@@ -16,6 +16,14 @@ export class CreateRestaurantDto {
 
   @IsOptional()
   @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  cuisineType?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(2048)
   logoUrl?: string;
 
@@ -33,6 +41,22 @@ export class CreateRestaurantDto {
   @IsNotEmpty()
   @IsPhoneNumber()
   phoneNumber: string;
+
+  @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  postalCode?: string;
 
   @IsOptional()
   @IsInt()

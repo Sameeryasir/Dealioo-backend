@@ -17,6 +17,12 @@ export class Restaurant {
   @Column({ type: 'varchar' })
   name: string;
 
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
+
+  @Column({ name: 'cuisine_type', type: 'varchar', nullable: true })
+  cuisineType: string | null;
+
   @Column({ name: 'logo_url', type: 'varchar', length: 2048, nullable: true })
   logoUrl: string | null;
 
@@ -28,6 +34,18 @@ export class Restaurant {
 
   @Column({ name: 'phone_number', type: 'varchar', nullable: true })
   phoneNumber: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  city: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  state: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  country: string | null;
+
+  @Column({ name: 'postal_code', type: 'varchar', nullable: true })
+  postalCode: string | null;
 
   @Column({ name: 'branch_count', type: 'int', default: 0 })
   branchCount: number;

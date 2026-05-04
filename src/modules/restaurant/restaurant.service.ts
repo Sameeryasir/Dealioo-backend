@@ -27,10 +27,16 @@ export class RestaurantService {
 
     const {
       name,
+      description,
+      cuisineType,
       logoUrl,
       websiteUrl,
       email,
       phoneNumber,
+      city,
+      state,
+      country,
+      postalCode,
       branchCount,
     } = createRestaurantDto;
 
@@ -41,10 +47,16 @@ export class RestaurantService {
 
     const restaurant = this.restaurantRepository.create({
       name,
+      description,
+      cuisineType,
       logoUrl,
       websiteUrl,
       email,
       phoneNumber,
+      city,
+      state,
+      country,
+      postalCode,
       branchCount,
       owner,
     });

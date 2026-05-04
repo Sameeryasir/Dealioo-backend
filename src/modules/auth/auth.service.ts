@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -21,6 +22,9 @@ import { RegisterUserDto } from './authDto/register.dto';
 import { LoginUserDto } from './authDto/login.dto';
 import { JwtAccessPayload } from './jwt/jwt-access-payload.interface';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
+import { SetupPasswordDto } from './authDto/setup-password.dto';
+import * as speakeasy from 'speakeasy';
+import * as qrcode from 'qrcode';
 
 @Injectable()
 export class AuthService {
@@ -33,6 +37,41 @@ export class AuthService {
     private readonly otpRepository: Repository<Otp>,
     private readonly jwtService: JwtService,
   ) {}
+
+  async setupPassword(
+    userId: number,
+    dto: SetupPasswordDto,
+  ): Promise<{ message: string }> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: {
+        passwordHash: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const currentOk = await bcrypt.compare(
+      dto.currentPassword,
+      user.passwordHash,
+    );
+    if (!currentOk) {
+      throw new UnauthorizedException('Current password is incorrect.');
+    }
+
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException(
+        'New password must be different from your current password.',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.userRepository.update(userId, { passwordHash });
+
+    return { message: 'Password updated successfully.' };
+  }
 
   async createUser(
     registerUserDto: RegisterUserDto,
@@ -235,5 +274,95 @@ export class AuthService {
     const token = this.jwtService.sign(this.buildAccessPayload(user));
 
     return { message: 'OTP verified successfully.', token, user };
+  }
+
+  async generateTwoFactorSecret(userId: number) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found.');
+    }
+
+    const secret = speakeasy.generateSecret({
+      name: `Restaurant Admin (${user.email})`,
+      issuer: 'Restaurant Admin App',
+    });
+
+    await this.userRepository.update(user.id, {
+      twoFactorSecret: secret.base32,
+      twoFactorEnabled: false,
+    });
+
+    const qrCode = await qrcode.toDataURL(secret.otpauth_url!);
+
+    return {
+      qrCode,
+      message: 'Scan this QR code using Google Authenticator.',
+    };
+  }
+
+  async verifyTwoFactorSetup(
+    userId: number,
+    code: string,
+  ): Promise<{ message: string; twoFactorEnabled: boolean }> {
+    const id = Number(userId);
+    if (!Number.isFinite(id) || id < 1) {
+      throw new BadRequestException('Invalid user.');
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { id },
+      select: {
+        id: true,
+        twoFactorEnabled: true,
+        twoFactorSecret: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (!user.twoFactorSecret) {
+      throw new BadRequestException(
+        'No two-factor secret found. Generate one first.',
+      );
+    }
+
+    if (user.twoFactorEnabled) {
+      return {
+        message: 'Two-factor authentication is already enabled.',
+        twoFactorEnabled: true,
+      };
+    }
+
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: 'base32',
+      token: code,
+      window: 2,
+    });
+
+    if (!valid) {
+      throw new UnauthorizedException('Invalid two-factor code.');
+    }
+
+    const updateResult = await this.userRepository.update(
+      { id },
+      { twoFactorEnabled: true },
+    );
+
+    if (!updateResult.affected) {
+      throw new BadRequestException(
+        'Could not save two-factor settings. Try again.',
+      );
+    }
+
+    return {
+      message: 'Two-factor authentication enabled successfully.',
+      twoFactorEnabled: true,
+    };
   }
 }

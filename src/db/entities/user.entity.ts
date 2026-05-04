@@ -37,6 +37,15 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ name: 'two_factor_secret', type: 'varchar', nullable: true, select: false })
+  twoFactorSecret: string | null;
+
+  @Column({ name: 'two_factor_enabled', type: 'boolean', default: false })
+  twoFactorEnabled: boolean;
+
+  @Column({ name: 'onboarding_step', type: 'int', default: 0 })
+  onboardingStep: number;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
