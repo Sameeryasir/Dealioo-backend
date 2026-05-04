@@ -5,9 +5,11 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
+  OneToMany,
   JoinColumn,
 } from 'typeorm';
 import { User } from './user.entity';
+import { Menu } from './menu.entity';
 
 @Entity('restaurants')
 export class Restaurant {
@@ -53,6 +55,9 @@ export class Restaurant {
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;
+
+  @OneToMany(() => Menu, (m) => m.restaurant)
+  menu: Menu[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
