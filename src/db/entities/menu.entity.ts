@@ -27,7 +27,7 @@ export class Menu {
   @JoinColumn({ name: 'restaurant_id' })
   restaurant: Restaurant;
 
-  @Column({ name: 'file_url', type: 'varchar', length: 2048, nullable: true })
+  @Column({ name: 'file_url', type: 'text', nullable: true })
   fileUrl: string | null;
 
   @Column({ name: 'file_name', type: 'varchar', nullable: true })

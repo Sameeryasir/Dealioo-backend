@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   IsEmail,
   IsInt,
@@ -24,7 +25,6 @@ export class CreateRestaurantDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(2048)
   logoUrl?: string;
 
   @IsOptional()
@@ -59,6 +59,7 @@ export class CreateRestaurantDto {
   postalCode?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   branchCount?: number;

@@ -17,7 +17,6 @@ export class UpdateRestaurantDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(2048)
   logoUrl?: string;
 
   @IsOptional()

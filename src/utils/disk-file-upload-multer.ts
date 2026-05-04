@@ -13,6 +13,8 @@ export const DEFAULT_DISK_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 export const MENUS_UPLOAD_SUBDIR = 'menus';
 
+export const RESTAURANTS_UPLOAD_SUBDIR = 'restaurants';
+
 export function publicUploadFileUrl(
   subdir: string,
   storedFileName: string,

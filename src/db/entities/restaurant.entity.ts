@@ -23,7 +23,7 @@ export class Restaurant {
   @Column({ name: 'cuisine_type', type: 'varchar', nullable: true })
   cuisineType: string | null;
 
-  @Column({ name: 'logo_url', type: 'varchar', length: 2048, nullable: true })
+  @Column({ name: 'logo_url', type: 'text', nullable: true })
   logoUrl: string | null;
 
   @Column({ name: 'website_url', type: 'varchar', length: 2048, nullable: true })
