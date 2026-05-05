@@ -11,6 +11,7 @@ import { RestaurantModule } from './modules/restaurant/restaurant.module';
 import { LocationModule } from './modules/location/location.module';
 import { MenuModule } from './modules/menu/menu.module';
 import { MenuItemModule } from './modules/menu-item/menu-item.module';
+import { FunnelModule } from './modules/funnel/funnel.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { MenuItemModule } from './modules/menu-item/menu-item.module';
     LocationModule,
     MenuModule,
     MenuItemModule,
+    FunnelModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

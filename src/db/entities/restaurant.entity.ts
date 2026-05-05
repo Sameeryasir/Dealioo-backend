@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Menu } from './menu.entity';
+import { Funnel } from './funnel.entity';
 
 @Entity('restaurants')
 export class Restaurant {
@@ -58,6 +59,9 @@ export class Restaurant {
 
   @OneToMany(() => Menu, (m) => m.restaurant)
   menu: Menu[];
+
+  @OneToMany(() => Funnel, (funnel) => funnel.restaurant)
+  funnels: Funnel[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

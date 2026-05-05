@@ -13,6 +13,8 @@ export const DEFAULT_DISK_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 export const MENUS_UPLOAD_SUBDIR = 'menus';
 
+export const FUNNELS_UPLOAD_SUBDIR = 'funnels';
+
 export const RESTAURANTS_UPLOAD_SUBDIR = 'restaurants';
 
 export function publicUploadFileUrl(
@@ -25,6 +27,7 @@ export function publicUploadFileUrl(
 export type DiskFileUploadMulterOptions = {
   maxFileBytes?: number;
   allowedMimeTypes?: readonly string[];
+  fileFilterErrorMessage?: string;
 };
 
 export function createDiskFileUploadMulterOptions(
@@ -52,7 +55,10 @@ export function createDiskFileUploadMulterOptions(
     fileFilter: (req, file, cb) => {
       if (!allowedMimeTypes.includes(file.mimetype)) {
         return cb(
-          new Error('Only PDF, PNG, JPG, and DOCX files are allowed'),
+          new Error(
+            options?.fileFilterErrorMessage ??
+              'Only PDF, PNG, JPG, and DOCX files are allowed',
+          ),
           false,
         );
       }
