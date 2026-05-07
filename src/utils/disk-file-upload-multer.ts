@@ -13,7 +13,7 @@ export const DEFAULT_DISK_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
 export const MENUS_UPLOAD_SUBDIR = 'menus';
 
-export const FUNNELS_UPLOAD_SUBDIR = 'funnels';
+export const CAMPAIGNS_UPLOAD_SUBDIR = 'campaigns';
 
 export const RESTAURANTS_UPLOAD_SUBDIR = 'restaurants';
 
@@ -22,6 +22,30 @@ export function publicUploadFileUrl(
   storedFileName: string,
 ): string {
   return `/uploads/${subdir}/${storedFileName}`;
+}
+
+export function getPublicAssetsBaseUrl(): string {
+  return (
+    process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') ??
+    `http://localhost:${process.env.PORT ?? '4001'}`
+  );
+}
+
+export function absolutePublicUploadFileUrl(
+  subdir: string,
+  storedFileName: string,
+): string {
+  return `${getPublicAssetsBaseUrl()}${publicUploadFileUrl(subdir, storedFileName)}`;
+}
+
+export function toAbsoluteAssetUrlIfRelative(
+  url: string | null | undefined,
+): string | null {
+  if (url == null || url === '') return null;
+  const t = url.trim();
+  if (t.startsWith('http://') || t.startsWith('https://')) return t;
+  if (t.startsWith('/uploads/')) return `${getPublicAssetsBaseUrl()}${t}`;
+  return t;
 }
 
 export type DiskFileUploadMulterOptions = {

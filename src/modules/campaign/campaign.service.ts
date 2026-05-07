@@ -2,29 +2,30 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
-  Funnel,
-  FunnelPublicationStatus,
-} from '../../db/entities/funnel.entity';
+  Campaign,
+  CampaignPublicationStatus,
+} from '../../db/entities/campaign.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import {
-  FUNNELS_UPLOAD_SUBDIR,
-  publicUploadFileUrl,
+  absolutePublicUploadFileUrl,
+  CAMPAIGNS_UPLOAD_SUBDIR,
+  toAbsoluteAssetUrlIfRelative,
 } from '../../utils/disk-file-upload-multer';
-import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
+import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 
 @Injectable()
-export class FunnelService {
+export class CampaignService {
   constructor(
-    @InjectRepository(Funnel)
-    private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
   ) {}
 
-  async createFunnel(
-    createFunnelDto: CreateFunnelDto,
+  async createCampaign(
+    createCampaignDto: CreateCampaignDto,
     file?: Express.Multer.File,
-  ): Promise<Funnel> {
+  ): Promise<Campaign> {
     const {
       restaurantId,
       campaignName,
@@ -33,7 +34,7 @@ export class FunnelService {
       offer,
       price,
       status,
-    } = createFunnelDto;
+    } = createCampaignDto;
 
     const restaurant = await this.restaurantRepository.findOne({
       where: { id: restaurantId },
@@ -43,9 +44,9 @@ export class FunnelService {
     }
 
     const imageUrl = file
-      ? publicUploadFileUrl(FUNNELS_UPLOAD_SUBDIR, file.filename)
-      : (dtoImageUrl ?? null);
-    const funnel = this.funnelRepository.create({
+      ? absolutePublicUploadFileUrl(CAMPAIGNS_UPLOAD_SUBDIR, file.filename)
+      : toAbsoluteAssetUrlIfRelative(dtoImageUrl);
+    const campaign = this.campaignRepository.create({
       restaurant,
       restaurantId: restaurant.id,
       campaignName,
@@ -53,24 +54,27 @@ export class FunnelService {
       imageUrl,
       offer: offer ?? null,
       price: price ?? null,
-      status: status ?? FunnelPublicationStatus.UNPUBLISHED,
+      status: status ?? CampaignPublicationStatus.UNPUBLISHED,
     });
-    return this.funnelRepository.save(funnel);
-  }
-  async getAllFunnels(): Promise<Funnel[]> {
-    return this.funnelRepository.find({ relations: ['restaurant'] });
+    return this.campaignRepository.save(campaign);
   }
 
-  async getFunnelsByRestaurantId(restaurantId: number): Promise<Funnel[]> {
+  async getAllCampaigns(): Promise<Campaign[]> {
+    return this.campaignRepository.find();
+  }
+
+  async getCampaignsByRestaurantId(
+    restaurantId: number,
+  ): Promise<Campaign[]> {
     const restaurant = await this.restaurantRepository.findOne({
       where: { id: restaurantId },
     });
     if (!restaurant) {
       throw new NotFoundException('Restaurant not found');
     }
-    return this.funnelRepository.find({
+    return this.campaignRepository.find({
       where: { restaurantId },
-      relations: ['restaurant'],
+    
     });
   }
 }

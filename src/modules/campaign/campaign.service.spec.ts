@@ -1,18 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Funnel } from '../../db/entities/funnel.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
-import { FunnelService } from './funnel.service';
+import { CampaignService } from './campaign.service';
 
-describe('FunnelService', () => {
-  let service: FunnelService;
+describe('CampaignService', () => {
+  let service: CampaignService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        FunnelService,
+        CampaignService,
         {
-          provide: getRepositoryToken(Funnel),
+          provide: getRepositoryToken(Campaign),
           useValue: {
             create: jest.fn((x) => x),
             save: jest.fn(async (x) => x),
@@ -28,7 +28,7 @@ describe('FunnelService', () => {
       ],
     }).compile();
 
-    service = module.get<FunnelService>(FunnelService);
+    service = module.get<CampaignService>(CampaignService);
   });
 
   it('should be defined', () => {
