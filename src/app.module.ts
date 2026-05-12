@@ -12,6 +12,7 @@ import { LocationModule } from './modules/location/location.module';
 import { MenuModule } from './modules/menu/menu.module';
 import { MenuItemModule } from './modules/menu-item/menu-item.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
+import { CustomerModule } from './modules/customer/customer.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { CampaignModule } from './modules/campaign/campaign.module';
     MenuModule,
     MenuItemModule,
     CampaignModule,
+    CustomerModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
