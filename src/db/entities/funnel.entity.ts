@@ -4,9 +4,11 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { FunnelPayment } from './funnel-payment.entity';
 import { Campaign } from './campaign.entity';
 import { User } from './user.entity';
 
@@ -36,6 +38,9 @@ export class Funnel {
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'updated_by' })
   updatedBy: User | null;
+
+  @OneToMany(() => FunnelPayment, (payment) => payment.funnel)
+  payments: FunnelPayment[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

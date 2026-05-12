@@ -14,6 +14,7 @@ import { MenuItemModule } from './modules/menu-item/menu-item.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
+import { StripeModule } from './modules/stripe/stripe.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { FunnelModule } from './modules/funnel/funnel.module';
     CampaignModule,
     FunnelModule,
     CustomerModule,
+    StripeModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
