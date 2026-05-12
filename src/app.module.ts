@@ -13,6 +13,7 @@ import { MenuModule } from './modules/menu/menu.module';
 import { MenuItemModule } from './modules/menu-item/menu-item.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
 import { CustomerModule } from './modules/customer/customer.module';
+import { FunnelModule } from './modules/funnel/funnel.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { CustomerModule } from './modules/customer/customer.module';
     MenuModule,
     MenuItemModule,
     CampaignModule,
+    FunnelModule,
     CustomerModule,
   ],
   controllers: [AppController],

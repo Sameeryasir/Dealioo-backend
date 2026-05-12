@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Campaign } from './campaign.entity';
+import { User } from './user.entity';
 
 @Entity('funnels')
 export class Funnel {
@@ -23,11 +24,18 @@ export class Funnel {
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
-  @Column({ name: 'lead_name', type: 'varchar', length: 255 })
-  leadName: string;
+  @Column({ type: 'jsonb', default: () => "'{}'" })
+  pages: Record<string, unknown>;
 
-  @Column({ name: 'lead_email', type: 'varchar', length: 255 })
-  leadEmail: string;
+  @Column({ type: 'int', default: 1 })
+  version: number;
+
+  @Column({ type: 'boolean', default: false })
+  published: boolean;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'updated_by' })
+  updatedBy: User | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
