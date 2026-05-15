@@ -4,7 +4,7 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
-  OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -30,8 +30,9 @@ export class Campaign {
   @JoinColumn({ name: 'restaurant_id' })
   restaurant: Restaurant;
 
-  @OneToMany(() => Funnel, (funnel) => funnel.campaign)
-  funnels: Funnel[];
+  /** Each campaign has at most one funnel (`funnels.campaign_id` is unique). */
+  @OneToOne(() => Funnel, (funnel) => funnel.campaign, { nullable: true })
+  funnel: Funnel | null;
 
   @Column({ name: 'campaign_name', type: 'varchar', length: 255 })
   campaignName: string;

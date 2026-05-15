@@ -23,15 +23,15 @@ export class FunnelController {
   @UseGuards(AuthGuard('jwt'))
   @Post('create')
   createFunnel(@Body() dto: CreateFunnelDto, @Req() req): Promise<Funnel> {
-    return this.funnelService.createFunnel(dto, req.user);
+    return this.funnelService.createOrUpdateFunnel(dto, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('campaign/:campaignId')
-  getFunnelsByCampaign(
+  getFunnelByCampaign(
     @Param('campaignId', ParseIntPipe) campaignId: number,
-  ): Promise<Funnel[]> {
-    return this.funnelService.getFunnelsByCampaignId(campaignId);
+  ): Promise<Funnel | null> {
+    return this.funnelService.getFunnelByCampaignId(campaignId);
   }
 
   @UseGuards(AuthGuard('jwt'))

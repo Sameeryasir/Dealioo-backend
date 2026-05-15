@@ -21,27 +21,47 @@ export class FunnelService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  async createFunnel(dto: CreateFunnelDto, user: User): Promise<Funnel> {
+  async createOrUpdateFunnel(
+    dto: CreateFunnelDto,
+    user: User,
+  ): Promise<Funnel> {
     requireAdminRole(
       user,
-      'You do not have permission to create a funnel.',
+      'You do not have permission to manage funnels.',
     );
 
     const campaign = await this.campaignRepository.findOne({
       where: { id: dto.campaignId },
     });
+
     if (!campaign) {
       throw new NotFoundException('Campaign not found');
     }
 
-    const funnel = this.funnelRepository.create({
-      campaign,
-      campaignId: campaign.id,
-      pages: dto.pages ?? {},
-      published: false,
-      version: 1,
-      updatedBy: { id: user.id } as User,
+    let funnel = await this.funnelRepository.findOne({
+      where: {
+        campaignId: dto.campaignId,
+      },
     });
+
+    if (!funnel) {
+      funnel = this.funnelRepository.create({
+        campaign,
+        campaignId: campaign.id,
+        pages: dto.pages ?? {},
+        published: false,
+        version: 1,
+        updatedBy: { id: user.id } as User,
+      });
+
+      return this.funnelRepository.save(funnel);
+    }
+
+    funnel.pages = dto.pages ?? funnel.pages;
+
+    funnel.version += 1;
+
+    funnel.updatedBy = { id: user.id } as User;
 
     return this.funnelRepository.save(funnel);
   }
@@ -57,17 +77,17 @@ export class FunnelService {
     return funnel;
   }
 
-  async getFunnelsByCampaignId(campaignId: number): Promise<Funnel[]> {
+  /** One funnel per campaign: returns that row or null if none exists yet. */
+  async getFunnelByCampaignId(campaignId: number): Promise<Funnel | null> {
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
     });
     if (!campaign) {
       throw new NotFoundException('Campaign not found');
     }
-    return this.funnelRepository.find({
+    return this.funnelRepository.findOne({
       where: { campaignId },
       relations: ['updatedBy'],
-      order: { id: 'ASC' },
     });
   }
 

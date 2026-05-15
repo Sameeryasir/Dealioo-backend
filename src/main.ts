@@ -5,9 +5,16 @@ import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
   const jsonBodyLimit = process.env.BODY_JSON_LIMIT ?? '10mb';
-  app.useBodyParser('json', { limit: jsonBodyLimit });
+  app.useBodyParser('json', {
+    limit: jsonBodyLimit,
+    verify: (req, _res, buf: Buffer) => {
+      (req as import('express').Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  });
   app.useBodyParser('urlencoded', { limit: jsonBodyLimit, extended: true });
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
   const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';

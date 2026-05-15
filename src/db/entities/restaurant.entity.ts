@@ -53,6 +53,14 @@ export class Restaurant {
   @Column({ name: 'branch_count', type: 'int', default: 0 })
   branchCount: number;
 
+  @Column({
+    name: 'stripe_account_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  stripeAccountId: string | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

@@ -5,6 +5,7 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
@@ -20,7 +21,7 @@ export class Funnel {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => Campaign, (campaign) => campaign.funnels, {
+  @OneToOne(() => Campaign, (campaign) => campaign.funnel, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'campaign_id' })

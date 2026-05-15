@@ -20,6 +20,23 @@ export class RestaurantService {
     private readonly userRepository: Repository<User>,
   ) {}
 
+  async findByUserId(userId: number): Promise<Restaurant | null> {
+    return this.restaurantRepository.findOne({
+      where: { owner: { id: userId } },
+      order: { id: 'ASC' },
+    });
+  }
+
+  /** Restaurant must exist and belong to this user (for scoped routes like Stripe dashboard). */
+  async findOwnedByUserId(
+    userId: number,
+    restaurantId: number,
+  ): Promise<Restaurant | null> {
+    return this.restaurantRepository.findOne({
+      where: { id: restaurantId, owner: { id: userId } },
+    });
+  }
+
   async createRestaurant(
     createRestaurantDto: CreateRestaurantDto,
     user: User,
