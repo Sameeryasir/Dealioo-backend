@@ -1,12 +1,17 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   Logger,
+  Param,
+  ParseIntPipe,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentService } from './payment.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
@@ -22,6 +27,13 @@ export class PaymentController {
   createPaymentIntent(@Body() dto: CreatePaymentIntentDto) {
     return this.paymentService.createPaymentIntent(dto);
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId')
+  getPaidFunnelPayments(@Param('funnelId', ParseIntPipe) funnelId: number) {
+    return this.paymentService.getPaidFunnelPayments(funnelId);
+  }
+
   @SkipThrottle()
   @Post('webhook')
   @HttpCode(200)

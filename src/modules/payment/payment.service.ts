@@ -205,6 +205,7 @@ export class PaymentService {
   private async handlePaymentIntentSucceeded(
     paymentIntent: PaymentIntentPayload,
     connectedAccountId?: string,
+    chargeReceiptUrl?: string,
   ) {
     this.logger.log(
       JSON.stringify({
@@ -245,7 +246,12 @@ export class PaymentService {
     }
 
     const paymentMethodId = this.paymentMethodIdFromIntent(paymentIntent);
-    const receiptUrl = this.receiptUrlFromIntent(paymentIntent);
+    const receiptUrl = await this.resolveReceiptUrl(
+      paymentIntent,
+      payment,
+      connectedAccountId,
+      chargeReceiptUrl,
+    );
 
     const updateResult = await this.funnelPaymentRepository.update(
       payment.id,
@@ -301,6 +307,77 @@ export class PaymentService {
       return lc.receipt_url;
     }
     return undefined;
+  }
+
+  private chargeIdFromIntent(pi: PaymentIntentPayload): string | undefined {
+    const lc = pi.latest_charge;
+    if (typeof lc === 'string') {
+      return lc;
+    }
+    return undefined;
+  }
+
+  private stripeForConnectedAccount(
+    connectedAccountId?: string | null,
+  ): InstanceType<typeof Stripe> {
+    const accountId = connectedAccountId?.trim();
+    if (!accountId) {
+      return this.stripe;
+    }
+    return new Stripe(process.env.STRIPE_SECRET_KEY!, {
+      stripeAccount: accountId,
+    });
+  }
+
+  /** Webhook payloads often omit receipt_url — load it from Stripe on the connected account. */
+  private async fetchReceiptUrlFromStripe(
+    paymentIntentId: string,
+    connectedAccountId?: string | null,
+    chargeId?: string,
+  ): Promise<string | undefined> {
+    try {
+      const stripe = this.stripeForConnectedAccount(connectedAccountId);
+      if (chargeId) {
+        const charge = await stripe.charges.retrieve(chargeId);
+        const url = charge.receipt_url?.trim();
+        if (url) {
+          return url;
+        }
+      }
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ['latest_charge'],
+      });
+      const latest = pi.latest_charge;
+      if (latest && typeof latest === 'object' && latest.receipt_url) {
+        return latest.receipt_url.trim() || undefined;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not fetch receipt URL for PaymentIntent ${paymentIntentId}`,
+        error,
+      );
+    }
+    return undefined;
+  }
+
+  private async resolveReceiptUrl(
+    paymentIntent: PaymentIntentPayload,
+    payment: FunnelPayment,
+    connectedAccountId?: string,
+    chargeReceiptUrl?: string,
+  ): Promise<string | undefined> {
+    const fromWebhook =
+      chargeReceiptUrl?.trim() ||
+      this.receiptUrlFromIntent(paymentIntent) ||
+      payment.receiptUrl?.trim();
+    if (fromWebhook) {
+      return fromWebhook;
+    }
+    return this.fetchReceiptUrlFromStripe(
+      paymentIntent.id,
+      connectedAccountId ?? payment.stripeConnectedAccountId,
+      this.chargeIdFromIntent(paymentIntent),
+    );
   }
 
   private async markFunnelPaymentPaidFromSucceededCharge(
@@ -409,6 +486,7 @@ export class PaymentService {
     await this.handlePaymentIntentSucceeded(
       { id: paymentIntentId },
       connectedAccountId,
+      receiptFromCharge,
     );
   }
 
@@ -678,6 +756,70 @@ export class PaymentService {
       paymentIntentId: paymentIntent.id,
       paymentId: payment.id,
       stripeAccountId: restaurant.stripeAccountId,
+    };
+  }
+
+  async getPaidFunnelPayments(funnelId: number): Promise<{
+    funnelId: number;
+    paymentCount: number;
+    payments: Array<{
+      id: number;
+      funnelId: number;
+      restaurantId: number;
+      amount: number;
+      currency: string;
+      status: FunnelPaymentStatus;
+      customerEmail: string;
+      paymentMethod: string | null;
+      receiptUrl: string | null;
+      failureReason: string | null;
+      failedAt: Date | null;
+      cancelledAt: Date | null;
+      stripeRefundId: string | null;
+      refundedAt: Date | null;
+      paidAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const rows = await this.funnelPaymentRepository.find({
+      where: { funnelId, status: FunnelPaymentStatus.PAID },
+      order: { paidAt: 'DESC', createdAt: 'DESC' },
+    });
+
+    return {
+      funnelId,
+      paymentCount: rows.length,
+      payments: rows.map((row) => this.toPublicFunnelPayment(row)),
+    };
+  }
+
+  private toPublicFunnelPayment(payment: FunnelPayment) {
+    return {
+      id: payment.id,
+      funnelId: payment.funnelId,
+      restaurantId: payment.restaurantId,
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      customerEmail: payment.customerEmail,
+      paymentMethod: payment.paymentMethod,
+      receiptUrl: payment.receiptUrl,
+      failureReason: payment.failureReason,
+      failedAt: payment.failedAt,
+      cancelledAt: payment.cancelledAt,
+      stripeRefundId: payment.stripeRefundId,
+      refundedAt: payment.refundedAt,
+      paidAt: payment.paidAt,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
     };
   }
 }

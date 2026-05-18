@@ -16,6 +16,7 @@ import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
 import { StripeModule } from './modules/stripe/stripe.module';
 import { PaymentModule } from './modules/payment/payment.module';
+import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { PaymentModule } from './modules/payment/payment.module';
     CustomerModule,
     StripeModule,
     PaymentModule,
+    FunnelEventModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
