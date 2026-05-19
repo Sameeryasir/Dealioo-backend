@@ -15,6 +15,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import { AutomationService } from '../automation/automation.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 
 @Injectable()
@@ -28,6 +29,7 @@ export class FunnelEventService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    private readonly automationService: AutomationService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
@@ -38,11 +40,14 @@ export class FunnelEventService {
       throw new NotFoundException('Funnel not found');
     }
 
-    if (dto.eventType === FunnelEventType.SIGNUP) {
-      return this.trackSignup(dto);
-    }
+    const event =
+      dto.eventType === FunnelEventType.SIGNUP
+        ? await this.trackSignup(dto)
+        : await this.trackPayment(dto);
 
-    return this.trackPayment(dto);
+    await this.automationService.handleEvent(event);
+
+    return event;
   }
 
   async getStats(funnelId: number): Promise<{
