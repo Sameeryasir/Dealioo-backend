@@ -41,6 +41,7 @@ import { AutomationEmailRendererService } from './automation-email-renderer.serv
 import { AutomationMailService } from './automation-mail.service';
 import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
 import type { AutomationEmailTemplateProps } from '../../templates/automation/types';
+import { AutomationFlowService } from './automation-flow.service';
 import { AutomationWorkerService } from './automation-worker.service';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
@@ -73,6 +74,7 @@ export class AutomationService {
     private readonly logService: AutomationLogService,
     private readonly mailService: AutomationMailService,
     private readonly emailRenderer: AutomationEmailRendererService,
+    private readonly flowService: AutomationFlowService,
     private readonly workerService: AutomationWorkerService,
   ) {}
 
@@ -396,42 +398,45 @@ export class AutomationService {
       throw new BadRequestException('Automation has no funnel linked');
     }
 
-    const { emailNode, subject, templateKey, templateProps } =
-      await this.resolveEmailNodeContent(dto.automationId, automation.purpose);
+    const plan = await this.flowService.buildExecutionPlan(dto.automationId);
 
-    const unpaidRecipients = await this.getUnpaidCustomersForFunnel(
-      automation.funnelId,
+    const { subject, templateKey, templateProps } = this.resolveEmailContent(
+      plan.emailNode!,
+      automation.purpose,
     );
-    if (unpaidRecipients.length === 0) {
-      throw new BadRequestException('No unpaid customers found for this funnel');
-    }
 
-    const startNodeId =
-      dto.currentNodeId ??
-      (await this.executionService.resolveStartNodeId(dto.automationId));
-
-    if (!startNodeId) {
+    let recipients: { customerId: number; email: string; name: string }[] = [];
+    if (plan.sendToUnpaidOnly) {
+      recipients = await this.getUnpaidCustomersForFunnel(automation.funnelId);
+      if (recipients.length === 0) {
+        throw new BadRequestException(
+          'No unpaid customers found for this funnel',
+        );
+      }
+    } else {
       throw new BadRequestException(
-        'Automation has no start node. Add a trigger node first.',
+        'Flow condition must target customers who have not completed payment.',
       );
     }
 
     const execution = await this.executionService.createExecution(
       {
         automationId: dto.automationId,
-        currentNodeId: startNodeId,
+        currentNodeId: plan.startNodeId,
         purpose: automation.purpose,
       },
-      unpaidRecipients[0].customerId,
+      recipients[0].customerId,
     );
 
     const batch = {
       executionId: execution.id,
-      emailNodeId: emailNode.id,
+      emailNodeId: plan.emailNode!.id,
+      conditionNodeId: plan.conditionNode?.id ?? plan.emailNode!.id,
       subject,
       templateKey,
       templateProps,
-      recipients: unpaidRecipients,
+      plan,
+      recipients,
     };
 
     this.workerService.enqueue(() => this.processUnpaidReminderBatch(batch));
@@ -442,12 +447,43 @@ export class AutomationService {
   private async processUnpaidReminderBatch(batch: {
     executionId: number;
     emailNodeId: number;
+    conditionNodeId: number;
     subject: string;
     templateKey: string;
     templateProps: Partial<AutomationEmailTemplateProps>;
+    plan: {
+      nodes: AutomationNode[];
+      emailNode: AutomationNode | null;
+      conditionNode: AutomationNode | null;
+    };
     recipients: { customerId: number; email: string; name: string }[];
   }): Promise<void> {
     const sent: { customerId: number; email: string }[] = [];
+    const pathSummary = batch.plan.nodes
+      .map((node) => `order ${node.order}:${node.type}`)
+      .join(' → ');
+    const firstCustomerId = batch.recipients[0].customerId;
+
+    await this.logService.createLog({
+      executionId: batch.executionId,
+      nodeId: batch.emailNodeId,
+      customerId: firstCustomerId,
+      message: `Step 0 email node: subject "${batch.subject}" loaded. Flow: ${pathSummary}`,
+    });
+
+    if (batch.plan.conditionNode) {
+      const conditionLabel = String(
+        batch.plan.conditionNode.config?.conditionType ??
+          batch.plan.conditionNode.config?.type ??
+          'condition',
+      );
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.conditionNodeId,
+        customerId: firstCustomerId,
+        message: `Step 1 condition: "${conditionLabel}" — sending to ${batch.recipients.length} unpaid customer(s)`,
+      });
+    }
 
     for (const recipient of batch.recipients) {
       try {
@@ -488,9 +524,9 @@ export class AutomationService {
         .join(', ');
       await this.logService.createLog({
         executionId: batch.executionId,
-        nodeId: batch.emailNodeId,
+        nodeId: batch.plan.nodes[batch.plan.nodes.length - 1].id,
         customerId: sent[sent.length - 1].customerId,
-        message: `Workflow completed for ${sent.length} customer(s): ${summary}`,
+        message: `Flow completed (node_order end). Emails sent to ${sent.length} customer(s): ${summary}`,
       });
     } else if (batch.recipients[0]) {
       await this.logService.createLog({
@@ -545,25 +581,14 @@ export class AutomationService {
     };
   }
 
-  private async resolveEmailNodeContent(
-    automationId: number,
+  private resolveEmailContent(
+    emailNode: AutomationNode,
     purpose: AutomationPurpose,
-  ): Promise<{
-    emailNode: AutomationNode;
+  ): {
     subject: string;
     templateKey: string;
     templateProps: Partial<AutomationEmailTemplateProps>;
-  }> {
-    const emailNode = await this.nodeRepository.findOne({
-      where: { automationId, type: AutomationNodeType.EMAIL },
-      order: { order: 'ASC' },
-    });
-    if (!emailNode || emailNode.type !== AutomationNodeType.EMAIL) {
-      throw new BadRequestException(
-        'Add an email node with subject in config.',
-      );
-    }
-
+  } {
     const config = emailNode.config ?? {};
     const subject = String(config.subject ?? '').trim();
     if (!subject) {
@@ -588,7 +613,7 @@ export class AutomationService {
       templateProps.ctaUrl = String(config.ctaUrl);
     }
 
-    return { emailNode, subject, templateKey, templateProps };
+    return { subject, templateKey, templateProps };
   }
 
   private async getUnpaidCustomersForFunnel(
@@ -603,27 +628,36 @@ export class AutomationService {
           FunnelPaymentStatus.CANCELLED,
         ]),
       },
+      select: ['customerEmail'],
     });
+
+    const normalizedEmails = [
+      ...new Set(
+        unpaidPayments
+          .map((payment) => payment.customerEmail?.trim().toLowerCase())
+          .filter((email): email is string => Boolean(email)),
+      ),
+    ];
+
+    if (normalizedEmails.length === 0) {
+      return [];
+    }
+
+    const customers = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('LOWER(customer.email) IN (:...emails)', {
+        emails: normalizedEmails,
+      })
+      .getMany();
 
     const recipients: { customerId: number; email: string; name: string }[] =
       [];
     const seenCustomerIds = new Set<number>();
 
-    for (const payment of unpaidPayments) {
-      const email = payment.customerEmail?.trim();
-      if (!email) {
+    for (const customer of customers) {
+      if (seenCustomerIds.has(customer.id)) {
         continue;
       }
-
-      const customer = await this.customerRepository
-        .createQueryBuilder('customer')
-        .where('LOWER(customer.email) = LOWER(:email)', { email })
-        .getOne();
-
-      if (!customer || seenCustomerIds.has(customer.id)) {
-        continue;
-      }
-
       seenCustomerIds.add(customer.id);
       recipients.push({
         customerId: customer.id,

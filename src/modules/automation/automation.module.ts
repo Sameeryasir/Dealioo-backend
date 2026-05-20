@@ -14,6 +14,7 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationController } from './automation.controller';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
+import { AutomationFlowService } from './automation-flow.service';
 import { AutomationMailService } from './automation-mail.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationExecutionService } from './automation-execution.service';
@@ -43,6 +44,7 @@ import { AutomationService } from './automation.service';
     AutomationService,
     AutomationMailService,
     AutomationEmailRendererService,
+    AutomationFlowService,
     AutomationEngineService,
     AutomationExecutionService,
     AutomationLogService,

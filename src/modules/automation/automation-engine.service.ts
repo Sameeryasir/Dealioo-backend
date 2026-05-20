@@ -281,7 +281,9 @@ export class AutomationEngineService {
         return 'advance';
 
       case AutomationNodeType.CONDITION: {
-        const conditionType = String(config.type ?? '');
+        const conditionType = String(
+          config.conditionType ?? config.type ?? '',
+        );
         const stopFlow = await this.shouldStopAfterCondition(
           execution,
           conditionType,
@@ -339,7 +341,12 @@ export class AutomationEngineService {
       return false;
     }
 
-    if (conditionType === 'payment_not_paid') {
+    const normalized = conditionType.toLowerCase();
+    if (
+      normalized.includes('not completed payment') ||
+      normalized.includes('not paid') ||
+      normalized === 'payment_not_paid'
+    ) {
       return this.customerHasPaidOnFunnel(funnelId, execution.customerId);
     }
 

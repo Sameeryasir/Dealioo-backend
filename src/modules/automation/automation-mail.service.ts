@@ -4,6 +4,7 @@ import * as nodemailer from 'nodemailer';
 @Injectable()
 export class AutomationMailService {
   private readonly logger = new Logger(AutomationMailService.name);
+  private transporter: nodemailer.Transporter | null = null;
 
   async send(params: {
     to: string;
@@ -11,20 +12,9 @@ export class AutomationMailService {
     html: string;
     text?: string;
   }): Promise<void> {
-    const mailUser = process.env.MAIL_USER;
-    const pass = process.env.MAIL_PASS;
-    if (!mailUser?.trim() || !pass?.trim()) {
-      throw new Error(
-        'MAIL_USER and MAIL_PASS must be set to send automation emails.',
-      );
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: mailUser, pass },
-    });
-
-    const from = process.env.MAIL_FROM?.trim() || mailUser;
+    const transporter = this.getTransporter();
+    const from =
+      process.env.MAIL_FROM?.trim() || process.env.MAIL_USER?.trim() || '';
 
     await transporter.sendMail({
       from,
@@ -35,5 +25,26 @@ export class AutomationMailService {
     });
 
     this.logger.log(`Automation email sent to ${params.to}`);
+  }
+
+  private getTransporter(): nodemailer.Transporter {
+    if (this.transporter) {
+      return this.transporter;
+    }
+
+    const mailUser = process.env.MAIL_USER;
+    const pass = process.env.MAIL_PASS;
+    if (!mailUser?.trim() || !pass?.trim()) {
+      throw new Error(
+        'MAIL_USER and MAIL_PASS must be set to send automation emails.',
+      );
+    }
+
+    this.transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: mailUser, pass },
+    });
+
+    return this.transporter;
   }
 }
