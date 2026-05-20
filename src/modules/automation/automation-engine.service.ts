@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationExecutionStatus } from '../../db/entities/automation-execution.entity';
 import { Customer } from '../../db/entities/customer.entity';
@@ -14,10 +15,14 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
-import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
+import {
+  resolveAutomationEmailTemplateFromPurpose,
+  resolveAutomationEmailTemplateId,
+} from '../../templates/automation/registry';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationMailService } from './automation-mail.service';
 import { AutomationQueueService } from './automation-queue.service';
+import { MAX_AUTOMATION_EXECUTION_STEPS } from './automation-queue.constants';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
 
@@ -39,13 +44,28 @@ export class AutomationEngineService {
     private readonly customerRepository: Repository<Customer>,
   ) {}
 
-  async processExecution(executionId: number): Promise<void> {
-    const execution = await this.executionService.findById(executionId);
+  async processExecution(executionId: number, nodeId: number): Promise<void> {
+    let execution = await this.executionService.findById(executionId);
 
     if (
       execution.status === AutomationExecutionStatus.COMPLETED ||
       execution.status === AutomationExecutionStatus.FAILED
     ) {
+      return;
+    }
+
+    const stepCount = await this.logService.countByExecutionId(executionId);
+    if (stepCount >= MAX_AUTOMATION_EXECUTION_STEPS) {
+      const message = `Workflow exceeded maximum steps (${MAX_AUTOMATION_EXECUTION_STEPS})`;
+      this.logger.warn(`Execution ${executionId}: ${message}`);
+      await this.logService.createLog({
+        executionId,
+        nodeId,
+        customerId: execution.customerId,
+        message: 'Workflow stopped (step limit)',
+        error: message,
+      });
+      await this.executionService.markFailed(executionId, message);
       return;
     }
 
@@ -58,21 +78,36 @@ export class AutomationEngineService {
       }
       await this.executionService.updateCurrentNode(
         executionId,
-        execution.currentNodeId,
+        nodeId,
         AutomationExecutionStatus.RUNNING,
         null,
       );
+      execution = await this.executionService.findById(executionId);
+    } else if (execution.currentNodeId !== nodeId) {
+      await this.executionService.updateCurrentNode(
+        executionId,
+        nodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      execution = await this.executionService.findById(executionId);
     }
 
-    const node = execution.currentNode;
-    if (!node) {
-      await this.executionService.markFailed(executionId);
-      return;
-    }
+    const node = await this.executionService.findNodeForAutomation(
+      execution.automationId,
+      nodeId,
+    );
+
+    this.logger.log(
+      `Execution ${executionId}: running node ${node.id} (${node.type})`,
+    );
 
     try {
       const result = await this.runNode(execution, node);
       await this.handleNodeResult(executionId, execution, node.id, result);
+      this.logger.log(
+        `Execution ${executionId}: finished node ${node.id} (${node.type}) → ${result}`,
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Node execution failed';
@@ -84,7 +119,7 @@ export class AutomationEngineService {
         message: 'Node execution failed',
         error: message,
       });
-      await this.executionService.markFailed(executionId);
+      await this.executionService.markFailed(executionId, message);
     }
   }
 
@@ -101,12 +136,13 @@ export class AutomationEngineService {
       message: 'Wait completed',
     });
 
-    const nextNodeId = await this.executionService.getNextNodeId(
+    const advanced = await this.advanceToNextNode(
+      executionId,
       execution.automationId,
       execution.currentNodeId,
+      execution.customerId,
     );
-
-    if (!nextNodeId) {
+    if (!advanced) {
       await this.logService.createLog({
         executionId,
         nodeId: execution.currentNodeId,
@@ -114,16 +150,7 @@ export class AutomationEngineService {
         message: 'Workflow completed',
       });
       await this.executionService.markCompleted(executionId);
-      return;
     }
-
-    await this.executionService.updateCurrentNode(
-      executionId,
-      nextNodeId,
-      AutomationExecutionStatus.RUNNING,
-      null,
-    );
-    await this.queueService.addProcessExecution({ executionId });
   }
 
   private async handleNodeResult(
@@ -152,12 +179,13 @@ export class AutomationEngineService {
       return;
     }
 
-    const nextNodeId = await this.executionService.getNextNodeId(
+    const advanced = await this.advanceToNextNode(
+      executionId,
       execution.automationId,
       nodeId,
+      execution.customerId,
     );
-
-    if (!nextNodeId) {
+    if (!advanced) {
       await this.logService.createLog({
         executionId,
         nodeId,
@@ -165,7 +193,43 @@ export class AutomationEngineService {
         message: 'Workflow completed',
       });
       await this.executionService.markCompleted(executionId);
-      return;
+    }
+  }
+
+  private async advanceToNextNode(
+    executionId: number,
+    automationId: number,
+    currentNodeId: number,
+    customerId: number,
+  ): Promise<boolean> {
+    const nextNodeId = await this.executionService.getNextNodeId(
+      automationId,
+      currentNodeId,
+    );
+
+    if (!nextNodeId) {
+      return false;
+    }
+
+    if (nextNodeId === currentNodeId) {
+      await this.failExecutionCycle(
+        executionId,
+        currentNodeId,
+        customerId,
+        'Workflow cycle detected (node points to itself)',
+      );
+      return false;
+    }
+
+    const visited = await this.logService.getVisitedNodeIds(executionId);
+    if (visited.includes(nextNodeId)) {
+      await this.failExecutionCycle(
+        executionId,
+        currentNodeId,
+        customerId,
+        'Workflow cycle detected (revisited node)',
+      );
+      return false;
     }
 
     await this.executionService.updateCurrentNode(
@@ -174,7 +238,28 @@ export class AutomationEngineService {
       AutomationExecutionStatus.RUNNING,
       null,
     );
-    await this.queueService.addProcessExecution({ executionId });
+    await this.queueService.addProcessExecution({
+      executionId,
+      nodeId: nextNodeId,
+    });
+    return true;
+  }
+
+  private async failExecutionCycle(
+    executionId: number,
+    nodeId: number,
+    customerId: number,
+    message: string,
+  ): Promise<void> {
+    this.logger.warn(`Execution ${executionId}: ${message}`);
+    await this.logService.createLog({
+      executionId,
+      nodeId,
+      customerId,
+      message: 'Workflow stopped (cycle)',
+      error: message,
+    });
+    await this.executionService.markFailed(executionId, message);
   }
 
   private async runNode(
@@ -186,14 +271,22 @@ export class AutomationEngineService {
     const config = node.config ?? {};
 
     switch (node.type) {
-      case AutomationNodeType.TRIGGER:
+      case AutomationNodeType.TRIGGER: {
+        const triggerLabel = String(
+          config.trigger ??
+            config.triggerType ??
+            config.event ??
+            execution.automation?.trigger ??
+            'trigger',
+        );
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: 'Workflow started',
+          message: `Trigger fired (${triggerLabel}) — starting workflow`,
         });
         return 'advance';
+      }
 
       case AutomationNodeType.WAIT: {
         const delayMinutes = Number(config.delayMinutes ?? 0);
@@ -228,36 +321,103 @@ export class AutomationEngineService {
       }
 
       case AutomationNodeType.EMAIL: {
-        const subject = String(config.subject ?? '').trim();
-        const templateKey = resolveAutomationEmailTemplateFromPurpose(
+        const campaignName =
+          execution.automation?.campaign?.campaignName?.trim() ||
+          'the campaign';
+
+        const rawTemplate = String(config.templateId ?? config.template ?? '').trim();
+        const templateLooksAbandoned = rawTemplate
+          .toLowerCase()
+          .includes('abandoned');
+
+        let subject = String(config.subject ?? '').trim();
+        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP) {
+          if (!subject) {
+            subject = `Thanks for signing up on ${campaignName}!`;
+          }
+        }
+        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+          if (!subject || templateLooksAbandoned) {
+            subject = `Thank you for trusting us — your payment is confirmed`;
+          }
+        }
+
+        const templateKey = this.resolveEmailTemplateKey(
           execution.automation.purpose,
+          rawTemplate,
         );
+
         const to = execution.customer?.email?.trim();
         const customerName =
           execution.customer?.name?.trim() || to?.split('@')[0] || 'there';
 
+        let defaultMessage: string | undefined;
+        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP) {
+          defaultMessage = `Thank you for signing up on ${campaignName}! Your registration was successful and we are excited to have you with us. We will keep you updated on what happens next.`;
+        } else if (execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+          defaultMessage = `Thank you for trusting us. Your payment is confirmed. We are glad to have you with us on ${campaignName}.`;
+        }
+
+        let emailSent = false;
+        let emailError: string | null = null;
+
         if (to && subject) {
-          const { html, text } = await this.emailRenderer.render(templateKey, {
-            customerName,
-            customerEmail: to,
-            subject,
-            message: config.message ? String(config.message) : undefined,
-            headline: config.headline ? String(config.headline) : undefined,
-            ctaLabel: config.ctaLabel ? String(config.ctaLabel) : undefined,
-            ctaUrl: config.ctaUrl ? String(config.ctaUrl) : undefined,
-          });
-          await this.mailService.send({ to, subject, html, text });
+          try {
+            this.logger.log(
+              `Execution ${execution.id}: rendering email (${execution.automation.purpose}) for ${to}`,
+            );
+            const { html, text } = await this.emailRenderer.render(templateKey, {
+              customerName,
+              customerEmail: to,
+              subject,
+              message: config.message
+                ? String(config.message)
+                : config.body
+                  ? String(config.body)
+                  : defaultMessage,
+              headline: config.headline
+                ? String(config.headline)
+                : execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP
+                  ? 'Thanks for signing up!'
+                  : execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT
+                    ? 'Your payment is confirmed'
+                    : undefined,
+              ctaLabel: config.ctaLabel ? String(config.ctaLabel) : undefined,
+              ctaUrl: config.ctaUrl ? String(config.ctaUrl) : undefined,
+            });
+            this.logger.log(
+              `Execution ${execution.id}: sending email to ${to}`,
+            );
+            await this.mailService.send({ to, subject, html, text });
+            await this.executionService.incrementEmailsSent(execution.id);
+            emailSent = true;
+          } catch (error) {
+            emailError =
+              error instanceof Error ? error.message : 'Email send failed';
+            this.logger.error(
+              `Execution ${execution.id}: email failed for ${to}: ${emailError}`,
+            );
+          }
         }
 
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message:
-            to && subject
-              ? `Email sent to ${to}`
-              : 'Email skipped (missing recipient or subject)',
+          message: emailSent
+            ? `Email sent to ${to}`
+            : to && subject
+              ? `Email failed: ${emailError ?? 'unknown error'}`
+              : to
+                ? 'Email skipped (missing subject)'
+                : 'Email skipped (missing customer email)',
+          error: emailError,
         });
+
+        if (to && subject && !emailSent) {
+          return 'failed';
+        }
+
         return 'advance';
       }
 
@@ -329,6 +489,22 @@ export class AutomationEngineService {
         });
         return 'failed';
     }
+  }
+
+  private resolveEmailTemplateKey(
+    purpose: AutomationPurpose,
+    rawTemplate: string,
+  ): string {
+    if (
+      purpose === AutomationPurpose.FUNNEL_SIGNUP ||
+      purpose === AutomationPurpose.FUNNEL_PAYMENT
+    ) {
+      return resolveAutomationEmailTemplateFromPurpose(purpose);
+    }
+    if (rawTemplate) {
+      return resolveAutomationEmailTemplateId(rawTemplate);
+    }
+    return resolveAutomationEmailTemplateFromPurpose(purpose);
   }
 
   private async shouldStopAfterCondition(

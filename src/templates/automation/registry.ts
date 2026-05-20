@@ -2,12 +2,16 @@ import * as React from 'react';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { AbandonedCheckoutReminderEmail } from './abandoned-checkout-reminder-email';
 import { GenericAutomationEmail } from './generic-automation-email';
+import { PaymentConfirmationEmail } from './payment-confirmation-email';
 import { PaymentReminderEmail } from './payment-reminder-email';
+import { SignupWelcomeEmail } from './signup-welcome-email';
 import type { AutomationEmailTemplateProps } from './types';
 
 export const AUTOMATION_EMAIL_TEMPLATE_IDS = {
   ABANDONED_CHECKOUT_REMINDER: 'abandoned_checkout_reminder',
   FUNNEL_SIGNUP_PAYMENT_REMINDER: 'funnel_signup_payment_reminder',
+  FUNNEL_SIGNUP_WELCOME: 'funnel_signup_welcome',
+  FUNNEL_PAYMENT_CONFIRMATION: 'funnel_payment_confirmation',
   PAYMENT_REMINDER: 'payment_reminder',
   GENERIC: 'generic',
 } as const;
@@ -26,6 +30,14 @@ const TEMPLATE_ALIASES: Record<string, AutomationEmailTemplateId> = {
     AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER,
   payment_reminder: AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER,
   signup_payment_reminder: AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER,
+  funnel_signup: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
+  funnel_signup_welcome: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
+  signup_welcome: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
+  welcome: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
+  funnel_payment: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
+  funnel_payment_confirmation:
+    AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
+  payment_confirmation: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
   generic: AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC,
 };
 
@@ -38,6 +50,9 @@ const TEMPLATE_COMPONENTS: Record<
   [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER]:
     PaymentReminderEmail,
   [AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER]: PaymentReminderEmail,
+  [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME]: SignupWelcomeEmail,
+  [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION]:
+    PaymentConfirmationEmail,
   [AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC]: GenericAutomationEmail,
 };
 
@@ -71,10 +86,11 @@ export function resolveAutomationEmailTemplateFromPurpose(
     case AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER:
       return AUTOMATION_EMAIL_TEMPLATE_IDS.ABANDONED_CHECKOUT_REMINDER;
     case AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER:
-    case AutomationPurpose.FUNNEL_SIGNUP:
       return AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER;
+    case AutomationPurpose.FUNNEL_SIGNUP:
+      return AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME;
     case AutomationPurpose.FUNNEL_PAYMENT:
-      return AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER;
+      return AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION;
     default:
       return AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC;
   }

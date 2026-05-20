@@ -40,14 +40,16 @@ export class FunnelEventService {
       throw new NotFoundException('Funnel not found');
     }
 
-    const event =
+    const tracked =
       dto.eventType === FunnelEventType.SIGNUP
         ? await this.trackSignup(dto)
         : await this.trackPayment(dto);
 
-    await this.automationService.handleEvent(event);
+    if (tracked.shouldRunAutomation) {
+      await this.automationService.handleEvent(tracked.event);
+    }
 
-    return event;
+    return tracked.event;
   }
 
   async getStats(funnelId: number): Promise<{
@@ -107,7 +109,9 @@ export class FunnelEventService {
     };
   }
 
-  private async trackSignup(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
+  private async trackSignup(
+    dto: TrackFunnelEventDto,
+  ): Promise<{ event: FunnelEvent; shouldRunAutomation: boolean }> {
     if (!dto.customerId) {
       throw new BadRequestException('customerId is required for signup events');
     }
@@ -129,7 +133,10 @@ export class FunnelEventService {
       if (visitorId) {
         existing.visitorId = visitorId;
       }
-      return this.funnelEventRepository.save(existing);
+      return {
+        event: await this.funnelEventRepository.save(existing),
+        shouldRunAutomation: false,
+      };
     }
 
     const event = this.funnelEventRepository.create({
@@ -139,10 +146,15 @@ export class FunnelEventService {
       visitorId,
     });
 
-    return this.funnelEventRepository.save(event);
+    return {
+      event: await this.funnelEventRepository.save(event),
+      shouldRunAutomation: true,
+    };
   }
 
-  private async trackPayment(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
+  private async trackPayment(
+    dto: TrackFunnelEventDto,
+  ): Promise<{ event: FunnelEvent; shouldRunAutomation: boolean }> {
     let payment: FunnelPayment | null = null;
 
     if (dto.funnelPaymentId) {
@@ -181,12 +193,18 @@ export class FunnelEventService {
     const funnelPaymentId = payment?.id ?? dto.funnelPaymentId ?? null;
 
     if (existing) {
+      const wasPaidBefore = this.isPaidFunnelEvent(existing);
       existing.customerId = customerId;
       if (visitorId) {
         existing.visitorId = visitorId;
       }
       this.applyPaymentFieldsToRow(existing, dto, payment);
-      return this.funnelEventRepository.save(existing);
+      const event = await this.funnelEventRepository.save(existing);
+      const isPaidNow = this.isPaidFunnelEvent(event);
+      return {
+        event,
+        shouldRunAutomation: !wasPaidBefore && isPaidNow,
+      };
     }
 
     const event = this.funnelEventRepository.create({
@@ -204,7 +222,18 @@ export class FunnelEventService {
       receiptUrl: dto.receiptUrl ?? payment?.receiptUrl ?? null,
     });
 
-    return this.funnelEventRepository.save(event);
+    const saved = await this.funnelEventRepository.save(event);
+    return {
+      event: saved,
+      shouldRunAutomation: this.isPaidFunnelEvent(saved),
+    };
+  }
+
+  private isPaidFunnelEvent(event: FunnelEvent): boolean {
+    if (event.paymentStatus === FunnelPaymentStatus.PAID) {
+      return true;
+    }
+    return event.funnelPaymentId !== null && event.funnelPaymentId !== undefined;
   }
 
   private applyPaymentFieldsToRow(

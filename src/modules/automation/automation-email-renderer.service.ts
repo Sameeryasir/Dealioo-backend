@@ -26,7 +26,10 @@ export class AutomationEmailRendererService {
 
   private buildPlainText(props: AutomationEmailTemplateProps): string {
     const name = props.customerName?.trim() || 'there';
+    const title = props.headline?.trim() || props.subject?.trim();
     const lines = [
+      title ? `${title}` : '',
+      title ? '' : null,
       `Hi ${name},`,
       '',
       props.message?.trim() ||
@@ -34,7 +37,7 @@ export class AutomationEmailRendererService {
       '',
       'Best regards,',
       'Retention+ Team',
-    ];
+    ].filter((line): line is string => line !== null);
 
     if (props.ctaUrl) {
       lines.splice(3, 0, `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`);

@@ -40,6 +40,22 @@ export class AutomationLogService {
     });
   }
 
+  async countByExecutionId(executionId: number): Promise<number> {
+    return this.automationLogRepository.count({ where: { executionId } });
+  }
+
+  async getVisitedNodeIds(executionId: number): Promise<number[]> {
+    const rows = await this.automationLogRepository
+      .createQueryBuilder('log')
+      .select('DISTINCT log.nodeId', 'nodeId')
+      .where('log.executionId = :executionId', { executionId })
+      .getRawMany<{ nodeId: string }>();
+
+    return rows
+      .map((row) => Number(row.nodeId))
+      .filter((id) => Number.isFinite(id));
+  }
+
   async findByAutomationId(automationId: number): Promise<AutomationLog[]> {
     return this.automationLogRepository.find({
       where: { execution: { automationId } },

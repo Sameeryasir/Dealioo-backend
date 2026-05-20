@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { FindOptionsWhere, In, Repository } from 'typeorm';
 import {
   Automation,
   AutomationTrigger,
@@ -756,8 +756,11 @@ export class AutomationService {
       user,
       'You do not have permission to process automation executions.',
     );
-    await this.executionService.findById(id);
-    await this.queueService.addProcessExecution({ executionId: id });
+    const execution = await this.executionService.findById(id);
+    await this.queueService.addProcessExecution({
+      executionId: id,
+      nodeId: execution.currentNodeId,
+    });
   }
 
   async resumeExecution(id: number, user: User): Promise<void> {
@@ -774,8 +777,21 @@ export class AutomationService {
       return;
     }
 
+    if (
+      event.eventType === FunnelEventType.PAYMENT &&
+      event.paymentStatus !== FunnelPaymentStatus.PAID &&
+      !event.funnelPaymentId
+    ) {
+      return;
+    }
+
     const trigger = this.mapFunnelEventToTrigger(event.eventType);
     if (!trigger) {
+      return;
+    }
+
+    const purpose = this.mapFunnelEventToAutoPurpose(event.eventType);
+    if (!purpose) {
       return;
     }
 
@@ -788,7 +804,11 @@ export class AutomationService {
     }
 
     const automations = await this.automationRepository.find({
-      where: { trigger, isActive: true },
+      where: {
+        trigger,
+        purpose,
+        isActive: true,
+      } as FindOptionsWhere<Automation>,
     });
 
     for (const automation of automations) {
@@ -804,10 +824,28 @@ export class AutomationService {
         continue;
       }
 
+      const alreadyCompleted =
+        await this.executionService.hasCompletedExecutionForCustomer(
+          automation.id,
+          event.customerId,
+        );
+      if (alreadyCompleted) {
+        continue;
+      }
+
       const startNodeId = await this.executionService.resolveStartNodeId(
         automation.id,
       );
       if (!startNodeId) {
+        continue;
+      }
+
+      const triggerMatches = await this.startNodeMatchesEvent(
+        automation,
+        startNodeId,
+        event.eventType,
+      );
+      if (!triggerMatches) {
         continue;
       }
 
@@ -822,8 +860,59 @@ export class AutomationService {
 
       await this.queueService.addProcessExecution({
         executionId: execution.id,
+        nodeId: startNodeId,
       });
     }
+  }
+
+  private mapFunnelEventToAutoPurpose(
+    eventType: FunnelEventType,
+  ): AutomationPurpose | null {
+    if (eventType === FunnelEventType.SIGNUP) {
+      return AutomationPurpose.FUNNEL_SIGNUP;
+    }
+    if (eventType === FunnelEventType.PAYMENT) {
+      return AutomationPurpose.FUNNEL_PAYMENT;
+    }
+    return null;
+  }
+
+  private async startNodeMatchesEvent(
+    automation: Automation,
+    startNodeId: number,
+    eventType: FunnelEventType,
+  ): Promise<boolean> {
+    const expectedTrigger = this.mapFunnelEventToTrigger(eventType);
+    if (expectedTrigger && automation.trigger === expectedTrigger) {
+      return true;
+    }
+
+    const node = await this.nodeRepository.findOne({
+      where: { id: startNodeId },
+    });
+    if (!node || node.type !== AutomationNodeType.TRIGGER) {
+      return true;
+    }
+
+    const config = node.config ?? {};
+    const configured = String(
+      config.trigger ?? config.triggerType ?? config.event ?? '',
+    )
+      .trim()
+      .toLowerCase();
+
+    if (!configured) {
+      return automation.trigger === expectedTrigger;
+    }
+
+    if (eventType === FunnelEventType.SIGNUP) {
+      return configured.includes('signup');
+    }
+    if (eventType === FunnelEventType.PAYMENT) {
+      return configured.includes('payment');
+    }
+
+    return false;
   }
 
   private mapFunnelEventToTrigger(

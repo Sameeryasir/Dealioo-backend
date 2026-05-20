@@ -18,6 +18,7 @@ export type UnpaidReminderBatchJob = {
 
 export type ProcessExecutionJob = {
   executionId: number;
+  nodeId: number;
 };
 
 export type ResumeExecutionJob = {

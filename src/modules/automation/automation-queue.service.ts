@@ -36,6 +36,7 @@ export class AutomationQueueService {
 
   async addProcessExecution(data: ProcessExecutionJob): Promise<string> {
     const job = await this.queue.add(AutomationJobName.PROCESS_EXECUTION, data, {
+      jobId: `process-execution-${data.executionId}-${data.nodeId}`,
       attempts: 3,
       backoff: { type: 'exponential', delay: 3000 },
       removeOnComplete: 200,
@@ -49,6 +50,7 @@ export class AutomationQueueService {
     delayMs: number,
   ): Promise<string> {
     const job = await this.queue.add(AutomationJobName.RESUME_EXECUTION, data, {
+      jobId: `resume-execution-${data.executionId}`,
       delay: delayMs,
       attempts: 3,
       backoff: { type: 'exponential', delay: 3000 },

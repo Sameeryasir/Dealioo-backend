@@ -84,10 +84,23 @@ export class AutomationExecutionService {
     );
   }
 
+  async findNodeForAutomation(
+    automationId: number,
+    nodeId: number,
+  ): Promise<AutomationNode> {
+    const node = await this.nodeRepository.findOne({
+      where: { id: nodeId, automationId },
+    });
+    if (!node) {
+      throw new NotFoundException('Automation node not found for this flow');
+    }
+    return node;
+  }
+
   async findById(id: number): Promise<AutomationExecution> {
     const execution = await this.executionRepository.findOne({
       where: { id },
-      relations: ['automation', 'currentNode', 'customer'],
+      relations: ['automation', 'automation.campaign', 'currentNode', 'customer'],
     });
     if (!execution) {
       throw new NotFoundException('Automation execution not found');
@@ -163,6 +176,19 @@ export class AutomationExecutionService {
     return { completed, inProgress };
   }
 
+  async hasCompletedExecutionForCustomer(
+    automationId: number,
+    customerId: number,
+  ): Promise<boolean> {
+    return this.executionRepository.exist({
+      where: {
+        automationId,
+        customerId,
+        status: AutomationExecutionStatus.COMPLETED,
+      },
+    });
+  }
+
   async hasActiveExecution(
     automationId: number,
     customerId: number,
@@ -200,7 +226,13 @@ export class AutomationExecutionService {
     const connection = await this.connectionRepository.findOne({
       where: { automationId, sourceNodeId },
     });
-    return connection?.targetNodeId ?? null;
+    if (!connection?.targetNodeId) {
+      return null;
+    }
+    if (connection.targetNodeId === sourceNodeId) {
+      return null;
+    }
+    return connection.targetNodeId;
   }
 
   async updateCurrentNode(

@@ -43,8 +43,10 @@ export class AutomationQueueProcessor extends WorkerHost {
       UnpaidReminderBatchJob | ProcessExecutionJob | ResumeExecutionJob
     >,
   ): Promise<void> {
-    this.logger.log(`Processing job ${job.name} (${job.id})`);
     const executionId = this.resolveExecutionId(job);
+    this.logger.log(
+      `Processing job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}`,
+    );
 
     try {
       switch (job.name) {
@@ -52,27 +54,35 @@ export class AutomationQueueProcessor extends WorkerHost {
           await this.automationService.runUnpaidReminderBatch(
             job.data as UnpaidReminderBatchJob,
           );
-          return;
+          break;
 
-        case AutomationJobName.PROCESS_EXECUTION:
+        case AutomationJobName.PROCESS_EXECUTION: {
+          const payload = job.data as ProcessExecutionJob;
           await this.engineService.processExecution(
-            (job.data as ProcessExecutionJob).executionId,
+            payload.executionId,
+            payload.nodeId,
           );
-          return;
+          break;
+        }
 
         case AutomationJobName.RESUME_EXECUTION:
           await this.engineService.resumeAfterWait(
             (job.data as ResumeExecutionJob).executionId,
           );
-          return;
+          break;
 
         default:
           this.logger.warn(`Unknown automation job: ${job.name}`);
       }
+
+      this.logger.log(`Completed job ${job.name} (${job.id})`);
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Job processing failed';
+      this.logger.error(
+        `Failed job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}: ${message}`,
+      );
       if (executionId) {
-        const message =
-          error instanceof Error ? error.message : 'Job processing failed';
         await this.executionService.markFailed(executionId, message);
       }
       throw error;
