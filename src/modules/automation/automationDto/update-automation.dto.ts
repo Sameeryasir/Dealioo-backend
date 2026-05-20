@@ -8,6 +8,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { AutomationPurpose } from '../../../db/entities/automation-purpose.enum';
 import { AutomationTrigger } from '../../../db/entities/automation.entity';
 
 export class UpdateAutomationDto {
@@ -25,16 +26,20 @@ export class UpdateAutomationDto {
   trigger?: AutomationTrigger;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  campaignId?: number | null;
+  @IsEnum(AutomationPurpose)
+  purpose?: AutomationPurpose;
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  funnelId?: number | null;
+  restaurantId?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  campaignId?: number;
 
   @IsOptional()
   @Type(() => Boolean)

@@ -25,6 +25,7 @@ export class AutomationExecutionService {
 
   async createExecution(
     dto: CreateAutomationExecutionDto,
+    customerId: number,
   ): Promise<AutomationExecution> {
     const node = await this.nodeRepository.findOne({
       where: { id: dto.currentNodeId, automationId: dto.automationId },
@@ -35,8 +36,9 @@ export class AutomationExecutionService {
 
     const execution = this.executionRepository.create({
       automationId: dto.automationId,
-      customerId: dto.customerId,
+      customerId,
       currentNodeId: dto.currentNodeId,
+      purpose: dto.purpose,
       status: AutomationExecutionStatus.RUNNING,
       scheduledAt: null,
     });
@@ -115,6 +117,15 @@ export class AutomationExecutionService {
     execution.currentNodeId = nodeId;
     execution.status = status;
     execution.scheduledAt = scheduledAt;
+    return this.executionRepository.save(execution);
+  }
+
+  async updateCustomerId(
+    executionId: number,
+    customerId: number,
+  ): Promise<AutomationExecution> {
+    const execution = await this.findById(executionId);
+    execution.customerId = customerId;
     return this.executionRepository.save(execution);
   }
 

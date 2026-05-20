@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsNotEmpty, Min } from 'class-validator';
+import { IsEnum, IsInt, Min } from 'class-validator';
+import { AutomationPurpose } from '../../../db/entities/automation-purpose.enum';
 
 export class CreateAutomationExecutionDto {
   @Type(() => Number)
@@ -10,11 +11,8 @@ export class CreateAutomationExecutionDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @IsNotEmpty()
-  customerId: number;
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
   currentNodeId: number;
+
+  @IsEnum(AutomationPurpose)
+  purpose: AutomationPurpose;
 }

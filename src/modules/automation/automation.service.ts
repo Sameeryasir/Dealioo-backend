@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,17 +10,26 @@ import {
   AutomationTrigger,
 } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
 import { AutomationLog } from '../../db/entities/automation-log.entity';
-import { AutomationNode } from '../../db/entities/automation-node.entity';
+import {
+  AutomationNode,
+  AutomationNodeType,
+} from '../../db/entities/automation-node.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
+import { Customer } from '../../db/entities/customer.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
@@ -29,6 +37,10 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
+import { AutomationEmailRendererService } from './automation-email-renderer.service';
+import { AutomationMailService } from './automation-mail.service';
+import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
+import type { AutomationEmailTemplateProps } from '../../templates/automation/types';
 import { AutomationWorkerService } from './automation-worker.service';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
@@ -52,9 +64,15 @@ export class AutomationService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Customer)
+    private readonly customerRepository: Repository<Customer>,
     private readonly executionService: AutomationExecutionService,
     private readonly engineService: AutomationEngineService,
     private readonly logService: AutomationLogService,
+    private readonly mailService: AutomationMailService,
+    private readonly emailRenderer: AutomationEmailRendererService,
     private readonly workerService: AutomationWorkerService,
   ) {}
 
@@ -65,13 +83,16 @@ export class AutomationService {
     requireAdminRole(user, 'You do not have permission to create automations.');
 
     const { restaurantId, campaignId, funnelId } =
-      await this.resolveScopeIds(dto);
+      await this.resolveScopeFromCampaign(dto.campaignId, dto.restaurantId);
+
+    this.validatePurposeAndTrigger(dto.purpose, dto.trigger);
 
     const automation = this.automationRepository.create({
       restaurantId,
       name: dto.name,
       description: dto.description?.trim() ?? null,
       trigger: dto.trigger,
+      purpose: dto.purpose,
       campaignId,
       funnelId,
       createdBy: user.id,
@@ -101,6 +122,12 @@ export class AutomationService {
     if (dto.trigger !== undefined) {
       automation.trigger = dto.trigger;
     }
+    if (dto.purpose !== undefined) {
+      automation.purpose = dto.purpose;
+    }
+    if (dto.trigger !== undefined || dto.purpose !== undefined) {
+      this.validatePurposeAndTrigger(automation.purpose, automation.trigger);
+    }
     if (dto.isActive !== undefined) {
       automation.isActive = dto.isActive;
     }
@@ -111,18 +138,13 @@ export class AutomationService {
       automation.isTemplate = dto.isTemplate;
     }
     if (dto.campaignId !== undefined) {
-      automation.campaignId = dto.campaignId;
-    }
-    if (dto.funnelId !== undefined) {
-      automation.funnelId = dto.funnelId;
-    }
-
-    if (dto.campaignId !== undefined || dto.funnelId !== undefined) {
-      await this.validateScope(
-        automation.restaurantId,
-        automation.campaignId,
-        automation.funnelId,
+      const scope = await this.resolveScopeFromCampaign(
+        dto.campaignId,
+        dto.restaurantId,
       );
+      automation.restaurantId = scope.restaurantId;
+      automation.campaignId = scope.campaignId;
+      automation.funnelId = scope.funnelId;
     }
 
     return this.automationRepository.save(automation);
@@ -317,11 +339,32 @@ export class AutomationService {
     customerId?: number;
     status?: AutomationExecutionStatus;
   }): Promise<AutomationExecution[]> {
-    return this.executionService.findExecutions(filters);
+    const executions = await this.executionService.findExecutions(filters);
+    return this.attachExecutedRecipients(executions);
   }
 
   async getExecutionById(id: number): Promise<AutomationExecution> {
-    return this.executionService.findById(id);
+    const execution = await this.executionService.findById(id);
+    const [enriched] = await this.attachExecutedRecipients([execution]);
+    return enriched;
+  }
+
+  private async attachExecutedRecipients(
+    executions: AutomationExecution[],
+  ): Promise<AutomationExecution[]> {
+    if (executions.length === 0) {
+      return executions;
+    }
+
+    const recipientMap = await this.logService.findEmailRecipientsByExecutionIds(
+      executions.map((execution) => execution.id),
+    );
+
+    return executions.map((execution) =>
+      Object.assign(execution, {
+        executedRecipients: recipientMap.get(execution.id) ?? [],
+      }),
+    );
   }
 
   async getExecutionLogs(executionId: number): Promise<AutomationLog[]> {
@@ -349,14 +392,18 @@ export class AutomationService {
       throw new BadRequestException('Automation is not active');
     }
 
-    const hasActive = await this.executionService.hasActiveExecution(
-      dto.automationId,
-      dto.customerId,
+    if (!automation.funnelId) {
+      throw new BadRequestException('Automation has no funnel linked');
+    }
+
+    const { emailNode, subject, templateKey, templateProps } =
+      await this.resolveEmailNodeContent(dto.automationId, automation.purpose);
+
+    const unpaidRecipients = await this.getUnpaidCustomersForFunnel(
+      automation.funnelId,
     );
-    if (hasActive) {
-      throw new ConflictException(
-        'Customer already has an active execution for this automation',
-      );
+    if (unpaidRecipients.length === 0) {
+      throw new BadRequestException('No unpaid customers found for this funnel');
     }
 
     const startNodeId =
@@ -369,17 +416,223 @@ export class AutomationService {
       );
     }
 
-    const execution = await this.executionService.createExecution({
-      automationId: dto.automationId,
-      customerId: dto.customerId,
-      currentNodeId: startNodeId,
-    });
-
-    this.workerService.enqueue(() =>
-      this.engineService.processExecution(execution.id),
+    const execution = await this.executionService.createExecution(
+      {
+        automationId: dto.automationId,
+        currentNodeId: startNodeId,
+        purpose: automation.purpose,
+      },
+      unpaidRecipients[0].customerId,
     );
 
+    const batch = {
+      executionId: execution.id,
+      emailNodeId: emailNode.id,
+      subject,
+      templateKey,
+      templateProps,
+      recipients: unpaidRecipients,
+    };
+
+    this.workerService.enqueue(() => this.processUnpaidReminderBatch(batch));
+
     return execution;
+  }
+
+  private async processUnpaidReminderBatch(batch: {
+    executionId: number;
+    emailNodeId: number;
+    subject: string;
+    templateKey: string;
+    templateProps: Partial<AutomationEmailTemplateProps>;
+    recipients: { customerId: number; email: string; name: string }[];
+  }): Promise<void> {
+    const sent: { customerId: number; email: string }[] = [];
+
+    for (const recipient of batch.recipients) {
+      try {
+        const { html, text } = await this.emailRenderer.render(
+          batch.templateKey,
+          {
+            customerName: recipient.name,
+            customerEmail: recipient.email,
+            subject: batch.subject,
+            ...batch.templateProps,
+          },
+        );
+        await this.mailService.send({
+          to: recipient.email,
+          subject: batch.subject,
+          html,
+          text,
+        });
+        await this.executionService.updateCustomerId(
+          batch.executionId,
+          recipient.customerId,
+        );
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          customerId: recipient.customerId,
+          message: `Payment reminder email sent to ${recipient.email}`,
+        });
+        sent.push(recipient);
+      } catch {
+        // Continue with the next unpaid customer.
+      }
+    }
+
+    if (sent.length > 0) {
+      const summary = sent
+        .map((recipient) => `${recipient.email} (#${recipient.customerId})`)
+        .join(', ');
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.emailNodeId,
+        customerId: sent[sent.length - 1].customerId,
+        message: `Workflow completed for ${sent.length} customer(s): ${summary}`,
+      });
+    } else if (batch.recipients[0]) {
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.emailNodeId,
+        customerId: batch.recipients[0].customerId,
+        message: 'Workflow completed. No emails were sent.',
+        error: 'All send attempts failed',
+      });
+    }
+
+    await this.executionService.markCompleted(batch.executionId);
+  }
+
+  async executeAutomation(
+    automationId: number,
+    user: User,
+  ): Promise<{ unpaidCount: number; emailsSent: number }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to execute automations.',
+    );
+
+    const automation = await this.findAutomationById(automationId);
+
+    if (!automation.isActive) {
+      throw new BadRequestException('Automation is not active');
+    }
+
+    if (
+      automation.purpose !== AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+      automation.trigger !== AutomationTrigger.SIGNUP
+    ) {
+      throw new BadRequestException(
+        'Only signup payment-reminder automations can be run this way.',
+      );
+    }
+
+    const execution = await this.startExecution({ automationId }, user);
+    const logs = await this.logService.findByExecutionId(execution.id);
+    const emailsSent = logs.filter((log) =>
+      log.message.includes('email sent'),
+    ).length;
+
+    const unpaidRecipients = automation.funnelId
+      ? await this.getUnpaidCustomersForFunnel(automation.funnelId)
+      : [];
+
+    return {
+      unpaidCount: unpaidRecipients.length,
+      emailsSent,
+    };
+  }
+
+  private async resolveEmailNodeContent(
+    automationId: number,
+    purpose: AutomationPurpose,
+  ): Promise<{
+    emailNode: AutomationNode;
+    subject: string;
+    templateKey: string;
+    templateProps: Partial<AutomationEmailTemplateProps>;
+  }> {
+    const emailNode = await this.nodeRepository.findOne({
+      where: { automationId, type: AutomationNodeType.EMAIL },
+      order: { order: 'ASC' },
+    });
+    if (!emailNode || emailNode.type !== AutomationNodeType.EMAIL) {
+      throw new BadRequestException(
+        'Add an email node with subject in config.',
+      );
+    }
+
+    const config = emailNode.config ?? {};
+    const subject = String(config.subject ?? '').trim();
+    if (!subject) {
+      throw new BadRequestException(
+        'Email node config must include subject.',
+      );
+    }
+
+    const templateKey = resolveAutomationEmailTemplateFromPurpose(purpose);
+
+    const templateProps: Partial<AutomationEmailTemplateProps> = {};
+    if (config.message) {
+      templateProps.message = String(config.message);
+    }
+    if (config.headline) {
+      templateProps.headline = String(config.headline);
+    }
+    if (config.ctaLabel) {
+      templateProps.ctaLabel = String(config.ctaLabel);
+    }
+    if (config.ctaUrl) {
+      templateProps.ctaUrl = String(config.ctaUrl);
+    }
+
+    return { emailNode, subject, templateKey, templateProps };
+  }
+
+  private async getUnpaidCustomersForFunnel(
+    funnelId: number,
+  ): Promise<{ customerId: number; email: string; name: string }[]> {
+    const unpaidPayments = await this.funnelPaymentRepository.find({
+      where: {
+        funnelId,
+        status: In([
+          FunnelPaymentStatus.PENDING,
+          FunnelPaymentStatus.FAILED,
+          FunnelPaymentStatus.CANCELLED,
+        ]),
+      },
+    });
+
+    const recipients: { customerId: number; email: string; name: string }[] =
+      [];
+    const seenCustomerIds = new Set<number>();
+
+    for (const payment of unpaidPayments) {
+      const email = payment.customerEmail?.trim();
+      if (!email) {
+        continue;
+      }
+
+      const customer = await this.customerRepository
+        .createQueryBuilder('customer')
+        .where('LOWER(customer.email) = LOWER(:email)', { email })
+        .getOne();
+
+      if (!customer || seenCustomerIds.has(customer.id)) {
+        continue;
+      }
+
+      seenCustomerIds.add(customer.id);
+      recipients.push({
+        customerId: customer.id,
+        email: customer.email,
+        name: customer.name,
+      });
+    }
+
+    return recipients;
   }
 
   async processExecution(id: number, user: User): Promise<void> {
@@ -442,11 +695,14 @@ export class AutomationService {
         continue;
       }
 
-      const execution = await this.executionService.createExecution({
-        automationId: automation.id,
-        customerId: event.customerId,
-        currentNodeId: startNodeId,
-      });
+      const execution = await this.executionService.createExecution(
+        {
+          automationId: automation.id,
+          currentNodeId: startNodeId,
+          purpose: automation.purpose,
+        },
+        event.customerId,
+      );
 
       this.workerService.enqueue(() =>
         this.engineService.processExecution(execution.id),
@@ -464,6 +720,43 @@ export class AutomationService {
       return AutomationTrigger.PAYMENT;
     }
     return null;
+  }
+
+  private validatePurposeAndTrigger(
+    purpose: AutomationPurpose,
+    trigger: AutomationTrigger,
+  ): void {
+    const signupPurposes = new Set<AutomationPurpose>([
+      AutomationPurpose.FUNNEL_SIGNUP,
+      AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+    ]);
+
+    if (
+      signupPurposes.has(purpose) &&
+      trigger !== AutomationTrigger.SIGNUP
+    ) {
+      throw new BadRequestException(
+        'Signup payment reminder automations require trigger "signup".',
+      );
+    }
+
+    if (
+      purpose === AutomationPurpose.FUNNEL_PAYMENT &&
+      trigger !== AutomationTrigger.PAYMENT
+    ) {
+      throw new BadRequestException(
+        'Post-payment automations require trigger "payment".',
+      );
+    }
+
+    if (
+      purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER &&
+      trigger !== AutomationTrigger.ABANDONED_CHECKOUT
+    ) {
+      throw new BadRequestException(
+        'Abandoned checkout automations require trigger "abandoned_checkout".',
+      );
+    }
   }
 
   private matchesAutomationScope(
@@ -489,90 +782,40 @@ export class AutomationService {
     return true;
   }
 
-  private async resolveScopeIds(dto: CreateAutomationDto): Promise<{
+  private async resolveScopeFromCampaign(
+    campaignId: number,
+    restaurantId?: number,
+  ): Promise<{
     restaurantId: number;
-    campaignId: number | null;
-    funnelId: number | null;
+    campaignId: number;
+    funnelId: number;
   }> {
-    let funnelId = dto.funnelId ?? null;
-    let campaignId = dto.campaignId ?? null;
-    let restaurantId = dto.restaurantId ?? null;
-
-    if (funnelId) {
-      const funnel = await this.funnelRepository.findOne({
-        where: { id: funnelId },
-        relations: ['campaign'],
-      });
-      if (!funnel) {
-        throw new NotFoundException('Funnel not found');
-      }
-      campaignId = funnel.campaignId;
-      restaurantId = funnel.campaign.restaurantId;
-    } else if (campaignId) {
-      const campaign = await this.campaignRepository.findOne({
-        where: { id: campaignId },
-      });
-      if (!campaign) {
-        throw new NotFoundException('Campaign not found');
-      }
-      restaurantId = campaign.restaurantId;
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+    });
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
     }
 
-    if (!restaurantId) {
+    if (restaurantId !== undefined && campaign.restaurantId !== restaurantId) {
       throw new BadRequestException(
-        'restaurantId is required when campaignId and funnelId are omitted',
+        'Campaign does not belong to this restaurant',
       );
     }
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const funnel = await this.funnelRepository.findOne({
+      where: { campaignId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!funnel) {
+      throw new BadRequestException(
+        'No funnel exists for this campaign. Create a funnel for the campaign first.',
+      );
     }
 
-    await this.validateScope(restaurantId, campaignId, funnelId);
-
-    return { restaurantId, campaignId, funnelId };
-  }
-
-  private async validateScope(
-    restaurantId: number,
-    campaignId: number | null,
-    funnelId: number | null,
-  ): Promise<void> {
-    if (campaignId) {
-      const campaign = await this.campaignRepository.findOne({
-        where: { id: campaignId },
-      });
-      if (!campaign) {
-        throw new NotFoundException('Campaign not found');
-      }
-      if (campaign.restaurantId !== restaurantId) {
-        throw new BadRequestException(
-          'Campaign does not belong to this restaurant',
-        );
-      }
-    }
-
-    if (funnelId) {
-      const funnel = await this.funnelRepository.findOne({
-        where: { id: funnelId },
-        relations: ['campaign'],
-      });
-      if (!funnel) {
-        throw new NotFoundException('Funnel not found');
-      }
-      if (funnel.campaign.restaurantId !== restaurantId) {
-        throw new BadRequestException(
-          'Funnel does not belong to this restaurant',
-        );
-      }
-      if (campaignId && funnel.campaignId !== campaignId) {
-        throw new BadRequestException(
-          'Funnel does not belong to this campaign',
-        );
-      }
-    }
+    return {
+      restaurantId: campaign.restaurantId,
+      campaignId: campaign.id,
+      funnelId: funnel.id,
+    };
   }
 }

@@ -15,6 +15,7 @@ import { Campaign } from './campaign.entity';
 import { Funnel } from './funnel.entity';
 import { Restaurant } from './restaurant.entity';
 import { User } from './user.entity';
+import { AutomationPurpose } from './automation-purpose.enum';
 
 export enum AutomationTrigger {
   SIGNUP = 'signup',
@@ -48,6 +49,13 @@ export class Automation {
     enum: AutomationTrigger,
   })
   trigger: AutomationTrigger;
+
+  @Column({
+    type: 'enum',
+    enum: AutomationPurpose,
+    default: AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+  })
+  purpose: AutomationPurpose;
 
   @Column({ name: 'campaign_id', nullable: true })
   campaignId: number | null;

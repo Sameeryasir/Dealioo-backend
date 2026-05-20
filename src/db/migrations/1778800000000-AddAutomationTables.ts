@@ -18,7 +18,6 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         WHEN duplicate_object THEN NULL;
       END $$;
     `);
-
     await queryRunner.query(`
       DO $$ BEGIN
         CREATE TYPE "automation_node_type_enum" AS ENUM (
@@ -35,7 +34,19 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         WHEN duplicate_object THEN NULL;
       END $$;
     `);
-
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "automation_execution_purpose_enum" AS ENUM (
+          'manual',
+          'funnel_signup_payment_reminder',
+          'funnel_signup',
+          'funnel_payment',
+          'funnel_abandoned_checkout_reminder'
+        );
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "automation" (
         "id" SERIAL NOT NULL,
@@ -43,6 +54,7 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         "name" character varying(255) NOT NULL,
         "description" text,
         "trigger" "automation_trigger_enum" NOT NULL,
+        "purpose" "automation_execution_purpose_enum" NOT NULL DEFAULT 'funnel_signup_payment_reminder',
         "campaign_id" integer,
         "funnel_id" integer,
         "created_by" integer NOT NULL,
@@ -58,7 +70,6 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         CONSTRAINT "FK_automation_created_by" FOREIGN KEY ("created_by") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
-
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "automation_node" (
         "id" SERIAL NOT NULL,
@@ -74,7 +85,6 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         CONSTRAINT "FK_automation_node_automation_id" FOREIGN KEY ("automation_id") REFERENCES "automation"("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
-
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "automation_connection" (
         "id" SERIAL NOT NULL,
@@ -87,7 +97,6 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         CONSTRAINT "FK_automation_connection_target_node_id" FOREIGN KEY ("target_node_id") REFERENCES "automation_node"("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
-
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "automation_execution" (
         "id" SERIAL NOT NULL,
@@ -96,6 +105,7 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         "current_node_id" integer NOT NULL,
         "status" character varying(32) NOT NULL DEFAULT 'running',
         "scheduled_at" TIMESTAMPTZ,
+        "purpose" "automation_execution_purpose_enum" NOT NULL DEFAULT 'manual',
         "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
         "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT "PK_automation_execution" PRIMARY KEY ("id"),
@@ -104,7 +114,6 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         CONSTRAINT "FK_automation_execution_current_node_id" FOREIGN KEY ("current_node_id") REFERENCES "automation_node"("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
-
     await queryRunner.query(`
       CREATE TABLE IF NOT EXISTS "automation_log" (
         "id" SERIAL NOT NULL,
@@ -120,37 +129,19 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
         CONSTRAINT "FK_automation_log_customer_id" FOREIGN KEY ("customer_id") REFERENCES "customers"("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
-
-    // Backfill columns when tables existed from an earlier partial migration
+    await queryRunner.query(`
+      ALTER TABLE "automation"
+      ADD COLUMN IF NOT EXISTS "purpose" "automation_execution_purpose_enum" NOT NULL DEFAULT 'funnel_signup_payment_reminder'
+    `);
     await queryRunner.query(`
       ALTER TABLE "automation_node"
       ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
       ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
     `);
-
     await queryRunner.query(`
       ALTER TABLE "automation_execution"
+      ADD COLUMN IF NOT EXISTS "purpose" "automation_execution_purpose_enum" NOT NULL DEFAULT 'manual',
       ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
-    `);
-
-    await queryRunner.query(`
-      DELETE FROM "automation_log"
-      WHERE "customer_id" IS NULL
-    `);
-
-    await queryRunner.query(`
-      DELETE FROM "automation_execution"
-      WHERE "customer_id" IS NULL
-    `);
-
-    await queryRunner.query(`
-      ALTER TABLE "automation_execution"
-      ALTER COLUMN "customer_id" SET NOT NULL
-    `);
-
-    await queryRunner.query(`
-      ALTER TABLE "automation_log"
-      ALTER COLUMN "customer_id" SET NOT NULL
     `);
   }
 
@@ -160,6 +151,7 @@ export class AddAutomationTables1778800000000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS "automation_connection"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "automation_node"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "automation"`);
+    await queryRunner.query(`DROP TYPE IF EXISTS "automation_execution_purpose_enum"`);
     await queryRunner.query(`DROP TYPE IF EXISTS "automation_node_type_enum"`);
     await queryRunner.query(`DROP TYPE IF EXISTS "automation_trigger_enum"`);
   }

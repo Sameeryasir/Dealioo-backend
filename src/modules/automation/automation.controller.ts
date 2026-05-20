@@ -66,7 +66,6 @@ export class AutomationController {
     return this.automationService.deleteNode(id);
   }
 
-  // --- Connections ---
   @UseGuards(AuthGuard('jwt'))
   @Post('connection')
   createConnection(
@@ -81,7 +80,6 @@ export class AutomationController {
     return this.automationService.deleteConnection(id);
   }
 
-  // --- Executions (runtime) ---
   @UseGuards(AuthGuard('jwt'))
   @Get('execution')
   getExecutions(
@@ -141,7 +139,6 @@ export class AutomationController {
     return this.automationService.resumeExecution(id, req.user);
   }
 
-  // --- Logs ---
   @UseGuards(AuthGuard('jwt'))
   @Get('log')
   getAutomationLogs(
@@ -150,7 +147,6 @@ export class AutomationController {
     return this.automationService.getAutomationLogs(automationId);
   }
 
-  // --- Automations ---
   @UseGuards(AuthGuard('jwt'))
   @Post()
   createAutomation(
@@ -194,6 +190,15 @@ export class AutomationController {
     @Req() req,
   ): Promise<void> {
     return this.automationService.deleteAutomation(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/execute')
+  executeAutomation(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req,
+  ): Promise<{ unpaidCount: number; emailsSent: number }> {
+    return this.automationService.executeAutomation(id, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))

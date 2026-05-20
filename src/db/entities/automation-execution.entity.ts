@@ -12,6 +12,7 @@ import { AutomationLog } from './automation-log.entity';
 import { Automation } from './automation.entity';
 import { AutomationNode } from './automation-node.entity';
 import { Customer } from './customer.entity';
+import { AutomationPurpose } from './automation-purpose.enum';
 
 export enum AutomationExecutionStatus {
   RUNNING = 'running',
@@ -19,6 +20,8 @@ export enum AutomationExecutionStatus {
   FAILED = 'failed',
   COMPLETED = 'completed',
 }
+
+export { AutomationPurpose as AutomationExecutionPurpose };
 
 @Entity('automation_execution')
 export class AutomationExecution {
@@ -55,6 +58,13 @@ export class AutomationExecution {
 
   @Column({ name: 'scheduled_at', type: 'timestamptz', nullable: true })
   scheduledAt: Date | null;
+
+  @Column({
+    type: 'enum',
+    enum: AutomationPurpose,
+    default: AutomationPurpose.MANUAL,
+  })
+  purpose: AutomationPurpose;
 
   @OneToMany(() => AutomationLog, (log) => log.execution)
   logs: AutomationLog[];

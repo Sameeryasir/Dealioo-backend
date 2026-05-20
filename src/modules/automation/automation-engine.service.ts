@@ -1,14 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationExecutionStatus } from '../../db/entities/automation-execution.entity';
+import { Customer } from '../../db/entities/customer.entity';
 import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
+import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
+import { AutomationEmailRendererService } from './automation-email-renderer.service';
+import { AutomationMailService } from './automation-mail.service';
 import { AutomationWorkerService } from './automation-worker.service';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
@@ -20,9 +28,15 @@ export class AutomationEngineService {
   constructor(
     private readonly executionService: AutomationExecutionService,
     private readonly logService: AutomationLogService,
+    private readonly mailService: AutomationMailService,
+    private readonly emailRenderer: AutomationEmailRendererService,
     private readonly workerService: AutomationWorkerService,
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Customer)
+    private readonly customerRepository: Repository<Customer>,
   ) {}
 
   async processExecution(executionId: number): Promise<void> {
@@ -214,14 +228,39 @@ export class AutomationEngineService {
         return 'wait';
       }
 
-      case AutomationNodeType.EMAIL:
+      case AutomationNodeType.EMAIL: {
+        const subject = String(config.subject ?? '').trim();
+        const templateKey = resolveAutomationEmailTemplateFromPurpose(
+          execution.automation.purpose,
+        );
+        const to = execution.customer?.email?.trim();
+        const customerName =
+          execution.customer?.name?.trim() || to?.split('@')[0] || 'there';
+
+        if (to && subject) {
+          const { html, text } = await this.emailRenderer.render(templateKey, {
+            customerName,
+            customerEmail: to,
+            subject,
+            message: config.message ? String(config.message) : undefined,
+            headline: config.headline ? String(config.headline) : undefined,
+            ctaLabel: config.ctaLabel ? String(config.ctaLabel) : undefined,
+            ctaUrl: config.ctaUrl ? String(config.ctaUrl) : undefined,
+          });
+          await this.mailService.send({ to, subject, html, text });
+        }
+
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: `Email sent (template ${config.templateId ?? 'default'})`,
+          message:
+            to && subject
+              ? `Email sent to ${to}`
+              : 'Email skipped (missing recipient or subject)',
         });
         return 'advance';
+      }
 
       case AutomationNodeType.SMS:
         await this.logService.createLog({
@@ -242,17 +281,20 @@ export class AutomationEngineService {
         return 'advance';
 
       case AutomationNodeType.CONDITION: {
-        const passed = await this.evaluateCondition(
+        const conditionType = String(config.type ?? '');
+        const stopFlow = await this.shouldStopAfterCondition(
           execution,
-          String(config.type ?? ''),
+          conditionType,
         );
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: passed ? 'Condition passed' : 'Condition failed',
+          message: stopFlow
+            ? 'Condition met — workflow stops'
+            : 'Condition not met — continue to next step',
         });
-        if (passed) {
+        if (stopFlow) {
           return 'complete';
         }
         return 'advance';
@@ -288,31 +330,39 @@ export class AutomationEngineService {
     }
   }
 
-  private async evaluateCondition(
+  private async shouldStopAfterCondition(
     execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
     conditionType: string,
   ): Promise<boolean> {
-    if (conditionType === 'payment_exists') {
-      const funnelId = execution.automation.funnelId;
-      if (!funnelId) {
-        return false;
-      }
+    const funnelId = execution.automation.funnelId;
+    if (!funnelId) {
+      return false;
+    }
 
-      return this.funnelEventRepository.exist({
-        where: {
-          funnelId,
-          customerId: execution.customerId,
-          funnelPaymentId: Not(IsNull()),
-        },
-      });
+    if (conditionType === 'payment_not_paid') {
+      return this.customerHasPaidOnFunnel(funnelId, execution.customerId);
+    }
+
+    if (conditionType === 'payment_pending') {
+      const paid = await this.customerHasPaidOnFunnel(
+        funnelId,
+        execution.customerId,
+      );
+      if (paid) {
+        return true;
+      }
+      const hasUnpaidAttempt = await this.customerHasUnpaidPaymentOnFunnel(
+        funnelId,
+        execution.customerId,
+      );
+      return !hasUnpaidAttempt;
+    }
+
+    if (conditionType === 'payment_exists') {
+      return this.customerHasPaidOnFunnel(funnelId, execution.customerId);
     }
 
     if (conditionType === 'signup_exists') {
-      const funnelId = execution.automation.funnelId;
-      if (!funnelId) {
-        return false;
-      }
-
       return this.funnelEventRepository.exist({
         where: {
           funnelId,
@@ -323,5 +373,49 @@ export class AutomationEngineService {
     }
 
     return false;
+  }
+
+  private async customerHasPaidOnFunnel(
+    funnelId: number,
+    customerId: number,
+  ): Promise<boolean> {
+    const customer = await this.customerRepository.findOne({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      return false;
+    }
+
+    return this.funnelPaymentRepository.exist({
+      where: {
+        funnelId,
+        customerEmail: customer.email,
+        status: FunnelPaymentStatus.PAID,
+      },
+    });
+  }
+
+  private async customerHasUnpaidPaymentOnFunnel(
+    funnelId: number,
+    customerId: number,
+  ): Promise<boolean> {
+    const customer = await this.customerRepository.findOne({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      return false;
+    }
+
+    return this.funnelPaymentRepository.exist({
+      where: {
+        funnelId,
+        customerEmail: customer.email,
+        status: In([
+          FunnelPaymentStatus.PENDING,
+          FunnelPaymentStatus.FAILED,
+          FunnelPaymentStatus.CANCELLED,
+        ]),
+      },
+    });
   }
 }
