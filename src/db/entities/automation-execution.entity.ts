@@ -15,6 +15,7 @@ import { Customer } from './customer.entity';
 import { AutomationPurpose } from './automation-purpose.enum';
 
 export enum AutomationExecutionStatus {
+  QUEUED = 'queued',
   RUNNING = 'running',
   WAITING = 'waiting',
   FAILED = 'failed',
@@ -55,6 +56,18 @@ export class AutomationExecution {
     default: AutomationExecutionStatus.RUNNING,
   })
   status: AutomationExecutionStatus;
+
+  @Column({ name: 'queue_job_id', type: 'varchar', length: 64, nullable: true })
+  queueJobId: string | null;
+
+  @Column({ name: 'total_recipients', type: 'int', default: 0 })
+  totalRecipients: number;
+
+  @Column({ name: 'emails_sent_count', type: 'int', default: 0 })
+  emailsSentCount: number;
+
+  @Column({ name: 'last_error', type: 'text', nullable: true })
+  lastError: string | null;
 
   @Column({ name: 'scheduled_at', type: 'timestamptz', nullable: true })
   scheduledAt: Date | null;

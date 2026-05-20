@@ -17,7 +17,7 @@ import { AutomationLogService } from './automation-log.service';
 import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationMailService } from './automation-mail.service';
-import { AutomationWorkerService } from './automation-worker.service';
+import { AutomationQueueService } from './automation-queue.service';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
 
@@ -30,7 +30,7 @@ export class AutomationEngineService {
     private readonly logService: AutomationLogService,
     private readonly mailService: AutomationMailService,
     private readonly emailRenderer: AutomationEmailRendererService,
-    private readonly workerService: AutomationWorkerService,
+    private readonly queueService: AutomationQueueService,
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(FunnelPayment)
@@ -123,7 +123,7 @@ export class AutomationEngineService {
       AutomationExecutionStatus.RUNNING,
       null,
     );
-    this.workerService.enqueue(() => this.processExecution(executionId));
+    await this.queueService.addProcessExecution({ executionId });
   }
 
   private async handleNodeResult(
@@ -174,7 +174,7 @@ export class AutomationEngineService {
       AutomationExecutionStatus.RUNNING,
       null,
     );
-    this.workerService.enqueue(() => this.processExecution(executionId));
+    await this.queueService.addProcessExecution({ executionId });
   }
 
   private async runNode(
@@ -220,10 +220,9 @@ export class AutomationEngineService {
           customerId: execution.customerId,
           message: `Delay scheduled (${delayMinutes} minutes)`,
         });
-        this.workerService.scheduleResume(
-          execution.id,
+        await this.queueService.addResumeExecution(
+          { executionId: execution.id },
           delayMinutes * 60_000,
-          () => this.resumeAfterWait(execution.id),
         );
         return 'wait';
       }

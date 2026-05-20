@@ -1,5 +1,8 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AUTOMATION_QUEUE } from './automation-queue.constants';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import { AutomationExecution } from '../../db/entities/automation-execution.entity';
@@ -19,11 +22,23 @@ import { AutomationMailService } from './automation-mail.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
-import { AutomationWorkerService } from './automation-worker.service';
+import { AutomationQueueProcessor } from './automation-queue.processor';
+import { AutomationQueueService } from './automation-queue.service';
 import { AutomationService } from './automation.service';
 
 @Module({
   imports: [
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', '127.0.0.1'),
+          port: parseInt(config.get<string>('REDIS_PORT', '6379'), 10),
+        },
+      }),
+    }),
+    BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
     TypeOrmModule.forFeature([
       Automation,
       AutomationNode,
@@ -48,7 +63,8 @@ import { AutomationService } from './automation.service';
     AutomationEngineService,
     AutomationExecutionService,
     AutomationLogService,
-    AutomationWorkerService,
+    AutomationQueueService,
+    AutomationQueueProcessor,
   ],
   exports: [AutomationService],
 })

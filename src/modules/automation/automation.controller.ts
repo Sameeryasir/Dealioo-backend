@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Delete,
   Get,
   Param,
@@ -12,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import {
@@ -24,10 +26,17 @@ import { AutomationService } from './automation.service';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
+import {
+  AutomationExecutionStatusDto,
+  ExecuteAutomationResponseDto,
+  StartAutomationExecutionResponseDto,
+} from './automationDto/automation-execution-status.dto';
+import { PaginatedExecutionsResponseDto } from './automationDto/paginated-executions.dto';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
 
+@SkipThrottle()
 @Controller('automation')
 export class AutomationController {
   constructor(private readonly automationService: AutomationService) {}
@@ -88,12 +97,18 @@ export class AutomationController {
     @Query('customerId', new ParseIntPipe({ optional: true }))
     customerId?: number,
     @Query('status') status?: AutomationExecutionStatus,
-  ): Promise<AutomationExecution[]> {
-    return this.automationService.getExecutions({
-      automationId,
-      customerId,
-      status,
-    });
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit?: number,
+  ): Promise<PaginatedExecutionsResponseDto> {
+    return this.automationService.getExecutions(
+      {
+        automationId,
+        customerId,
+        status,
+      },
+      page,
+      limit,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -102,6 +117,14 @@ export class AutomationController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<AutomationLog[]> {
     return this.automationService.getExecutionLogs(id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('execution/:id/status')
+  getExecutionStatus(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<AutomationExecutionStatusDto> {
+    return this.automationService.getExecutionStatus(id);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -117,7 +140,7 @@ export class AutomationController {
   startExecution(
     @Body() dto: StartAutomationExecutionDto,
     @Req() req,
-  ): Promise<AutomationExecution> {
+  ): Promise<StartAutomationExecutionResponseDto> {
     return this.automationService.startExecution(dto, req.user);
   }
 
@@ -197,7 +220,7 @@ export class AutomationController {
   executeAutomation(
     @Param('id', ParseIntPipe) id: number,
     @Req() req,
-  ): Promise<{ unpaidCount: number; emailsSent: number }> {
+  ): Promise<ExecuteAutomationResponseDto> {
     return this.automationService.executeAutomation(id, req.user);
   }
 

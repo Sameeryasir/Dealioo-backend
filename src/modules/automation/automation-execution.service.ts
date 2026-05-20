@@ -1,6 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, In, Repository } from 'typeorm';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+  type PaginationParams,
+} from '../../common/pagination';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import {
   AutomationNode,
@@ -26,6 +32,10 @@ export class AutomationExecutionService {
   async createExecution(
     dto: CreateAutomationExecutionDto,
     customerId: number,
+    options?: {
+      status?: AutomationExecutionStatus;
+      totalRecipients?: number;
+    },
   ): Promise<AutomationExecution> {
     const node = await this.nodeRepository.findOne({
       where: { id: dto.currentNodeId, automationId: dto.automationId },
@@ -39,11 +49,39 @@ export class AutomationExecutionService {
       customerId,
       currentNodeId: dto.currentNodeId,
       purpose: dto.purpose,
-      status: AutomationExecutionStatus.RUNNING,
+      status: options?.status ?? AutomationExecutionStatus.RUNNING,
       scheduledAt: null,
+      totalRecipients: options?.totalRecipients ?? 0,
+      emailsSentCount: 0,
+      queueJobId: null,
+      lastError: null,
     });
 
     return this.executionRepository.save(execution);
+  }
+
+  async setQueueJobId(
+    executionId: number,
+    queueJobId: string,
+  ): Promise<AutomationExecution> {
+    const execution = await this.findById(executionId);
+    execution.queueJobId = queueJobId;
+    return this.executionRepository.save(execution);
+  }
+
+  async markProcessing(executionId: number): Promise<AutomationExecution> {
+    const execution = await this.findById(executionId);
+    execution.status = AutomationExecutionStatus.RUNNING;
+    execution.lastError = null;
+    return this.executionRepository.save(execution);
+  }
+
+  async incrementEmailsSent(executionId: number): Promise<void> {
+    await this.executionRepository.increment(
+      { id: executionId },
+      'emailsSentCount',
+      1,
+    );
   }
 
   async findById(id: number): Promise<AutomationExecution> {
@@ -57,11 +95,11 @@ export class AutomationExecutionService {
     return execution;
   }
 
-  async findExecutions(filters: {
+  private buildExecutionWhere(filters: {
     automationId?: number;
     customerId?: number;
     status?: AutomationExecutionStatus;
-  }): Promise<AutomationExecution[]> {
+  }): FindOptionsWhere<AutomationExecution> {
     const where: FindOptionsWhere<AutomationExecution> = {};
 
     if (filters.automationId !== undefined) {
@@ -74,11 +112,55 @@ export class AutomationExecutionService {
       where.status = filters.status;
     }
 
-    return this.executionRepository.find({
+    return where;
+  }
+
+  async findExecutionsPaginated(
+    filters: {
+      automationId?: number;
+      customerId?: number;
+      status?: AutomationExecutionStatus;
+    },
+    page?: number,
+    limit?: number,
+  ): Promise<{ items: AutomationExecution[]; meta: PaginationMeta }> {
+    const pagination: PaginationParams = normalizePagination(page, limit);
+    const where = this.buildExecutionWhere(filters);
+
+    const [items, total] = await this.executionRepository.findAndCount({
       where,
       relations: ['automation', 'currentNode', 'customer'],
       order: { createdAt: 'DESC' },
+      skip: pagination.skip,
+      take: pagination.limit,
     });
+
+    return {
+      items,
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  async getExecutionListSummary(
+    automationId: number,
+  ): Promise<{ completed: number; inProgress: number }> {
+    const completed = await this.executionRepository.count({
+      where: {
+        automationId,
+        status: AutomationExecutionStatus.COMPLETED,
+      },
+    });
+    const inProgress = await this.executionRepository.count({
+      where: {
+        automationId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+        ]),
+      },
+    });
+    return { completed, inProgress };
   }
 
   async hasActiveExecution(
@@ -90,6 +172,20 @@ export class AutomationExecutionService {
         automationId,
         customerId,
         status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+        ]),
+      },
+    });
+  }
+
+  async hasActiveExecutionForAutomation(automationId: number): Promise<boolean> {
+    return this.executionRepository.exist({
+      where: {
+        automationId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
           AutomationExecutionStatus.RUNNING,
           AutomationExecutionStatus.WAITING,
         ]),
@@ -143,6 +239,9 @@ export class AutomationExecutionService {
     const execution = await this.findById(executionId);
     execution.status = AutomationExecutionStatus.FAILED;
     execution.scheduledAt = null;
+    if (error) {
+      execution.lastError = error;
+    }
     return this.executionRepository.save(execution);
   }
 

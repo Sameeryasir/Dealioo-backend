@@ -79,4 +79,18 @@ export class AutomationLogService {
 
     return map;
   }
+
+  async countDistinctEmailRecipientsForAutomation(
+    automationId: number,
+  ): Promise<number> {
+    const row = await this.automationLogRepository
+      .createQueryBuilder('log')
+      .innerJoin('log.execution', 'execution')
+      .where('execution.automationId = :automationId', { automationId })
+      .andWhere('log.message ILIKE :pattern', { pattern: '%email sent to%' })
+      .select('COUNT(DISTINCT log.customerId)', 'count')
+      .getRawOne<{ count: string }>();
+
+    return Number(row?.count ?? 0);
+  }
 }

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -42,7 +43,14 @@ import { AutomationMailService } from './automation-mail.service';
 import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
 import type { AutomationEmailTemplateProps } from '../../templates/automation/types';
 import { AutomationFlowService } from './automation-flow.service';
-import { AutomationWorkerService } from './automation-worker.service';
+import { AutomationQueueService } from './automation-queue.service';
+import type { UnpaidReminderBatchJob } from './automation-queue.types';
+import {
+  AutomationExecutionStatusDto,
+  ExecuteAutomationResponseDto,
+  StartAutomationExecutionResponseDto,
+} from './automationDto/automation-execution-status.dto';
+import type { PaginatedExecutionsResponseDto } from './automationDto/paginated-executions.dto';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
@@ -75,7 +83,7 @@ export class AutomationService {
     private readonly mailService: AutomationMailService,
     private readonly emailRenderer: AutomationEmailRendererService,
     private readonly flowService: AutomationFlowService,
-    private readonly workerService: AutomationWorkerService,
+    private readonly queueService: AutomationQueueService,
   ) {}
 
   async createAutomation(
@@ -336,19 +344,84 @@ export class AutomationService {
     await this.connectionRepository.remove(connection);
   }
 
-  async getExecutions(filters: {
-    automationId?: number;
-    customerId?: number;
-    status?: AutomationExecutionStatus;
-  }): Promise<AutomationExecution[]> {
-    const executions = await this.executionService.findExecutions(filters);
-    return this.attachExecutedRecipients(executions);
+  async getExecutions(
+    filters: {
+      automationId?: number;
+      customerId?: number;
+      status?: AutomationExecutionStatus;
+    },
+    page?: number,
+    limit?: number,
+  ): Promise<PaginatedExecutionsResponseDto> {
+    const { items, meta } = await this.executionService.findExecutionsPaginated(
+      filters,
+      page,
+      limit,
+    );
+    const data = await this.attachExecutedRecipients(items);
+
+    let summary: PaginatedExecutionsResponseDto['meta']['summary'];
+    if (filters.automationId !== undefined) {
+      const [counts, customersReached] = await Promise.all([
+        this.executionService.getExecutionListSummary(filters.automationId),
+        this.logService.countDistinctEmailRecipientsForAutomation(
+          filters.automationId,
+        ),
+      ]);
+      summary = {
+        ...counts,
+        customersReached,
+      };
+    }
+
+    return {
+      data,
+      meta: summary ? { ...meta, summary } : meta,
+    };
   }
 
   async getExecutionById(id: number): Promise<AutomationExecution> {
     const execution = await this.executionService.findById(id);
     const [enriched] = await this.attachExecutedRecipients([execution]);
     return enriched;
+  }
+
+  async getExecutionStatus(
+    executionId: number,
+  ): Promise<AutomationExecutionStatusDto> {
+    const execution = await this.executionService.findById(executionId);
+    return this.buildExecutionStatusDto(execution);
+  }
+
+  private buildExecutionStatusDto(
+    execution: AutomationExecution,
+  ): AutomationExecutionStatusDto {
+    const isTerminal =
+      execution.status === AutomationExecutionStatus.COMPLETED ||
+      execution.status === AutomationExecutionStatus.FAILED;
+
+    const total = execution.totalRecipients ?? 0;
+    const sent = execution.emailsSentCount ?? 0;
+    let progressPercent = 0;
+    if (total > 0) {
+      progressPercent = Math.min(100, Math.round((sent / total) * 100));
+    } else if (execution.status === AutomationExecutionStatus.COMPLETED) {
+      progressPercent = 100;
+    }
+
+    return {
+      executionId: execution.id,
+      automationId: execution.automationId,
+      status: execution.status,
+      isTerminal,
+      totalRecipients: total,
+      emailsSent: sent,
+      progressPercent,
+      queueJobId: execution.queueJobId ?? null,
+      lastError: execution.lastError ?? null,
+      createdAt: execution.createdAt,
+      updatedAt: execution.updatedAt,
+    };
   }
 
   private async attachExecutedRecipients(
@@ -382,7 +455,7 @@ export class AutomationService {
   async startExecution(
     dto: StartAutomationExecutionDto,
     user: User,
-  ): Promise<AutomationExecution> {
+  ): Promise<StartAutomationExecutionResponseDto> {
     requireAdminRole(
       user,
       'You do not have permission to start automation executions.',
@@ -396,6 +469,16 @@ export class AutomationService {
 
     if (!automation.funnelId) {
       throw new BadRequestException('Automation has no funnel linked');
+    }
+
+    const alreadyRunning =
+      await this.executionService.hasActiveExecutionForAutomation(
+        dto.automationId,
+      );
+    if (alreadyRunning) {
+      throw new ConflictException(
+        'This automation is already running. Wait for it to finish before starting again.',
+      );
     }
 
     const plan = await this.flowService.buildExecutionPlan(dto.automationId);
@@ -426,9 +509,13 @@ export class AutomationService {
         purpose: automation.purpose,
       },
       recipients[0].customerId,
+      {
+        status: AutomationExecutionStatus.QUEUED,
+        totalRecipients: recipients.length,
+      },
     );
 
-    const batch = {
+    const batch: UnpaidReminderBatchJob = {
       executionId: execution.id,
       emailNodeId: plan.emailNode!.id,
       conditionNodeId: plan.conditionNode?.id ?? plan.emailNode!.id,
@@ -439,25 +526,17 @@ export class AutomationService {
       recipients,
     };
 
-    this.workerService.enqueue(() => this.processUnpaidReminderBatch(batch));
+    const queueJobId =
+      await this.queueService.addUnpaidReminderBatch(batch);
+    await this.executionService.setQueueJobId(execution.id, queueJobId);
 
-    return execution;
+    return {
+      status: await this.getExecutionStatus(execution.id),
+    };
   }
 
-  private async processUnpaidReminderBatch(batch: {
-    executionId: number;
-    emailNodeId: number;
-    conditionNodeId: number;
-    subject: string;
-    templateKey: string;
-    templateProps: Partial<AutomationEmailTemplateProps>;
-    plan: {
-      nodes: AutomationNode[];
-      emailNode: AutomationNode | null;
-      conditionNode: AutomationNode | null;
-    };
-    recipients: { customerId: number; email: string; name: string }[];
-  }): Promise<void> {
+  async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
+    await this.executionService.markProcessing(batch.executionId);
     const sent: { customerId: number; email: string }[] = [];
     const pathSummary = batch.plan.nodes
       .map((node) => `order ${node.order}:${node.type}`)
@@ -512,6 +591,7 @@ export class AutomationService {
           customerId: recipient.customerId,
           message: `Payment reminder email sent to ${recipient.email}`,
         });
+        await this.executionService.incrementEmailsSent(batch.executionId);
         sent.push(recipient);
       } catch {
         // Continue with the next unpaid customer.
@@ -536,6 +616,11 @@ export class AutomationService {
         message: 'Workflow completed. No emails were sent.',
         error: 'All send attempts failed',
       });
+      await this.executionService.markFailed(
+        batch.executionId,
+        'All send attempts failed',
+      );
+      return;
     }
 
     await this.executionService.markCompleted(batch.executionId);
@@ -544,7 +629,7 @@ export class AutomationService {
   async executeAutomation(
     automationId: number,
     user: User,
-  ): Promise<{ unpaidCount: number; emailsSent: number }> {
+  ): Promise<ExecuteAutomationResponseDto> {
     requireAdminRole(
       user,
       'You do not have permission to execute automations.',
@@ -565,19 +650,16 @@ export class AutomationService {
       );
     }
 
-    const execution = await this.startExecution({ automationId }, user);
-    const logs = await this.logService.findByExecutionId(execution.id);
-    const emailsSent = logs.filter((log) =>
-      log.message.includes('email sent'),
-    ).length;
-
-    const unpaidRecipients = automation.funnelId
-      ? await this.getUnpaidCustomersForFunnel(automation.funnelId)
-      : [];
+    const { status } = await this.startExecution({ automationId }, user);
 
     return {
-      unpaidCount: unpaidRecipients.length,
-      emailsSent,
+      executionId: status.executionId,
+      status: status.status,
+      isTerminal: status.isTerminal,
+      unpaidCount: status.totalRecipients,
+      totalRecipients: status.totalRecipients,
+      emailsSent: status.emailsSent,
+      progressPercent: status.progressPercent,
     };
   }
 
@@ -675,7 +757,7 @@ export class AutomationService {
       'You do not have permission to process automation executions.',
     );
     await this.executionService.findById(id);
-    this.workerService.enqueue(() => this.engineService.processExecution(id));
+    await this.queueService.addProcessExecution({ executionId: id });
   }
 
   async resumeExecution(id: number, user: User): Promise<void> {
@@ -684,7 +766,7 @@ export class AutomationService {
       'You do not have permission to resume automation executions.',
     );
     await this.executionService.findById(id);
-    this.workerService.enqueue(() => this.engineService.resumeAfterWait(id));
+    await this.queueService.addResumeExecution({ executionId: id }, 0);
   }
 
   async handleEvent(event: FunnelEvent): Promise<void> {
@@ -738,9 +820,9 @@ export class AutomationService {
         event.customerId,
       );
 
-      this.workerService.enqueue(() =>
-        this.engineService.processExecution(execution.id),
-      );
+      await this.queueService.addProcessExecution({
+        executionId: execution.id,
+      });
     }
   }
 
