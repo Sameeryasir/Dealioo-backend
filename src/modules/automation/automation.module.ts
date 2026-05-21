@@ -19,6 +19,7 @@ import { AutomationController } from './automation.controller';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
+import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationExecutionService } from './automation-execution.service';
@@ -67,6 +68,7 @@ import { AutomationService } from './automation.service';
     AutomationLogService,
     AutomationQueueService,
     AutomationQueueProcessor,
+    AutomationCronSchedulerService,
   ],
   exports: [AutomationService],
 })

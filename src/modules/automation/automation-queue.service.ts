@@ -4,8 +4,10 @@ import { Queue } from 'bullmq';
 import {
   AUTOMATION_QUEUE,
   AutomationJobName,
+  automationCronSchedulerKey,
 } from './automation-queue.constants';
 import type {
+  CronTickJob,
   ProcessExecutionJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
@@ -58,5 +60,36 @@ export class AutomationQueueService {
       removeOnFail: 500,
     });
     return job.id ?? '';
+  }
+
+  async upsertCronSchedule(
+    automationId: number,
+    intervalMs: number,
+  ): Promise<void> {
+    const schedulerKey = automationCronSchedulerKey(automationId);
+    const schedulers = await this.queue.getJobSchedulers();
+    const existing = schedulers.find((entry) => entry.key === schedulerKey);
+
+    if (existing && existing.every !== intervalMs) {
+      await this.removeCronSchedule(automationId);
+    }
+
+    await this.queue.upsertJobScheduler(
+      schedulerKey,
+      { every: intervalMs },
+      {
+        name: AutomationJobName.CRON_TICK,
+        data: { automationId } satisfies CronTickJob,
+      },
+    );
+  }
+
+  async removeCronSchedule(automationId: number): Promise<void> {
+    try {
+      await this.queue.removeJobScheduler(
+        automationCronSchedulerKey(automationId),
+      );
+    } catch {
+    }
   }
 }

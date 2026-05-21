@@ -6,4 +6,9 @@ export enum AutomationJobName {
   UNPAID_REMINDER_BATCH = 'unpaid-reminder-batch',
   PROCESS_EXECUTION = 'process-execution',
   RESUME_EXECUTION = 'resume-execution',
+  CRON_TICK = 'cron-tick',
+}
+
+export function automationCronSchedulerKey(automationId: number): string {
+  return `automation-cron:${automationId}`;
 }

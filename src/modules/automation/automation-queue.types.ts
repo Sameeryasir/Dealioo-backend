@@ -27,3 +27,7 @@ export type ProcessExecutionJob = {
 export type ResumeExecutionJob = {
   executionId: number;
 };
+
+export type CronTickJob = {
+  automationId: number;
+};

@@ -6,6 +6,7 @@ import {
   AutomationJobName,
 } from './automation-queue.constants';
 import type {
+  CronTickJob,
   ProcessExecutionJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
@@ -28,7 +29,10 @@ export class AutomationQueueProcessor extends WorkerHost {
 
   private resolveExecutionId(
     job: Job<
-      UnpaidReminderBatchJob | ProcessExecutionJob | ResumeExecutionJob
+      | UnpaidReminderBatchJob
+      | ProcessExecutionJob
+      | ResumeExecutionJob
+      | CronTickJob
     >,
   ): number | null {
     const data = job.data;
@@ -40,7 +44,10 @@ export class AutomationQueueProcessor extends WorkerHost {
 
   async process(
     job: Job<
-      UnpaidReminderBatchJob | ProcessExecutionJob | ResumeExecutionJob
+      | UnpaidReminderBatchJob
+      | ProcessExecutionJob
+      | ResumeExecutionJob
+      | CronTickJob
     >,
   ): Promise<void> {
     const executionId = this.resolveExecutionId(job);
@@ -50,6 +57,12 @@ export class AutomationQueueProcessor extends WorkerHost {
 
     try {
       switch (job.name) {
+        case AutomationJobName.CRON_TICK:
+          await this.automationService.runCronTick(
+            (job.data as CronTickJob).automationId,
+          );
+          break;
+
         case AutomationJobName.UNPAID_REMINDER_BATCH:
           await this.automationService.runUnpaidReminderBatch(
             job.data as UnpaidReminderBatchJob,

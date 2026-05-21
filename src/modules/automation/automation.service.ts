@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -41,6 +42,7 @@ import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
 import { AutomationFlowService } from './automation-flow.service';
+import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import { AutomationQueueService } from './automation-queue.service';
 import type { EmailRecipient } from './automation-email.types';
 import type { UnpaidReminderBatchJob } from './automation-queue.types';
@@ -59,6 +61,8 @@ import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.
 
 @Injectable()
 export class AutomationService {
+  private readonly logger = new Logger(AutomationService.name);
+
   constructor(
     @InjectRepository(Automation)
     private readonly automationRepository: Repository<Automation>,
@@ -79,6 +83,7 @@ export class AutomationService {
     private readonly recipientsService: AutomationRecipientsService,
     private readonly flowService: AutomationFlowService,
     private readonly queueService: AutomationQueueService,
+    private readonly cronScheduler: AutomationCronSchedulerService,
   ) {}
 
   async createAutomation(
@@ -152,7 +157,9 @@ export class AutomationService {
       automation.funnelId = scope.funnelId;
     }
 
-    return this.automationRepository.save(automation);
+    const saved = await this.automationRepository.save(automation);
+    await this.cronScheduler.syncAutomationCron(saved.id);
+    return saved;
   }
 
   async getAutomations(restaurantId?: number): Promise<Automation[]> {
@@ -188,6 +195,7 @@ export class AutomationService {
   async deleteAutomation(id: number, user: User): Promise<void> {
     requireAdminRole(user, 'You do not have permission to delete automations.');
     const automation = await this.findAutomationById(id);
+    await this.queueService.removeCronSchedule(id);
     await this.automationRepository.remove(automation);
   }
 
@@ -202,7 +210,9 @@ export class AutomationService {
     requireAdminRole(user, 'You do not have permission to activate automations.');
     const automation = await this.findAutomationById(id);
     automation.isActive = true;
-    return this.automationRepository.save(automation);
+    const saved = await this.automationRepository.save(automation);
+    await this.cronScheduler.syncAutomationCron(saved.id);
+    return saved;
   }
 
   async deactivateAutomation(id: number, user: User): Promise<Automation> {
@@ -212,7 +222,9 @@ export class AutomationService {
     );
     const automation = await this.findAutomationById(id);
     automation.isActive = false;
-    return this.automationRepository.save(automation);
+    const saved = await this.automationRepository.save(automation);
+    await this.cronScheduler.syncAutomationCron(saved.id);
+    return saved;
   }
 
   async createNode(dto: CreateAutomationNodeDto): Promise<AutomationNode> {
@@ -227,7 +239,9 @@ export class AutomationService {
       order: dto.order,
     });
 
-    return this.nodeRepository.save(node);
+    const saved = await this.nodeRepository.save(node);
+    await this.cronScheduler.syncAutomationCron(saved.automationId);
+    return saved;
   }
 
   async getNodesByFunnelId(funnelId: number): Promise<{
@@ -291,7 +305,9 @@ export class AutomationService {
       node.order = dto.order;
     }
 
-    return this.nodeRepository.save(node);
+    const saved = await this.nodeRepository.save(node);
+    await this.cronScheduler.syncAutomationCron(saved.automationId);
+    return saved;
   }
 
   async deleteNode(id: number): Promise<void> {
@@ -299,7 +315,9 @@ export class AutomationService {
     if (!node) {
       throw new NotFoundException('Automation node not found');
     }
+    const automationId = node.automationId;
     await this.nodeRepository.remove(node);
+    await this.cronScheduler.syncAutomationCron(automationId);
   }
 
   async createConnection(
@@ -503,7 +521,73 @@ export class AutomationService {
       );
     }
 
-    const plan = await this.flowService.buildExecutionPlan(dto.automationId);
+    const result = await this.enqueueUnpaidReminderBatch(automation, {
+      skipIfNoRecipients: false,
+    });
+    if (!result) {
+      throw new BadRequestException(
+        'No unpaid customers found for this funnel',
+      );
+    }
+
+    return result;
+  }
+
+  async runCronTick(automationId: number): Promise<void> {
+    const verified =
+      await this.cronScheduler.verifyAndRefreshBeforeRun(automationId);
+    if (!verified) {
+      return;
+    }
+
+    const automation = await this.automationRepository.findOne({
+      where: { id: automationId },
+      relations: ['campaign'],
+    });
+
+    if (!automation?.isActive) {
+      return;
+    }
+
+    if (!automation.funnelId) {
+      this.logger.warn(
+        `Cron tick skipped for automation ${automationId}: no funnel linked`,
+      );
+      return;
+    }
+
+    if (
+      await this.executionService.hasActiveExecutionForAutomation(automationId)
+    ) {
+      this.logger.log(
+        `Cron tick skipped for automation ${automationId}: execution already running`,
+      );
+      return;
+    }
+
+    try {
+      const result = await this.enqueueUnpaidReminderBatch(automation, {
+        skipIfNoRecipients: true,
+      });
+      if (!result) {
+        this.logger.log(
+          `Cron tick for automation ${automationId}: no unpaid recipients`,
+        );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Cron batch enqueue failed';
+      this.logger.warn(
+        `Cron tick failed for automation ${automationId}: ${message}`,
+      );
+    }
+  }
+
+  private async enqueueUnpaidReminderBatch(
+    automation: Automation,
+    options: { skipIfNoRecipients: boolean },
+  ): Promise<StartAutomationExecutionResponseDto | null> {
+    const plan = await this.flowService.buildExecutionPlan(automation.id);
 
     const campaignName =
       automation.campaign?.campaignName?.trim() || 'the campaign';
@@ -516,9 +600,12 @@ export class AutomationService {
     let recipients: EmailRecipient[] = [];
     if (plan.sendToUnpaidOnly) {
       recipients = await this.recipientsService.getUnpaidCustomersForFunnel(
-        automation.funnelId,
+        automation.funnelId!,
       );
       if (recipients.length === 0) {
+        if (options.skipIfNoRecipients) {
+          return null;
+        }
         throw new BadRequestException(
           'No unpaid customers found for this funnel',
         );
@@ -531,7 +618,7 @@ export class AutomationService {
 
     const execution = await this.executionService.createExecution(
       {
-        automationId: dto.automationId,
+        automationId: automation.id,
         currentNodeId: plan.startNodeId,
         purpose: automation.purpose,
       },
