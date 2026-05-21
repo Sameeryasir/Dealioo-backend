@@ -77,10 +77,20 @@ export class AutomationExecutionService {
   }
 
   async incrementEmailsSent(executionId: number): Promise<void> {
+    await this.incrementEmailsSentBy(executionId, 1);
+  }
+
+  async incrementEmailsSentBy(
+    executionId: number,
+    count: number,
+  ): Promise<void> {
+    if (!Number.isFinite(count) || count <= 0) {
+      return;
+    }
     await this.executionRepository.increment(
       { id: executionId },
       'emailsSentCount',
-      1,
+      count,
     );
   }
 
@@ -262,6 +272,11 @@ export class AutomationExecutionService {
     execution.status = AutomationExecutionStatus.COMPLETED;
     execution.scheduledAt = null;
     return this.executionRepository.save(execution);
+  }
+
+  async deleteById(id: number): Promise<void> {
+    const execution = await this.findById(id);
+    await this.executionRepository.remove(execution);
   }
 
   async markFailed(

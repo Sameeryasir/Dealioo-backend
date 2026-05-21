@@ -163,6 +163,15 @@ export class AutomationController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Delete('execution/:id')
+  deleteExecution(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req,
+  ): Promise<void> {
+    return this.automationService.deleteExecution(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('log')
   getAutomationLogs(
     @Query('automationId', ParseIntPipe) automationId: number,

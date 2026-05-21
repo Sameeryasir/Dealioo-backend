@@ -18,10 +18,12 @@ import { StripeModule } from './modules/stripe/stripe.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
+import { MailModule } from './modules/mail/mail.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    MailModule,
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 200 }],
       errorMessage:

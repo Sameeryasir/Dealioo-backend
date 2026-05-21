@@ -386,6 +386,27 @@ export class AutomationService {
     return enriched;
   }
 
+  async deleteExecution(id: number, user: User): Promise<void> {
+    requireAdminRole(
+      user,
+      'You do not have permission to delete automation executions.',
+    );
+
+    const execution = await this.executionService.findById(id);
+
+    if (
+      execution.status === AutomationExecutionStatus.QUEUED ||
+      execution.status === AutomationExecutionStatus.RUNNING ||
+      execution.status === AutomationExecutionStatus.WAITING
+    ) {
+      throw new ConflictException(
+        'Cannot delete an execution that is still queued, running, or waiting.',
+      );
+    }
+
+    await this.executionService.deleteById(id);
+  }
+
   async getExecutionStatus(
     executionId: number,
   ): Promise<AutomationExecutionStatusDto> {
@@ -564,8 +585,8 @@ export class AutomationService {
       });
     }
 
-    for (const recipient of batch.recipients) {
-      try {
+    const renderedRecipients = await Promise.all(
+      batch.recipients.map(async (recipient) => {
         const { html, text } = await this.emailRenderer.render(
           batch.templateKey,
           {
@@ -575,12 +596,38 @@ export class AutomationService {
             ...batch.templateProps,
           },
         );
-        await this.mailService.send({
-          to: recipient.email,
-          subject: batch.subject,
+        return {
+          customerId: recipient.customerId,
+          email: recipient.email,
+          name: recipient.name,
           html,
           text,
-        });
+        };
+      }),
+    );
+
+    try {
+      const templateId = this.mailService.resolveTemplateIdForPurpose(
+        AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+      );
+
+      await this.mailService.sendPaymentReminderBulk({
+        recipients: renderedRecipients.map((recipient) => ({
+          email: recipient.email,
+          name: recipient.name,
+          html: recipient.html,
+          text: recipient.text,
+          params: {
+            customerName: recipient.name,
+            subject: batch.subject,
+          },
+        })),
+        subject: batch.subject,
+        templateId,
+        tags: ['automation', 'unpaid_reminder_batch'],
+      });
+
+      for (const recipient of renderedRecipients) {
         await this.executionService.updateCustomerId(
           batch.executionId,
           recipient.customerId,
@@ -589,13 +636,30 @@ export class AutomationService {
           executionId: batch.executionId,
           nodeId: batch.emailNodeId,
           customerId: recipient.customerId,
-          message: `Payment reminder email sent to ${recipient.email}`,
+          message: `Payment reminder email sent to ${recipient.email} (bulk)`,
         });
-        await this.executionService.incrementEmailsSent(batch.executionId);
-        sent.push(recipient);
-      } catch {
-        // Continue with the next unpaid customer.
+        sent.push({
+          customerId: recipient.customerId,
+          email: recipient.email,
+        });
       }
+
+      await this.executionService.incrementEmailsSentBy(
+        batch.executionId,
+        sent.length,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Bulk email send failed';
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.emailNodeId,
+        customerId: firstCustomerId,
+        message: 'Bulk payment reminder send failed',
+        error: message,
+      });
+      await this.executionService.markFailed(batch.executionId, message);
+      return;
     }
 
     if (sent.length > 0) {

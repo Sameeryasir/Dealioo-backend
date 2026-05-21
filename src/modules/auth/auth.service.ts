@@ -3,14 +3,16 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
-import * as nodemailer from 'nodemailer';
 import { Repository } from 'typeorm';
+import { BrevoService } from '../mail/brevo.service';
+import { BrevoSendFailedError } from '../mail/brevo-mail.errors';
 import { JwtService } from '@nestjs/jwt';
 import { render } from '@react-email/render';
 import * as React from 'react';
@@ -36,6 +38,7 @@ export class AuthService {
     @InjectRepository(Otp)
     private readonly otpRepository: Repository<Otp>,
     private readonly jwtService: JwtService,
+    private readonly brevoService: BrevoService,
   ) {}
 
   async setupPassword(
@@ -189,7 +192,7 @@ export class AuthService {
       }),
     );
     const text = `Hi ${user.name},\n\nYour verification code is: ${code}\n\nThis code expires in ${expiresInMinutes} minutes.`;
-    await this.sendMailWithGmail({
+    await this.sendMail({
       to: user.email,
       subject,
       html,
@@ -197,37 +200,26 @@ export class AuthService {
     });
   }
 
-  private createGmailTransport(): nodemailer.Transporter {
-    const mailUser = process.env.MAIL_USER;
-    const pass = process.env.MAIL_PASS;
-    if (!mailUser?.trim() || !pass?.trim()) {
-      throw new Error(
-        'MAIL_USER and MAIL_PASS must be set for Gmail (Google account app password).',
-      );
-    }
-
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: mailUser, pass },
-    });
-  }
-
-  private async sendMailWithGmail(params: {
+  private async sendMail(params: {
     to: string;
     subject: string;
     html: string;
     text: string;
   }): Promise<void> {
-    const transporter = this.createGmailTransport();
-    const from = process.env.MAIL_FROM?.trim() || process.env.MAIL_USER;
-
-    await transporter.sendMail({
-      from,
-      to: params.to,
-      subject: params.subject,
-      html: params.html,
-      text: params.text,
-    });
+    try {
+      await this.brevoService.sendAutomationEmail({
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+        text: params.text,
+        tags: ['auth', 'otp'],
+      });
+    } catch (error) {
+      if (error instanceof BrevoSendFailedError) {
+        throw new InternalServerErrorException(error.message);
+      }
+      throw error;
+    }
   }
 
   private buildAccessPayload(user: User): JwtAccessPayload {

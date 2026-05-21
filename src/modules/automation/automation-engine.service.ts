@@ -360,11 +360,12 @@ export class AutomationEngineService {
 
         let emailSent = false;
         let emailError: string | null = null;
+        const purpose = execution.automation?.purpose;
 
         if (to && subject) {
           try {
             this.logger.log(
-              `Execution ${execution.id}: rendering email (${execution.automation.purpose}) for ${to}`,
+              `Execution ${execution.id}: rendering email (${purpose}) for ${to}`,
             );
             const { html, text } = await this.emailRenderer.render(templateKey, {
               customerName,
@@ -377,9 +378,9 @@ export class AutomationEngineService {
                   : defaultMessage,
               headline: config.headline
                 ? String(config.headline)
-                : execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP
+                : purpose === AutomationPurpose.FUNNEL_SIGNUP
                   ? 'Thanks for signing up!'
-                  : execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT
+                  : purpose === AutomationPurpose.FUNNEL_PAYMENT
                     ? 'Your payment is confirmed'
                     : undefined,
               ctaLabel: config.ctaLabel ? String(config.ctaLabel) : undefined,
@@ -388,7 +389,48 @@ export class AutomationEngineService {
             this.logger.log(
               `Execution ${execution.id}: sending email to ${to}`,
             );
-            await this.mailService.send({ to, subject, html, text });
+            const emailContent = { subject, html, text };
+            const templateId =
+              this.mailService.resolveTemplateIdForPurpose(purpose);
+
+            if (templateId) {
+              await this.mailService.send({
+                to,
+                toName: customerName,
+                templateId,
+                params: { customerName, subject },
+                tags: [String(purpose)],
+              });
+            } else if (purpose === AutomationPurpose.FUNNEL_SIGNUP) {
+              await this.mailService.sendWelcomeEmail(
+                to,
+                customerName,
+                emailContent,
+              );
+            } else if (purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+              await this.mailService.sendPaymentConfirmationEmail(
+                to,
+                customerName,
+                undefined,
+                emailContent,
+              );
+            } else if (
+              purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+              purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER
+            ) {
+              await this.mailService.sendAbandonedPaymentReminderEmail(
+                to,
+                customerName,
+                emailContent,
+              );
+            } else {
+              await this.mailService.send({
+                to,
+                subject,
+                html,
+                text,
+              });
+            }
             await this.executionService.incrementEmailsSent(execution.id);
             emailSent = true;
           } catch (error) {
