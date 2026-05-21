@@ -38,12 +38,11 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
-import { AutomationEmailRendererService } from './automation-email-renderer.service';
-import { AutomationMailService } from './automation-mail.service';
-import { resolveAutomationEmailTemplateFromPurpose } from '../../templates/automation/registry';
-import type { AutomationEmailTemplateProps } from '../../templates/automation/types';
+import { AutomationEmailService } from './automation-email.service';
+import { AutomationRecipientsService } from './automation-recipients.service';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationQueueService } from './automation-queue.service';
+import type { EmailRecipient } from './automation-email.types';
 import type { UnpaidReminderBatchJob } from './automation-queue.types';
 import {
   AutomationExecutionStatusDto,
@@ -73,15 +72,11 @@ export class AutomationService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
-    @InjectRepository(FunnelPayment)
-    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
-    @InjectRepository(Customer)
-    private readonly customerRepository: Repository<Customer>,
     private readonly executionService: AutomationExecutionService,
     private readonly engineService: AutomationEngineService,
     private readonly logService: AutomationLogService,
-    private readonly mailService: AutomationMailService,
-    private readonly emailRenderer: AutomationEmailRendererService,
+    private readonly automationEmailService: AutomationEmailService,
+    private readonly recipientsService: AutomationRecipientsService,
     private readonly flowService: AutomationFlowService,
     private readonly queueService: AutomationQueueService,
   ) {}
@@ -482,7 +477,13 @@ export class AutomationService {
       'You do not have permission to start automation executions.',
     );
 
-    const automation = await this.findAutomationById(dto.automationId);
+    const automation = await this.automationRepository.findOne({
+      where: { id: dto.automationId },
+      relations: ['nodes', 'connections', 'campaign'],
+    });
+    if (!automation) {
+      throw new NotFoundException('Automation not found');
+    }
 
     if (!automation.isActive) {
       throw new BadRequestException('Automation is not active');
@@ -504,14 +505,19 @@ export class AutomationService {
 
     const plan = await this.flowService.buildExecutionPlan(dto.automationId);
 
-    const { subject, templateKey, templateProps } = this.resolveEmailContent(
-      plan.emailNode!,
+    const campaignName =
+      automation.campaign?.campaignName?.trim() || 'the campaign';
+    const prepared = this.automationEmailService.prepareFromEmailNode(
+      plan.emailNode!.config ?? {},
       automation.purpose,
+      { requireSubject: true, campaignName },
     );
 
-    let recipients: { customerId: number; email: string; name: string }[] = [];
+    let recipients: EmailRecipient[] = [];
     if (plan.sendToUnpaidOnly) {
-      recipients = await this.getUnpaidCustomersForFunnel(automation.funnelId);
+      recipients = await this.recipientsService.getUnpaidCustomersForFunnel(
+        automation.funnelId,
+      );
       if (recipients.length === 0) {
         throw new BadRequestException(
           'No unpaid customers found for this funnel',
@@ -540,9 +546,8 @@ export class AutomationService {
       executionId: execution.id,
       emailNodeId: plan.emailNode!.id,
       conditionNodeId: plan.conditionNode?.id ?? plan.emailNode!.id,
-      subject,
-      templateKey,
-      templateProps,
+      purpose: automation.purpose,
+      prepared,
       plan,
       recipients,
     };
@@ -568,7 +573,7 @@ export class AutomationService {
       executionId: batch.executionId,
       nodeId: batch.emailNodeId,
       customerId: firstCustomerId,
-      message: `Step 0 email node: subject "${batch.subject}" loaded. Flow: ${pathSummary}`,
+      message: `Step 0 email node: subject "${batch.prepared.subject}" loaded. Flow: ${pathSummary}`,
     });
 
     if (batch.plan.conditionNode) {
@@ -585,49 +590,22 @@ export class AutomationService {
       });
     }
 
-    const renderedRecipients = await Promise.all(
-      batch.recipients.map(async (recipient) => {
-        const { html, text } = await this.emailRenderer.render(
-          batch.templateKey,
-          {
-            customerName: recipient.name,
-            customerEmail: recipient.email,
-            subject: batch.subject,
-            ...batch.templateProps,
-          },
-        );
-        return {
-          customerId: recipient.customerId,
-          email: recipient.email,
-          name: recipient.name,
-          html,
-          text,
-        };
-      }),
-    );
-
     try {
-      const templateId = this.mailService.resolveTemplateIdForPurpose(
-        AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+      const sendResult = await this.automationEmailService.sendBulkToRecipients(
+        batch.purpose,
+        batch.recipients,
+        batch.prepared,
+        ['unpaid_reminder_batch'],
       );
 
-      await this.mailService.sendPaymentReminderBulk({
-        recipients: renderedRecipients.map((recipient) => ({
-          email: recipient.email,
-          name: recipient.name,
-          html: recipient.html,
-          text: recipient.text,
-          params: {
-            customerName: recipient.name,
-            subject: batch.subject,
-          },
-        })),
-        subject: batch.subject,
-        templateId,
-        tags: ['automation', 'unpaid_reminder_batch'],
-      });
+      if (!sendResult.sent) {
+        throw new Error(sendResult.error ?? 'Bulk email send failed');
+      }
 
-      for (const recipient of renderedRecipients) {
+      for (const recipient of batch.recipients) {
+        if (!recipient.customerId) {
+          continue;
+        }
         await this.executionService.updateCustomerId(
           batch.executionId,
           recipient.customerId,
@@ -646,7 +624,7 @@ export class AutomationService {
 
       await this.executionService.incrementEmailsSentBy(
         batch.executionId,
-        sent.length,
+        sendResult.recipientCount,
       );
     } catch (error) {
       const message =
@@ -725,94 +703,6 @@ export class AutomationService {
       emailsSent: status.emailsSent,
       progressPercent: status.progressPercent,
     };
-  }
-
-  private resolveEmailContent(
-    emailNode: AutomationNode,
-    purpose: AutomationPurpose,
-  ): {
-    subject: string;
-    templateKey: string;
-    templateProps: Partial<AutomationEmailTemplateProps>;
-  } {
-    const config = emailNode.config ?? {};
-    const subject = String(config.subject ?? '').trim();
-    if (!subject) {
-      throw new BadRequestException(
-        'Email node config must include subject.',
-      );
-    }
-
-    const templateKey = resolveAutomationEmailTemplateFromPurpose(purpose);
-
-    const templateProps: Partial<AutomationEmailTemplateProps> = {};
-    if (config.message) {
-      templateProps.message = String(config.message);
-    }
-    if (config.headline) {
-      templateProps.headline = String(config.headline);
-    }
-    if (config.ctaLabel) {
-      templateProps.ctaLabel = String(config.ctaLabel);
-    }
-    if (config.ctaUrl) {
-      templateProps.ctaUrl = String(config.ctaUrl);
-    }
-
-    return { subject, templateKey, templateProps };
-  }
-
-  private async getUnpaidCustomersForFunnel(
-    funnelId: number,
-  ): Promise<{ customerId: number; email: string; name: string }[]> {
-    const unpaidPayments = await this.funnelPaymentRepository.find({
-      where: {
-        funnelId,
-        status: In([
-          FunnelPaymentStatus.PENDING,
-          FunnelPaymentStatus.FAILED,
-          FunnelPaymentStatus.CANCELLED,
-        ]),
-      },
-      select: ['customerEmail'],
-    });
-
-    const normalizedEmails = [
-      ...new Set(
-        unpaidPayments
-          .map((payment) => payment.customerEmail?.trim().toLowerCase())
-          .filter((email): email is string => Boolean(email)),
-      ),
-    ];
-
-    if (normalizedEmails.length === 0) {
-      return [];
-    }
-
-    const customers = await this.customerRepository
-      .createQueryBuilder('customer')
-      .where('LOWER(customer.email) IN (:...emails)', {
-        emails: normalizedEmails,
-      })
-      .getMany();
-
-    const recipients: { customerId: number; email: string; name: string }[] =
-      [];
-    const seenCustomerIds = new Set<number>();
-
-    for (const customer of customers) {
-      if (seenCustomerIds.has(customer.id)) {
-        continue;
-      }
-      seenCustomerIds.add(customer.id);
-      recipients.push({
-        customerId: customer.id,
-        email: customer.email,
-        name: customer.name,
-      });
-    }
-
-    return recipients;
   }
 
   async processExecution(id: number, user: User): Promise<void> {

@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationExecutionStatus } from '../../db/entities/automation-execution.entity';
 import { Customer } from '../../db/entities/customer.entity';
@@ -15,12 +14,7 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
-import {
-  resolveAutomationEmailTemplateFromPurpose,
-  resolveAutomationEmailTemplateId,
-} from '../../templates/automation/registry';
-import { AutomationEmailRendererService } from './automation-email-renderer.service';
-import { AutomationMailService } from './automation-mail.service';
+import { AutomationEmailService } from './automation-email.service';
 import { AutomationQueueService } from './automation-queue.service';
 import { MAX_AUTOMATION_EXECUTION_STEPS } from './automation-queue.constants';
 
@@ -33,8 +27,7 @@ export class AutomationEngineService {
   constructor(
     private readonly executionService: AutomationExecutionService,
     private readonly logService: AutomationLogService,
-    private readonly mailService: AutomationMailService,
-    private readonly emailRenderer: AutomationEmailRendererService,
+    private readonly automationEmailService: AutomationEmailService,
     private readonly queueService: AutomationQueueService,
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,
@@ -324,139 +317,42 @@ export class AutomationEngineService {
         const campaignName =
           execution.automation?.campaign?.campaignName?.trim() ||
           'the campaign';
+        const purpose = execution.automation.purpose;
+        const to = execution.customer?.email?.trim();
 
-        const rawTemplate = String(config.templateId ?? config.template ?? '').trim();
-        const templateLooksAbandoned = rawTemplate
-          .toLowerCase()
-          .includes('abandoned');
-
-        let subject = String(config.subject ?? '').trim();
-        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP) {
-          if (!subject) {
-            subject = `Thanks for signing up on ${campaignName}!`;
-          }
-        }
-        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
-          if (!subject || templateLooksAbandoned) {
-            subject = `Thank you for trusting us — your payment is confirmed`;
-          }
-        }
-
-        const templateKey = this.resolveEmailTemplateKey(
-          execution.automation.purpose,
-          rawTemplate,
+        this.logger.log(
+          `Execution ${execution.id}: sending email (${purpose}) for ${to ?? 'unknown'}`,
         );
 
-        const to = execution.customer?.email?.trim();
-        const customerName =
-          execution.customer?.name?.trim() || to?.split('@')[0] || 'there';
-
-        let defaultMessage: string | undefined;
-        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP) {
-          defaultMessage = `Thank you for signing up on ${campaignName}! Your registration was successful and we are excited to have you with us. We will keep you updated on what happens next.`;
-        } else if (execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
-          defaultMessage = `Thank you for trusting us. Your payment is confirmed. We are glad to have you with us on ${campaignName}.`;
-        }
-
-        let emailSent = false;
-        let emailError: string | null = null;
-        const purpose = execution.automation?.purpose;
-
-        if (to && subject) {
-          try {
-            this.logger.log(
-              `Execution ${execution.id}: rendering email (${purpose}) for ${to}`,
-            );
-            const { html, text } = await this.emailRenderer.render(templateKey, {
-              customerName,
-              customerEmail: to,
-              subject,
-              message: config.message
-                ? String(config.message)
-                : config.body
-                  ? String(config.body)
-                  : defaultMessage,
-              headline: config.headline
-                ? String(config.headline)
-                : purpose === AutomationPurpose.FUNNEL_SIGNUP
-                  ? 'Thanks for signing up!'
-                  : purpose === AutomationPurpose.FUNNEL_PAYMENT
-                    ? 'Your payment is confirmed'
-                    : undefined,
-              ctaLabel: config.ctaLabel ? String(config.ctaLabel) : undefined,
-              ctaUrl: config.ctaUrl ? String(config.ctaUrl) : undefined,
-            });
-            this.logger.log(
-              `Execution ${execution.id}: sending email to ${to}`,
-            );
-            const emailContent = { subject, html, text };
-            const templateId =
-              this.mailService.resolveTemplateIdForPurpose(purpose);
-
-            if (templateId) {
-              await this.mailService.send({
-                to,
-                toName: customerName,
-                templateId,
-                params: { customerName, subject },
-                tags: [String(purpose)],
-              });
-            } else if (purpose === AutomationPurpose.FUNNEL_SIGNUP) {
-              await this.mailService.sendWelcomeEmail(
-                to,
-                customerName,
-                emailContent,
-              );
-            } else if (purpose === AutomationPurpose.FUNNEL_PAYMENT) {
-              await this.mailService.sendPaymentConfirmationEmail(
-                to,
-                customerName,
-                undefined,
-                emailContent,
-              );
-            } else if (
-              purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
-              purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER
-            ) {
-              await this.mailService.sendAbandonedPaymentReminderEmail(
-                to,
-                customerName,
-                emailContent,
-              );
-            } else {
-              await this.mailService.send({
-                to,
-                subject,
-                html,
-                text,
-              });
-            }
-            await this.executionService.incrementEmailsSent(execution.id);
-            emailSent = true;
-          } catch (error) {
-            emailError =
-              error instanceof Error ? error.message : 'Email send failed';
-            this.logger.error(
-              `Execution ${execution.id}: email failed for ${to}: ${emailError}`,
-            );
-          }
-        }
+        const sendResult = await this.automationEmailService.sendToCustomer(
+          purpose,
+          {
+            customerId: execution.customerId,
+            email: to ?? '',
+            name: execution.customer?.name ?? '',
+          },
+          config,
+          campaignName,
+        );
 
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: emailSent
+          message: sendResult.sent
             ? `Email sent to ${to}`
-            : to && subject
-              ? `Email failed: ${emailError ?? 'unknown error'}`
-              : to
-                ? 'Email skipped (missing subject)'
-                : 'Email skipped (missing customer email)',
-          error: emailError,
+            : to
+              ? `Email failed: ${sendResult.error ?? 'unknown error'}`
+              : 'Email skipped (missing customer email)',
+          error: sendResult.error,
         });
 
-        if (to && subject && !emailSent) {
+        if (sendResult.sent) {
+          await this.executionService.incrementEmailsSent(execution.id);
+          return 'advance';
+        }
+
+        if (to && sendResult.error) {
           return 'failed';
         }
 
@@ -531,22 +427,6 @@ export class AutomationEngineService {
         });
         return 'failed';
     }
-  }
-
-  private resolveEmailTemplateKey(
-    purpose: AutomationPurpose,
-    rawTemplate: string,
-  ): string {
-    if (
-      purpose === AutomationPurpose.FUNNEL_SIGNUP ||
-      purpose === AutomationPurpose.FUNNEL_PAYMENT
-    ) {
-      return resolveAutomationEmailTemplateFromPurpose(purpose);
-    }
-    if (rawTemplate) {
-      return resolveAutomationEmailTemplateId(rawTemplate);
-    }
-    return resolveAutomationEmailTemplateFromPurpose(purpose);
   }
 
   private async shouldStopAfterCondition(

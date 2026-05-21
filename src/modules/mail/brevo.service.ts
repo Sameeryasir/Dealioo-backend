@@ -11,7 +11,6 @@ import type {
   BrevoBulkSendOptions,
   BrevoBulkSendResult,
   BrevoSendResult,
-  BrevoTransactionalContent,
 } from './brevo-mail.types';
 
 const BREVO_MAX_RECIPIENTS_PER_REQUEST = 2000;
@@ -49,18 +48,6 @@ export class BrevoService implements OnModuleInit {
     this.logger.log(
       `Brevo email ready (sender: ${this.getSender().email}, baseUrl: ${this.getBaseUrl()})`,
     );
-  }
-
-  getWelcomeTemplateId(): number | undefined {
-    return this.parseOptionalTemplateId('BREVO_WELCOME_TEMPLATE_ID');
-  }
-
-  getPaymentConfirmationTemplateId(): number | undefined {
-    return this.parseOptionalTemplateId('BREVO_PAYMENT_CONFIRMATION_TEMPLATE_ID');
-  }
-
-  getAbandonedPaymentTemplateId(): number | undefined {
-    return this.parseOptionalTemplateId('BREVO_ABANDONED_PAYMENT_TEMPLATE_ID');
   }
 
   async sendAutomationEmail(
@@ -110,85 +97,6 @@ export class BrevoService implements OnModuleInit {
     });
   }
 
-  async sendWelcomeEmail(
-    customerEmail: string,
-    customerName: string,
-    content: BrevoTransactionalContent,
-    extraParams?: Record<string, unknown>,
-  ): Promise<BrevoSendResult> {
-    const templateId = this.getWelcomeTemplateId();
-    return this.sendAutomationEmail({
-      to: customerEmail,
-      toName: customerName,
-      templateId,
-      params: {
-        customerName,
-        ...extraParams,
-      },
-      subject: content.subject,
-      html: content.html,
-      text: content.text,
-      tags: ['automation', 'welcome'],
-    });
-  }
-
-  async sendPaymentConfirmationEmail(
-    customerEmail: string,
-    customerName: string,
-    amount: string | number | undefined,
-    content: BrevoTransactionalContent,
-    extraParams?: Record<string, unknown>,
-  ): Promise<BrevoSendResult> {
-    const templateId = this.getPaymentConfirmationTemplateId();
-    return this.sendAutomationEmail({
-      to: customerEmail,
-      toName: customerName,
-      templateId,
-      params: {
-        customerName,
-        amount: amount ?? '',
-        ...extraParams,
-      },
-      subject: content.subject,
-      html: content.html,
-      text: content.text,
-      tags: ['automation', 'payment_confirmation'],
-    });
-  }
-
-  async sendAbandonedPaymentReminderEmail(
-    customerEmail: string,
-    customerName: string,
-    content: BrevoTransactionalContent,
-    extraParams?: Record<string, unknown>,
-  ): Promise<BrevoSendResult> {
-    const bulk = await this.sendPaymentReminderBulk({
-      recipients: [
-        {
-          email: customerEmail,
-          name: customerName,
-          html: content.html,
-          text: content.text,
-          params: { customerName, ...extraParams },
-        },
-      ],
-      subject: content.subject,
-    });
-    return { messageId: bulk.messageIds[0] };
-  }
-
-  async sendPaymentReminderBulk(
-    options: BrevoBulkSendOptions,
-  ): Promise<BrevoBulkSendResult> {
-    const templateId =
-      options.templateId ?? this.getAbandonedPaymentTemplateId();
-    return this.sendBulkTransactionalEmail({
-      ...options,
-      templateId,
-      tags: options.tags ?? ['automation', 'payment_reminder'],
-    });
-  }
-
   async sendBulkTransactionalEmail(
     options: BrevoBulkSendOptions,
   ): Promise<BrevoBulkSendResult> {
@@ -212,7 +120,7 @@ export class BrevoService implements OnModuleInit {
     const templateId = options.templateId;
     const hasTemplate = templateId !== undefined && templateId > 0;
 
-    if (!hasTemplate && !subject) {
+    if (!subject) {
       throw new BrevoSendFailedError(
         'Brevo email request is invalid. Check sender, recipient, templateId, or params.',
         400,
@@ -294,10 +202,41 @@ export class BrevoService implements OnModuleInit {
       };
     }
 
+    const baseHtml = this.resolveBulkBaseHtml(recipients);
+    const baseText = this.resolveBulkBaseText(recipients, baseHtml);
+
+    // Brevo requires top-level subject + htmlContent/textContent even with messageVersions.
     return {
       ...base,
+      subject: options.subject,
+      htmlContent: baseHtml,
+      textContent: baseText,
       messageVersions: this.buildHtmlMessageVersions(recipients, options.subject),
     };
+  }
+
+  private resolveBulkBaseHtml(
+    recipients: BrevoBulkSendOptions['recipients'],
+  ): string {
+    const html = recipients.find((recipient) => recipient.html?.trim())?.html?.trim();
+    if (!html) {
+      throw new BrevoSendFailedError(
+        'Email HTML body is empty. Check automation email template rendering.',
+        400,
+      );
+    }
+    return html;
+  }
+
+  private resolveBulkBaseText(
+    recipients: BrevoBulkSendOptions['recipients'],
+    baseHtml: string,
+  ): string {
+    const text = recipients.find((recipient) => recipient.text?.trim())?.text?.trim();
+    return (
+      text ??
+      baseHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    );
   }
 
   private buildTemplateMessageVersions(
@@ -324,7 +263,13 @@ export class BrevoService implements OnModuleInit {
     subject: string,
   ): Brevo.SendTransacEmailRequest.MessageVersions.Item[] {
     return recipients.map((recipient) => {
-      const html = recipient.html?.trim() ?? '';
+      const html = recipient.html?.trim();
+      if (!html) {
+        throw new BrevoSendFailedError(
+          `Email HTML body is empty for ${recipient.email}. Check automation email template rendering.`,
+          400,
+        );
+      }
       const text =
         recipient.text?.trim() ??
         html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -447,15 +392,6 @@ export class BrevoService implements OnModuleInit {
     };
   }
 
-  private parseOptionalTemplateId(envKey: string): number | undefined {
-    const raw = this.config.get<string>(envKey)?.trim();
-    if (!raw) {
-      return undefined;
-    }
-    const id = Number(raw);
-    return Number.isFinite(id) && id > 0 ? id : undefined;
-  }
-
   private extractMessageId(data: unknown): string | undefined {
     if (!data || typeof data !== 'object') {
       return undefined;
@@ -503,8 +439,10 @@ export class BrevoService implements OnModuleInit {
         );
       }
       if (status === 400) {
+        const detail = this.extractBrevoBodyMessage(error.body);
         return new BrevoSendFailedError(
-          'Brevo email request is invalid. Check sender, recipient, templateId, or params.',
+          detail ??
+            'Brevo email request is invalid. Check sender, recipient, templateId, or params.',
           400,
         );
       }

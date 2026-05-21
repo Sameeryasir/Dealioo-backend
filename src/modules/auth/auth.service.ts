@@ -11,8 +11,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { Repository } from 'typeorm';
-import { BrevoService } from '../mail/brevo.service';
 import { BrevoSendFailedError } from '../mail/brevo-mail.errors';
+import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { JwtService } from '@nestjs/jwt';
 import { render } from '@react-email/render';
 import * as React from 'react';
@@ -38,7 +38,7 @@ export class AuthService {
     @InjectRepository(Otp)
     private readonly otpRepository: Repository<Otp>,
     private readonly jwtService: JwtService,
-    private readonly brevoService: BrevoService,
+    private readonly mailDelivery: MailDeliveryService,
   ) {}
 
   async setupPassword(
@@ -207,7 +207,7 @@ export class AuthService {
     text: string;
   }): Promise<void> {
     try {
-      await this.brevoService.sendAutomationEmail({
+      await this.mailDelivery.sendHtmlEmail({
         to: params.to,
         subject: params.subject,
         html: params.html,

@@ -1,19 +1,22 @@
-import type { AutomationEmailTemplateProps } from '../../templates/automation/types';
+import type { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type { AutomationNode } from '../../db/entities/automation-node.entity';
+import type {
+  EmailRecipient,
+  PreparedAutomationEmail,
+} from './automation-email.types';
 
 export type UnpaidReminderBatchJob = {
   executionId: number;
   emailNodeId: number;
   conditionNodeId: number;
-  subject: string;
-  templateKey: string;
-  templateProps: Partial<AutomationEmailTemplateProps>;
+  purpose: AutomationPurpose;
+  prepared: PreparedAutomationEmail;
   plan: {
     nodes: AutomationNode[];
     emailNode: AutomationNode | null;
     conditionNode: AutomationNode | null;
   };
-  recipients: { customerId: number; email: string; name: string }[];
+  recipients: EmailRecipient[];
 };
 
 export type ProcessExecutionJob = {
