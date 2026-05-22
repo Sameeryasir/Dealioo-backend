@@ -5,7 +5,11 @@ import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
-import { PUSHER_EVENT, pusherExecutionChannel } from './pusher.constants';
+import {
+  PUSHER_EVENT,
+  pusherAutomationChannel,
+  pusherExecutionChannel,
+} from './pusher.constants';
 import type { ExecutionTerminalPusherPayload } from './pusher.types';
 
 @Injectable()
@@ -90,12 +94,16 @@ export class PusherService implements OnModuleInit {
       return;
     }
 
-    const channel = pusherExecutionChannel(payload.executionId);
+    const executionChannel = pusherExecutionChannel(payload.executionId);
+    const automationChannel = pusherAutomationChannel(payload.automationId);
 
     try {
-      await this.client.trigger(channel, event, payload);
+      await Promise.all([
+        this.client.trigger(executionChannel, event, payload),
+        this.client.trigger(automationChannel, event, payload),
+      ]);
       this.logger.log(
-        `Pusher send → channel: ${channel} | event: ${event} | payload: ${JSON.stringify(payload)}`,
+        `Pusher send → channels: ${executionChannel}, ${automationChannel} | event: ${event} | payload: ${JSON.stringify(payload)}`,
       );
     } catch (error) {
       const message =

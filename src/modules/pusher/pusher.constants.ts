@@ -6,3 +6,7 @@ export const PUSHER_EVENT = {
 export function pusherExecutionChannel(executionId: number): string {
   return `automation-execution-${executionId}`;
 }
+
+export function pusherAutomationChannel(automationId: number): string {
+  return `automation-${automationId}`;
+}
