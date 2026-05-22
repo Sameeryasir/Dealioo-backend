@@ -66,6 +66,7 @@ export class PusherService implements OnModuleInit {
       queueJobId: execution.queueJobId ?? null,
       lastError: execution.lastError ?? null,
       finishedAt: execution.updatedAt.toISOString(),
+      stepType: execution.currentNode?.type ?? null,
     };
   }
 
