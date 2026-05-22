@@ -51,7 +51,10 @@ import {
   ExecuteAutomationResponseDto,
   StartAutomationExecutionResponseDto,
 } from './automationDto/automation-execution-status.dto';
-import type { PaginatedExecutionsResponseDto } from './automationDto/paginated-executions.dto';
+import {
+  ExecutionListItemDto,
+  type PaginatedExecutionsResponseDto,
+} from './automationDto/paginated-executions.dto';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
@@ -371,7 +374,7 @@ export class AutomationService {
       page,
       limit,
     );
-    const data = await this.attachExecutedRecipients(items);
+    const data = items.map((execution) => this.toExecutionListItem(execution));
 
     let summary: PaginatedExecutionsResponseDto['meta']['summary'];
     if (filters.automationId !== undefined) {
@@ -425,6 +428,24 @@ export class AutomationService {
   ): Promise<AutomationExecutionStatusDto> {
     const execution = await this.executionService.findById(executionId);
     return this.buildExecutionStatusDto(execution);
+  }
+
+  private toExecutionListItem(
+    execution: AutomationExecution,
+  ): ExecutionListItemDto {
+    const customerCount =
+      execution.totalRecipients > 0
+        ? execution.totalRecipients
+        : execution.emailsSentCount;
+
+    return {
+      runId: execution.id,
+      id: execution.id,
+      status: execution.status,
+      startedAt: execution.createdAt,
+      customerCount,
+      stepType: execution.currentNode?.type ?? null,
+    };
   }
 
   private buildExecutionStatusDto(

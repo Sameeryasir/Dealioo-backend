@@ -1,5 +1,5 @@
 import type { PaginationMeta } from '../../../common/pagination';
-import type { AutomationExecution } from '../../../db/entities/automation-execution.entity';
+import { AutomationExecutionStatus } from '../../../db/entities/automation-execution.entity';
 
 export type ExecutionListSummary = {
   completed: number;
@@ -7,8 +7,17 @@ export type ExecutionListSummary = {
   customersReached: number;
 };
 
+export class ExecutionListItemDto {
+  runId: number;
+  id: number;
+  status: AutomationExecutionStatus;
+  startedAt: Date;
+  customerCount: number;
+  stepType: string | null;
+}
+
 export class PaginatedExecutionsResponseDto {
-  data: AutomationExecution[];
+  data: ExecutionListItemDto[];
   meta: PaginationMeta & {
     summary?: ExecutionListSummary;
   };

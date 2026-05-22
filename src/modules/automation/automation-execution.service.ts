@@ -16,6 +16,7 @@ import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
+import { PusherService } from '../pusher/pusher.service';
 import { CreateAutomationExecutionDto } from './automationDto/create-automation-execution.dto';
 
 @Injectable()
@@ -27,6 +28,7 @@ export class AutomationExecutionService {
     private readonly connectionRepository: Repository<AutomationConnection>,
     @InjectRepository(AutomationNode)
     private readonly nodeRepository: Repository<AutomationNode>,
+    private readonly pusherService: PusherService,
   ) {}
 
   async createExecution(
@@ -152,7 +154,7 @@ export class AutomationExecutionService {
 
     const [items, total] = await this.executionRepository.findAndCount({
       where,
-      relations: ['automation', 'currentNode', 'customer'],
+      relations: ['currentNode'],
       order: { createdAt: 'DESC' },
       skip: pagination.skip,
       take: pagination.limit,
@@ -271,7 +273,13 @@ export class AutomationExecutionService {
     const execution = await this.findById(executionId);
     execution.status = AutomationExecutionStatus.COMPLETED;
     execution.scheduledAt = null;
-    return this.executionRepository.save(execution);
+    const saved = await this.executionRepository.save(execution);
+
+    await this.pusherService.notifyExecutionCompleted(
+      this.pusherService.buildExecutionTerminalPayload(saved),
+    );
+
+    return saved;
   }
 
   async deleteById(id: number): Promise<void> {
@@ -289,7 +297,13 @@ export class AutomationExecutionService {
     if (error) {
       execution.lastError = error;
     }
-    return this.executionRepository.save(execution);
+    const saved = await this.executionRepository.save(execution);
+
+    await this.pusherService.notifyExecutionFailed(
+      this.pusherService.buildExecutionTerminalPayload(saved),
+    );
+
+    return saved;
   }
 
   async resolveStartNodeId(automationId: number): Promise<number | null> {
