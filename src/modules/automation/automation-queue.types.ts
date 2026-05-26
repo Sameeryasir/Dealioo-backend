@@ -1,5 +1,5 @@
 import type { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
-import type { AutomationNode } from '../../db/entities/automation-node.entity';
+import type { AutomationExecutionPlan } from './automation-flow.service';
 import type {
   EmailRecipient,
   PreparedAutomationEmail,
@@ -11,12 +11,10 @@ export type UnpaidReminderBatchJob = {
   conditionNodeId: number;
   purpose: AutomationPurpose;
   prepared: PreparedAutomationEmail;
-  plan: {
-    nodes: AutomationNode[];
-    emailNode: AutomationNode | null;
-    conditionNode: AutomationNode | null;
-  };
+  plan: AutomationExecutionPlan;
   recipients: EmailRecipient[];
+  /** Cron-scheduled runs stay on the trigger node for step display / Pusher stepType. */
+  anchorStepOnTrigger: boolean;
 };
 
 export type ProcessExecutionJob = {

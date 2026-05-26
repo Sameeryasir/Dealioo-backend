@@ -22,6 +22,17 @@ export class AutomationFlowService {
     private readonly nodeRepository: Repository<AutomationNode>,
   ) {}
 
+  /** Manual Run button: start display on condition or email, not the cron trigger. */
+  resolveBulkRunStartNodeId(plan: AutomationExecutionPlan): number {
+    if (plan.conditionNode) {
+      return plan.conditionNode.id;
+    }
+    if (plan.emailNode) {
+      return plan.emailNode.id;
+    }
+    return plan.startNodeId;
+  }
+
   async buildExecutionPlan(automationId: number): Promise<AutomationExecutionPlan> {
     const nodes = await this.nodeRepository.find({
       where: { automationId },

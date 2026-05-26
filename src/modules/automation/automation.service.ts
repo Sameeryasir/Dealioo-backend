@@ -544,6 +544,7 @@ export class AutomationService {
 
     const result = await this.enqueueUnpaidReminderBatch(automation, {
       skipIfNoRecipients: false,
+      triggeredByCron: false,
     });
     if (!result) {
       throw new BadRequestException(
@@ -589,6 +590,7 @@ export class AutomationService {
     try {
       const result = await this.enqueueUnpaidReminderBatch(automation, {
         skipIfNoRecipients: true,
+        triggeredByCron: true,
       });
       if (!result) {
         this.logger.log(
@@ -606,7 +608,7 @@ export class AutomationService {
 
   private async enqueueUnpaidReminderBatch(
     automation: Automation,
-    options: { skipIfNoRecipients: boolean },
+    options: { skipIfNoRecipients: boolean; triggeredByCron: boolean },
   ): Promise<StartAutomationExecutionResponseDto | null> {
     const plan = await this.flowService.buildExecutionPlan(automation.id);
 
@@ -637,10 +639,15 @@ export class AutomationService {
       );
     }
 
+    const anchorStepOnTrigger = options.triggeredByCron;
+    const initialNodeId = anchorStepOnTrigger
+      ? plan.startNodeId
+      : this.flowService.resolveBulkRunStartNodeId(plan);
+
     const execution = await this.executionService.createExecution(
       {
         automationId: automation.id,
-        currentNodeId: plan.startNodeId,
+        currentNodeId: initialNodeId,
         purpose: automation.purpose,
       },
       recipients[0].customerId,
@@ -658,6 +665,7 @@ export class AutomationService {
       prepared,
       plan,
       recipients,
+      anchorStepOnTrigger,
     };
 
     const queueJobId =
@@ -671,6 +679,21 @@ export class AutomationService {
 
   async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
     await this.executionService.markProcessing(batch.executionId);
+
+    if (!batch.anchorStepOnTrigger) {
+      if (batch.plan.conditionNode) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.conditionNode.id,
+        );
+      }
+
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+      );
+    }
+
     const sent: { customerId: number; email: string }[] = [];
     const pathSummary = batch.plan.nodes
       .map((node) => `order ${node.order}:${node.type}`)
@@ -744,6 +767,12 @@ export class AutomationService {
         message: 'Bulk payment reminder send failed',
         error: message,
       });
+      if (batch.anchorStepOnTrigger) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.startNodeId,
+        );
+      }
       await this.executionService.markFailed(batch.executionId, message);
       return;
     }
@@ -766,6 +795,12 @@ export class AutomationService {
         message: 'Workflow completed. No emails were sent.',
         error: 'All send attempts failed',
       });
+      if (batch.anchorStepOnTrigger) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.startNodeId,
+        );
+      }
       await this.executionService.markFailed(
         batch.executionId,
         'All send attempts failed',
@@ -773,6 +808,17 @@ export class AutomationService {
       return;
     }
 
+    if (batch.anchorStepOnTrigger) {
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.plan.startNodeId,
+      );
+    } else {
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.plan.endNodeId,
+      );
+    }
     await this.executionService.markCompleted(batch.executionId);
   }
 
