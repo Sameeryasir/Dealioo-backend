@@ -78,7 +78,7 @@ export class Automation {
   @JoinColumn({ name: 'created_by' })
   creator: User;
 
-  @Column({ name: 'is_active', type: 'boolean', default: true })
+  @Column({ name: 'is_active', type: 'boolean', default: false })
   isActive: boolean;
 
   @Column({ type: 'boolean', default: false })

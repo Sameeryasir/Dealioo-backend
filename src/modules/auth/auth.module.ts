@@ -9,19 +9,21 @@ import { User } from '../../db/entities/user.entity';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { Otp } from '../../db/entities/otp.entity';
+import { RefreshToken } from '../../db/entities/refresh-token.entity';
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    TypeOrmModule.forFeature([User, Role, Otp]),
+    TypeOrmModule.forFeature([User, Role, Otp, RefreshToken]),
     JwtModule.registerAsync({
       useFactory: () => {
         const secret = process.env.JWT_SECRET;
         if (!secret) {
           throw new Error('JWT_SECRET is not defined in environment variables');
         }
-        const expiresIn = (process.env.JWT_EXPIRES_IN ??
-          '7d') as jwt.SignOptions['expiresIn'];
+        const expiresIn = (process.env.JWT_ACCESS_EXPIRES_IN ??
+          process.env.JWT_EXPIRES_IN ??
+          '15m') as jwt.SignOptions['expiresIn'];
         return {
           secret,
           signOptions: {

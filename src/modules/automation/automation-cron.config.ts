@@ -270,6 +270,44 @@ export function sortAutomationNodes(nodes: AutomationNode[]): AutomationNode[] {
   });
 }
 
+export function isCronTriggerAutomationNode(node: AutomationNode): boolean {
+  return isCronTriggerNodePayload(node.type, node.config ?? {});
+}
+
+export function isCronTriggerNodePayload(
+  type: AutomationNodeType,
+  config: Record<string, unknown>,
+): boolean {
+  if (type !== AutomationNodeType.TRIGGER) {
+    return false;
+  }
+
+  const trigger = String(config.trigger ?? config.triggerType ?? '')
+    .trim()
+    .toLowerCase();
+
+  return trigger === 'cron';
+}
+
+export function clampAutomationNodeOrder(
+  node: AutomationNode,
+  requestedOrder: number,
+  allNodes: AutomationNode[],
+): number {
+  const cronNode = allNodes.find(isCronTriggerAutomationNode);
+  const safeOrder = Math.max(0, requestedOrder);
+
+  if (isCronTriggerAutomationNode(node)) {
+    return 0;
+  }
+
+  if (cronNode && cronNode.id !== node.id && safeOrder <= cronNode.order) {
+    return Math.max(1, cronNode.order + 1);
+  }
+
+  return safeOrder;
+}
+
 export function resolveCronFromAutomationNodes(
   nodes: AutomationNode[],
 ): ParsedCronTriggerConfig | null {

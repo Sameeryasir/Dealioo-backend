@@ -43,6 +43,11 @@ import { AutomationEmailService } from './automation-email.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
+import {
+  clampAutomationNodeOrder,
+  isCronTriggerAutomationNode,
+  isCronTriggerNodePayload,
+} from './automation-cron.config';
 import { AutomationQueueService } from './automation-queue.service';
 import type { EmailRecipient } from './automation-email.types';
 import type { UnpaidReminderBatchJob } from './automation-queue.types';
@@ -109,7 +114,7 @@ export class AutomationService {
       campaignId,
       funnelId,
       createdBy: user.id,
-      isActive: dto.isActive ?? true,
+      isActive: dto.isActive ?? false,
       published: false,
       isTemplate: false,
     });
@@ -233,13 +238,52 @@ export class AutomationService {
   async createNode(dto: CreateAutomationNodeDto): Promise<AutomationNode> {
     await this.findAutomationById(dto.automationId);
 
+    const existingNodes = await this.nodeRepository.find({
+      where: { automationId: dto.automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    const creatingCron = isCronTriggerNodePayload(
+      dto.type,
+      dto.config ?? {},
+    );
+
+    if (creatingCron && existingNodes.some(isCronTriggerAutomationNode)) {
+      throw new BadRequestException(
+        'This automation already has a Cron Job trigger.',
+      );
+    }
+
+    const order = creatingCron
+      ? 0
+      : clampAutomationNodeOrder(
+          {
+            id: 0,
+            automationId: dto.automationId,
+            type: dto.type,
+            config: dto.config ?? {},
+            positionX: dto.positionX ?? 0,
+            positionY: dto.positionY ?? 0,
+            order: dto.order,
+          } as AutomationNode,
+          dto.order,
+          existingNodes,
+        );
+
+    if (creatingCron && existingNodes.length > 0) {
+      for (const node of existingNodes) {
+        node.order += 1;
+      }
+      await this.nodeRepository.save(existingNodes);
+    }
+
     const node = this.nodeRepository.create({
       automationId: dto.automationId,
       type: dto.type,
       config: dto.config ?? {},
       positionX: dto.positionX ?? 0,
       positionY: dto.positionY ?? 0,
-      order: dto.order,
+      order,
     });
 
     const saved = await this.nodeRepository.save(node);
@@ -305,7 +349,11 @@ export class AutomationService {
       node.positionY = dto.positionY;
     }
     if (dto.order !== undefined) {
-      node.order = dto.order;
+      const siblings = await this.nodeRepository.find({
+        where: { automationId: node.automationId },
+        order: { order: 'ASC', id: 'ASC' },
+      });
+      node.order = clampAutomationNodeOrder(node, dto.order, siblings);
     }
 
     const saved = await this.nodeRepository.save(node);
