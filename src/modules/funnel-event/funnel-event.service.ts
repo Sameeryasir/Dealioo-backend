@@ -74,8 +74,6 @@ export class FunnelEventService {
 
     let signupOnly = 0;
     let paidAfterSignup = 0;
-    let revenue = 0;
-    let currency: string | null = null;
 
     for (const row of rows) {
       const signedUp = row.customerId !== null;
@@ -87,14 +85,23 @@ export class FunnelEventService {
 
       if (paid) {
         paidAfterSignup += 1;
-        if (row.paymentStatus === FunnelPaymentStatus.PAID && row.amount) {
-          revenue += row.amount;
-          if (!currency && row.currency) {
-            currency = row.currency;
-          }
-        }
       } else {
         signupOnly += 1;
+      }
+    }
+
+    const paidPayments = await this.funnelPaymentRepository.find({
+      where: { funnelId, status: FunnelPaymentStatus.PAID },
+      select: ['amount', 'currency'],
+    });
+
+    let revenue = 0;
+    let currency: string | null = null;
+
+    for (const payment of paidPayments) {
+      revenue += payment.amount;
+      if (!currency && payment.currency) {
+        currency = payment.currency;
       }
     }
 
