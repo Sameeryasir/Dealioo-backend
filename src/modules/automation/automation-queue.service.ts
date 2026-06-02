@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import {
   AUTOMATION_QUEUE,
+  AUTOMATION_JOB_CLEANUP_OPTIONS,
   AutomationJobName,
   automationCronSchedulerKey,
 } from './automation-queue.constants';
@@ -29,8 +30,7 @@ export class AutomationQueueService {
       {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
-        removeOnComplete: 200,
-        removeOnFail: 500,
+        ...AUTOMATION_JOB_CLEANUP_OPTIONS,
       },
     );
     return job.id ?? '';
@@ -41,8 +41,7 @@ export class AutomationQueueService {
       jobId: `process-execution-${data.executionId}-${data.nodeId}`,
       attempts: 3,
       backoff: { type: 'exponential', delay: 3000 },
-      removeOnComplete: 200,
-      removeOnFail: 500,
+      ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
     return job.id ?? '';
   }
@@ -56,8 +55,7 @@ export class AutomationQueueService {
       delay: delayMs,
       attempts: 3,
       backoff: { type: 'exponential', delay: 3000 },
-      removeOnComplete: 200,
-      removeOnFail: 500,
+      ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
     return job.id ?? '';
   }
@@ -69,17 +67,26 @@ export class AutomationQueueService {
     const schedulerKey = automationCronSchedulerKey(automationId);
     const schedulers = await this.queue.getJobSchedulers();
     const existing = schedulers.find((entry) => entry.key === schedulerKey);
+    const intervalChanged =
+      existing != null && Number(existing.every) !== intervalMs;
+    const isFirstSchedule = existing == null;
 
-    if (existing && existing.every !== intervalMs) {
+    if (intervalChanged) {
       await this.removeCronSchedule(automationId);
     }
 
     await this.queue.upsertJobScheduler(
       schedulerKey,
-      { every: intervalMs },
+      {
+        every: intervalMs,
+        ...(isFirstSchedule || intervalChanged
+          ? { startDate: Date.now() + intervalMs }
+          : {}),
+      },
       {
         name: AutomationJobName.CRON_TICK,
         data: { automationId } satisfies CronTickJob,
+        opts: AUTOMATION_JOB_CLEANUP_OPTIONS,
       },
     );
   }

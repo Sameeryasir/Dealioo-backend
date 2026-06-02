@@ -2,7 +2,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AUTOMATION_QUEUE } from './automation-queue.constants';
+import { AUTOMATION_QUEUE, AUTOMATION_JOB_CLEANUP_OPTIONS } from './automation-queue.constants';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import { AutomationExecution } from '../../db/entities/automation-execution.entity';
@@ -40,7 +40,10 @@ import { AutomationService } from './automation.service';
         },
       }),
     }),
-    BullModule.registerQueue({ name: AUTOMATION_QUEUE }),
+    BullModule.registerQueue({
+      name: AUTOMATION_QUEUE,
+      defaultJobOptions: AUTOMATION_JOB_CLEANUP_OPTIONS,
+    }),
     TypeOrmModule.forFeature([
       Automation,
       AutomationNode,

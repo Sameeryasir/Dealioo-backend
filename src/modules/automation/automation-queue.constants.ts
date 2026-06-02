@@ -12,3 +12,8 @@ export enum AutomationJobName {
 export function automationCronSchedulerKey(automationId: number): string {
   return `automation-cron:${automationId}`;
 }
+
+export const AUTOMATION_JOB_CLEANUP_OPTIONS = {
+  removeOnComplete: true,
+  removeOnFail: true,
+} as const;
