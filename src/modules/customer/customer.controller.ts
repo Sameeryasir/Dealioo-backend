@@ -1,4 +1,14 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  DefaultValuePipe,
+  Get,
+  ParseIntPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { CustomerService } from './customer.service';
 import { Customer } from 'src/db/entities/customer.entity';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
@@ -8,5 +18,14 @@ export class CustomerController {
     @Post('create')
     async registerCustomer(@Body()registerCustomer:RegisterCustomerDto):Promise<Customer>{
         return this.customerService.registerCustomer(registerCustomer);
+    }
+
+    @UseGuards(AuthGuard('jwt'))
+    @Get()
+    listCustomers(
+      @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+      @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    ) {
+      return this.customerService.findAllPaginated(page, limit);
     }
 }
