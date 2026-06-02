@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   UploadedFiles,
   UseGuards,
@@ -17,6 +18,7 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
+import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 import { CampaignService } from './campaign.service';
 
 @Controller('campaign')
@@ -67,5 +69,42 @@ export class CampaignController {
     @Param('id', ParseIntPipe) restaurantId: number,
   ): Promise<Campaign[]> {
     return this.campaignService.getCampaignsByRestaurantId(restaurantId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id')
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'file', maxCount: 1 },
+        { name: 'image', maxCount: 1 },
+      ],
+      createDiskFileUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+        allowedMimeTypes: [
+          'image/png',
+          'image/jpeg',
+          'image/webp',
+          'image/gif',
+        ],
+        fileFilterErrorMessage:
+          'Only image files are allowed (PNG, JPEG, WebP, GIF).',
+      }),
+    ),
+  )
+  updateCampaign(
+    @Param('id', ParseIntPipe) campaignId: number,
+    @Body() updateCampaignDto: UpdateCampaignDto,
+    @UploadedFiles()
+    files: {
+      file?: Express.Multer.File[];
+      image?: Express.Multer.File[];
+    },
+  ): Promise<Campaign> {
+    const uploaded = files?.file?.[0] ?? files?.image?.[0];
+    return this.campaignService.updateCampaign(
+      campaignId,
+      updateCampaignDto,
+      uploaded,
+    );
   }
 }

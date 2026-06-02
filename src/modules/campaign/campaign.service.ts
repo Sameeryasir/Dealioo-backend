@@ -12,6 +12,7 @@ import {
   toAbsoluteAssetUrlIfRelative,
 } from '../../utils/disk-file-upload-multer';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
+import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
 @Injectable()
 export class CampaignService {
@@ -74,7 +75,48 @@ export class CampaignService {
     }
     return this.campaignRepository.find({
       where: { restaurantId },
-    
     });
+  }
+
+  async updateCampaign(
+    campaignId: number,
+    updateCampaignDto: UpdateCampaignDto,
+    file?: Express.Multer.File,
+  ): Promise<Campaign> {
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+    });
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    if (updateCampaignDto.campaignName !== undefined) {
+      campaign.campaignName = updateCampaignDto.campaignName;
+    }
+    if (updateCampaignDto.websiteUrl !== undefined) {
+      campaign.websiteUrl = updateCampaignDto.websiteUrl;
+    }
+    if (updateCampaignDto.offer !== undefined) {
+      campaign.offer = updateCampaignDto.offer;
+    }
+    if (updateCampaignDto.price !== undefined) {
+      campaign.price = updateCampaignDto.price;
+    }
+    if (updateCampaignDto.status !== undefined) {
+      campaign.status = updateCampaignDto.status;
+    }
+
+    if (file) {
+      campaign.imageUrl = absolutePublicUploadFileUrl(
+        CAMPAIGNS_UPLOAD_SUBDIR,
+        file.filename,
+      );
+    } else if (updateCampaignDto.imageUrl !== undefined) {
+      campaign.imageUrl = toAbsoluteAssetUrlIfRelative(
+        updateCampaignDto.imageUrl,
+      );
+    }
+
+    return this.campaignRepository.save(campaign);
   }
 }
