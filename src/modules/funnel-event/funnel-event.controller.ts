@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -15,6 +16,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
+import { clampOverviewMonths } from './overview-monthly.util';
 import { FunnelEventService } from './funnel-event.service';
 
 @Controller('funnel-event')
@@ -47,9 +49,33 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/stats/monthly')
+  getStatsMonthly(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('months') months?: string,
+  ) {
+    return this.funnelEventService.getStatsMonthly(
+      funnelId,
+      clampOverviewMonths(months),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('funnel/:funnelId/analytics-overview')
   getAnalyticsOverview(@Param('funnelId', ParseIntPipe) funnelId: number) {
     return this.funnelAnalyticsService.getAnalyticsOverview(funnelId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/analytics-overview/monthly')
+  getAnalyticsOverviewMonthly(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('months') months?: string,
+  ) {
+    return this.funnelAnalyticsService.getAnalyticsOverviewMonthly(
+      funnelId,
+      clampOverviewMonths(months),
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

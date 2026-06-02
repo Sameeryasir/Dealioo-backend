@@ -8,6 +8,11 @@ import {
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
+import {
+  buildRecentMonthBuckets,
+  type OverviewMonthBucket,
+} from './overview-monthly.util';
+import { And, LessThan, MoreThanOrEqual } from 'typeorm';
 
 export type FunnelAnalyticsOverview = {
   funnelId: number;
@@ -112,6 +117,96 @@ export class FunnelAnalyticsService {
 
     return {
       funnelId,
+      pageViews,
+      buttonClicks,
+      uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
+      sessions: Number(sessionsRaw?.count ?? 0),
+    };
+  }
+
+  async getAnalyticsOverviewMonthly(
+    funnelId: number,
+    monthCount: number,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    data: {
+      month: string;
+      pageViews: number;
+      buttonClicks: number;
+      uniqueVisitors: number;
+      sessions: number;
+    }[];
+  }> {
+    await this.assertFunnelExists(funnelId);
+
+    const buckets = buildRecentMonthBuckets(monthCount);
+    const data: {
+      month: string;
+      pageViews: number;
+      buttonClicks: number;
+      uniqueVisitors: number;
+      sessions: number;
+    }[] = [];
+
+    for (const bucket of buckets) {
+      data.push(await this.aggregateAnalyticsForMonth(funnelId, bucket));
+    }
+
+    return { funnelId, months: monthCount, data };
+  }
+
+  private async aggregateAnalyticsForMonth(
+    funnelId: number,
+    bucket: OverviewMonthBucket,
+  ): Promise<{
+    month: string;
+    pageViews: number;
+    buttonClicks: number;
+    uniqueVisitors: number;
+    sessions: number;
+  }> {
+    const createdInMonth = And(
+      MoreThanOrEqual(bucket.start),
+      LessThan(bucket.end),
+    );
+
+    const pageViews = await this.analyticsRepository.count({
+      where: {
+        funnelId,
+        eventType: FunnelAnalyticsEventType.PAGE_VIEW,
+        createdAt: createdInMonth,
+      },
+    });
+
+    const buttonClicks = await this.analyticsRepository.count({
+      where: {
+        funnelId,
+        eventType: FunnelAnalyticsEventType.BUTTON_CLICK,
+        createdAt: createdInMonth,
+      },
+    });
+
+    const uniqueVisitorsRaw = await this.analyticsRepository
+      .createQueryBuilder('e')
+      .select('COUNT(DISTINCT e.customer_id)', 'count')
+      .where('e.funnel_id = :funnelId', { funnelId })
+      .andWhere('e.customer_id IS NOT NULL')
+      .andWhere('e.created_at >= :start', { start: bucket.start })
+      .andWhere('e.created_at < :end', { end: bucket.end })
+      .getRawOne<{ count: string }>();
+
+    const sessionsRaw = await this.analyticsRepository
+      .createQueryBuilder('e')
+      .select('COUNT(DISTINCT e.session_id)', 'count')
+      .where('e.funnel_id = :funnelId', { funnelId })
+      .andWhere('e.session_id IS NOT NULL')
+      .andWhere('e.created_at >= :start', { start: bucket.start })
+      .andWhere('e.created_at < :end', { end: bucket.end })
+      .getRawOne<{ count: string }>();
+
+    return {
+      month: bucket.month,
       pageViews,
       buttonClicks,
       uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),

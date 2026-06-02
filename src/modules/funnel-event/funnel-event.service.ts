@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { And, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -17,7 +17,10 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationService } from '../automation/automation.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
-
+import {
+  buildRecentMonthBuckets,
+  type OverviewMonthBucket,
+} from './overview-monthly.util';
 @Injectable()
 export class FunnelEventService {
   constructor(
@@ -113,6 +116,130 @@ export class FunnelEventService {
       paidAfterSignup,
       revenue,
       currency,
+    };
+  }
+
+  async getStatsMonthly(
+    funnelId: number,
+    monthCount: number,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    currency: string | null;
+    data: {
+      month: string;
+      signups: number;
+      payments: number;
+      signupOnly: number;
+      paidAfterSignup: number;
+      revenue: number;
+    }[];
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const buckets = buildRecentMonthBuckets(monthCount);
+    let currency: string | null = null;
+    const data: {
+      month: string;
+      signups: number;
+      payments: number;
+      signupOnly: number;
+      paidAfterSignup: number;
+      revenue: number;
+    }[] = [];
+
+    for (const bucket of buckets) {
+      const point = await this.aggregateStatsForMonth(funnelId, bucket);
+      data.push(point);
+      if (!currency && point.revenue > 0) {
+        const sample = await this.funnelPaymentRepository.findOne({
+          where: {
+            funnelId,
+            status: FunnelPaymentStatus.PAID,
+            createdAt: And(
+              MoreThanOrEqual(bucket.start),
+              LessThan(bucket.end),
+            ),
+          },
+          select: ['currency'],
+        });
+        currency = sample?.currency ?? null;
+      }
+    }
+
+    if (!currency) {
+      const anyPaid = await this.funnelPaymentRepository.findOne({
+        where: { funnelId, status: FunnelPaymentStatus.PAID },
+        select: ['currency'],
+      });
+      currency = anyPaid?.currency ?? null;
+    }
+
+    return { funnelId, months: monthCount, currency, data };
+  }
+
+  private async aggregateStatsForMonth(
+    funnelId: number,
+    bucket: OverviewMonthBucket,
+  ): Promise<{
+    month: string;
+    signups: number;
+    payments: number;
+    signupOnly: number;
+    paidAfterSignup: number;
+    revenue: number;
+  }> {
+    const createdInMonth = And(
+      MoreThanOrEqual(bucket.start),
+      LessThan(bucket.end),
+    );
+
+    const rows = await this.funnelEventRepository.find({
+      where: { funnelId, createdAt: createdInMonth },
+    });
+
+    let signupOnly = 0;
+    let paidAfterSignup = 0;
+
+    for (const row of rows) {
+      if (row.customerId === null) {
+        continue;
+      }
+      if (row.funnelPaymentId !== null) {
+        paidAfterSignup += 1;
+      } else {
+        signupOnly += 1;
+      }
+    }
+
+    const paidPayments = await this.funnelPaymentRepository.find({
+      where: {
+        funnelId,
+        status: FunnelPaymentStatus.PAID,
+        createdAt: createdInMonth,
+      },
+      select: ['amount'],
+    });
+
+    let revenue = 0;
+    for (const payment of paidPayments) {
+      revenue += payment.amount;
+    }
+
+    const payments = paidPayments.length;
+
+    return {
+      month: bucket.month,
+      signups: signupOnly + paidAfterSignup,
+      payments,
+      signupOnly,
+      paidAfterSignup,
+      revenue,
     };
   }
 
