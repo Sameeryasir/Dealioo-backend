@@ -50,7 +50,7 @@ export class AutomationCronSchedulerService implements OnModuleInit {
   ): Promise<VerifiedCronSchedule | null> {
     const automation = await this.automationRepository.findOne({
       where: { id: automationId },
-      select: ['id', 'isActive'],
+      select: ['id', 'published'],
     });
 
     if (!automation) {
@@ -63,7 +63,7 @@ export class AutomationCronSchedulerService implements OnModuleInit {
       order: { order: 'ASC', id: 'ASC' },
     });
 
-    const cronConfig = automation.isActive
+    const cronConfig = automation.published
       ? resolveCronFromAutomationNodes(nodes)
       : null;
 
@@ -100,7 +100,7 @@ export class AutomationCronSchedulerService implements OnModuleInit {
     const verified = await this.syncAutomationCron(automationId, { silent: true });
     if (!verified) {
       this.logger.log(
-        `Cron run blocked for automation ${automationId}: inactive, missing cron trigger, or invalid interval/unit in DB`,
+        `Cron run blocked for automation ${automationId}: not published, missing cron trigger, or invalid interval/unit in DB`,
       );
       return null;
     }

@@ -615,7 +615,7 @@ export class AutomationService {
       relations: ['campaign'],
     });
 
-    if (!automation?.isActive) {
+    if (!automation?.isActive || !automation.published) {
       return;
     }
 
