@@ -11,6 +11,19 @@ import { Repository } from 'typeorm';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import {
+  errorStripePayment,
+  logStripePayment,
+} from '../payment/payment-logger';
+
+const STRIPE_TIMEOUT_MS = 30_000;
+const STRIPE_MAX_NETWORK_RETRIES = 2;
+
+export type ValidatedConnectAccount = {
+  id: string;
+  chargesEnabled: boolean;
+  detailsSubmitted: boolean;
+};
 
 @Injectable()
 export class StripeService {
@@ -24,7 +37,70 @@ export class StripeService {
   ) {
     this.platformSecretKey =
       this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
-    this.stripe = new Stripe(this.platformSecretKey);
+    this.stripe = new Stripe(this.platformSecretKey, {
+      timeout: STRIPE_TIMEOUT_MS,
+      maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES,
+    });
+  }
+
+  getPlatformClient(): InstanceType<typeof Stripe> {
+    return this.stripe;
+  }
+
+  clientForConnectedAccount(
+    stripeAccountId: string,
+  ): InstanceType<typeof Stripe> {
+    return new Stripe(this.platformSecretKey, {
+      stripeAccount: stripeAccountId.trim(),
+      timeout: STRIPE_TIMEOUT_MS,
+      maxNetworkRetries: STRIPE_MAX_NETWORK_RETRIES,
+    });
+  }
+
+  /** Ensures Connect onboarding is complete before accepting payments. */
+  async validateConnectedAccount(
+    stripeAccountId: string,
+  ): Promise<ValidatedConnectAccount> {
+    const accountId = stripeAccountId?.trim();
+    if (!accountId) {
+      throw new BadRequestException('Missing Stripe connected account id.');
+    }
+
+    let account: Awaited<ReturnType<InstanceType<typeof Stripe>['accounts']['retrieve']>>;
+    try {
+      account = await this.stripe.accounts.retrieve(accountId);
+    } catch (err) {
+      errorStripePayment({
+        phase: 'connect_account_retrieve',
+        outcome: 'stripe_api_error',
+        stripeAccountId: accountId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new BadRequestException(
+        'Unable to verify Stripe account. Please reconnect Stripe in settings.',
+      );
+    }
+
+    const chargesEnabled = account.charges_enabled === true;
+    const detailsSubmitted = account.details_submitted === true;
+
+    logStripePayment({
+      phase: 'connect_account_validated',
+      stripeAccountId: accountId,
+      outcome: chargesEnabled && detailsSubmitted ? 'ready' : 'incomplete',
+    });
+
+    if (!chargesEnabled || !detailsSubmitted) {
+      throw new BadRequestException(
+        'Stripe onboarding is incomplete. Finish setup in Restaurant Settings before accepting payments.',
+      );
+    }
+
+    return {
+      id: accountId,
+      chargesEnabled,
+      detailsSubmitted,
+    };
   }
 
   async connect(user: User, restaurantId: number): Promise<{ url: string }> {
@@ -107,33 +183,98 @@ export class StripeService {
     currency: string;
     applicationFeeAmount: number;
     receiptEmail: string;
-    metadata?: Record<string, string>;
-  }) {
-    const stripeAccountId = opts.stripeAccountId?.trim();
-    if (!stripeAccountId) {
-      throw new BadRequestException('Missing Stripe connected account id.');
-    }
+    idempotencyKey: string;
+    metadata: Record<string, string>;
+  }): Promise<
+    Awaited<
+      ReturnType<
+        InstanceType<typeof Stripe>['paymentIntents']['create']
+      >
+    >
+  > {
+    await this.validateConnectedAccount(opts.stripeAccountId);
 
-    const stripeForConnectedAccount = new Stripe(this.platformSecretKey, {
-      stripeAccount: stripeAccountId,
-    });
+    const stripeForConnectedAccount = this.clientForConnectedAccount(
+      opts.stripeAccountId,
+    );
 
-    const intent = await stripeForConnectedAccount.paymentIntents.create({
+    logStripePayment({
+      phase: 'payment_intent_create',
+      stripeAccountId: opts.stripeAccountId,
       amount: opts.amount,
-      currency: opts.currency.toLowerCase(),
-      automatic_payment_methods: { enabled: true },
-      application_fee_amount: opts.applicationFeeAmount,
-      receipt_email: opts.receiptEmail,
-      metadata: opts.metadata ?? {},
+      currency: opts.currency,
+      paymentId: opts.metadata.paymentId
+        ? Number(opts.metadata.paymentId)
+        : null,
+      funnelId: opts.metadata.funnelId
+        ? Number(opts.metadata.funnelId)
+        : null,
+      restaurantId: opts.metadata.restaurantId
+        ? Number(opts.metadata.restaurantId)
+        : null,
+      campaignId: opts.metadata.campaignId
+        ? Number(opts.metadata.campaignId)
+        : null,
     });
 
-    if (!intent.client_secret) {
-      throw new InternalServerErrorException(
-        'Stripe did not return a client secret for this payment intent.',
+    try {
+      const intent = await stripeForConnectedAccount.paymentIntents.create(
+        {
+          amount: opts.amount,
+          currency: opts.currency.toLowerCase(),
+          automatic_payment_methods: { enabled: true },
+          application_fee_amount: opts.applicationFeeAmount,
+          receipt_email: opts.receiptEmail,
+          metadata: opts.metadata,
+        },
+        { idempotencyKey: opts.idempotencyKey },
       );
-    }
 
-    return intent;
+      if (!intent.client_secret) {
+        throw new InternalServerErrorException(
+          'Stripe did not return a client secret for this payment intent.',
+        );
+      }
+
+      logStripePayment({
+        phase: 'payment_intent_created',
+        outcome: 'success',
+        paymentIntentId: intent.id,
+        paymentId: opts.metadata.paymentId
+          ? Number(opts.metadata.paymentId)
+          : null,
+        stripeAccountId: opts.stripeAccountId,
+        amount: opts.amount,
+        currency: opts.currency,
+      });
+
+      return intent;
+    } catch (err) {
+      errorStripePayment({
+        phase: 'payment_intent_create',
+        outcome: 'stripe_api_error',
+        stripeAccountId: opts.stripeAccountId,
+        amount: opts.amount,
+        currency: opts.currency,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  async retrievePaymentIntentOnConnectedAccount(
+    stripeAccountId: string,
+    paymentIntentId: string,
+  ): Promise<
+    Awaited<
+      ReturnType<
+        InstanceType<typeof Stripe>['paymentIntents']['retrieve']
+      >
+    >
+  > {
+    return this.clientForConnectedAccount(stripeAccountId).paymentIntents.retrieve(
+      paymentIntentId,
+    );
   }
 
   async createOAuthConnectUrl(

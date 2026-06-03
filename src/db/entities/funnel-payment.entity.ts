@@ -21,6 +21,8 @@ export enum FunnelPaymentStatus {
   FAILED = 'failed',
   CANCELLED = 'cancelled',
   REFUNDED = 'refunded',
+  PARTIALLY_REFUNDED = 'partially_refunded',
+  DISPUTED = 'disputed',
 }
 
 @Entity('funnel_payment')
@@ -46,13 +48,47 @@ export class FunnelPayment {
   @JoinColumn({ name: 'restaurant_id' })
   restaurant: Restaurant;
 
+  @Column({ name: 'campaign_id', type: 'int', nullable: true })
+  campaignId: number | null;
+
   @Column({
     name: 'stripe_payment_intent_id',
     type: 'varchar',
     length: 255,
     unique: true,
+    nullable: true,
   })
-  stripePaymentIntentId: string;
+  stripePaymentIntentId: string | null;
+
+  @Column({ name: 'platform_fee_amount', type: 'int', default: 0 })
+  platformFeeAmount: number;
+
+  @Column({ name: 'refunded_amount', type: 'int', default: 0 })
+  refundedAmount: number;
+
+  @Column({
+    name: 'stripe_charge_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  stripeChargeId: string | null;
+
+  @Column({
+    name: 'stripe_dispute_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  stripeDisputeId: string | null;
+
+  @Column({
+    name: 'dispute_status',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  disputeStatus: string | null;
 
   @Column({
     name: 'stripe_connected_account_id',

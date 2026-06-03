@@ -4,10 +4,11 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import {
   FunnelPayment,
   FunnelPaymentStatus,
@@ -17,25 +18,17 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { campaignPriceToStripeAmount } from '../../utils/campaign-price-to-stripe-amount';
 import { StripeService } from '../stripe/stripe.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
-
-type PaymentIntentPayload = {
-  id: string;
-  last_payment_error?: { message?: string } | null;
-  payment_method?: string | { id?: string } | null;
-  charges?: { data?: Array<{ receipt_url?: string | null }> } | null;
-  latest_charge?: string | { receipt_url?: string | null } | null;
-};
-
-type ChargePayload = {
-  id: string;
-  payment_intent?: string | { id: string } | null;
-  refunds?: { data?: Array<{ id?: string }> } | null;
-  status?: string;
-  receipt_url?: string | null;
-};
+import { FeeService } from './fee.service';
+import {
+  errorStripePayment,
+  logStripePayment,
+  warnStripePayment,
+} from './payment-logger';
+import { PaymentWebhookHandler } from './payment-webhook.handler';
+import { StripeWebhookService } from './stripe-webhook.service';
 
 @Injectable()
-export class PaymentService {
+export class PaymentService implements OnModuleInit {
   private readonly logger = new Logger(PaymentService.name);
   private readonly stripe: InstanceType<typeof Stripe>;
 
@@ -47,58 +40,45 @@ export class PaymentService {
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     private readonly stripeService: StripeService,
+    private readonly feeService: FeeService,
+    private readonly stripeWebhookService: StripeWebhookService,
+    private readonly paymentWebhookHandler: PaymentWebhookHandler,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
       throw new Error('STRIPE_SECRET_KEY is not set');
     }
-    this.stripe = new Stripe(stripeSecretKey);
+    this.stripe = this.stripeService.getPlatformClient();
+  }
+
+  onModuleInit(): void {
+    const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+    if (!secret) {
+      this.logger.warn(
+        'STRIPE_WEBHOOK_SECRET is not set — POST /payment/webhook will reject events. ' +
+          'Run: stripe listen --forward-to localhost:4001/payment/webhook and copy the whsec_ value into .env',
+      );
+    }
   }
 
   async handleStripeWebhook(
     rawBody: Buffer | undefined,
     signature: string | undefined,
   ): Promise<{ received: boolean }> {
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        phase: 'validate',
-        rawBodyBytes: rawBody?.length ?? 0,
-        hasSignature: Boolean(signature),
-      }),
-    );
+    logStripePayment({
+      phase: 'webhook_validate',
+      outcome: 'start',
+    });
 
     if (!rawBody?.length) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          phase: 'validate',
-          error: 'missing_raw_body',
-        }),
-      );
       throw new BadRequestException('Missing raw body');
     }
     if (!signature) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          phase: 'validate',
-          error: 'missing_stripe_signature_header',
-        }),
-      );
       throw new BadRequestException('Missing Stripe signature.');
     }
 
-    const rawWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    const webhookSecret = rawWebhookSecret?.trim() ?? '';
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? '';
     if (!webhookSecret) {
-      this.logger.error(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          phase: 'validate',
-          error: 'STRIPE_WEBHOOK_SECRET_not_configured',
-        }),
-      );
       throw new InternalServerErrorException(
         'STRIPE_WEBHOOK_SECRET is not configured',
       );
@@ -114,568 +94,130 @@ export class PaymentService {
         webhookSecret,
       );
     } catch (error) {
-      this.logger.error(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          phase: 'signature',
-          error: 'constructEvent_failed',
-        }),
-        error,
-      );
+      errorStripePayment({
+        phase: 'webhook_signature',
+        outcome: 'invalid',
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw new BadRequestException('Invalid Stripe webhook signature.');
     }
 
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        phase: 'event_verified',
-        eventType: event.type,
-        eventId: event.id,
-        livemode: event.livemode,
-        apiVersion: event.api_version ?? null,
-        stripeConnectAccount: event.account ?? null,
-      }),
-    );
-
-    const connectedAccountId = event.account ?? undefined;
-
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        await this.handlePaymentIntentSucceeded(
-          event.data.object as PaymentIntentPayload,
-          connectedAccountId,
-        );
-        break;
-
-      case 'payment_intent.payment_failed':
-        await this.handlePaymentIntentFailed(
-          event.data.object as PaymentIntentPayload,
-          connectedAccountId,
-        );
-        break;
-
-      case 'payment_intent.canceled':
-        await this.handlePaymentIntentCanceled(
-          event.data.object as PaymentIntentPayload,
-          connectedAccountId,
-        );
-        break;
-
-      case 'charge.refunded':
-        await this.handleChargeRefunded(
-          event.data.object as ChargePayload,
-          connectedAccountId,
-        );
-        break;
-
-      case 'charge.succeeded':
-      case 'charge.updated':
-        await this.markFunnelPaymentPaidFromSucceededCharge(
-          event.data.object as ChargePayload,
-          connectedAccountId,
-        );
-        break;
-
-      default:
-        this.logger.log(
-          JSON.stringify({
-            scope: 'stripe_webhook',
-            phase: 'route',
-            outcome: 'no_funnel_payment_handler',
-            eventType: event.type,
-            eventId: event.id,
-          }),
-        );
-        break;
-    }
-
-    const response = { received: true as const };
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        phase: 'response',
-        body: response,
-        eventType: event.type,
-        eventId: event.id,
-      }),
-    );
-    return response;
-  }
-
-  private async handlePaymentIntentSucceeded(
-    paymentIntent: PaymentIntentPayload,
-    connectedAccountId?: string,
-    chargeReceiptUrl?: string,
-  ) {
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.succeeded',
-        paymentIntentId: paymentIntent.id,
-        stripeConnectAccount: connectedAccountId ?? null,
-      }),
-    );
-
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { stripePaymentIntentId: paymentIntent.id },
+    logStripePayment({
+      phase: 'webhook_verified',
+      eventId: event.id,
+      eventType: event.type,
+      stripeAccountId: event.account ?? null,
     });
 
+    await this.stripeWebhookService.processOnce(event, (ev, acct) =>
+      this.paymentWebhookHandler.routeEvent(ev, acct),
+    );
+
+    return { received: true };
+  }
+
+  async getPaymentStatus(paymentId: number): Promise<{
+    paymentId: number;
+    status: FunnelPaymentStatus;
+    stripePaymentIntentId: string | null;
+    paidAt: Date | null;
+    failureReason: string | null;
+    refundedAmount: number;
+    disputeStatus: string | null;
+    syncedFromStripe?: boolean;
+  }> {
+    let payment = await this.funnelPaymentRepository.findOne({
+      where: { id: paymentId },
+    });
     if (!payment) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'payment_intent.succeeded',
-          outcome: 'funnel_payment_not_found',
-          paymentIntentId: paymentIntent.id,
-        }),
-      );
-      return;
+      throw new NotFoundException('Payment not found');
     }
 
-    if (payment.status === FunnelPaymentStatus.REFUNDED) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'payment_intent.succeeded',
-          outcome: 'skip_already_refunded',
-          funnelPaymentId: payment.id,
-          paymentIntentId: paymentIntent.id,
-        }),
-      );
-      return;
-    }
-
-    const paymentMethodId = this.paymentMethodIdFromIntent(paymentIntent);
-    const receiptUrl = await this.resolveReceiptUrl(
-      paymentIntent,
-      payment,
-      connectedAccountId,
-      chargeReceiptUrl,
-    );
-
-    const updateResult = await this.funnelPaymentRepository.update(
-      payment.id,
-      {
-        status: FunnelPaymentStatus.PAID,
-        paidAt: new Date(),
-        stripeConnectedAccountId:
-          connectedAccountId ?? payment.stripeConnectedAccountId,
-        ...(paymentMethodId ? { paymentMethod: paymentMethodId } : {}),
-        ...(receiptUrl ? { receiptUrl } : {}),
-      },
-    );
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.succeeded',
-        outcome: 'funnel_payment_updated',
-        funnelPaymentId: payment.id,
-        previousStatus: payment.status,
-        newStatus: FunnelPaymentStatus.PAID,
-        rowsAffected: updateResult.affected ?? 0,
-        paymentIntentId: paymentIntent.id,
-        setPaymentMethod: Boolean(paymentMethodId),
-        setReceiptUrl: Boolean(receiptUrl),
-      }),
-    );
-  }
-
-  private paymentMethodIdFromIntent(
-    pi: PaymentIntentPayload,
-  ): string | undefined {
-    const pm = pi.payment_method;
-    if (!pm) {
-      return undefined;
-    }
-    if (typeof pm === 'string') {
-      return pm;
-    }
-    if (typeof pm === 'object' && pm.id) {
-      return pm.id;
-    }
-    return undefined;
-  }
-
-  private receiptUrlFromIntent(pi: PaymentIntentPayload): string | undefined {
-    const fromCharges = pi.charges?.data?.[0]?.receipt_url;
-    if (fromCharges) {
-      return fromCharges;
-    }
-    const lc = pi.latest_charge;
-    if (lc && typeof lc === 'object' && lc.receipt_url) {
-      return lc.receipt_url;
-    }
-    return undefined;
-  }
-
-  private chargeIdFromIntent(pi: PaymentIntentPayload): string | undefined {
-    const lc = pi.latest_charge;
-    if (typeof lc === 'string') {
-      return lc;
-    }
-    return undefined;
-  }
-
-  private stripeForConnectedAccount(
-    connectedAccountId?: string | null,
-  ): InstanceType<typeof Stripe> {
-    const accountId = connectedAccountId?.trim();
-    if (!accountId) {
-      return this.stripe;
-    }
-    return new Stripe(process.env.STRIPE_SECRET_KEY!, {
-      stripeAccount: accountId,
-    });
-  }
-
-  /** Webhook payloads often omit receipt_url — load it from Stripe on the connected account. */
-  private async fetchReceiptUrlFromStripe(
-    paymentIntentId: string,
-    connectedAccountId?: string | null,
-    chargeId?: string,
-  ): Promise<string | undefined> {
-    try {
-      const stripe = this.stripeForConnectedAccount(connectedAccountId);
-      if (chargeId) {
-        const charge = await stripe.charges.retrieve(chargeId);
-        const url = charge.receipt_url?.trim();
-        if (url) {
-          return url;
-        }
+    let syncedFromStripe = false;
+    if (payment.status === FunnelPaymentStatus.PENDING) {
+      syncedFromStripe = await this.syncPendingPaymentFromStripe(payment);
+      if (syncedFromStripe) {
+        payment =
+          (await this.funnelPaymentRepository.findOne({
+            where: { id: paymentId },
+          })) ?? payment;
       }
-      const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ['latest_charge'],
-      });
-      const latest = pi.latest_charge;
-      if (latest && typeof latest === 'object' && latest.receipt_url) {
-        return latest.receipt_url.trim() || undefined;
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Could not fetch receipt URL for PaymentIntent ${paymentIntentId}`,
-        error,
-      );
     }
-    return undefined;
+
+    return {
+      paymentId: payment.id,
+      status: payment.status,
+      stripePaymentIntentId: payment.stripePaymentIntentId,
+      paidAt: payment.paidAt,
+      failureReason: payment.failureReason,
+      refundedAmount: payment.refundedAmount,
+      disputeStatus: payment.disputeStatus,
+      ...(syncedFromStripe ? { syncedFromStripe: true } : {}),
+    };
   }
 
-  private async resolveReceiptUrl(
-    paymentIntent: PaymentIntentPayload,
+  /** Fallback when webhooks did not run (local dev, missing secret, Connect events). */
+  private async syncPendingPaymentFromStripe(
     payment: FunnelPayment,
-    connectedAccountId?: string,
-    chargeReceiptUrl?: string,
-  ): Promise<string | undefined> {
-    const fromWebhook =
-      chargeReceiptUrl?.trim() ||
-      this.receiptUrlFromIntent(paymentIntent) ||
-      payment.receiptUrl?.trim();
-    if (fromWebhook) {
-      return fromWebhook;
+  ): Promise<boolean> {
+    const piId = payment.stripePaymentIntentId?.trim();
+    const accountId = payment.stripeConnectedAccountId?.trim();
+    if (!piId || !accountId) {
+      return false;
     }
-    return this.fetchReceiptUrlFromStripe(
-      paymentIntent.id,
-      connectedAccountId ?? payment.stripeConnectedAccountId,
-      this.chargeIdFromIntent(paymentIntent),
-    );
-  }
-
-  private async markFunnelPaymentPaidFromSucceededCharge(
-    charge: ChargePayload,
-    connectedAccountId?: string,
-  ): Promise<void> {
-    const paymentIntentId =
-      typeof charge.payment_intent === 'string'
-        ? charge.payment_intent
-        : charge.payment_intent?.id;
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'charge_success_fallback',
-        chargeId: charge.id,
-        chargeStatus: charge.status ?? null,
-        paymentIntentId: paymentIntentId ?? null,
-        stripeConnectAccount: connectedAccountId ?? null,
-      }),
-    );
-
-    if (charge.status !== 'succeeded') {
-      this.logger.log(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge_success_fallback',
-          outcome: 'skip_charge_not_succeeded',
-          chargeId: charge.id,
-          chargeStatus: charge.status ?? null,
-        }),
+    try {
+      const pi = await this.stripeService.retrievePaymentIntentOnConnectedAccount(
+        accountId,
+        piId,
       );
-      return;
+      if (pi.status === 'succeeded') {
+        await this.funnelPaymentRepository.update(payment.id, {
+          status: FunnelPaymentStatus.PAID,
+          paidAt: payment.paidAt ?? new Date(),
+        });
+        logStripePayment({
+          phase: 'payment_status_sync',
+          outcome: 'marked_paid_from_stripe',
+          paymentId: payment.id,
+          paymentIntentId: piId,
+        });
+        return true;
+      }
+      if (pi.status === 'canceled') {
+        await this.funnelPaymentRepository.update(payment.id, {
+          status: FunnelPaymentStatus.CANCELLED,
+          cancelledAt: payment.cancelledAt ?? new Date(),
+        });
+        return true;
+      }
+      if (pi.status === 'requires_payment_method' && pi.last_payment_error) {
+        await this.funnelPaymentRepository.update(payment.id, {
+          status: FunnelPaymentStatus.FAILED,
+          failedAt: payment.failedAt ?? new Date(),
+          failureReason:
+            pi.last_payment_error.message ?? 'Payment failed',
+        });
+        return true;
+      }
+    } catch (err) {
+      warnStripePayment({
+        phase: 'payment_status_sync',
+        outcome: 'stripe_retrieve_failed',
+        paymentId: payment.id,
+        paymentIntentId: piId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-    if (!paymentIntentId) {
-      this.logger.log(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge_success_fallback',
-          outcome: 'skip_no_payment_intent_on_charge',
-          chargeId: charge.id,
-        }),
-      );
-      return;
-    }
-
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { stripePaymentIntentId: paymentIntentId },
-    });
-
-    if (!payment) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge_success_fallback',
-          outcome: 'funnel_payment_not_found',
-          paymentIntentId,
-          chargeId: charge.id,
-        }),
-      );
-      return;
-    }
-
-    const receiptFromCharge = charge.receipt_url?.trim();
-    if (
-      receiptFromCharge &&
-      !payment.receiptUrl &&
-      (payment.status === FunnelPaymentStatus.PENDING ||
-        payment.status === FunnelPaymentStatus.PAID)
-    ) {
-      const receiptUpdate = await this.funnelPaymentRepository.update(
-        payment.id,
-        {
-          receiptUrl: receiptFromCharge,
-          stripeConnectedAccountId:
-            connectedAccountId ?? payment.stripeConnectedAccountId,
-        },
-      );
-      this.logger.log(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge_receipt_url_sync',
-          outcome: 'funnel_payment_receipt_updated',
-          funnelPaymentId: payment.id,
-          paymentIntentId,
-          chargeId: charge.id,
-          rowsAffected: receiptUpdate.affected ?? 0,
-        }),
-      );
-    }
-
-    if (payment.status !== FunnelPaymentStatus.PENDING) {
-      this.logger.log(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge_success_fallback',
-          outcome: 'skip_funnel_payment_not_pending',
-          funnelPaymentId: payment.id,
-          currentStatus: payment.status,
-          paymentIntentId,
-        }),
-      );
-      return;
-    }
-
-    await this.handlePaymentIntentSucceeded(
-      { id: paymentIntentId },
-      connectedAccountId,
-      receiptFromCharge,
-    );
-  }
-
-  private async handlePaymentIntentFailed(
-    paymentIntent: PaymentIntentPayload,
-    connectedAccountId?: string,
-  ) {
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.payment_failed',
-        paymentIntentId: paymentIntent.id,
-        stripeConnectAccount: connectedAccountId ?? null,
-      }),
-    );
-
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { stripePaymentIntentId: paymentIntent.id },
-    });
-
-    if (!payment) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'payment_intent.payment_failed',
-          outcome: 'funnel_payment_not_found',
-          paymentIntentId: paymentIntent.id,
-        }),
-      );
-      return;
-    }
-
-    const failureMessage =
-      paymentIntent.last_payment_error?.message ?? 'Payment failed';
-
-    const updateResult = await this.funnelPaymentRepository.update(
-      payment.id,
-      {
-        status: FunnelPaymentStatus.FAILED,
-        failedAt: new Date(),
-        failureReason: failureMessage,
-        stripeConnectedAccountId:
-          connectedAccountId ?? payment.stripeConnectedAccountId,
-      },
-    );
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.payment_failed',
-        outcome: 'funnel_payment_updated',
-        funnelPaymentId: payment.id,
-        rowsAffected: updateResult.affected ?? 0,
-        paymentIntentId: paymentIntent.id,
-        failureReason: failureMessage,
-      }),
-    );
-  }
-
-  private async handlePaymentIntentCanceled(
-    paymentIntent: PaymentIntentPayload,
-    connectedAccountId?: string,
-  ) {
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.canceled',
-        paymentIntentId: paymentIntent.id,
-        stripeConnectAccount: connectedAccountId ?? null,
-      }),
-    );
-
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { stripePaymentIntentId: paymentIntent.id },
-    });
-
-    if (!payment) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'payment_intent.canceled',
-          outcome: 'funnel_payment_not_found',
-          paymentIntentId: paymentIntent.id,
-        }),
-      );
-      return;
-    }
-
-    const updateResult = await this.funnelPaymentRepository.update(
-      payment.id,
-      {
-        status: FunnelPaymentStatus.CANCELLED,
-        cancelledAt: new Date(),
-        stripeConnectedAccountId:
-          connectedAccountId ?? payment.stripeConnectedAccountId,
-      },
-    );
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'payment_intent.canceled',
-        outcome: 'funnel_payment_updated',
-        funnelPaymentId: payment.id,
-        rowsAffected: updateResult.affected ?? 0,
-        paymentIntentId: paymentIntent.id,
-      }),
-    );
-  }
-
-  private async handleChargeRefunded(
-    charge: ChargePayload,
-    connectedAccountId?: string,
-  ) {
-    const paymentIntentId =
-      typeof charge.payment_intent === 'string'
-        ? charge.payment_intent
-        : charge.payment_intent?.id;
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'charge.refunded',
-        chargeId: charge.id,
-        paymentIntentId: paymentIntentId ?? null,
-        stripeConnectAccount: connectedAccountId ?? null,
-      }),
-    );
-
-    if (!paymentIntentId) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge.refunded',
-          outcome: 'skip_no_payment_intent_on_charge',
-          chargeId: charge.id,
-        }),
-      );
-      return;
-    }
-
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { stripePaymentIntentId: paymentIntentId },
-    });
-
-    if (!payment) {
-      this.logger.warn(
-        JSON.stringify({
-          scope: 'stripe_webhook',
-          handler: 'charge.refunded',
-          outcome: 'funnel_payment_not_found',
-          paymentIntentId,
-          chargeId: charge.id,
-        }),
-      );
-      return;
-    }
-
-    const refundId = charge.refunds?.data?.[0]?.id ?? null;
-
-    const updateResult = await this.funnelPaymentRepository.update(
-      payment.id,
-      {
-        status: FunnelPaymentStatus.REFUNDED,
-        refundedAt: new Date(),
-        stripeRefundId: refundId,
-        stripeConnectedAccountId:
-          connectedAccountId ?? payment.stripeConnectedAccountId,
-      },
-    );
-
-    this.logger.log(
-      JSON.stringify({
-        scope: 'stripe_webhook',
-        handler: 'charge.refunded',
-        outcome: 'funnel_payment_updated',
-        funnelPaymentId: payment.id,
-        rowsAffected: updateResult.affected ?? 0,
-        paymentIntentId,
-        stripeRefundId: refundId,
-      }),
-    );
+    return false;
   }
 
   async createPaymentIntent(dto: CreatePaymentIntentDto): Promise<{
-    clientSecret: string;
+    clientSecret?: string;
     paymentIntentId: string;
     paymentId: number;
     stripeAccountId: string;
+    reused: boolean;
+    alreadyCompleted?: boolean;
   }> {
     const restaurant = await this.restaurantRepository.findOne({
       where: { id: dto.restaurantId },
@@ -686,7 +228,9 @@ export class PaymentService {
     }
 
     if (!restaurant.stripeAccountId) {
-      throw new BadRequestException('Stripe account not connected');
+      throw new BadRequestException(
+        'Stripe account not connected. Complete onboarding in Restaurant Settings.',
+      );
     }
 
     const funnel = await this.funnelRepository.findOne({
@@ -708,9 +252,13 @@ export class PaymentService {
       );
     }
 
+    const stripeAccountId = restaurant.stripeAccountId.trim();
+    await this.stripeService.validateConnectedAccount(stripeAccountId);
+
+    const currency = dto.currency.toLowerCase().trim();
     const amount = campaignPriceToStripeAmount(
       funnel.campaign.price,
-      dto.currency,
+      currency,
     );
     if (!Number.isFinite(amount) || amount < 1) {
       throw new BadRequestException(
@@ -718,69 +266,191 @@ export class PaymentService {
       );
     }
 
-    if (dto.applicationFeeAmount >= amount) {
+    const { applicationFeeAmount } = this.feeService.calculatePlatformFee({
+      chargeAmountMinor: amount,
+      currency,
+      restaurantId: dto.restaurantId,
+      campaignId: funnel.campaign.id,
+    });
+
+    if (applicationFeeAmount >= amount) {
       throw new BadRequestException(
-        'Application fee must be less than the payment amount.',
+        'Platform fee configuration is invalid for this charge amount.',
       );
     }
 
-    const paymentIntent =
-      await this.stripeService.createPaymentIntentOnConnectedAccount({
-        stripeAccountId: restaurant.stripeAccountId,
-        amount,
-        currency: dto.currency,
-        applicationFeeAmount: dto.applicationFeeAmount,
-        receiptEmail: dto.customerEmail,
-        metadata: {
-          funnelId: String(dto.funnelId),
-          restaurantId: String(dto.restaurantId),
-          campaignId: String(funnel.campaign.id),
-        },
-      });
+    const reused = await this.tryReusePendingPayment({
+      funnelId: dto.funnelId,
+      restaurantId: dto.restaurantId,
+      customerEmail: dto.customerEmail,
+      stripeAccountId,
+    });
+    if (reused) {
+      return reused;
+    }
 
     const payment = this.funnelPaymentRepository.create({
       funnelId: dto.funnelId,
       restaurantId: dto.restaurantId,
-      stripePaymentIntentId: paymentIntent.id,
-      stripeConnectedAccountId: restaurant.stripeAccountId,
+      campaignId: funnel.campaign.id,
+      stripeConnectedAccountId: stripeAccountId,
       amount,
-      currency: dto.currency.toLowerCase(),
-      customerEmail: dto.customerEmail,
+      currency,
+      platformFeeAmount: applicationFeeAmount,
+      customerEmail: dto.customerEmail.trim(),
       status: FunnelPaymentStatus.PENDING,
+      stripePaymentIntentId: null,
+      refundedAmount: 0,
     });
 
     await this.funnelPaymentRepository.save(payment);
+
+    const metadata = this.buildPaymentMetadata(payment, funnel.campaign.id);
+
+    const paymentIntent =
+      await this.stripeService.createPaymentIntentOnConnectedAccount({
+        stripeAccountId,
+        amount,
+        currency,
+        applicationFeeAmount,
+        receiptEmail: dto.customerEmail.trim(),
+        idempotencyKey: `payment-intent-${payment.id}`,
+        metadata,
+      });
+
+    await this.funnelPaymentRepository.update(payment.id, {
+      stripePaymentIntentId: paymentIntent.id,
+    });
 
     return {
       clientSecret: paymentIntent.client_secret!,
       paymentIntentId: paymentIntent.id,
       paymentId: payment.id,
-      stripeAccountId: restaurant.stripeAccountId,
+      stripeAccountId,
+      reused: false,
     };
+  }
+
+  private buildPaymentMetadata(
+    payment: FunnelPayment,
+    campaignId: number,
+  ): Record<string, string> {
+    return {
+      paymentId: String(payment.id),
+      funnelId: String(payment.funnelId),
+      restaurantId: String(payment.restaurantId),
+      campaignId: String(campaignId),
+    };
+  }
+
+  private async tryReusePendingPayment(opts: {
+    funnelId: number;
+    restaurantId: number;
+    customerEmail: string;
+    stripeAccountId: string;
+  }): Promise<{
+    clientSecret?: string;
+    paymentIntentId: string;
+    paymentId: number;
+    stripeAccountId: string;
+    reused: boolean;
+    alreadyCompleted?: boolean;
+  } | null> {
+    const cutoff = new Date(
+      Date.now() -
+        PaymentWebhookHandler.PENDING_REUSE_HOURS * 60 * 60 * 1000,
+    );
+
+    const pending = await this.funnelPaymentRepository.findOne({
+      where: {
+        funnelId: opts.funnelId,
+        restaurantId: opts.restaurantId,
+        customerEmail: opts.customerEmail.trim(),
+        status: FunnelPaymentStatus.PENDING,
+        createdAt: MoreThan(cutoff),
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!pending?.stripePaymentIntentId) {
+      return null;
+    }
+
+    try {
+      const pi = await this.stripeService.retrievePaymentIntentOnConnectedAccount(
+        opts.stripeAccountId,
+        pending.stripePaymentIntentId,
+      );
+
+      if (pi.status === 'succeeded') {
+        await this.funnelPaymentRepository.update(pending.id, {
+          status: FunnelPaymentStatus.PAID,
+          paidAt: pending.paidAt ?? new Date(),
+          stripeConnectedAccountId: opts.stripeAccountId,
+        });
+        logStripePayment({
+          phase: 'payment_intent_reuse',
+          outcome: 'already_succeeded_synced',
+          paymentId: pending.id,
+          paymentIntentId: pi.id,
+          funnelId: pending.funnelId,
+          restaurantId: pending.restaurantId,
+        });
+        return {
+          paymentIntentId: pi.id,
+          paymentId: pending.id,
+          stripeAccountId: opts.stripeAccountId,
+          reused: true,
+          alreadyCompleted: true,
+        };
+      }
+
+      if (pi.status === 'canceled') {
+        await this.funnelPaymentRepository.update(pending.id, {
+          status: FunnelPaymentStatus.CANCELLED,
+          cancelledAt: pending.cancelledAt ?? new Date(),
+        });
+        return null;
+      }
+
+      if (
+        !PaymentWebhookHandler.isReusablePaymentIntentStatus(pi.status) ||
+        !pi.client_secret
+      ) {
+        return null;
+      }
+
+      logStripePayment({
+        phase: 'payment_intent_reuse',
+        outcome: 'success',
+        paymentId: pending.id,
+        paymentIntentId: pi.id,
+        funnelId: pending.funnelId,
+        restaurantId: pending.restaurantId,
+      });
+
+      return {
+        clientSecret: pi.client_secret,
+        paymentIntentId: pi.id,
+        paymentId: pending.id,
+        stripeAccountId: opts.stripeAccountId,
+        reused: true,
+      };
+    } catch {
+      warnStripePayment({
+        phase: 'payment_intent_reuse',
+        outcome: 'retrieve_failed',
+        paymentId: pending.id,
+        paymentIntentId: pending.stripePaymentIntentId,
+      });
+      return null;
+    }
   }
 
   async getPaidFunnelPayments(funnelId: number): Promise<{
     funnelId: number;
     paymentCount: number;
-    payments: Array<{
-      id: number;
-      funnelId: number;
-      restaurantId: number;
-      amount: number;
-      currency: string;
-      status: FunnelPaymentStatus;
-      customerEmail: string;
-      paymentMethod: string | null;
-      receiptUrl: string | null;
-      failureReason: string | null;
-      failedAt: Date | null;
-      cancelledAt: Date | null;
-      stripeRefundId: string | null;
-      refundedAt: Date | null;
-      paidAt: Date | null;
-      createdAt: Date;
-      updatedAt: Date;
-    }>;
+    payments: Array<ReturnType<PaymentService['toPublicFunnelPayment']>>;
   }> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
@@ -806,6 +476,7 @@ export class PaymentService {
       id: payment.id,
       funnelId: payment.funnelId,
       restaurantId: payment.restaurantId,
+      campaignId: payment.campaignId,
       amount: payment.amount,
       currency: payment.currency,
       status: payment.status,
@@ -817,6 +488,9 @@ export class PaymentService {
       cancelledAt: payment.cancelledAt,
       stripeRefundId: payment.stripeRefundId,
       refundedAt: payment.refundedAt,
+      refundedAmount: payment.refundedAmount,
+      stripeDisputeId: payment.stripeDisputeId,
+      disputeStatus: payment.disputeStatus,
       paidAt: payment.paidAt,
       createdAt: payment.createdAt,
       updatedAt: payment.updatedAt,

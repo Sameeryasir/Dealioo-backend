@@ -34,6 +34,27 @@ export class PaymentController {
     return this.paymentService.getPaidFunnelPayments(funnelId);
   }
 
+  @Get(':paymentId/status')
+  getPaymentStatus(@Param('paymentId', ParseIntPipe) paymentId: number) {
+    return this.paymentService.getPaymentStatus(paymentId);
+  }
+
+  @SkipThrottle()
+  @Get('webhook/health')
+  webhookHealth() {
+    const secretConfigured = Boolean(
+      process.env.STRIPE_WEBHOOK_SECRET?.trim(),
+    );
+    return {
+      ok: secretConfigured,
+      endpoint: 'POST /payment/webhook',
+      stripeWebhookSecretConfigured: secretConfigured,
+      hint: secretConfigured
+        ? 'Use stripe listen --forward-to localhost:4001/payment/webhook for local testing.'
+        : 'Set STRIPE_WEBHOOK_SECRET in .env (from stripe listen or Stripe Dashboard signing secret).',
+    };
+  }
+
   @SkipThrottle()
   @Post('webhook')
   @HttpCode(200)
