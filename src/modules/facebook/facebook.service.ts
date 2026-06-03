@@ -10,29 +10,29 @@ import { Repository } from 'typeorm';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
-import { MetaConnectionStatusDto } from './dto/meta-connection-status.dto';
-import { MetaOAuthCallbackResultDto } from './dto/meta-oauth-callback-result.dto';
+import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
+import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
 
-const META_GRAPH = 'https://graph.facebook.com/v23.0';
-const META_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
-const META_OAUTH_SCOPES =
+const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
+const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
+const FACEBOOK_OAUTH_SCOPES =
   'pages_show_list,pages_read_engagement,ads_read';
 
-type MetaTokenResponse = {
+type FacebookTokenResponse = {
   access_token?: string;
   expires_in?: number;
   error?: { message?: string };
 };
 
-type MetaMeResponse = {
+type FacebookMeResponse = {
   id?: string;
   name?: string;
   error?: { message?: string };
 };
 
 @Injectable()
-export class MetaService {
-  private readonly logger = new Logger(MetaService.name);
+export class FacebookService {
+  private readonly logger = new Logger(FacebookService.name);
 
   constructor(
     @InjectRepository(Restaurant)
@@ -73,14 +73,14 @@ export class MetaService {
     const appId = this.getAppId();
     if (!appId) {
       throw new InternalServerErrorException(
-        'Set META_APP_ID or FACEBOOK_APP_ID for Facebook Login OAuth.',
+        'Set FACEBOOK_APP_ID for Facebook Login OAuth.',
       );
     }
 
     const redirectUri = this.getRedirectUri();
     if (!redirectUri) {
       throw new InternalServerErrorException(
-        'Set META_REDIRECT_URI or FACEBOOK_REDIRECT_URI to your API URL for GET /meta/callback/oauth.',
+        'Set FACEBOOK_REDIRECT_URI to your OAuth callback URL (e.g. GET /facebook/callback/oauth).',
       );
     }
 
@@ -88,12 +88,12 @@ export class MetaService {
       client_id: appId,
       redirect_uri: redirectUri,
       state: String(restaurantId),
-      scope: META_OAUTH_SCOPES,
+      scope: FACEBOOK_OAUTH_SCOPES,
       response_type: 'code',
     });
 
     return {
-      url: `${META_OAUTH_DIALOG}?${params.toString()}`,
+      url: `${FACEBOOK_OAUTH_DIALOG}?${params.toString()}`,
     };
   }
 
@@ -102,7 +102,7 @@ export class MetaService {
     state: string | undefined,
     oauthError: string | undefined,
     oauthErrorDescription: string | undefined,
-  ): Promise<MetaOAuthCallbackResultDto> {
+  ): Promise<FacebookOAuthCallbackResultDto> {
     if (oauthError) {
       throw new BadRequestException(
         oauthErrorDescription?.trim() ||
@@ -112,17 +112,17 @@ export class MetaService {
     }
 
     if (!code?.trim()) {
-      throw new BadRequestException('Missing Meta OAuth code.');
+      throw new BadRequestException('Missing Facebook OAuth code.');
     }
 
     if (!state?.trim()) {
-      throw new BadRequestException('Missing Meta OAuth state.');
+      throw new BadRequestException('Missing Facebook OAuth state.');
     }
 
     const restaurantId = Number.parseInt(state, 10);
 
     if (!Number.isFinite(restaurantId) || restaurantId < 1) {
-      throw new BadRequestException('Invalid Meta OAuth state.');
+      throw new BadRequestException('Invalid Facebook OAuth state.');
     }
 
     const restaurant = await this.restaurantRepository.findOne({
@@ -139,7 +139,7 @@ export class MetaService {
 
     if (!appId || !appSecret || !redirectUri) {
       throw new InternalServerErrorException(
-        'Set META_APP_ID, META_APP_SECRET, and META_REDIRECT_URI (or FACEBOOK_* equivalents).',
+        'Set FACEBOOK_APP_ID, FACEBOOK_APP_SECRET, and FACEBOOK_REDIRECT_URI.',
       );
     }
 
@@ -173,13 +173,13 @@ export class MetaService {
     });
 
     this.logger.log(
-      `Meta connected for restaurant ${restaurantId} (facebook user ${me.id})`,
+      `Facebook connected for restaurant ${restaurantId} (user ${me.id})`,
     );
 
     return { connected: true, restaurantId };
   }
 
-  getConnectionStatus(restaurant: Restaurant): MetaConnectionStatusDto {
+  getConnectionStatus(restaurant: Restaurant): FacebookConnectionStatusDto {
     const connected = Boolean(
       restaurant.metaUserId?.trim() && restaurant.metaAccessToken?.trim(),
     );
@@ -191,23 +191,50 @@ export class MetaService {
     };
   }
 
+  verifyWebhook(
+    mode: string | undefined,
+    verifyToken: string | undefined,
+    challenge: string | undefined,
+  ): string {
+    const expected = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN?.trim();
+    if (!expected) {
+      throw new InternalServerErrorException(
+        'FACEBOOK_WEBHOOK_VERIFY_TOKEN is not configured.',
+      );
+    }
+
+    if (mode === 'subscribe' && verifyToken === expected && challenge) {
+      return challenge;
+    }
+
+    throw new BadRequestException('Facebook webhook verification failed.');
+  }
+
+  logWebhookPayload(payload: unknown): void {
+    this.logger.log(
+      `Facebook webhook received: ${JSON.stringify(payload).slice(0, 4000)}`,
+    );
+  }
+
   private getAppId(): string | undefined {
     return (
-      process.env.META_APP_ID?.trim() || process.env.FACEBOOK_APP_ID?.trim()
+      process.env.FACEBOOK_APP_ID?.trim() ||
+      process.env.META_APP_ID?.trim()
     );
   }
 
   private getAppSecret(): string | undefined {
     return (
-      process.env.META_APP_SECRET?.trim() ||
-      process.env.FACEBOOK_APP_SECRET?.trim()
+      process.env.FACEBOOK_APP_SECRET?.trim() ||
+      process.env.META_APP_SECRET?.trim()
     );
   }
 
+  /** FACEBOOK_REDIRECT_URI is canonical; META_REDIRECT_URI kept for older .env files. */
   private getRedirectUri(): string | undefined {
     return (
-      process.env.META_REDIRECT_URI?.trim() ||
-      process.env.FACEBOOK_REDIRECT_URI?.trim()
+      process.env.FACEBOOK_REDIRECT_URI?.trim() ||
+      process.env.META_REDIRECT_URI?.trim()
     );
   }
 
@@ -216,14 +243,14 @@ export class MetaService {
     appId: string,
     appSecret: string,
     redirectUri: string,
-  ): Promise<MetaTokenResponse> {
-    const url = new URL(`${META_GRAPH}/oauth/access_token`);
+  ): Promise<FacebookTokenResponse> {
+    const url = new URL(`${FACEBOOK_GRAPH}/oauth/access_token`);
     url.searchParams.set('client_id', appId);
     url.searchParams.set('client_secret', appSecret);
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('code', code);
 
-    return this.graphGet<MetaTokenResponse>(url.toString());
+    return this.graphGet<FacebookTokenResponse>(url.toString());
   }
 
   private async exchangeForLongLivedToken(
@@ -231,24 +258,24 @@ export class MetaService {
     appId: string,
     appSecret: string,
   ): Promise<string> {
-    const url = new URL(`${META_GRAPH}/oauth/access_token`);
+    const url = new URL(`${FACEBOOK_GRAPH}/oauth/access_token`);
     url.searchParams.set('grant_type', 'fb_exchange_token');
     url.searchParams.set('client_id', appId);
     url.searchParams.set('client_secret', appSecret);
     url.searchParams.set('fb_exchange_token', shortLivedToken);
 
-    const longJson = await this.graphGet<MetaTokenResponse>(url.toString());
+    const longJson = await this.graphGet<FacebookTokenResponse>(url.toString());
     return longJson.access_token ?? shortLivedToken;
   }
 
   private async fetchFacebookUser(
     accessToken: string,
   ): Promise<{ id: string; name: string | null }> {
-    const url = new URL(`${META_GRAPH}/me`);
+    const url = new URL(`${FACEBOOK_GRAPH}/me`);
     url.searchParams.set('fields', 'id,name');
     url.searchParams.set('access_token', accessToken);
 
-    const me = await this.graphGet<MetaMeResponse>(url.toString());
+    const me = await this.graphGet<FacebookMeResponse>(url.toString());
     if (!me.id) {
       throw new BadRequestException(
         me.error?.message ?? 'Could not read your Facebook profile.',
@@ -264,7 +291,7 @@ export class MetaService {
       res = await fetch(url);
     } catch (err) {
       this.logger.error(
-        `Meta Graph API network error: ${err instanceof Error ? err.message : String(err)}`,
+        `Facebook Graph API network error: ${err instanceof Error ? err.message : String(err)}`,
       );
       throw new BadRequestException(
         'Could not reach Facebook. Check your connection and try again.',

@@ -1,15 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Restaurant } from '../../db/entities/restaurant.entity';
-import { MetaService } from './meta.service';
+import { FacebookService } from './facebook.service';
 
-describe('MetaService', () => {
-  let service: MetaService;
+describe('FacebookService', () => {
+  let service: FacebookService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        MetaService,
+        FacebookService,
         {
           provide: getRepositoryToken(Restaurant),
           useValue: {
@@ -20,7 +20,7 @@ describe('MetaService', () => {
       ],
     }).compile();
 
-    service = module.get<MetaService>(MetaService);
+    service = module.get<FacebookService>(FacebookService);
   });
 
   it('should be defined', () => {

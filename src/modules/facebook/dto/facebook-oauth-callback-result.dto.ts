@@ -1,4 +1,4 @@
-export class MetaOAuthCallbackResultDto {
+export class FacebookOAuthCallbackResultDto {
   connected: boolean;
   restaurantId: number;
 }

@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthGuard } from '@nestjs/passport';
+import { RestaurantService } from '../restaurant/restaurant.service';
 import { FacebookController } from './facebook.controller';
 import { FacebookService } from './facebook.service';
 
@@ -13,11 +14,15 @@ describe('FacebookController', () => {
         {
           provide: FacebookService,
           useValue: {
-            resolveUserIdFromAccessToken: jest.fn(),
-            buildOAuthLoginUrl: jest.fn(),
+            connect: jest.fn(),
+            createOAuthConnectUrl: jest.fn(),
             handleOAuthCallback: jest.fn(),
             getConnectionStatus: jest.fn(),
           },
+        },
+        {
+          provide: RestaurantService,
+          useValue: { findOwnedByUserId: jest.fn() },
         },
       ],
     })
