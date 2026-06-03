@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { RestaurantService } from '../restaurant/restaurant.service';
 import { StripeService } from './stripe.service';
 
@@ -47,12 +48,7 @@ export class StripeController {
 
     await this.stripeService.handleOAuthCallback(code, state);
 
-    const frontendBase =
-      process.env.FRONTEND_URL ??
-      process.env.CORS_ORIGIN ??
-      'http://localhost:3000';
-
-    return res.redirect(`${frontendBase}/stripe/connect/success`);
+    return res.redirect(`${getFrontendBaseUrl()}/stripe/connect/success`);
   }
 
   @UseGuards(AuthGuard('jwt'))

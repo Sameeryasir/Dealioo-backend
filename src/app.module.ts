@@ -15,6 +15,7 @@ import { CampaignModule } from './modules/campaign/campaign.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
 import { StripeModule } from './modules/stripe/stripe.module';
+import { MetaModule } from './modules/meta/meta.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
@@ -59,6 +60,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     FunnelModule,
     CustomerModule,
     StripeModule,
+    MetaModule,
     PaymentModule,
     FunnelEventModule,
     AutomationModule,

@@ -1,0 +1,287 @@
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Restaurant } from '../../db/entities/restaurant.entity';
+import { User } from '../../db/entities/user.entity';
+import { requireAdminRole } from '../../utils/require-admin-role';
+import { MetaConnectionStatusDto } from './dto/meta-connection-status.dto';
+import { MetaOAuthCallbackResultDto } from './dto/meta-oauth-callback-result.dto';
+
+const META_GRAPH = 'https://graph.facebook.com/v23.0';
+const META_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
+const META_OAUTH_SCOPES =
+  'pages_show_list,pages_read_engagement,ads_read';
+
+type MetaTokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  error?: { message?: string };
+};
+
+type MetaMeResponse = {
+  id?: string;
+  name?: string;
+  error?: { message?: string };
+};
+
+@Injectable()
+export class MetaService {
+  private readonly logger = new Logger(MetaService.name);
+
+  constructor(
+    @InjectRepository(Restaurant)
+    private readonly restaurantRepository: Repository<Restaurant>,
+  ) {}
+
+  async connect(user: User, restaurantId: number): Promise<{ url: string }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to connect Facebook for this account.',
+    );
+
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId, owner: { id: user.id } },
+      relations: ['owner'],
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException(
+        'Restaurant not found or you do not own this restaurant.',
+      );
+    }
+
+    return this.createOAuthConnectUrl(restaurantId);
+  }
+
+  async createOAuthConnectUrl(
+    restaurantId: number,
+  ): Promise<{ url: string }> {
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId },
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant not found.');
+    }
+
+    const appId = this.getAppId();
+    if (!appId) {
+      throw new InternalServerErrorException(
+        'Set META_APP_ID or FACEBOOK_APP_ID for Facebook Login OAuth.',
+      );
+    }
+
+    const redirectUri = this.getRedirectUri();
+    if (!redirectUri) {
+      throw new InternalServerErrorException(
+        'Set META_REDIRECT_URI or FACEBOOK_REDIRECT_URI to your API URL for GET /meta/callback/oauth.',
+      );
+    }
+
+    const params = new URLSearchParams({
+      client_id: appId,
+      redirect_uri: redirectUri,
+      state: String(restaurantId),
+      scope: META_OAUTH_SCOPES,
+      response_type: 'code',
+    });
+
+    return {
+      url: `${META_OAUTH_DIALOG}?${params.toString()}`,
+    };
+  }
+
+  async handleOAuthCallback(
+    code: string | undefined,
+    state: string | undefined,
+    oauthError: string | undefined,
+    oauthErrorDescription: string | undefined,
+  ): Promise<MetaOAuthCallbackResultDto> {
+    if (oauthError) {
+      throw new BadRequestException(
+        oauthErrorDescription?.trim() ||
+          oauthError ||
+          'Facebook connection was cancelled.',
+      );
+    }
+
+    if (!code?.trim()) {
+      throw new BadRequestException('Missing Meta OAuth code.');
+    }
+
+    if (!state?.trim()) {
+      throw new BadRequestException('Missing Meta OAuth state.');
+    }
+
+    const restaurantId = Number.parseInt(state, 10);
+
+    if (!Number.isFinite(restaurantId) || restaurantId < 1) {
+      throw new BadRequestException('Invalid Meta OAuth state.');
+    }
+
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId },
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant not found.');
+    }
+
+    const appId = this.getAppId();
+    const appSecret = this.getAppSecret();
+    const redirectUri = this.getRedirectUri();
+
+    if (!appId || !appSecret || !redirectUri) {
+      throw new InternalServerErrorException(
+        'Set META_APP_ID, META_APP_SECRET, and META_REDIRECT_URI (or FACEBOOK_* equivalents).',
+      );
+    }
+
+    const tokenJson = await this.exchangeCodeForAccessToken(
+      code.trim(),
+      appId,
+      appSecret,
+      redirectUri,
+    );
+
+    let accessToken = tokenJson.access_token;
+    if (!accessToken) {
+      throw new BadRequestException(
+        tokenJson.error?.message ??
+          'Facebook did not return an access token. Try connecting again.',
+      );
+    }
+
+    accessToken = await this.exchangeForLongLivedToken(
+      accessToken,
+      appId,
+      appSecret,
+    );
+
+    const me = await this.fetchFacebookUser(accessToken);
+
+    await this.restaurantRepository.update(restaurantId, {
+      metaUserId: me.id,
+      metaAccessToken: accessToken,
+      metaConnectedAt: new Date(),
+    });
+
+    this.logger.log(
+      `Meta connected for restaurant ${restaurantId} (facebook user ${me.id})`,
+    );
+
+    return { connected: true, restaurantId };
+  }
+
+  getConnectionStatus(restaurant: Restaurant): MetaConnectionStatusDto {
+    const connected = Boolean(
+      restaurant.metaUserId?.trim() && restaurant.metaAccessToken?.trim(),
+    );
+
+    return {
+      connected,
+      metaUserId: restaurant.metaUserId,
+      metaConnectedAt: restaurant.metaConnectedAt,
+    };
+  }
+
+  private getAppId(): string | undefined {
+    return (
+      process.env.META_APP_ID?.trim() || process.env.FACEBOOK_APP_ID?.trim()
+    );
+  }
+
+  private getAppSecret(): string | undefined {
+    return (
+      process.env.META_APP_SECRET?.trim() ||
+      process.env.FACEBOOK_APP_SECRET?.trim()
+    );
+  }
+
+  private getRedirectUri(): string | undefined {
+    return (
+      process.env.META_REDIRECT_URI?.trim() ||
+      process.env.FACEBOOK_REDIRECT_URI?.trim()
+    );
+  }
+
+  private async exchangeCodeForAccessToken(
+    code: string,
+    appId: string,
+    appSecret: string,
+    redirectUri: string,
+  ): Promise<MetaTokenResponse> {
+    const url = new URL(`${META_GRAPH}/oauth/access_token`);
+    url.searchParams.set('client_id', appId);
+    url.searchParams.set('client_secret', appSecret);
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('code', code);
+
+    return this.graphGet<MetaTokenResponse>(url.toString());
+  }
+
+  private async exchangeForLongLivedToken(
+    shortLivedToken: string,
+    appId: string,
+    appSecret: string,
+  ): Promise<string> {
+    const url = new URL(`${META_GRAPH}/oauth/access_token`);
+    url.searchParams.set('grant_type', 'fb_exchange_token');
+    url.searchParams.set('client_id', appId);
+    url.searchParams.set('client_secret', appSecret);
+    url.searchParams.set('fb_exchange_token', shortLivedToken);
+
+    const longJson = await this.graphGet<MetaTokenResponse>(url.toString());
+    return longJson.access_token ?? shortLivedToken;
+  }
+
+  private async fetchFacebookUser(
+    accessToken: string,
+  ): Promise<{ id: string; name: string | null }> {
+    const url = new URL(`${META_GRAPH}/me`);
+    url.searchParams.set('fields', 'id,name');
+    url.searchParams.set('access_token', accessToken);
+
+    const me = await this.graphGet<MetaMeResponse>(url.toString());
+    if (!me.id) {
+      throw new BadRequestException(
+        me.error?.message ?? 'Could not read your Facebook profile.',
+      );
+    }
+
+    return { id: me.id, name: me.name ?? null };
+  }
+
+  private async graphGet<T>(url: string): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      this.logger.error(
+        `Meta Graph API network error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new BadRequestException(
+        'Could not reach Facebook. Check your connection and try again.',
+      );
+    }
+
+    const body = (await res.json()) as T & {
+      error?: { message?: string };
+    };
+
+    if (!res.ok) {
+      throw new BadRequestException(
+        body?.error?.message ??
+          `Facebook API request failed (${res.status}).`,
+      );
+    }
+
+    return body;
+  }
+}

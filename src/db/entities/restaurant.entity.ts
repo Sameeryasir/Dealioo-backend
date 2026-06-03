@@ -61,6 +61,15 @@ export class Restaurant {
   })
   stripeAccountId: string | null;
 
+  @Column({ name: 'meta_user_id', type: 'varchar', length: 64, nullable: true })
+  metaUserId: string | null;
+
+  @Column({ name: 'meta_access_token', type: 'text', nullable: true })
+  metaAccessToken: string | null;
+
+  @Column({ name: 'meta_connected_at', type: 'timestamptz', nullable: true })
+  metaConnectedAt: Date | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

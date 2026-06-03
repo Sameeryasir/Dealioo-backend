@@ -10,9 +10,11 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
+import { FacebookModule } from './facebook/facebook.module';
 
 @Module({
   imports: [
+    FacebookModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     TypeOrmModule.forFeature([User, Role, Otp, RefreshToken]),
     JwtModule.registerAsync({

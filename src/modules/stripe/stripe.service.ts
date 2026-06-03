@@ -10,6 +10,7 @@ import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import {
   errorStripePayment,
@@ -156,8 +157,7 @@ export class StripeService {
       }
     }
 
-    const frontendBase =
-      process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+    const frontendBase = getFrontendBaseUrl();
 
     const accountLink = await this.stripe.accountLinks.create({
       account: stripeAccountId,
