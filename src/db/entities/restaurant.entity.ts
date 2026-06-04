@@ -70,6 +70,9 @@ export class Restaurant {
   @Column({ name: 'meta_connected_at', type: 'timestamptz', nullable: true })
   metaConnectedAt: Date | null;
 
+  @Column({ name: 'meta_ad_account_id', type: 'varchar', length: 64, nullable: true })
+  metaAdAccountId: string | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

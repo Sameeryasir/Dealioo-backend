@@ -18,6 +18,7 @@ describe('FacebookController', () => {
             createOAuthConnectUrl: jest.fn(),
             handleOAuthCallback: jest.fn(),
             getConnectionStatus: jest.fn(),
+            getAdCampaignStats: jest.fn(),
           },
         },
         {

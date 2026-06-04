@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   NotFoundException,
@@ -14,7 +15,10 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { RestaurantService } from '../restaurant/restaurant.service';
+import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
+import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
+import { SetFacebookAdAccountDto } from './dto/set-facebook-ad-account.dto';
 import { FacebookService } from './facebook.service';
 
 @Controller('facebook')
@@ -47,7 +51,7 @@ export class FacebookController {
     );
 
     return res.redirect(
-      `${getFrontendBaseUrl()}/facebook/success?restaurantId=${result.restaurantId}`,
+      `${getFrontendBaseUrl()}/facebook/select-ad-account?restaurantId=${result.restaurantId}`,
     );
   }
 
@@ -78,5 +82,51 @@ export class FacebookController {
     }
 
     return this.facebookService.getConnectionStatus(restaurant);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('ads/campaign-stats/:restaurantId')
+  async adCampaignStats(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  ): Promise<FacebookAdCampaignStatsDto> {
+    const restaurant = await this.restaurantService.findOwnedByUserId(
+      req.user.id,
+      restaurantId,
+    );
+
+    if (!restaurant) {
+      throw new NotFoundException(
+        'Restaurant not found or you do not own this restaurant.',
+      );
+    }
+
+    return this.facebookService.getAdCampaignStats(restaurant);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('ad-accounts/:restaurantId')
+  async listAdAccounts(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  ): Promise<FacebookAdAccountDto[]> {
+    return this.facebookService.listAdAccountsForRestaurant(
+      req.user,
+      restaurantId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('ad-account/:restaurantId')
+  async setAdAccount(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Body() body: SetFacebookAdAccountDto,
+  ): Promise<{ metaAdAccountId: string }> {
+    return this.facebookService.setRestaurantAdAccount(
+      req.user,
+      restaurantId,
+      body.adAccountId,
+    );
   }
 }
