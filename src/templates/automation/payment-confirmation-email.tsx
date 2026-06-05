@@ -14,7 +14,7 @@ export function PaymentConfirmationEmail({
     ? [message.trim()]
     : [
         'Thank you for trusting us. Your payment is confirmed.',
-        'We are glad to have you with us and will send any receipts or updates to this email.',
+        'Tap the button below to open your pass QR code and show it at the restaurant.',
       ];
 
   return (

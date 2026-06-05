@@ -22,6 +22,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationService } from '../automation/automation.service';
+import { CouponService } from '../redemption/coupon.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import {
   buildRecentMonthBuckets,
@@ -41,6 +42,7 @@ export class FunnelEventService {
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     private readonly automationService: AutomationService,
+    private readonly couponService: CouponService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
@@ -55,6 +57,20 @@ export class FunnelEventService {
       dto.eventType === FunnelEventType.SIGNUP
         ? await this.trackSignup(dto)
         : await this.trackPayment(dto);
+
+    // Issue coupon before payment automations so confirmation emails can link to the pass.
+    if (
+      dto.eventType === FunnelEventType.PAYMENT &&
+      tracked.event.customerId &&
+      tracked.event.funnelPaymentId &&
+      this.isPaidFunnelEvent(tracked.event)
+    ) {
+      await this.couponService.issueFromPayment(
+        tracked.event.funnelPaymentId,
+        dto.funnelId,
+        tracked.event.customerId,
+      );
+    }
 
     if (tracked.shouldRunAutomation) {
       await this.automationService.handleEvent(tracked.event);

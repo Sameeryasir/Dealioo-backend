@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationExecutionStatus } from '../../db/entities/automation-execution.entity';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
+import type { AutomationExecution } from '../../db/entities/automation-execution.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import {
   FunnelEvent,
@@ -12,6 +14,8 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { CouponService } from '../redemption/coupon.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
@@ -35,6 +39,7 @@ export class AutomationEngineService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    private readonly couponService: CouponService,
   ) {}
 
   async processExecution(executionId: number, nodeId: number): Promise<void> {
@@ -324,6 +329,12 @@ export class AutomationEngineService {
           `Execution ${execution.id}: sending email (${purpose}) for ${to ?? 'unknown'}`,
         );
 
+        const emailConfig = await this.enrichPaymentEmailConfig(
+          purpose,
+          execution,
+          (config ?? {}) as Record<string, unknown>,
+        );
+
         const sendResult = await this.automationEmailService.sendToCustomer(
           purpose,
           {
@@ -331,7 +342,7 @@ export class AutomationEngineService {
             email: to ?? '',
             name: execution.customer?.name ?? '',
           },
-          config,
+          emailConfig,
           campaignName,
         );
 
@@ -521,5 +532,62 @@ export class AutomationEngineService {
         ]),
       },
     });
+  }
+
+  /** Add pass QR link to post-payment confirmation emails when a coupon exists. */
+  private async enrichPaymentEmailConfig(
+    purpose: AutomationPurpose,
+    execution: AutomationExecution,
+    config: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+      return config;
+    }
+
+    const passUrl = await this.resolvePassUrlForExecution(execution);
+    if (!passUrl) {
+      return config;
+    }
+
+    const enriched = { ...config };
+    if (!String(enriched.ctaUrl ?? '').trim()) {
+      enriched.ctaUrl = passUrl;
+    }
+    if (!String(enriched.ctaLabel ?? '').trim()) {
+      enriched.ctaLabel = 'View your pass';
+    }
+    return enriched;
+  }
+
+  private async resolvePassUrlForExecution(
+    execution: AutomationExecution,
+  ): Promise<string | null> {
+    const funnelId = execution.automation?.funnelId;
+    if (!funnelId) {
+      return null;
+    }
+
+    const event = await this.funnelEventRepository.findOne({
+      where: {
+        customerId: execution.customerId,
+        funnelId,
+        funnelPaymentId: Not(IsNull()),
+        eventType: FunnelEventType.PAYMENT,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!event?.funnelPaymentId) {
+      return null;
+    }
+
+    const coupon = await this.couponService.findByPaymentId(
+      event.funnelPaymentId,
+    );
+    if (!coupon) {
+      return null;
+    }
+
+    return `${getFrontendBaseUrl()}/pass/${event.funnelPaymentId}`;
   }
 }

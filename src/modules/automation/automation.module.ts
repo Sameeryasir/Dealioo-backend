@@ -15,6 +15,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { AuthModule } from '../auth/auth.module';
+import { RedemptionModule } from '../redemption/redemption.module';
 import { AutomationController } from './automation.controller';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationEmailService } from './automation-email.service';
@@ -58,6 +59,7 @@ import { AutomationService } from './automation.service';
       Customer,
     ]),
     AuthModule,
+    RedemptionModule,
   ],
   controllers: [AutomationController],
   providers: [
