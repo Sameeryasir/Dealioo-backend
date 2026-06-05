@@ -5,6 +5,12 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { And, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { Campaign } from '../../db/entities/campaign.entity';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+} from '../../common/pagination';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -28,6 +34,8 @@ export class FunnelEventService {
     private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Customer)
@@ -405,6 +413,98 @@ export class FunnelEventService {
       where: { id: customerId },
     });
     return exists ? customerId : null;
+  }
+
+  async getRestaurantFunnelEvents(
+    restaurantId: number,
+    page?: number,
+    limit?: number,
+  ): Promise<{
+    data: Array<{
+      id: number;
+      eventType: FunnelEventType;
+      createdAt: Date;
+      funnelId: number;
+      campaignId: number;
+      campaignName: string;
+      customer: {
+        id: number;
+        name: string;
+        email: string;
+        phone: string | null;
+      } | null;
+      customerEmail: string | null;
+      amount: number | null;
+      currency: string | null;
+      paymentStatus: FunnelPaymentStatus | null;
+      receiptUrl: string | null;
+    }>;
+    meta: PaginationMeta & {
+      campaignCount: number;
+      funnelCount: number;
+    };
+  }> {
+    const pagination = normalizePagination(page, limit);
+
+    const campaignCount = await this.campaignRepository.count({
+      where: { restaurantId },
+    });
+
+    const funnelCount = await this.funnelRepository
+      .createQueryBuilder('funnel')
+      .innerJoin('funnel.campaign', 'campaign')
+      .where('campaign.restaurant_id = :restaurantId', { restaurantId })
+      .getCount();
+
+    const [rows, total] = await this.funnelEventRepository.findAndCount({
+      where: {
+        funnel: {
+          campaign: {
+            restaurantId,
+          },
+        },
+      },
+      relations: {
+        customer: true,
+        funnel: {
+          campaign: true,
+        },
+      },
+      order: { createdAt: 'DESC' },
+      skip: pagination.skip,
+      take: pagination.limit,
+    });
+
+    return {
+      data: rows
+        .filter((row) => row.funnel?.campaign != null)
+        .map((row) => ({
+          id: row.id,
+          eventType: row.eventType,
+          createdAt: row.createdAt,
+          funnelId: row.funnelId,
+          campaignId: row.funnel.campaign.id,
+          campaignName: row.funnel.campaign.campaignName,
+          customer: row.customer
+            ? {
+                id: row.customer.id,
+                name: row.customer.name,
+                email: row.customer.email,
+                phone: row.customer.phone,
+              }
+            : null,
+          customerEmail: row.customerEmail,
+          amount: row.amount,
+          currency: row.currency,
+          paymentStatus: row.paymentStatus,
+          receiptUrl: row.receiptUrl,
+        })),
+      meta: {
+        ...buildPaginationMeta(total, pagination.page, pagination.limit),
+        campaignCount,
+        funnelCount,
+      },
+    };
   }
 
 }

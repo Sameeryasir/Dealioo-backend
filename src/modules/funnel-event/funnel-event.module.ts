@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { AutomationModule } from '../automation/automation.module';
@@ -15,6 +16,7 @@ import { FunnelEventService } from './funnel-event.service';
     TypeOrmModule.forFeature([
       FunnelEvent,
       FunnelAnalyticsEvent,
+      Campaign,
       Funnel,
       FunnelPayment,
       Customer,

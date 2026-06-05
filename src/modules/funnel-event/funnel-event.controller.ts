@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   HttpCode,
   Param,
@@ -40,6 +41,20 @@ export class FunnelEventController {
     @Body() dto: TrackFunnelAnalyticsDto,
   ): Promise<FunnelAnalyticsEvent> {
     return this.funnelAnalyticsService.trackAnalyticsEvent(dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('restaurant/:restaurantId/events')
+  getRestaurantFunnelEvents(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+  ) {
+    return this.funnelEventService.getRestaurantFunnelEvents(
+      restaurantId,
+      page,
+      limit,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))
