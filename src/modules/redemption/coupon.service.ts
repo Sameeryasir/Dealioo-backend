@@ -33,7 +33,103 @@ export class CouponService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  /** Issue one coupon per paid funnel payment (idempotent). */
+  /**
+   * Issue a QR pass right after funnel signup.
+   * Payment stays PENDING until Stripe checkout completes — redemption stays blocked.
+   */
+  async issueFromSignup(
+    funnelId: number,
+    customerId: number,
+  ): Promise<Coupon | null> {
+    const existing = await this.findByCustomerAndFunnel(customerId, funnelId);
+    if (existing) {
+      return existing;
+    }
+
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel?.campaign) {
+      return null;
+    }
+
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt);
+    expiresAt.setDate(expiresAt.getDate() + COUPON_VALIDITY_DAYS);
+
+    const coupon = this.couponRepository.create({
+      campaignId: funnel.campaign.id,
+      funnelId,
+      restaurantId: funnel.campaign.restaurantId,
+      customerId,
+      funnelPaymentId: null,
+      qrToken: randomUUID(),
+      status: CouponStatus.ACTIVE,
+      paymentStatus: CouponPaymentStatus.PENDING,
+      issuedAt,
+      expiresAt,
+    });
+
+    try {
+      return await this.couponRepository.save(coupon);
+    } catch (err) {
+      const raced = await this.findByCustomerAndFunnel(customerId, funnelId);
+      if (raced) {
+        return raced;
+      }
+      this.logger.warn(
+        `Failed to issue signup coupon for customer ${customerId}`,
+        err,
+      );
+      return null;
+    }
+  }
+
+  async findByCustomerAndFunnel(
+    customerId: number,
+    funnelId: number,
+  ): Promise<Coupon | null> {
+    const coupons = await this.couponRepository.find({
+      where: { customerId, funnelId },
+      relations: ['customer', 'campaign', 'funnelPayment'],
+      order: { id: 'DESC' },
+      take: 1,
+    });
+    return coupons[0] ?? null;
+  }
+
+  /** Attach the signup pass to a pending checkout session. */
+  async linkSignupCouponToPayment(
+    customerId: number,
+    funnelId: number,
+    funnelPaymentId: number,
+  ): Promise<Coupon | null> {
+    let coupon = await this.findByCustomerAndFunnel(customerId, funnelId);
+    if (!coupon) {
+      coupon = await this.issueFromSignup(funnelId, customerId);
+    }
+    if (!coupon) {
+      return null;
+    }
+
+    if (
+      coupon.funnelPaymentId != null &&
+      coupon.funnelPaymentId !== funnelPaymentId
+    ) {
+      return coupon;
+    }
+
+    if (coupon.funnelPaymentId !== funnelPaymentId) {
+      await this.couponRepository.update(coupon.id, { funnelPaymentId });
+      coupon.funnelPaymentId = funnelPaymentId;
+    }
+
+    await this.syncPaymentStatusFromFunnelPayment(coupon);
+    return coupon;
+  }
+
+  /** Issue or upgrade a coupon when checkout completes (idempotent). */
   async issueFromPayment(
     funnelPaymentId: number,
     funnelId: number,
@@ -41,15 +137,42 @@ export class CouponService {
   ): Promise<Coupon | null> {
     const existing = await this.couponRepository.findOne({
       where: { funnelPaymentId },
+      relations: ['customer', 'campaign', 'funnelPayment'],
     });
     if (existing) {
+      await this.syncPaymentStatusFromFunnelPayment(existing);
       return existing;
     }
 
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: funnelPaymentId, funnelId },
     });
-    if (!payment || payment.status !== FunnelPaymentStatus.PAID) {
+    if (!payment) {
+      return null;
+    }
+
+    const signupCoupon = await this.findByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
+
+    if (signupCoupon) {
+      const paymentStatus =
+        payment.status === FunnelPaymentStatus.PAID
+          ? CouponPaymentStatus.PAID
+          : this.mapFunnelPaymentToCouponStatus(payment.status);
+
+      await this.couponRepository.update(signupCoupon.id, {
+        funnelPaymentId,
+        paymentStatus,
+      });
+
+      signupCoupon.funnelPaymentId = funnelPaymentId;
+      signupCoupon.paymentStatus = paymentStatus;
+      return signupCoupon;
+    }
+
+    if (payment.status !== FunnelPaymentStatus.PAID) {
       return null;
     }
 
@@ -87,7 +210,6 @@ export class CouponService {
     try {
       return await this.couponRepository.save(coupon);
     } catch (err) {
-      // Race: another request may have created the coupon first.
       const raced = await this.couponRepository.findOne({
         where: { funnelPaymentId },
       });
@@ -126,8 +248,73 @@ export class CouponService {
   async findByQrToken(qrToken: string): Promise<Coupon | null> {
     return this.couponRepository.findOne({
       where: { qrToken },
-      relations: ['customer', 'campaign'],
+      relations: ['customer', 'campaign', 'funnelPayment'],
     });
+  }
+
+  /**
+   * Keep coupon payment_status aligned with Stripe funnel payment lifecycle
+   * (refunds, disputes) before preview/redeem decisions.
+   */
+  async syncPaymentStatusFromFunnelPayment(coupon: Coupon): Promise<Coupon> {
+    if (!coupon.funnelPaymentId) {
+      return coupon;
+    }
+
+    const payment =
+      coupon.funnelPayment ??
+      (await this.funnelPaymentRepository.findOne({
+        where: { id: coupon.funnelPaymentId },
+      }));
+
+    if (!payment) {
+      return coupon;
+    }
+
+    const mapped = this.mapFunnelPaymentToCouponStatus(payment.status);
+    if (mapped !== coupon.paymentStatus) {
+      await this.couponRepository.update(coupon.id, { paymentStatus: mapped });
+      coupon.paymentStatus = mapped;
+    }
+
+    return coupon;
+  }
+
+  /** Sync all coupons tied to a funnel payment after webhook status change. */
+  async syncCouponsForFunnelPayment(funnelPaymentId: number): Promise<void> {
+    const payment = await this.funnelPaymentRepository.findOne({
+      where: { id: funnelPaymentId },
+    });
+    if (!payment) {
+      return;
+    }
+
+    const mapped = this.mapFunnelPaymentToCouponStatus(payment.status);
+    await this.couponRepository.update(
+      { funnelPaymentId },
+      { paymentStatus: mapped },
+    );
+  }
+
+  mapFunnelPaymentToCouponStatus(
+    status: FunnelPaymentStatus,
+  ): CouponPaymentStatus {
+    switch (status) {
+      case FunnelPaymentStatus.PAID:
+        return CouponPaymentStatus.PAID;
+      case FunnelPaymentStatus.PENDING:
+        return CouponPaymentStatus.PENDING;
+      case FunnelPaymentStatus.FAILED:
+      case FunnelPaymentStatus.CANCELLED:
+        return CouponPaymentStatus.FAILED;
+      case FunnelPaymentStatus.REFUNDED:
+      case FunnelPaymentStatus.PARTIALLY_REFUNDED:
+        return CouponPaymentStatus.REFUNDED;
+      case FunnelPaymentStatus.DISPUTED:
+        return CouponPaymentStatus.DISPUTED;
+      default:
+        return CouponPaymentStatus.PENDING;
+    }
   }
 
   /** Build QR payload and image for a coupon pass. */

@@ -16,6 +16,7 @@ import {
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { campaignPriceToStripeAmount } from '../../utils/campaign-price-to-stripe-amount';
+import { CouponService } from '../redemption/coupon.service';
 import { StripeService } from '../stripe/stripe.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
 import { FeeService } from './fee.service';
@@ -43,6 +44,7 @@ export class PaymentService implements OnModuleInit {
     private readonly feeService: FeeService,
     private readonly stripeWebhookService: StripeWebhookService,
     private readonly paymentWebhookHandler: PaymentWebhookHandler,
+    private readonly couponService: CouponService,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -284,6 +286,7 @@ export class PaymentService implements OnModuleInit {
       restaurantId: dto.restaurantId,
       customerEmail: dto.customerEmail,
       stripeAccountId,
+      customerId: dto.customerId,
     });
     if (reused) {
       return reused;
@@ -322,6 +325,12 @@ export class PaymentService implements OnModuleInit {
       stripePaymentIntentId: paymentIntent.id,
     });
 
+    await this.linkSignupPassToPayment(
+      dto.customerId,
+      dto.funnelId,
+      payment.id,
+    );
+
     return {
       clientSecret: paymentIntent.client_secret!,
       paymentIntentId: paymentIntent.id,
@@ -329,6 +338,21 @@ export class PaymentService implements OnModuleInit {
       stripeAccountId,
       reused: false,
     };
+  }
+
+  private async linkSignupPassToPayment(
+    customerId: number | undefined,
+    funnelId: number,
+    paymentId: number,
+  ): Promise<void> {
+    if (!customerId) {
+      return;
+    }
+    await this.couponService.linkSignupCouponToPayment(
+      customerId,
+      funnelId,
+      paymentId,
+    );
   }
 
   private buildPaymentMetadata(
@@ -348,6 +372,7 @@ export class PaymentService implements OnModuleInit {
     restaurantId: number;
     customerEmail: string;
     stripeAccountId: string;
+    customerId?: number;
   }): Promise<{
     clientSecret?: string;
     paymentIntentId: string;
@@ -396,6 +421,12 @@ export class PaymentService implements OnModuleInit {
           funnelId: pending.funnelId,
           restaurantId: pending.restaurantId,
         });
+        await this.linkSignupPassToPayment(
+          opts.customerId,
+          opts.funnelId,
+          pending.id,
+        );
+
         return {
           paymentIntentId: pi.id,
           paymentId: pending.id,
@@ -428,6 +459,12 @@ export class PaymentService implements OnModuleInit {
         funnelId: pending.funnelId,
         restaurantId: pending.restaurantId,
       });
+
+      await this.linkSignupPassToPayment(
+        opts.customerId,
+        opts.funnelId,
+        pending.id,
+      );
 
       return {
         clientSecret: pi.client_secret,

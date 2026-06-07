@@ -5,6 +5,7 @@ import { StripeWebhookEvent } from '../../db/entities/stripe-webhook-event.entit
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { AuthModule } from '../auth/auth.module';
+import { RedemptionModule } from '../redemption/redemption.module';
 import { StripeModule } from '../stripe/stripe.module';
 import { FeeService } from './fee.service';
 import { PaymentController } from './payment.controller';
@@ -22,6 +23,7 @@ import { StripeWebhookService } from './stripe-webhook.service';
     ]),
     StripeModule,
     AuthModule,
+    RedemptionModule,
   ],
   controllers: [PaymentController],
   providers: [

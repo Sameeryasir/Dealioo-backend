@@ -14,6 +14,14 @@ import { Coupon } from './coupon.entity';
 import { Customer } from './customer.entity';
 import { Restaurant } from './restaurant.entity';
 
+/** Audit event type for every preview and redemption attempt. */
+export enum RedemptionEventType {
+  PREVIEW_SUCCESS = 'PREVIEW_SUCCESS',
+  PREVIEW_FAILURE = 'PREVIEW_FAILURE',
+  REDEEM_SUCCESS = 'REDEEM_SUCCESS',
+  REDEEM_FAILURE = 'REDEEM_FAILURE',
+}
+
 @Entity('redemption_logs')
 export class RedemptionLog {
   @PrimaryGeneratedColumn()
@@ -61,6 +69,15 @@ export class RedemptionLog {
 
   @Column({ name: 'failure_reason', type: 'varchar', length: 255, nullable: true })
   failureReason: string | null;
+
+  @Column({ name: 'event_type', type: 'varchar', length: 32, nullable: true })
+  eventType: RedemptionEventType | null;
+
+  @Column({ name: 'ip_address', type: 'varchar', length: 64, nullable: true })
+  ipAddress: string | null;
+
+  @Column({ name: 'idempotency_key', type: 'varchar', length: 128, nullable: true })
+  idempotencyKey: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

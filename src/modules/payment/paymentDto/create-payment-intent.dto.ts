@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsEmail, IsInt, IsString } from 'class-validator';
+import { IsEmail, IsInt, IsOptional, IsString } from 'class-validator';
 
 /**
  * Checkout charge amount and platform fee are computed server-side only.
@@ -19,4 +19,10 @@ export class CreatePaymentIntentDto {
 
   @IsEmail()
   customerEmail: string;
+
+  /** Links the signup QR pass to this checkout session. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  customerId?: number;
 }

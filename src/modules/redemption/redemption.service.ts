@@ -1,15 +1,35 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
-import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import {
+  CustomerVisit,
+  CustomerVisitSource,
+} from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import {
   Coupon,
   CouponPaymentStatus,
   CouponStatus,
 } from '../../db/entities/coupon.entity';
-import { RedemptionLog } from '../../db/entities/redemption-log.entity';
+import {
+  RedemptionEventType,
+  RedemptionLog,
+} from '../../db/entities/redemption-log.entity';
+import { Restaurant } from '../../db/entities/restaurant.entity';
 import { CouponService } from './coupon.service';
+import { RedemptionValidationService } from './redemption-validation.service';
+import { sanitizeScanToken } from './sanitize-scan-token';
+
+export type ScanAuditContext = {
+  scannedBy: number | null;
+  deviceInfo?: string;
+  ipAddress?: string;
+  idempotencyKey?: string;
+};
 
 export type ScanResult =
   | {
@@ -30,7 +50,24 @@ export type ScanResult =
 export type ScanPreviewResult =
   | {
       success: true;
+      customer: {
+        id: number;
+        name: string;
+        email: string;
+      };
+      coupon: {
+        id: number;
+        status: string;
+        paymentStatus: string;
+        expiresAt: string | null;
+        redeemedAt: string | null;
+      };
+      campaign: {
+        id: number;
+        name: string;
+      };
       customerName: string;
+      customerEmail: string;
       campaignName: string;
       totalVisits: number;
       rewardsAvailable: number;
@@ -42,6 +79,9 @@ export type ScanPreviewResult =
       }>;
       canRedeem: boolean;
       redeemBlockedReason: string | null;
+      paymentStatus: string;
+      couponStatus: string;
+      couponExpired: boolean;
       qrToken: string;
       scannedCouponId: number;
       availableRewards: Array<{
@@ -77,6 +117,7 @@ export class RedemptionService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly couponService: CouponService,
+    private readonly validationService: RedemptionValidationService,
     @InjectRepository(RedemptionLog)
     private readonly redemptionLogRepository: Repository<RedemptionLog>,
     @InjectRepository(CustomerVisit)
@@ -85,22 +126,43 @@ export class RedemptionService {
     private readonly couponRepository: Repository<Coupon>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(Restaurant)
+    private readonly restaurantRepository: Repository<Restaurant>,
   ) {}
 
   /** Parse raw token or JSON QR payload `{ couponId, token }`. */
   extractToken(raw: string): string {
-    const trimmed = raw.trim();
+    const trimmed = sanitizeScanToken(raw);
     if (trimmed.startsWith('{')) {
       try {
         const parsed = JSON.parse(trimmed) as { token?: string };
         if (parsed.token?.trim()) {
-          return parsed.token.trim();
+          return sanitizeScanToken(parsed.token);
         }
       } catch {
         // fall through to raw token
       }
     }
     return trimmed;
+  }
+
+  async verifyRestaurantAccess(
+    restaurantId: number,
+    userId: number,
+    userRole: string,
+  ): Promise<void> {
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId },
+      relations: ['owner'],
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant not found');
+    }
+
+    if (userRole === 'Admin' && restaurant.owner?.id !== userId) {
+      throw new ForbiddenException('You do not have access to this restaurant');
+    }
   }
 
   async getGuestProfile(
@@ -132,60 +194,135 @@ export class RedemptionService {
     };
   }
 
-  /** Lookup only — never redeems, logs visits, or updates analytics. */
+  /**
+   * Preview only — never redeems, creates visits, or mutates coupon state.
+   * Logs every preview attempt for audit.
+   */
   async previewScan(
     rawToken: string,
     restaurantId: number,
+    audit: ScanAuditContext,
   ): Promise<ScanPreviewResult> {
     const qrToken = this.extractToken(rawToken);
+
+    if (!qrToken || qrToken.length < 8) {
+      await this.logAudit({
+        eventType: RedemptionEventType.PREVIEW_FAILURE,
+        coupon: null,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Invalid QR code',
+      });
+      return { success: false, message: 'Invalid QR code' };
+    }
+
     const coupon = await this.couponService.findByQrToken(qrToken);
 
     if (!coupon) {
+      await this.logAudit({
+        eventType: RedemptionEventType.PREVIEW_FAILURE,
+        coupon: null,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Invalid QR code',
+      });
       return { success: false, message: 'Invalid QR code' };
     }
 
     if (coupon.restaurantId !== restaurantId) {
+      await this.logAudit({
+        eventType: RedemptionEventType.PREVIEW_FAILURE,
+        coupon,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Restaurant mismatch',
+      });
       return {
         success: false,
         message: 'This coupon belongs to another restaurant',
       };
     }
 
+    if (!coupon.customer) {
+      await this.logAudit({
+        eventType: RedemptionEventType.PREVIEW_FAILURE,
+        coupon,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Customer not found',
+      });
+      return { success: false, message: 'Customer not found' };
+    }
+
+    if (!coupon.campaign) {
+      await this.logAudit({
+        eventType: RedemptionEventType.PREVIEW_FAILURE,
+        coupon,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Campaign not found',
+      });
+      return { success: false, message: 'Campaign not found' };
+    }
+
+    await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+    const validation = this.validationService.validateCouponForRedemption(coupon);
     const profile = await this.getCustomerRestaurantProfile(
       coupon.customerId,
       restaurantId,
     );
-    const customerName = coupon.customer?.name?.trim() || 'Guest';
-    const campaignName = coupon.campaign?.campaignName?.trim() || 'Campaign';
 
-    let canRedeem = true;
-    let redeemBlockedReason: string | null = null;
+    const customerName = coupon.customer.name?.trim() || 'Guest';
+    const campaignName = coupon.campaign.campaignName?.trim() || 'Campaign';
 
-    if (coupon.paymentStatus !== CouponPaymentStatus.PAID) {
-      canRedeem = false;
-      redeemBlockedReason = 'Payment not completed';
-    } else if (this.couponService.isExpired(coupon)) {
-      canRedeem = false;
-      redeemBlockedReason = 'Coupon expired';
-    } else if (coupon.status === CouponStatus.REDEEMED) {
-      canRedeem = false;
-      redeemBlockedReason = 'Coupon already redeemed';
-    } else if (coupon.status !== CouponStatus.ACTIVE) {
-      canRedeem = false;
-      redeemBlockedReason = 'Coupon is not active';
-    }
+    await this.logAudit({
+      eventType: validation.canRedeem
+        ? RedemptionEventType.PREVIEW_SUCCESS
+        : RedemptionEventType.PREVIEW_FAILURE,
+      coupon,
+      restaurantId,
+      audit,
+      success: validation.canRedeem,
+      failureReason: validation.redeemBlockedReason,
+    });
 
     return {
       success: true,
+      customer: {
+        id: coupon.customer.id,
+        name: customerName,
+        email: coupon.customer.email,
+      },
+      coupon: {
+        id: coupon.id,
+        status: coupon.status,
+        paymentStatus: coupon.paymentStatus,
+        expiresAt: coupon.expiresAt?.toISOString() ?? null,
+        redeemedAt: coupon.redeemedAt?.toISOString() ?? null,
+      },
+      campaign: {
+        id: coupon.campaign.id,
+        name: campaignName,
+      },
       customerName,
+      customerEmail: coupon.customer.email,
       campaignName,
       totalVisits: profile.totalVisits,
       rewardsAvailable: profile.rewardsAvailable,
       upcomingRewardsCount: 0,
       previouslyRedeemedCount: profile.previouslyRedeemedCount,
       previousRedemptions: profile.previousRedemptions,
-      canRedeem,
-      redeemBlockedReason,
+      canRedeem: validation.canRedeem,
+      redeemBlockedReason: validation.redeemBlockedReason,
+      paymentStatus: validation.paymentStatus,
+      couponStatus: validation.couponStatus,
+      couponExpired: validation.couponExpired,
       qrToken,
       scannedCouponId: coupon.id,
       availableRewards: await this.getAvailableRewards(
@@ -200,17 +337,25 @@ export class RedemptionService {
   async scan(
     rawToken: string,
     restaurantId: number,
-    scannedBy: number | null,
-    deviceInfo?: string,
+    audit: ScanAuditContext,
     couponIds?: number[],
     orderSubtotal?: number,
   ): Promise<ScanResult> {
+    if (audit.idempotencyKey?.trim()) {
+      const cached = await this.findIdempotentRedemption(
+        audit.idempotencyKey.trim(),
+        restaurantId,
+      );
+      if (cached) {
+        return cached;
+      }
+    }
+
     if (couponIds?.length) {
       return this.redeemSelectedCoupons(
         couponIds,
         restaurantId,
-        scannedBy,
-        deviceInfo,
+        audit,
         orderSubtotal,
       );
     }
@@ -219,182 +364,150 @@ export class RedemptionService {
     const coupon = await this.couponService.findByQrToken(qrToken);
 
     if (!coupon) {
-      await this.logFailure(null, restaurantId, scannedBy, deviceInfo, 'Coupon not found');
+      await this.logAudit({
+        eventType: RedemptionEventType.REDEEM_FAILURE,
+        coupon: null,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: 'Coupon not found',
+      });
       return { success: false, message: 'Invalid QR code' };
     }
 
     if (coupon.restaurantId !== restaurantId) {
-      await this.logFailure(
+      await this.logAudit({
+        eventType: RedemptionEventType.REDEEM_FAILURE,
         coupon,
         restaurantId,
-        scannedBy,
-        deviceInfo,
-        'Restaurant mismatch',
-      );
-      return { success: false, message: 'This coupon belongs to another restaurant' };
-    }
-
-    if (coupon.paymentStatus !== CouponPaymentStatus.PAID) {
-      await this.logFailure(coupon, restaurantId, scannedBy, deviceInfo, 'Payment not completed');
-      return { success: false, message: 'Payment not completed' };
-    }
-
-    if (this.couponService.isExpired(coupon)) {
-      if (coupon.status === CouponStatus.ACTIVE) {
-        await this.couponRepository.update(coupon.id, {
-          status: CouponStatus.EXPIRED,
-        });
-      }
-      await this.logFailure(coupon, restaurantId, scannedBy, deviceInfo, 'Coupon expired');
-      return { success: false, message: 'Coupon expired' };
-    }
-
-    if (coupon.status === CouponStatus.REDEEMED) {
-      await this.logFailure(coupon, restaurantId, scannedBy, deviceInfo, 'Already redeemed');
-      return { success: false, message: 'Coupon already redeemed' };
-    }
-
-    if (coupon.status !== CouponStatus.ACTIVE) {
-      await this.logFailure(coupon, restaurantId, scannedBy, deviceInfo, 'Coupon not active');
-      return { success: false, message: 'Coupon is not active' };
-    }
-
-    const redeemedAt = new Date();
-
-    return this.dataSource.transaction(async (manager) => {
-      const updateResult = await manager.update(
-        Coupon,
-        { id: coupon.id, status: CouponStatus.ACTIVE },
-        { status: CouponStatus.REDEEMED, redeemedAt },
-      );
-
-      if (!updateResult.affected) {
-        await this.logFailure(coupon, restaurantId, scannedBy, deviceInfo, 'Already redeemed');
-        return { success: false, message: 'Coupon already redeemed' } as ScanResult;
-      }
-
-      await manager.save(RedemptionLog, {
-        couponId: coupon.id,
-        customerId: coupon.customerId,
-        campaignId: coupon.campaignId,
-        restaurantId,
-        scannedBy,
-        scannedAt: redeemedAt,
-        deviceInfo: deviceInfo ?? null,
-        success: true,
-        failureReason: null,
+        audit,
+        success: false,
+        failureReason: 'Restaurant mismatch',
       });
-
-      await manager.save(CustomerVisit, {
-        customerId: coupon.customerId,
-        campaignId: coupon.campaignId,
-        restaurantId,
-        couponId: coupon.id,
-        staffUserId: scannedBy,
-        visitedAt: redeemedAt,
-        source: CustomerVisitSource.QR_REDEMPTION,
-        orderSubtotal: orderSubtotal ?? null,
-      });
-
-      const customerName = coupon.customer?.name?.trim() || 'Guest';
-      const campaignName = coupon.campaign?.campaignName?.trim() || 'Campaign';
-
-      const totalVisits = await manager.count(CustomerVisit, {
-        where: { customerId: coupon.customerId, restaurantId },
-      });
-
-      const activeCoupons = await manager.find(Coupon, {
-        where: {
-          customerId: coupon.customerId,
-          restaurantId,
-          status: CouponStatus.ACTIVE,
-          paymentStatus: CouponPaymentStatus.PAID,
-        },
-      });
-      const rewardsAvailable = activeCoupons.filter(
-        (activeCoupon) => !this.couponService.isExpired(activeCoupon),
-      ).length;
-
-      const previouslyRedeemedCount = await manager.count(Coupon, {
-        where: {
-          customerId: coupon.customerId,
-          restaurantId,
-          status: CouponStatus.REDEEMED,
-        },
-      });
-
       return {
-        success: true,
-        customerName,
-        campaignName,
-        couponStatus: CouponStatus.REDEEMED,
-        redeemedAt: redeemedAt.toISOString(),
-        totalVisits,
-        rewardsAvailable,
-        previouslyRedeemedCount,
+        success: false,
+        message: 'This coupon belongs to another restaurant',
       };
-    });
+    }
+
+    await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+    const validation = this.validationService.validateCouponForRedemption(coupon);
+    if (!validation.canRedeem) {
+      await this.logAudit({
+        eventType: RedemptionEventType.REDEEM_FAILURE,
+        coupon,
+        restaurantId,
+        audit,
+        success: false,
+        failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
+      });
+      return {
+        success: false,
+        message: validation.redeemBlockedReason ?? 'Redemption blocked',
+      };
+    }
+
+    return this.redeemSelectedCoupons(
+      [coupon.id],
+      restaurantId,
+      audit,
+      orderSubtotal,
+    );
   }
 
   private async redeemSelectedCoupons(
     couponIds: number[],
     restaurantId: number,
-    scannedBy: number | null,
-    deviceInfo?: string,
+    audit: ScanAuditContext,
     orderSubtotal?: number,
   ): Promise<ScanResult> {
-    const uniqueIds = [...new Set(couponIds)];
+    const uniqueIds = [...new Set(couponIds)].sort((a, b) => a - b);
     if (uniqueIds.length === 0) {
       return { success: false, message: 'Select at least one reward' };
     }
 
-    const coupons = await this.couponRepository.find({
-      where: { id: In(uniqueIds) },
-      relations: ['customer', 'campaign'],
-      order: { id: 'ASC' },
-    });
-
-    if (coupons.length !== uniqueIds.length) {
-      return { success: false, message: 'One or more rewards were not found' };
-    }
-
-    const customerId = coupons[0].customerId;
-    if (
-      !coupons.every(
-        (coupon) =>
-          coupon.customerId === customerId &&
-          coupon.restaurantId === restaurantId,
-      )
-    ) {
-      return { success: false, message: 'Invalid reward selection' };
-    }
-
-    for (const coupon of coupons) {
-      if (coupon.paymentStatus !== CouponPaymentStatus.PAID) {
-        return {
-          success: false,
-          message: 'Only prepaid rewards can be redeemed',
-        };
-      }
-      if (this.couponService.isExpired(coupon)) {
-        return { success: false, message: 'One or more rewards have expired' };
-      }
-      if (coupon.status === CouponStatus.REDEEMED) {
-        return {
-          success: false,
-          message: 'One or more rewards were already redeemed',
-        };
-      }
-      if (coupon.status !== CouponStatus.ACTIVE) {
-        return { success: false, message: 'One or more rewards are not active' };
+    if (audit.idempotencyKey?.trim()) {
+      const cached = await this.findIdempotentRedemption(
+        audit.idempotencyKey.trim(),
+        restaurantId,
+      );
+      if (cached) {
+        return cached;
       }
     }
 
     const redeemedAt = new Date();
-    const primaryCoupon = coupons[0];
 
     return this.dataSource.transaction(async (manager) => {
-      for (const coupon of coupons) {
+      const lockedCoupons: Coupon[] = [];
+
+      for (const couponId of uniqueIds) {
+        const locked = await manager.findOne(Coupon, {
+          where: { id: couponId },
+          relations: ['customer', 'campaign', 'funnelPayment'],
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!locked) {
+          await this.logAuditInTransaction(manager, {
+            eventType: RedemptionEventType.REDEEM_FAILURE,
+            coupon: null,
+            restaurantId,
+            audit,
+            success: false,
+            failureReason: 'Coupon not found',
+          });
+          return {
+            success: false,
+            message: 'One or more rewards were not found',
+          } as ScanResult;
+        }
+
+        lockedCoupons.push(locked);
+      }
+
+      const customerId = lockedCoupons[0].customerId;
+      if (
+        !lockedCoupons.every(
+          (coupon) =>
+            coupon.customerId === customerId &&
+            coupon.restaurantId === restaurantId,
+        )
+      ) {
+        await this.logAuditInTransaction(manager, {
+          eventType: RedemptionEventType.REDEEM_FAILURE,
+          coupon: lockedCoupons[0],
+          restaurantId,
+          audit,
+          success: false,
+          failureReason: 'Invalid reward selection',
+        });
+        return { success: false, message: 'Invalid reward selection' } as ScanResult;
+      }
+
+      for (const coupon of lockedCoupons) {
+        await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+        const validation =
+          this.validationService.validateCouponForRedemption(coupon);
+        if (!validation.canRedeem) {
+          await this.logAuditInTransaction(manager, {
+            eventType: RedemptionEventType.REDEEM_FAILURE,
+            coupon,
+            restaurantId,
+            audit,
+            success: false,
+            failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
+          });
+          return {
+            success: false,
+            message: validation.redeemBlockedReason ?? 'Redemption blocked',
+          } as ScanResult;
+        }
+      }
+
+      for (const coupon of lockedCoupons) {
         const updateResult = await manager.update(
           Coupon,
           { id: coupon.id, status: CouponStatus.ACTIVE },
@@ -402,78 +515,171 @@ export class RedemptionService {
         );
 
         if (!updateResult.affected) {
+          await this.logAuditInTransaction(manager, {
+            eventType: RedemptionEventType.REDEEM_FAILURE,
+            coupon,
+            restaurantId,
+            audit,
+            success: false,
+            failureReason: 'Already redeemed',
+          });
           return {
             success: false,
-            message: 'One or more rewards were already redeemed',
+            message: 'Coupon already redeemed',
           } as ScanResult;
         }
 
-        await manager.save(RedemptionLog, {
-          couponId: coupon.id,
-          customerId: coupon.customerId,
-          campaignId: coupon.campaignId,
+        await this.logAuditInTransaction(manager, {
+          eventType: RedemptionEventType.REDEEM_SUCCESS,
+          coupon,
           restaurantId,
-          scannedBy,
-          scannedAt: redeemedAt,
-          deviceInfo: deviceInfo ?? null,
+          audit,
           success: true,
           failureReason: null,
         });
       }
 
-      await manager.save(CustomerVisit, {
-        customerId: primaryCoupon.customerId,
-        campaignId: primaryCoupon.campaignId,
-        restaurantId,
-        couponId: primaryCoupon.id,
-        staffUserId: scannedBy,
-        visitedAt: redeemedAt,
-        source: CustomerVisitSource.QR_REDEMPTION,
-        orderSubtotal: orderSubtotal ?? null,
+      const primaryCoupon = lockedCoupons[0];
+
+      const existingVisit = await manager.findOne(CustomerVisit, {
+        where: { couponId: primaryCoupon.id },
       });
 
-      const customerName =
-        primaryCoupon.customer?.name?.trim() || 'Guest';
-      const campaignName =
-        coupons.length === 1
-          ? primaryCoupon.campaign?.campaignName?.trim() || 'Campaign'
-          : `${coupons.length} rewards`;
-
-      const totalVisits = await manager.count(CustomerVisit, {
-        where: { customerId, restaurantId },
-      });
-
-      const activeCoupons = await manager.find(Coupon, {
-        where: {
-          customerId,
+      if (!existingVisit) {
+        await manager.save(CustomerVisit, {
+          customerId: primaryCoupon.customerId,
+          campaignId: primaryCoupon.campaignId,
           restaurantId,
-          status: CouponStatus.ACTIVE,
-          paymentStatus: CouponPaymentStatus.PAID,
-        },
-      });
-      const rewardsAvailable = activeCoupons.filter(
-        (activeCoupon) => !this.couponService.isExpired(activeCoupon),
-      ).length;
+          couponId: primaryCoupon.id,
+          staffUserId: audit.scannedBy,
+          visitedAt: redeemedAt,
+          source: CustomerVisitSource.QR_REDEMPTION,
+          orderSubtotal: orderSubtotal ?? null,
+        });
+      }
 
-      const previouslyRedeemedCount = await manager.count(Coupon, {
-        where: {
-          customerId,
-          restaurantId,
-          status: CouponStatus.REDEEMED,
-        },
-      });
-
-      return {
-        success: true,
-        customerName,
-        campaignName,
-        couponStatus: CouponStatus.REDEEMED,
-        redeemedAt: redeemedAt.toISOString(),
-        totalVisits,
-        rewardsAvailable,
-        previouslyRedeemedCount,
-      };
+      return this.buildRedeemSuccessResult(
+        manager,
+        primaryCoupon,
+        lockedCoupons,
+        redeemedAt,
+      );
     });
+  }
+
+  private async buildRedeemSuccessResult(
+    manager: EntityManager,
+    primaryCoupon: Coupon,
+    redeemedCoupons: Coupon[],
+    redeemedAt: Date,
+  ): Promise<ScanResult> {
+    const customerId = primaryCoupon.customerId;
+    const restaurantId = primaryCoupon.restaurantId;
+
+    const customerName = primaryCoupon.customer?.name?.trim() || 'Guest';
+    const campaignName =
+      redeemedCoupons.length === 1
+        ? primaryCoupon.campaign?.campaignName?.trim() || 'Campaign'
+        : `${redeemedCoupons.length} rewards`;
+
+    const totalVisits = await manager.count(CustomerVisit, {
+      where: { customerId, restaurantId },
+    });
+
+    const activeCoupons = await manager.find(Coupon, {
+      where: {
+        customerId,
+        restaurantId,
+        status: CouponStatus.ACTIVE,
+        paymentStatus: CouponPaymentStatus.PAID,
+      },
+    });
+    const rewardsAvailable = activeCoupons.filter(
+      (activeCoupon) => !this.couponService.isExpired(activeCoupon),
+    ).length;
+
+    const previouslyRedeemedCount = await manager.count(Coupon, {
+      where: {
+        customerId,
+        restaurantId,
+        status: CouponStatus.REDEEMED,
+      },
+    });
+
+    return {
+      success: true,
+      customerName,
+      campaignName,
+      couponStatus: CouponStatus.REDEEMED,
+      redeemedAt: redeemedAt.toISOString(),
+      totalVisits,
+      rewardsAvailable,
+      previouslyRedeemedCount,
+    };
+  }
+
+  private async findIdempotentRedemption(
+    idempotencyKey: string,
+    restaurantId: number,
+  ): Promise<ScanResult | null> {
+    const priorLog = await this.redemptionLogRepository.findOne({
+      where: {
+        idempotencyKey,
+        restaurantId,
+        success: true,
+        eventType: RedemptionEventType.REDEEM_SUCCESS,
+      },
+      order: { id: 'DESC' },
+    });
+
+    if (!priorLog?.couponId) {
+      return null;
+    }
+
+    const coupon = await this.couponRepository.findOne({
+      where: { id: priorLog.couponId },
+      relations: ['customer', 'campaign'],
+    });
+
+    if (!coupon) {
+      return null;
+    }
+
+    const redeemedAt = coupon.redeemedAt ?? priorLog.scannedAt;
+    const totalVisits = await this.customerVisitRepository.count({
+      where: { customerId: coupon.customerId, restaurantId },
+    });
+
+    const activeCoupons = await this.couponRepository.find({
+      where: {
+        customerId: coupon.customerId,
+        restaurantId,
+        status: CouponStatus.ACTIVE,
+        paymentStatus: CouponPaymentStatus.PAID,
+      },
+    });
+    const rewardsAvailable = activeCoupons.filter(
+      (activeCoupon) => !this.couponService.isExpired(activeCoupon),
+    ).length;
+
+    const previouslyRedeemedCount = await this.couponRepository.count({
+      where: {
+        customerId: coupon.customerId,
+        restaurantId,
+        status: CouponStatus.REDEEMED,
+      },
+    });
+
+    return {
+      success: true,
+      customerName: coupon.customer?.name?.trim() || 'Guest',
+      campaignName: coupon.campaign?.campaignName?.trim() || 'Campaign',
+      couponStatus: CouponStatus.REDEEMED,
+      redeemedAt: redeemedAt.toISOString(),
+      totalVisits,
+      rewardsAvailable,
+      previouslyRedeemedCount,
+    };
   }
 
   async getRestaurantStats(restaurantId: number): Promise<{
@@ -518,7 +724,11 @@ export class RedemptionService {
     });
 
     const customerCoupons = await this.couponRepository.find({
-      where: { customerId, restaurantId, paymentStatus: CouponPaymentStatus.PAID },
+      where: {
+        customerId,
+        restaurantId,
+        paymentStatus: CouponPaymentStatus.PAID,
+      },
       relations: ['campaign'],
       order: { redeemedAt: 'DESC' },
     });
@@ -561,47 +771,91 @@ export class RedemptionService {
   > {
     const coupons = await this.couponRepository.find({
       where: { customerId, restaurantId, status: CouponStatus.ACTIVE },
-      relations: ['campaign'],
+      relations: ['campaign', 'funnelPayment'],
       order: { issuedAt: 'ASC' },
     });
 
-    return coupons
-      .filter((coupon) => !this.couponService.isExpired(coupon))
-      .map((coupon) => {
-        const offer =
-          coupon.campaign?.offer?.trim() ||
-          coupon.campaign?.campaignName?.trim() ||
-          'Reward';
-        const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
-        const paymentLabel = isPrepaid ? 'PREPAID' : 'UNPAID';
+    const results: Array<{
+      couponId: number;
+      label: string;
+      paymentLabel: 'PREPAID' | 'UNPAID';
+      isScannedCoupon: boolean;
+      canSelect: boolean;
+    }> = [];
+    for (const coupon of coupons) {
+      if (this.couponService.isExpired(coupon)) {
+        continue;
+      }
 
-        return {
-          couponId: coupon.id,
-          label: `${offer} [${paymentLabel}]`,
-          paymentLabel,
-          isScannedCoupon: coupon.id === scannedCouponId,
-          canSelect: isPrepaid,
-        };
+      await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+      const offer =
+        coupon.campaign?.offer?.trim() ||
+        coupon.campaign?.campaignName?.trim() ||
+        'Reward';
+      const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
+      const paymentLabel = isPrepaid ? 'PREPAID' : 'UNPAID';
+
+      results.push({
+        couponId: coupon.id,
+        label: `${offer} [${paymentLabel}]`,
+        paymentLabel,
+        isScannedCoupon: coupon.id === scannedCouponId,
+        canSelect: isPrepaid,
       });
+    }
+
+    return results;
   }
 
-  private async logFailure(
-    coupon: Coupon | null,
-    restaurantId: number,
-    scannedBy: number | null,
-    deviceInfo: string | undefined,
-    reason: string,
-  ): Promise<void> {
+  private async logAudit(params: {
+    eventType: RedemptionEventType;
+    coupon: Coupon | null;
+    restaurantId: number;
+    audit: ScanAuditContext;
+    success: boolean;
+    failureReason: string | null;
+  }): Promise<void> {
     await this.redemptionLogRepository.save({
-      couponId: coupon?.id ?? null,
-      customerId: coupon?.customerId ?? null,
-      campaignId: coupon?.campaignId ?? null,
-      restaurantId,
-      scannedBy,
+      couponId: params.coupon?.id ?? null,
+      customerId: params.coupon?.customerId ?? null,
+      campaignId: params.coupon?.campaignId ?? null,
+      restaurantId: params.restaurantId,
+      scannedBy: params.audit.scannedBy,
       scannedAt: new Date(),
-      deviceInfo: deviceInfo ?? null,
-      success: false,
-      failureReason: reason,
+      deviceInfo: params.audit.deviceInfo ?? null,
+      ipAddress: params.audit.ipAddress ?? null,
+      idempotencyKey: params.audit.idempotencyKey?.trim() || null,
+      eventType: params.eventType,
+      success: params.success,
+      failureReason: params.failureReason,
+    });
+  }
+
+  private async logAuditInTransaction(
+    manager: EntityManager,
+    params: {
+      eventType: RedemptionEventType;
+      coupon: Coupon | null;
+      restaurantId: number;
+      audit: ScanAuditContext;
+      success: boolean;
+      failureReason: string | null;
+    },
+  ): Promise<void> {
+    await manager.save(RedemptionLog, {
+      couponId: params.coupon?.id ?? null,
+      customerId: params.coupon?.customerId ?? null,
+      campaignId: params.coupon?.campaignId ?? null,
+      restaurantId: params.restaurantId,
+      scannedBy: params.audit.scannedBy,
+      scannedAt: new Date(),
+      deviceInfo: params.audit.deviceInfo ?? null,
+      ipAddress: params.audit.ipAddress ?? null,
+      idempotencyKey: params.audit.idempotencyKey?.trim() || null,
+      eventType: params.eventType,
+      success: params.success,
+      failureReason: params.failureReason,
     });
   }
 }

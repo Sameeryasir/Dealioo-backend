@@ -6,6 +6,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import { CouponService } from '../redemption/coupon.service';
 import { StripeService } from '../stripe/stripe.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 
@@ -55,6 +56,7 @@ export class PaymentWebhookHandler {
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     private readonly stripeService: StripeService,
+    private readonly couponService: CouponService,
   ) {}
 
   async routeEvent(
@@ -266,6 +268,8 @@ export class PaymentWebhookHandler {
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
     });
+
+    await this.couponService.syncCouponsForFunnelPayment(payment.id);
   }
 
   private async handleDisputeEvent(
@@ -324,6 +328,8 @@ export class PaymentWebhookHandler {
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
     });
+
+    await this.couponService.syncCouponsForFunnelPayment(payment.id);
   }
 
   private async markFunnelPaymentPaidFromSucceededCharge(

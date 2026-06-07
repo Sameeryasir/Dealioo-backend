@@ -27,7 +27,9 @@ export enum CouponStatus {
 export enum CouponPaymentStatus {
   PAID = 'PAID',
   PENDING = 'PENDING',
+  FAILED = 'FAILED',
   REFUNDED = 'REFUNDED',
+  DISPUTED = 'DISPUTED',
 }
 
 @Entity('coupons')
