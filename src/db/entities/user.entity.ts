@@ -43,6 +43,9 @@ export class User {
   @Column({ name: 'two_factor_enabled', type: 'boolean', default: false })
   twoFactorEnabled: boolean;
 
+  @Column({ name: 'is_two_factor_verified', type: 'boolean', default: false })
+  isTwoFactorVerified: boolean;
+
   @Column({ name: 'onboarding_step', type: 'int', default: 0 })
   onboardingStep: number;
 

@@ -19,6 +19,7 @@ import { FacebookModule } from './modules/facebook/facebook.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
@@ -66,6 +67,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     FunnelEventModule,
     AutomationModule,
     RedemptionModule,
+    OnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

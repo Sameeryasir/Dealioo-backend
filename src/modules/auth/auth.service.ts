@@ -382,6 +382,12 @@ export class AuthService {
       throw new UnauthorizedException('User not found.');
     }
 
+    if (user.isTwoFactorVerified || user.twoFactorEnabled) {
+      throw new BadRequestException(
+        'Two-factor authentication is already configured for this account.',
+      );
+    }
+
     const secret = speakeasy.generateSecret({
       name: `Restaurant Admin (${user.email})`,
       issuer: 'Restaurant Admin App',
@@ -414,6 +420,7 @@ export class AuthService {
       select: {
         id: true,
         twoFactorEnabled: true,
+        isTwoFactorVerified: true,
         twoFactorSecret: true,
       },
     });
@@ -428,7 +435,7 @@ export class AuthService {
       );
     }
 
-    if (user.twoFactorEnabled) {
+    if (user.isTwoFactorVerified || user.twoFactorEnabled) {
       return {
         message: 'Two-factor authentication is already enabled.',
         twoFactorEnabled: true,
@@ -448,7 +455,7 @@ export class AuthService {
 
     const updateResult = await this.userRepository.update(
       { id },
-      { twoFactorEnabled: true },
+      { twoFactorEnabled: true, isTwoFactorVerified: true },
     );
 
     if (!updateResult.affected) {

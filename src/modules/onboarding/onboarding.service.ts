@@ -1,0 +1,231 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Menu } from '../../db/entities/menu.entity';
+import { Restaurant } from '../../db/entities/restaurant.entity';
+import { User } from '../../db/entities/user.entity';
+import {
+  OnboardingNextStep,
+  OnboardingStatusResponse,
+} from './onboarding.types';
+
+const ADMIN_ROLE = 'Admin';
+const SCANNER_ROLE = 'Scanner';
+
+@Injectable()
+export class OnboardingService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Restaurant)
+    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Menu)
+    private readonly menuRepository: Repository<Menu>,
+  ) {}
+
+  async getStatusForUser(
+    userId: number,
+    roleName: string,
+    restaurantIdParam?: number,
+  ): Promise<OnboardingStatusResponse> {
+    const normalizedRole = roleName.trim();
+
+    if (normalizedRole === SCANNER_ROLE) {
+      return {
+        restaurantId: null,
+        twoFactorCompleted: true,
+        restaurantCreated: true,
+        menuCreated: true,
+        onboardingCompleted: true,
+        nextStep: null,
+        redirectPath: '/dashboard',
+      };
+    }
+
+    if (normalizedRole !== ADMIN_ROLE) {
+      throw new ForbiddenException(
+        'Onboarding status is only available for admin accounts.',
+      );
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        isTwoFactorVerified: true,
+        twoFactorEnabled: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const twoFactorCompleted =
+      user.isTwoFactorVerified === true || user.twoFactorEnabled === true;
+
+    const ownedRestaurants = await this.restaurantRepository.find({
+      where: { owner: { id: userId } },
+      order: { id: 'ASC' },
+      select: {
+        id: true,
+        onboardingCompleted: true,
+        onboardingCompletedAt: true,
+      },
+    });
+
+    const restaurantCreated = ownedRestaurants.length > 0;
+
+    let targetRestaurant = ownedRestaurants[0] ?? null;
+
+    if (restaurantIdParam != null) {
+      const match = ownedRestaurants.find((r) => r.id === restaurantIdParam);
+      if (!match) {
+        throw new BadRequestException(
+          'Restaurant not found or you do not own this restaurant.',
+        );
+      }
+      targetRestaurant = match;
+    }
+
+    let menuCreated = false;
+    if (targetRestaurant != null) {
+      menuCreated = await this.restaurantHasMenu(targetRestaurant.id);
+      if (menuCreated && !targetRestaurant.onboardingCompleted) {
+        await this.markRestaurantOnboardingComplete(targetRestaurant.id);
+      }
+    }
+
+    const restaurantNeedingMenuId =
+      await this.findFirstRestaurantWithoutMenu(ownedRestaurants);
+
+    const nextStep = this.resolveNextStep({
+      restaurantCreated,
+      twoFactorCompleted,
+      menuCreated,
+      restaurantNeedingMenuId,
+    });
+
+    const onboardingCompleted =
+      restaurantCreated &&
+      twoFactorCompleted &&
+      restaurantNeedingMenuId == null;
+
+    const redirectRestaurantId =
+      targetRestaurant?.id ??
+      restaurantNeedingMenuId ??
+      ownedRestaurants[0]?.id ??
+      null;
+
+    const redirectPath = this.buildRedirectPath(
+      nextStep,
+      redirectRestaurantId,
+      onboardingCompleted,
+    );
+
+    return {
+      restaurantId: targetRestaurant?.id ?? ownedRestaurants[0]?.id ?? null,
+      twoFactorCompleted,
+      restaurantCreated,
+      menuCreated,
+      onboardingCompleted,
+      nextStep,
+      redirectPath,
+    };
+  }
+
+  async markTwoFactorVerified(userId: number): Promise<void> {
+    await this.userRepository.update(userId, {
+      isTwoFactorVerified: true,
+      twoFactorEnabled: true,
+    });
+  }
+
+  async markMenuSetupComplete(restaurantId: number): Promise<void> {
+    await this.markRestaurantOnboardingComplete(restaurantId);
+  }
+
+  async restaurantHasMenu(restaurantId: number): Promise<boolean> {
+    const count = await this.menuRepository.count({
+      where: { restaurant: { id: restaurantId } },
+    });
+    return count > 0;
+  }
+
+  private async markRestaurantOnboardingComplete(
+    restaurantId: number,
+  ): Promise<void> {
+    await this.restaurantRepository.update(restaurantId, {
+      onboardingCompleted: true,
+      onboardingCompletedAt: new Date(),
+    });
+  }
+
+  private resolveNextStep(input: {
+    restaurantCreated: boolean;
+    twoFactorCompleted: boolean;
+    menuCreated: boolean;
+    restaurantNeedingMenuId: number | null;
+  }): OnboardingNextStep {
+    if (!input.restaurantCreated) {
+      return 'restaurant_creation';
+    }
+
+    if (!input.twoFactorCompleted) {
+      return 'two_factor';
+    }
+
+    if (input.restaurantNeedingMenuId != null) {
+      return 'menu_setup';
+    }
+
+    if (!input.menuCreated) {
+      return 'menu_setup';
+    }
+
+    return null;
+  }
+
+  private async findFirstRestaurantWithoutMenu(
+    restaurants: Pick<Restaurant, 'id' | 'onboardingCompleted'>[],
+  ): Promise<number | null> {
+    for (const restaurant of restaurants) {
+      const hasMenu = await this.restaurantHasMenu(restaurant.id);
+      if (!hasMenu) {
+        return restaurant.id;
+      }
+      if (!restaurant.onboardingCompleted) {
+        await this.markRestaurantOnboardingComplete(restaurant.id);
+      }
+    }
+    return null;
+  }
+
+  private buildRedirectPath(
+    nextStep: OnboardingNextStep,
+    restaurantId: number | null,
+    onboardingCompleted: boolean,
+  ): string {
+    if (onboardingCompleted) {
+      return '/dashboard';
+    }
+
+    switch (nextStep) {
+      case 'restaurant_creation':
+        return '/restaurant/register';
+      case 'two_factor':
+        return '/auth/2fa';
+      case 'menu_setup':
+        return restaurantId != null
+          ? `/restaurant/upload-menu?restaurantId=${restaurantId}`
+          : '/restaurant/upload-menu';
+      default:
+        return '/dashboard';
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Menu } from 'src/db/entities/menu.entity';
 import { Repository } from 'typeorm';
@@ -10,6 +10,7 @@ import {
 } from 'src/utils/disk-file-upload-multer';
 import { User } from 'src/db/entities/user.entity';
 import { Restaurant } from 'src/db/entities/restaurant.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
 
 @Injectable()
 export class MenuService {
@@ -18,6 +19,7 @@ export class MenuService {
     private readonly menuRepository: Repository<Menu>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    private readonly onboardingService: OnboardingService,
   ) {}
 
   async createMenu(
@@ -34,10 +36,19 @@ export class MenuService {
       fileUrl: dtoFileUrl,
     } = createMenuDto;
     const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+      where: { id: restaurantId, owner: { id: user.id } },
     });
     if (!restaurant) {
       throw new NotFoundException('Restaurant not found');
+    }
+
+    const existingMenuCount = await this.menuRepository.count({
+      where: { restaurant: { id: restaurantId } },
+    });
+    if (existingMenuCount > 0) {
+      throw new ConflictException(
+        'This restaurant already has a menu. Onboarding menu setup is complete.',
+      );
     }
     const fileUrl = file
       ? publicUploadFileUrl(MENUS_UPLOAD_SUBDIR, file.filename)
@@ -54,6 +65,7 @@ export class MenuService {
       fileSize,
     });
     await this.menuRepository.save(menu);
+    await this.onboardingService.markMenuSetupComplete(restaurantId);
     return menu;
   }
   async getAllMenus(user: User): Promise<Menu[]> {

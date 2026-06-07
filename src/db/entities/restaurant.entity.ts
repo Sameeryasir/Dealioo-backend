@@ -53,6 +53,16 @@ export class Restaurant {
   @Column({ name: 'branch_count', type: 'int', default: 0 })
   branchCount: number;
 
+  @Column({ name: 'onboarding_completed', type: 'boolean', default: false })
+  onboardingCompleted: boolean;
+
+  @Column({
+    name: 'onboarding_completed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  onboardingCompletedAt: Date | null;
+
   @Column({
     name: 'stripe_account_id',
     type: 'varchar',
