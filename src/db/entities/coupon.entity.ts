@@ -101,6 +101,15 @@ export class Coupon {
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date | null;
 
+  @Column({ name: 'signup_pass_email_scheduled_at', type: 'timestamptz', nullable: true })
+  signupPassEmailScheduledAt: Date | null;
+
+  @Column({ name: 'signup_pass_email_sent_at', type: 'timestamptz', nullable: true })
+  signupPassEmailSentAt: Date | null;
+
+  @Column({ name: 'signup_pass_email_cancelled_at', type: 'timestamptz', nullable: true })
+  signupPassEmailCancelledAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

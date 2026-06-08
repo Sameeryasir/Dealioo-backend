@@ -13,6 +13,7 @@ import {
 } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
+import { isBuiltinSignupPassEmailEnabled } from '../redemption/signup-qr-email.constants';
 import {
   AutomationExecution,
   AutomationExecutionStatus,
@@ -948,6 +949,16 @@ export class AutomationService {
 
     const purpose = this.mapFunnelEventToAutoPurpose(event.eventType);
     if (!purpose) {
+      return;
+    }
+
+    if (
+      purpose === AutomationPurpose.FUNNEL_SIGNUP &&
+      isBuiltinSignupPassEmailEnabled()
+    ) {
+      this.logger.log(
+        `Skipping FUNNEL_SIGNUP automation for customer ${event.customerId} — built-in signup pass email is enabled`,
+      );
       return;
     }
 

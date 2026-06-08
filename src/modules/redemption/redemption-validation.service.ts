@@ -7,8 +7,15 @@ import {
 import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 import { CouponService } from './coupon.service';
 
+export type RedemptionValidationOptions = {
+  /** Order subtotal entered by staff at the restaurant (walk-in payment). */
+  orderSubtotal?: number;
+};
+
 export type RedemptionValidationResult = {
   canRedeem: boolean;
+  /** Unpaid signup — staff must enter order amount before redeem completes. */
+  requiresWalkInPayment: boolean;
   redeemBlockedReason: string | null;
   paymentStatus: CouponPaymentStatus;
   couponStatus: CouponStatus;
@@ -59,24 +66,18 @@ export class RedemptionValidationService {
   }
 
   /** Shared server-side checks for preview and redeem — never trust the frontend. */
-  validateCouponForRedemption(coupon: Coupon): RedemptionValidationResult {
+  validateCouponForRedemption(
+    coupon: Coupon,
+    options?: RedemptionValidationOptions,
+  ): RedemptionValidationResult {
     const couponExpired = this.couponService.isExpired(coupon);
     const paymentStatus = coupon.paymentStatus;
     const couponStatus = coupon.status;
 
-    if (paymentStatus !== CouponPaymentStatus.PAID) {
-      return {
-        canRedeem: false,
-        redeemBlockedReason: this.paymentBlockedReason(paymentStatus),
-        paymentStatus,
-        couponStatus,
-        couponExpired,
-      };
-    }
-
     if (couponExpired) {
       return {
         canRedeem: false,
+        requiresWalkInPayment: false,
         redeemBlockedReason: 'Coupon expired',
         paymentStatus,
         couponStatus,
@@ -87,6 +88,7 @@ export class RedemptionValidationService {
     if (couponStatus === CouponStatus.REDEEMED) {
       return {
         canRedeem: false,
+        requiresWalkInPayment: false,
         redeemBlockedReason: 'Coupon already redeemed',
         paymentStatus,
         couponStatus,
@@ -97,6 +99,7 @@ export class RedemptionValidationService {
     if (couponStatus !== CouponStatus.ACTIVE) {
       return {
         canRedeem: false,
+        requiresWalkInPayment: false,
         redeemBlockedReason: 'Coupon is not active',
         paymentStatus,
         couponStatus,
@@ -104,9 +107,48 @@ export class RedemptionValidationService {
       };
     }
 
+    if (paymentStatus === CouponPaymentStatus.PAID) {
+      return {
+        canRedeem: true,
+        requiresWalkInPayment: false,
+        redeemBlockedReason: null,
+        paymentStatus,
+        couponStatus,
+        couponExpired,
+      };
+    }
+
+    if (paymentStatus === CouponPaymentStatus.PENDING) {
+      const walkInAmount = options?.orderSubtotal;
+      const hasWalkInPayment =
+        walkInAmount != null && Number.isFinite(walkInAmount) && walkInAmount > 0;
+
+      if (hasWalkInPayment) {
+        return {
+          canRedeem: true,
+          requiresWalkInPayment: true,
+          redeemBlockedReason: null,
+          paymentStatus,
+          couponStatus,
+          couponExpired,
+        };
+      }
+
+      return {
+        canRedeem: false,
+        requiresWalkInPayment: true,
+        redeemBlockedReason:
+          'Guest has not paid online — enter order amount to redeem',
+        paymentStatus,
+        couponStatus,
+        couponExpired,
+      };
+    }
+
     return {
-      canRedeem: true,
-      redeemBlockedReason: null,
+      canRedeem: false,
+      requiresWalkInPayment: false,
+      redeemBlockedReason: this.paymentBlockedReason(paymentStatus),
       paymentStatus,
       couponStatus,
       couponExpired,

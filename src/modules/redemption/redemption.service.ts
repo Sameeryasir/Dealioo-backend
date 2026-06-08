@@ -78,6 +78,7 @@ export type ScanPreviewResult =
         redeemedAt: string;
       }>;
       canRedeem: boolean;
+      requiresWalkInPayment: boolean;
       redeemBlockedReason: string | null;
       paymentStatus: string;
       couponStatus: string;
@@ -281,14 +282,17 @@ export class RedemptionService {
     const customerName = coupon.customer.name?.trim() || 'Guest';
     const campaignName = coupon.campaign.campaignName?.trim() || 'Campaign';
 
+    const previewAllowed =
+      validation.canRedeem || validation.requiresWalkInPayment;
+
     await this.logAudit({
-      eventType: validation.canRedeem
+      eventType: previewAllowed
         ? RedemptionEventType.PREVIEW_SUCCESS
         : RedemptionEventType.PREVIEW_FAILURE,
       coupon,
       restaurantId,
       audit,
-      success: validation.canRedeem,
+      success: previewAllowed,
       failureReason: validation.redeemBlockedReason,
     });
 
@@ -319,6 +323,7 @@ export class RedemptionService {
       previouslyRedeemedCount: profile.previouslyRedeemedCount,
       previousRedemptions: profile.previousRedemptions,
       canRedeem: validation.canRedeem,
+      requiresWalkInPayment: validation.requiresWalkInPayment,
       redeemBlockedReason: validation.redeemBlockedReason,
       paymentStatus: validation.paymentStatus,
       couponStatus: validation.couponStatus,
@@ -392,7 +397,10 @@ export class RedemptionService {
 
     await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
 
-    const validation = this.validationService.validateCouponForRedemption(coupon);
+    const validation = this.validationService.validateCouponForRedemption(
+      coupon,
+      { orderSubtotal },
+    );
     if (!validation.canRedeem) {
       await this.logAudit({
         eventType: RedemptionEventType.REDEEM_FAILURE,
@@ -443,11 +451,7 @@ export class RedemptionService {
       const lockedCoupons: Coupon[] = [];
 
       for (const couponId of uniqueIds) {
-        const locked = await manager.findOne(Coupon, {
-          where: { id: couponId },
-          relations: ['customer', 'campaign', 'funnelPayment'],
-          lock: { mode: 'pessimistic_write' },
-        });
+        const locked = await this.lockCouponForRedemption(manager, couponId);
 
         if (!locked) {
           await this.logAuditInTransaction(manager, {
@@ -489,8 +493,10 @@ export class RedemptionService {
       for (const coupon of lockedCoupons) {
         await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
 
-        const validation =
-          this.validationService.validateCouponForRedemption(coupon);
+        const validation = this.validationService.validateCouponForRedemption(
+          coupon,
+          { orderSubtotal },
+        );
         if (!validation.canRedeem) {
           await this.logAuditInTransaction(manager, {
             eventType: RedemptionEventType.REDEEM_FAILURE,
@@ -508,10 +514,19 @@ export class RedemptionService {
       }
 
       for (const coupon of lockedCoupons) {
+        const walkInPayment =
+          coupon.paymentStatus === CouponPaymentStatus.PENDING;
+
         const updateResult = await manager.update(
           Coupon,
           { id: coupon.id, status: CouponStatus.ACTIVE },
-          { status: CouponStatus.REDEEMED, redeemedAt },
+          {
+            status: CouponStatus.REDEEMED,
+            redeemedAt,
+            ...(walkInPayment
+              ? { paymentStatus: CouponPaymentStatus.PAID }
+              : {}),
+          },
         );
 
         if (!updateResult.affected) {
@@ -801,7 +816,8 @@ export class RedemptionService {
         label: `${offer} [${paymentLabel}]`,
         paymentLabel,
         isScannedCoupon: coupon.id === scannedCouponId,
-        canSelect: isPrepaid,
+        canSelect:
+          isPrepaid || coupon.paymentStatus === CouponPaymentStatus.PENDING,
       });
     }
 
@@ -830,6 +846,26 @@ export class RedemptionService {
       success: params.success,
       failureReason: params.failureReason,
     });
+  }
+
+  private async lockCouponForRedemption(
+    manager: EntityManager,
+    couponId: number,
+  ): Promise<Coupon | null> {
+    const locked = await manager.findOne(Coupon, {
+      where: { id: couponId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!locked) {
+      return null;
+    }
+
+    return (
+      (await manager.findOne(Coupon, {
+        where: { id: couponId },
+        relations: ['customer', 'campaign', 'funnelPayment'],
+      })) ?? locked
+    );
   }
 
   private async logAuditInTransaction(

@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
@@ -13,9 +14,13 @@ import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { RedemptionService } from './redemption.service';
+import { SIGNUP_QR_EMAIL_QUEUE } from './signup-qr-email.constants';
+import { SignupQrEmailProcessor } from './signup-qr-email.processor';
+import { SignupQrEmailService } from './signup-qr-email.service';
 
 @Module({
   imports: [
+    BullModule.registerQueue({ name: SIGNUP_QR_EMAIL_QUEUE }),
     TypeOrmModule.forFeature([
       Coupon,
       RedemptionLog,
@@ -29,7 +34,13 @@ import { RedemptionService } from './redemption.service';
     AuthModule,
   ],
   controllers: [RedemptionController],
-  providers: [CouponService, RedemptionValidationService, RedemptionService],
-  exports: [CouponService],
+  providers: [
+    CouponService,
+    RedemptionValidationService,
+    RedemptionService,
+    SignupQrEmailService,
+    SignupQrEmailProcessor,
+  ],
+  exports: [CouponService, SignupQrEmailService],
 })
 export class RedemptionModule {}

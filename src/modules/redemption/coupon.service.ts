@@ -18,6 +18,11 @@ import {
 /** Default pass validity after issuance (90 days). */
 const COUPON_VALIDITY_DAYS = 90;
 
+export type IssueSignupCouponResult = {
+  coupon: Coupon | null;
+  created: boolean;
+};
+
 @Injectable()
 export class CouponService {
   private readonly logger = new Logger(CouponService.name);
@@ -33,17 +38,13 @@ export class CouponService {
     private readonly campaignRepository: Repository<Campaign>,
   ) {}
 
-  /**
-   * Issue a QR pass right after funnel signup.
-   * Payment stays PENDING until Stripe checkout completes — redemption stays blocked.
-   */
   async issueFromSignup(
     funnelId: number,
     customerId: number,
-  ): Promise<Coupon | null> {
+  ): Promise<IssueSignupCouponResult> {
     const existing = await this.findByCustomerAndFunnel(customerId, funnelId);
     if (existing) {
-      return existing;
+      return { coupon: existing, created: false };
     }
 
     const funnel = await this.funnelRepository.findOne({
@@ -51,7 +52,7 @@ export class CouponService {
       relations: ['campaign'],
     });
     if (!funnel?.campaign) {
-      return null;
+      return { coupon: null, created: false };
     }
 
     const issuedAt = new Date();
@@ -72,17 +73,18 @@ export class CouponService {
     });
 
     try {
-      return await this.couponRepository.save(coupon);
+      const saved = await this.couponRepository.save(coupon);
+      return { coupon: saved, created: true };
     } catch (err) {
       const raced = await this.findByCustomerAndFunnel(customerId, funnelId);
       if (raced) {
-        return raced;
+        return { coupon: raced, created: false };
       }
       this.logger.warn(
         `Failed to issue signup coupon for customer ${customerId}`,
         err,
       );
-      return null;
+      return { coupon: null, created: false };
     }
   }
 

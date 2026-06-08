@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
@@ -21,6 +22,7 @@ import { FunnelEventService } from './funnel-event.service';
       Funnel,
       FunnelPayment,
       Customer,
+      CustomerVisit,
     ]),
     AutomationModule,
     RedemptionModule,

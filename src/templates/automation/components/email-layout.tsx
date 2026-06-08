@@ -31,6 +31,7 @@ export type AutomationEmailLayoutProps = {
   paragraphs: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  children?: React.ReactNode;
 };
 
 export function AutomationEmailLayout({
@@ -40,6 +41,7 @@ export function AutomationEmailLayout({
   paragraphs,
   ctaLabel,
   ctaUrl,
+  children,
 }: AutomationEmailLayoutProps) {
   const greetingName = customerName?.trim() || 'there';
 
@@ -64,6 +66,8 @@ export function AutomationEmailLayout({
               {paragraph}
             </Text>
           ))}
+
+          {children}
 
           {ctaLabel && ctaUrl ? (
             <Section style={automationCtaWrap}>

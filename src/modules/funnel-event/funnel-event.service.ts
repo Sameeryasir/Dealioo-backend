@@ -4,8 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -23,11 +24,18 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationService } from '../automation/automation.service';
 import { CouponService } from '../redemption/coupon.service';
+import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import {
   buildRecentMonthBuckets,
   type OverviewMonthBucket,
 } from './overview-monthly.util';
+import {
+  buildRestaurantOrderPaymentSummary,
+  customerFunnelVisitKey,
+  type RestaurantOrderPaymentStatus,
+  type RestaurantVisitSnapshot,
+} from './restaurant-order-payment.util';
 @Injectable()
 export class FunnelEventService {
   constructor(
@@ -41,8 +49,11 @@ export class FunnelEventService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(CustomerVisit)
+    private readonly customerVisitRepository: Repository<CustomerVisit>,
     private readonly automationService: AutomationService,
     private readonly couponService: CouponService,
+    private readonly signupQrEmailService: SignupQrEmailService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
@@ -58,7 +69,34 @@ export class FunnelEventService {
         ? await this.trackSignup(dto)
         : await this.trackPayment(dto);
 
-    // Coupon + QR are issued only after a successful payment — not on signup alone.
+    if (
+      dto.eventType === FunnelEventType.SIGNUP &&
+      tracked.event.customerId
+    ) {
+      const issued = await this.couponService.issueFromSignup(
+        dto.funnelId,
+        tracked.event.customerId,
+      );
+      if (issued.created && issued.coupon) {
+        await this.signupQrEmailService.scheduleSignupQrEmail({
+          couponId: issued.coupon.id,
+          funnelId: dto.funnelId,
+          customerId: tracked.event.customerId,
+        });
+      }
+    }
+
+    if (
+      dto.eventType === FunnelEventType.PAYMENT &&
+      tracked.event.customerId &&
+      this.isPaidFunnelEvent(tracked.event)
+    ) {
+      await this.signupQrEmailService.cancelScheduledSignupQrEmail(
+        tracked.event.customerId,
+        dto.funnelId,
+      );
+    }
+
     if (
       dto.eventType === FunnelEventType.PAYMENT &&
       tracked.event.customerId &&
@@ -453,6 +491,10 @@ export class FunnelEventService {
       currency: string | null;
       paymentStatus: FunnelPaymentStatus | null;
       receiptUrl: string | null;
+      orderStatus: RestaurantOrderPaymentStatus;
+      onlineAmountCents: number | null;
+      restaurantAmount: number | null;
+      restaurantVisitedAt: Date | null;
     }>;
     meta: PaginationMeta & {
       campaignCount: number;
@@ -490,10 +532,29 @@ export class FunnelEventService {
       take: pagination.limit,
     });
 
-    return {
-      data: rows
-        .filter((row) => row.funnel?.campaign != null)
+    const filteredRows = rows.filter((row) => row.funnel?.campaign != null);
+
+    const visitByCustomerFunnel = await this.loadLatestRestaurantVisits(
+      restaurantId,
+      filteredRows
+        .filter((row) => row.customerId != null)
         .map((row) => ({
+          customerId: row.customerId!,
+          funnelId: row.funnelId,
+        })),
+    );
+
+    return {
+      data: filteredRows.map((row) => {
+        const visitKey =
+          row.customerId != null
+            ? customerFunnelVisitKey(row.customerId, row.funnelId)
+            : null;
+        const visit =
+          visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+        const paymentSummary = buildRestaurantOrderPaymentSummary(row, visit);
+
+        return {
           id: row.id,
           eventType: row.eventType,
           createdAt: row.createdAt,
@@ -513,13 +574,67 @@ export class FunnelEventService {
           currency: row.currency,
           paymentStatus: row.paymentStatus,
           receiptUrl: row.receiptUrl,
-        })),
+          orderStatus: paymentSummary.orderStatus,
+          onlineAmountCents: paymentSummary.onlineAmountCents,
+          restaurantAmount: paymentSummary.restaurantAmount,
+          restaurantVisitedAt: paymentSummary.restaurantVisitedAt,
+        };
+      }),
       meta: {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         campaignCount,
         funnelCount,
       },
     };
+  }
+
+  /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */
+  private async loadLatestRestaurantVisits(
+    restaurantId: number,
+    pairs: Array<{ customerId: number; funnelId: number }>,
+  ): Promise<Map<string, RestaurantVisitSnapshot>> {
+    const result = new Map<string, RestaurantVisitSnapshot>();
+    if (pairs.length === 0) {
+      return result;
+    }
+
+    const customerIds = [...new Set(pairs.map((pair) => pair.customerId))];
+    const funnelIds = [...new Set(pairs.map((pair) => pair.funnelId))];
+
+    const visits = await this.customerVisitRepository.find({
+      where: {
+        restaurantId,
+        coupon: {
+          customerId: In(customerIds),
+          funnelId: In(funnelIds),
+        },
+      },
+      relations: { coupon: true },
+      order: { visitedAt: 'DESC' },
+    });
+
+    for (const visit of visits) {
+      const customerId = visit.coupon?.customerId;
+      const funnelId = visit.coupon?.funnelId;
+      if (customerId == null || funnelId == null) {
+        continue;
+      }
+      if (visit.orderSubtotal == null) {
+        continue;
+      }
+
+      const key = customerFunnelVisitKey(customerId, funnelId);
+      if (result.has(key)) {
+        continue;
+      }
+
+      result.set(key, {
+        orderSubtotal: Number(visit.orderSubtotal),
+        visitedAt: visit.visitedAt,
+      });
+    }
+
+    return result;
   }
 
 }
