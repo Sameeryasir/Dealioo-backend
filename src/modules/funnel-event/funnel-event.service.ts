@@ -58,18 +58,7 @@ export class FunnelEventService {
         ? await this.trackSignup(dto)
         : await this.trackPayment(dto);
 
-    // Signup pass: QR is issued immediately with payment_status PENDING.
-    if (
-      dto.eventType === FunnelEventType.SIGNUP &&
-      tracked.event.customerId
-    ) {
-      await this.couponService.issueFromSignup(
-        dto.funnelId,
-        tracked.event.customerId,
-      );
-    }
-
-    // Paid checkout upgrades the same pass to PAID (or creates one if missing).
+    // Coupon + QR are issued only after a successful payment — not on signup alone.
     if (
       dto.eventType === FunnelEventType.PAYMENT &&
       tracked.event.customerId &&

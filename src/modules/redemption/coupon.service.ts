@@ -105,10 +105,7 @@ export class CouponService {
     funnelId: number,
     funnelPaymentId: number,
   ): Promise<Coupon | null> {
-    let coupon = await this.findByCustomerAndFunnel(customerId, funnelId);
-    if (!coupon) {
-      coupon = await this.issueFromSignup(funnelId, customerId);
-    }
+    const coupon = await this.findByCustomerAndFunnel(customerId, funnelId);
     if (!coupon) {
       return null;
     }
