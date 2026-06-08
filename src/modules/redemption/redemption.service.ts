@@ -111,6 +111,16 @@ export type GuestProfileResult = {
     campaignName: string;
     redeemedAt: string;
   }>;
+  activeDeals: Array<{
+    couponId: number;
+    campaignName: string;
+    offerName: string;
+    paymentLabel: 'PREPAID' | 'UNPAID';
+    paymentStatus: CouponPaymentStatus;
+    expiresAt: string | null;
+    canSelect: boolean;
+    qrToken: string;
+  }>;
 };
 
 @Injectable()
@@ -131,7 +141,6 @@ export class RedemptionService {
     private readonly restaurantRepository: Repository<Restaurant>,
   ) {}
 
-  /** Parse raw token or JSON QR payload `{ couponId, token }`. */
   extractToken(raw: string): string {
     const trimmed = sanitizeScanToken(raw);
     if (trimmed.startsWith('{')) {
@@ -181,6 +190,7 @@ export class RedemptionService {
       customerId,
       restaurantId,
     );
+    const activeDeals = await this.getGuestActiveDeals(customerId, restaurantId);
 
     return {
       customerId: customer.id,
@@ -188,10 +198,11 @@ export class RedemptionService {
       email: customer.email,
       phone: customer.phone,
       totalVisits: profile.totalVisits,
-      rewardsAvailable: profile.rewardsAvailable,
+      rewardsAvailable: activeDeals.length,
       upcomingRewardsCount: 0,
       previouslyRedeemedCount: profile.previouslyRedeemedCount,
       previousRedemptions: profile.previousRedemptions,
+      activeDeals,
     };
   }
 
@@ -818,6 +829,69 @@ export class RedemptionService {
         isScannedCoupon: coupon.id === scannedCouponId,
         canSelect:
           isPrepaid || coupon.paymentStatus === CouponPaymentStatus.PENDING,
+      });
+    }
+
+    return results;
+  }
+
+  private async getGuestActiveDeals(
+    customerId: number,
+    restaurantId: number,
+  ): Promise<
+    Array<{
+      couponId: number;
+      campaignName: string;
+      offerName: string;
+      paymentLabel: 'PREPAID' | 'UNPAID';
+      paymentStatus: CouponPaymentStatus;
+      expiresAt: string | null;
+      canSelect: boolean;
+      qrToken: string;
+    }>
+  > {
+    const coupons = await this.couponRepository.find({
+      where: { customerId, restaurantId, status: CouponStatus.ACTIVE },
+      relations: ['campaign', 'funnelPayment'],
+      order: { issuedAt: 'DESC' },
+    });
+
+    const results: Array<{
+      couponId: number;
+      campaignName: string;
+      offerName: string;
+      paymentLabel: 'PREPAID' | 'UNPAID';
+      paymentStatus: CouponPaymentStatus;
+      expiresAt: string | null;
+      canSelect: boolean;
+      qrToken: string;
+    }> = [];
+
+    for (const coupon of coupons) {
+      if (this.couponService.isExpired(coupon)) {
+        continue;
+      }
+
+      await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+      const campaignName =
+        coupon.campaign?.campaignName?.trim() || 'Campaign';
+      const offerName =
+        coupon.campaign?.offer?.trim() ||
+        coupon.campaign?.campaignName?.trim() ||
+        'Reward';
+      const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
+
+      results.push({
+        couponId: coupon.id,
+        campaignName,
+        offerName,
+        paymentLabel: isPrepaid ? 'PREPAID' : 'UNPAID',
+        paymentStatus: coupon.paymentStatus,
+        expiresAt: coupon.expiresAt?.toISOString() ?? null,
+        canSelect:
+          isPrepaid || coupon.paymentStatus === CouponPaymentStatus.PENDING,
+        qrToken: coupon.qrToken,
       });
     }
 
