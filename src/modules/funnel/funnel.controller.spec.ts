@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { RedemptionService } from '../redemption/redemption.service';
 import { FunnelController } from './funnel.controller';
 import { FunnelService } from './funnel.service';
 
@@ -14,9 +15,16 @@ describe('FunnelController', () => {
           useValue: {
             createFunnel: jest.fn(),
             getFunnelById: jest.fn(),
-            getFunnelsByCampaignId: jest.fn(),
+            getFunnelByCampaignId: jest.fn(),
+            getFunnelsByRestaurantId: jest.fn(),
             updateFunnel: jest.fn(),
             deleteFunnel: jest.fn(),
+          },
+        },
+        {
+          provide: RedemptionService,
+          useValue: {
+            verifyRestaurantAccess: jest.fn(),
           },
         },
       ],

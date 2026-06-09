@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
-import { CustomerVisit } from '../../db/entities/customer-visit.entity';
+import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -22,6 +22,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import { Restaurant } from '../../db/entities/restaurant.entity';
 import { AutomationService } from '../automation/automation.service';
 import { ActivityService } from '../activity/activity.service';
 import { CouponService } from '../redemption/coupon.service';
@@ -52,6 +53,8 @@ export class FunnelEventService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(CustomerVisit)
     private readonly customerVisitRepository: Repository<CustomerVisit>,
+    @InjectRepository(Restaurant)
+    private readonly restaurantRepository: Repository<Restaurant>,
     private readonly automationService: AutomationService,
     private readonly couponService: CouponService,
     private readonly signupQrEmailService: SignupQrEmailService,
@@ -128,6 +131,138 @@ export class FunnelEventService {
     }
 
     return tracked.event;
+  }
+
+  /** Scanner walk-in: enroll guest in selected deals and record payment + visit. */
+  async purchaseDealsAtScanner(params: {
+    restaurantId: number;
+    customerId: number;
+    funnelIds: number[];
+    orderSubtotal: number;
+    staffUserId: number;
+  }): Promise<
+    Array<{ funnelId: number; campaignName: string; couponId: number }>
+  > {
+    const { restaurantId, customerId, funnelIds, orderSubtotal, staffUserId } =
+      params;
+
+    if (!Number.isFinite(orderSubtotal) || orderSubtotal <= 0) {
+      throw new BadRequestException('Enter an amount greater than zero.');
+    }
+
+    const uniqueFunnelIds = [...new Set(funnelIds)].sort((a, b) => a - b);
+    if (uniqueFunnelIds.length === 0) {
+      throw new BadRequestException('Select at least one deal.');
+    }
+
+    const customer = await this.customerRepository.findOne({
+      where: { id: customerId },
+    });
+    if (!customer) {
+      throw new NotFoundException('Customer not found.');
+    }
+
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId },
+    });
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant not found.');
+    }
+
+    const amountCentsPerDeal = Math.round(
+      (orderSubtotal / uniqueFunnelIds.length) * 100,
+    );
+    const purchased: Array<{
+      funnelId: number;
+      campaignName: string;
+      couponId: number;
+    }> = [];
+
+    for (const funnelId of uniqueFunnelIds) {
+      const funnel = await this.funnelRepository.findOne({
+        where: { id: funnelId },
+        relations: ['campaign'],
+      });
+      if (!funnel?.campaign || funnel.campaign.restaurantId !== restaurantId) {
+        throw new NotFoundException(
+          `Deal not found for this restaurant (funnel ${funnelId}).`,
+        );
+      }
+
+      await this.track({
+        eventType: FunnelEventType.SIGNUP,
+        funnelId,
+        customerId,
+        visitorId: `scanner-${staffUserId}`,
+      });
+
+      const payment = this.funnelPaymentRepository.create({
+        funnelId,
+        restaurantId,
+        campaignId: funnel.campaign.id,
+        amount: amountCentsPerDeal,
+        currency: 'usd',
+        status: FunnelPaymentStatus.PAID,
+        customerEmail: customer.email.trim(),
+        platformFeeAmount: 0,
+        refundedAmount: 0,
+        stripePaymentIntentId: null,
+        stripeConnectedAccountId: null,
+      });
+      const savedPayment = await this.funnelPaymentRepository.save(payment);
+
+      await this.track({
+        eventType: FunnelEventType.PAYMENT,
+        funnelId,
+        customerId,
+        funnelPaymentId: savedPayment.id,
+        amount: amountCentsPerDeal,
+        currency: 'usd',
+        paymentStatus: FunnelPaymentStatus.PAID,
+        customerEmail: customer.email.trim(),
+      });
+
+      const coupon = await this.couponService.findByCustomerAndFunnel(
+        customerId,
+        funnelId,
+      );
+      if (!coupon) {
+        throw new BadRequestException('Could not issue pass for this deal.');
+      }
+
+      const visitedAt = new Date();
+      const existingVisit = await this.customerVisitRepository.findOne({
+        where: { couponId: coupon.id },
+      });
+      if (!existingVisit) {
+        await this.customerVisitRepository.save({
+          customerId,
+          campaignId: funnel.campaign.id,
+          restaurantId,
+          couponId: coupon.id,
+          staffUserId,
+          visitedAt,
+          source: CustomerVisitSource.QR_REDEMPTION,
+          orderSubtotal,
+        });
+
+        await this.activityService.logVisited({
+          restaurantId,
+          customerId,
+          couponId: coupon.id,
+          restaurantName: restaurant.name?.trim() || 'Restaurant',
+          occurredAt: visitedAt,
+        });
+      }
+
+      purchased.push({
+        funnelId,
+        campaignName: funnel.campaign.campaignName,
+        couponId: coupon.id,
+      });
+    }
+
+    return purchased;
   }
 
   async getStats(funnelId: number): Promise<{

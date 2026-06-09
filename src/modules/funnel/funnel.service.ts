@@ -7,9 +7,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
+import { RestaurantFunnelSummary } from './funnelDto/restaurant-funnel-summary.dto';
 import { UpdateFunnelDto } from './funnelDto/update-funnel.dto';
 
 @Injectable()
@@ -19,6 +21,8 @@ export class FunnelService {
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
+    @InjectRepository(Restaurant)
+    private readonly restaurantRepository: Repository<Restaurant>,
   ) {}
 
   async createOrUpdateFunnel(
@@ -75,6 +79,39 @@ export class FunnelService {
       throw new NotFoundException('Funnel not found');
     }
     return funnel;
+  }
+
+  async getFunnelsByRestaurantId(
+    restaurantId: number,
+  ): Promise<RestaurantFunnelSummary[]> {
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId },
+    });
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant not found');
+    }
+
+    const funnels = await this.funnelRepository.find({
+      where: {
+        campaign: { restaurantId },
+      },
+      relations: ['campaign'],
+      select: {
+        id: true,
+        campaign: {
+          campaignName: true,
+          price: true,
+        },
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    return funnels.map((funnel) => ({
+      id: funnel.id,
+      campaignName: funnel.campaign.campaignName,
+      price:
+        funnel.campaign.price != null ? Number(funnel.campaign.price) : null,
+    }));
   }
 
   /** One funnel per campaign: returns that row or null if none exists yet. */
