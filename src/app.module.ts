@@ -21,6 +21,7 @@ import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
+import { ActivityModule } from './modules/activity/activity.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 
@@ -67,6 +68,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     FunnelEventModule,
     AutomationModule,
     RedemptionModule,
+    ActivityModule,
     OnboardingModule,
   ],
   controllers: [AppController],

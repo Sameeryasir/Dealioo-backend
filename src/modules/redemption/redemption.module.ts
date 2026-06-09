@@ -1,5 +1,5 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
@@ -9,6 +9,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
+import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
@@ -32,6 +33,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Restaurant,
     ]),
     AuthModule,
+    forwardRef(() => ActivityModule),
   ],
   controllers: [RedemptionController],
   providers: [
@@ -41,6 +43,6 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     SignupQrEmailService,
     SignupQrEmailProcessor,
   ],
-  exports: [CouponService, SignupQrEmailService],
+  exports: [CouponService, SignupQrEmailService, RedemptionService],
 })
 export class RedemptionModule {}
