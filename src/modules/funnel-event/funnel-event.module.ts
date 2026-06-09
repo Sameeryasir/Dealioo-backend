@@ -7,6 +7,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
+import { ActivityModule } from '../activity/activity.module';
 import { AutomationModule } from '../automation/automation.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
@@ -26,6 +27,7 @@ import { FunnelEventService } from './funnel-event.service';
     ]),
     AutomationModule,
     RedemptionModule,
+    ActivityModule,
   ],
   controllers: [FunnelEventController],
   providers: [FunnelEventService, FunnelAnalyticsService],

@@ -7,6 +7,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { CouponService } from '../redemption/coupon.service';
+import { ActivityService } from '../activity/activity.service';
 import { StripeService } from '../stripe/stripe.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 
@@ -57,6 +58,7 @@ export class PaymentWebhookHandler {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     private readonly stripeService: StripeService,
     private readonly couponService: CouponService,
+    private readonly activityService: ActivityService,
   ) {}
 
   async routeEvent(
@@ -182,6 +184,11 @@ export class PaymentWebhookHandler {
       ...(chargeId ? { stripeChargeId: chargeId } : {}),
       ...(paymentMethodId ? { paymentMethod: paymentMethodId } : {}),
       ...(receiptUrl ? { receiptUrl } : {}),
+    });
+
+    await this.activityService.logPrepaidForOffer({
+      paymentId: payment.id,
+      occurredAt: new Date(),
     });
   }
 

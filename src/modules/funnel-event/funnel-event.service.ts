@@ -23,6 +23,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { AutomationService } from '../automation/automation.service';
+import { ActivityService } from '../activity/activity.service';
 import { CouponService } from '../redemption/coupon.service';
 import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
@@ -54,6 +55,7 @@ export class FunnelEventService {
     private readonly automationService: AutomationService,
     private readonly couponService: CouponService,
     private readonly signupQrEmailService: SignupQrEmailService,
+    private readonly activityService: ActivityService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
@@ -111,6 +113,18 @@ export class FunnelEventService {
 
     if (tracked.shouldRunAutomation) {
       await this.automationService.handleEvent(tracked.event);
+    }
+
+    if (
+      dto.eventType === FunnelEventType.PAYMENT &&
+      tracked.event.customerId &&
+      tracked.event.funnelPaymentId &&
+      this.isPaidFunnelEvent(tracked.event)
+    ) {
+      await this.activityService.logPrepaidForOffer({
+        paymentId: tracked.event.funnelPaymentId,
+        customerId: tracked.event.customerId,
+      });
     }
 
     return tracked.event;

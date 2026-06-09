@@ -34,3 +34,31 @@ export function getCorsOrigins(): string[] {
 
   return [...origins];
 }
+
+/** Dev-only: allow any ngrok tunnel without updating .env each time. */
+export function isAllowedCorsOrigin(origin: string | undefined): boolean {
+  if (!origin) {
+    return true;
+  }
+
+  const normalized = normalizeOrigin(origin);
+  if (getCorsOrigins().includes(normalized)) {
+    return true;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+
+  try {
+    const { hostname, protocol } = new URL(normalized);
+    return (
+      protocol === 'https:' &&
+      (hostname.endsWith('.ngrok-free.app') ||
+        hostname.endsWith('.ngrok.io') ||
+        hostname.endsWith('.ngrok.app'))
+    );
+  } catch {
+    return false;
+  }
+}

@@ -1,7 +1,9 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -20,6 +22,7 @@ import {
   RedemptionLog,
 } from '../../db/entities/redemption-log.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
+import { ActivityService } from '../activity/activity.service';
 import { CouponService } from './coupon.service';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
@@ -139,6 +142,8 @@ export class RedemptionService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    @Inject(forwardRef(() => ActivityService))
+    private readonly activityService: ActivityService,
   ) {}
 
   extractToken(raw: string): string {
@@ -206,10 +211,6 @@ export class RedemptionService {
     };
   }
 
-  /**
-   * Preview only — never redeems, creates visits, or mutates coupon state.
-   * Logs every preview attempt for audit.
-   */
   async previewScan(
     rawToken: string,
     restaurantId: number,
@@ -285,6 +286,13 @@ export class RedemptionService {
     await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
 
     const validation = this.validationService.validateCouponForRedemption(coupon);
+
+    await this.recordVisitFromQrScan({
+      coupon,
+      restaurantId,
+      audit,
+    });
+
     const profile = await this.getCustomerRestaurantProfile(
       coupon.customerId,
       restaurantId,
@@ -460,6 +468,10 @@ export class RedemptionService {
 
     return this.dataSource.transaction(async (manager) => {
       const lockedCoupons: Coupon[] = [];
+      const restaurant = await manager.findOne(Restaurant, {
+        where: { id: restaurantId },
+      });
+      const restaurantName = restaurant?.name?.trim() || 'Restaurant';
 
       for (const couponId of uniqueIds) {
         const locked = await this.lockCouponForRedemption(manager, couponId);
@@ -563,26 +575,28 @@ export class RedemptionService {
           success: true,
           failureReason: null,
         });
+
+        await this.activityService.logRedeemedReward({
+          restaurantId,
+          customerId: coupon.customerId,
+          coupon,
+          restaurantName,
+          occurredAt: redeemedAt,
+          manager,
+        });
       }
 
       const primaryCoupon = lockedCoupons[0];
 
-      const existingVisit = await manager.findOne(CustomerVisit, {
-        where: { couponId: primaryCoupon.id },
+      await this.recordVisitFromQrScan({
+        coupon: primaryCoupon,
+        restaurantId,
+        audit,
+        visitedAt: redeemedAt,
+        orderSubtotal: orderSubtotal ?? null,
+        manager,
+        restaurantName,
       });
-
-      if (!existingVisit) {
-        await manager.save(CustomerVisit, {
-          customerId: primaryCoupon.customerId,
-          campaignId: primaryCoupon.campaignId,
-          restaurantId,
-          couponId: primaryCoupon.id,
-          staffUserId: audit.scannedBy,
-          visitedAt: redeemedAt,
-          source: CustomerVisitSource.QR_REDEMPTION,
-          orderSubtotal: orderSubtotal ?? null,
-        });
-      }
 
       return this.buildRedeemSuccessResult(
         manager,
@@ -590,6 +604,54 @@ export class RedemptionService {
         lockedCoupons,
         redeemedAt,
       );
+    });
+  }
+
+  private async recordVisitFromQrScan(params: {
+    coupon: Coupon;
+    restaurantId: number;
+    audit: ScanAuditContext;
+    visitedAt?: Date;
+    orderSubtotal?: number | null;
+    manager?: EntityManager;
+    restaurantName?: string;
+  }): Promise<void> {
+    const visitedAt = params.visitedAt ?? new Date();
+    const manager = params.manager ?? this.dataSource.manager;
+
+    const existingVisit = await manager.findOne(CustomerVisit, {
+      where: { couponId: params.coupon.id },
+    });
+    if (existingVisit) {
+      return;
+    }
+
+    let restaurantName = params.restaurantName?.trim();
+    if (!restaurantName) {
+      const restaurant = await manager.findOne(Restaurant, {
+        where: { id: params.restaurantId },
+      });
+      restaurantName = restaurant?.name?.trim() || 'Restaurant';
+    }
+
+    await manager.save(CustomerVisit, {
+      customerId: params.coupon.customerId,
+      campaignId: params.coupon.campaignId,
+      restaurantId: params.restaurantId,
+      couponId: params.coupon.id,
+      staffUserId: params.audit.scannedBy,
+      visitedAt,
+      source: CustomerVisitSource.QR_REDEMPTION,
+      orderSubtotal: params.orderSubtotal ?? null,
+    });
+
+    await this.activityService.logVisited({
+      restaurantId: params.restaurantId,
+      customerId: params.coupon.customerId,
+      couponId: params.coupon.id,
+      restaurantName,
+      occurredAt: visitedAt,
+      manager: params.manager,
     });
   }
 

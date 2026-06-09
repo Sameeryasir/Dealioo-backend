@@ -1,7 +1,3 @@
-/**
- * Records an in-restaurant visit after staff confirms QR redemption.
- * Visits are NOT created on preview/lookup scans.
- */
 import {
   Column,
   CreateDateColumn,
