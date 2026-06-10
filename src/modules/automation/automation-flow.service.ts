@@ -5,6 +5,7 @@ import {
   AutomationNode,
   AutomationNodeType,
 } from '../../db/entities/automation-node.entity';
+import { isCronTriggerAutomationNode } from './automation-cron.config';
 
 export type AutomationExecutionPlan = {
   nodes: AutomationNode[];
@@ -50,6 +51,9 @@ export class AutomationFlowService {
     for (const node of nodes) {
       if (node.type === AutomationNodeType.EMAIL) {
         emailNode = node;
+      }
+      if (isCronTriggerAutomationNode(node)) {
+        sendToUnpaidOnly = true;
       }
       if (node.type === AutomationNodeType.CONDITION) {
         conditionNode = node;

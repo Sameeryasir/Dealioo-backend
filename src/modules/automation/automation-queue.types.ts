@@ -7,6 +7,7 @@ import type {
 
 export type UnpaidReminderBatchJob = {
   executionId: number;
+  restaurantId: number;
   emailNodeId: number;
   conditionNodeId: number;
   purpose: AutomationPurpose;

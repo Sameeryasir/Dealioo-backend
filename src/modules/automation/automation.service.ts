@@ -37,6 +37,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { ActivityService } from '../activity/activity.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
@@ -93,6 +94,7 @@ export class AutomationService {
     private readonly flowService: AutomationFlowService,
     private readonly queueService: AutomationQueueService,
     private readonly cronScheduler: AutomationCronSchedulerService,
+    private readonly activityService: ActivityService,
   ) {}
 
   async createAutomation(
@@ -708,6 +710,7 @@ export class AutomationService {
 
     const batch: UnpaidReminderBatchJob = {
       executionId: execution.id,
+      restaurantId: automation.restaurantId,
       emailNodeId: plan.emailNode!.id,
       conditionNodeId: plan.conditionNode?.id ?? plan.emailNode!.id,
       purpose: automation.purpose,
@@ -782,6 +785,9 @@ export class AutomationService {
         throw new Error(sendResult.error ?? 'Bulk email send failed');
       }
 
+      const messagePreview =
+        this.automationEmailService.resolvePreparedEmailPreview(batch.prepared);
+
       for (const recipient of batch.recipients) {
         if (!recipient.customerId) {
           continue;
@@ -795,6 +801,17 @@ export class AutomationService {
           nodeId: batch.emailNodeId,
           customerId: recipient.customerId,
           message: `Payment reminder email sent to ${recipient.email} (bulk)`,
+        });
+        await this.activityService.logMessageSent({
+          restaurantId: batch.restaurantId,
+          customerId: recipient.customerId,
+          messagePreview,
+          idempotencyKey: `message_sent:execution:${batch.executionId}:node:${batch.emailNodeId}:customer:${recipient.customerId}`,
+          metadata: {
+            automationExecutionId: batch.executionId,
+            emailNodeId: batch.emailNodeId,
+            purpose: batch.purpose,
+          },
         });
         sent.push({
           customerId: recipient.customerId,

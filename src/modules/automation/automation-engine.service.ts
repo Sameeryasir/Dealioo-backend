@@ -15,6 +15,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { ActivityService } from '../activity/activity.service';
 import { CouponService } from '../redemption/coupon.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
@@ -40,6 +41,7 @@ export class AutomationEngineService {
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     private readonly couponService: CouponService,
+    private readonly activityService: ActivityService,
   ) {}
 
   async processExecution(executionId: number, nodeId: number): Promise<void> {
@@ -335,6 +337,12 @@ export class AutomationEngineService {
           (config ?? {}) as Record<string, unknown>,
         );
 
+        const prepared = this.automationEmailService.prepareFromEmailNode(
+          emailConfig,
+          purpose,
+          { campaignName },
+        );
+
         const sendResult = await this.automationEmailService.sendToCustomer(
           purpose,
           {
@@ -360,6 +368,19 @@ export class AutomationEngineService {
 
         if (sendResult.sent) {
           await this.executionService.incrementEmailsSent(execution.id);
+          await this.activityService.logMessageSent({
+            restaurantId: execution.automation.restaurantId,
+            customerId: execution.customerId,
+            messagePreview:
+              this.automationEmailService.resolvePreparedEmailPreview(prepared),
+            idempotencyKey: `message_sent:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
+            metadata: {
+              automationId: execution.automationId,
+              automationExecutionId: execution.id,
+              nodeId: node.id,
+              purpose,
+            },
+          });
           return 'advance';
         }
 

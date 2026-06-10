@@ -46,7 +46,7 @@ export class ActivityController {
   async getRestaurantEvents(
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('eventType') eventType?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,

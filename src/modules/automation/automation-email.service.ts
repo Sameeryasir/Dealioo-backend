@@ -12,6 +12,7 @@ import {
   resolveEmailTemplateKey,
   resolveSubjectForPurpose,
 } from './automation-email-catalog';
+import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import type {
   AutomationEmailSendResult,
@@ -74,6 +75,21 @@ export class AutomationEmailService {
     }
 
     return { subject, templateKey, templateProps };
+  }
+
+  /** Headline or short message for the restaurant activity feed. */
+  resolvePreparedEmailPreview(prepared: PreparedAutomationEmail): string {
+    const headline = prepared.templateProps.headline?.trim();
+    if (headline) {
+      return truncateActivityMessagePreview(headline);
+    }
+
+    const message = prepared.templateProps.message?.trim();
+    if (message) {
+      return truncateActivityMessagePreview(message);
+    }
+
+    return truncateActivityMessagePreview(prepared.subject);
   }
 
   buildTemplatePropsForRecipient(

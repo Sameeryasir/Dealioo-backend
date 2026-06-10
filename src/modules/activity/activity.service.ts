@@ -20,9 +20,11 @@ import { Customer } from '../../db/entities/customer.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { CreateActivityEventDto } from './activityDto/create-activity-event.dto';
+import { LogMessageSentDto } from './activityDto/log-message-sent.dto';
 import { LogPrepaidForOfferDto } from './activityDto/log-prepaid-for-offer.dto';
 import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
+import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 
 export type ActivityEventListItem = {
   id: number;
@@ -38,6 +40,7 @@ export type ActivitySummary = {
   totalVisited: number;
   totalRedeemed: number;
   totalPrepaid: number;
+  totalMessagesSent: number;
 };
 
 function formatMoney(amountCents: number, currency: string): string {
@@ -177,6 +180,25 @@ export class ActivityService {
     await this.logInTransaction(this.activityRepository.manager, payload);
   }
 
+  async logMessageSent(params: LogMessageSentDto): Promise<void> {
+    const payload: CreateActivityEventDto = {
+      restaurantId: params.restaurantId,
+      customerId: params.customerId,
+      eventType: ActivityEventType.MESSAGE_SENT,
+      description: truncateActivityMessagePreview(params.messagePreview),
+      idempotencyKey: params.idempotencyKey,
+      occurredAt: params.occurredAt,
+      metadata: params.metadata ?? null,
+    };
+
+    if (params.manager) {
+      await this.logInTransaction(params.manager, payload);
+      return;
+    }
+
+    await this.logInTransaction(this.activityRepository.manager, payload);
+  }
+
   async getRestaurantEvents(
     restaurantId: number,
     options: {
@@ -252,6 +274,7 @@ export class ActivityService {
     let totalVisited = 0;
     let totalRedeemed = 0;
     let totalPrepaid = 0;
+    let totalMessagesSent = 0;
 
     for (const row of rows) {
       const count = Number.parseInt(row.count, 10) || 0;
@@ -265,16 +288,21 @@ export class ActivityService {
         case ActivityEventType.PREPAID_FOR_OFFER:
           totalPrepaid = count;
           break;
+        case ActivityEventType.MESSAGE_SENT:
+          totalMessagesSent = count;
+          break;
         default:
           break;
       }
     }
 
     return {
-      totalEvents: totalVisited + totalRedeemed + totalPrepaid,
+      totalEvents:
+        totalVisited + totalRedeemed + totalPrepaid + totalMessagesSent,
       totalVisited,
       totalRedeemed,
       totalPrepaid,
+      totalMessagesSent,
     };
   }
 }
