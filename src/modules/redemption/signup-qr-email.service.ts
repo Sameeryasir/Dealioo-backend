@@ -259,7 +259,7 @@ export class SignupQrEmailService {
       `View your pass: ${passUrl}`,
       '',
       'Best regards,',
-      'Retention+ Team',
+      'Only Deals Team',
     ].join('\n');
 
     try {

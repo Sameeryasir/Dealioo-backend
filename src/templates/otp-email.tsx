@@ -82,7 +82,7 @@ export function OtpEmail({
         <Container className="email-container" style={container}>
           <Section style={brandRow}>
             <Text style={brandIcon}>◇</Text>
-            <Text style={brandName}>Retention+</Text>
+            <Text style={brandName}>Only Deals</Text>
           </Section>
 
           <Heading as="h1" className="email-title" style={title}>
@@ -92,7 +92,7 @@ export function OtpEmail({
           <Text style={greeting}>Hi {greetingName},</Text>
 
           <Text style={body}>
-            Welcome to Retention. Please confirm your email address using the
+            Welcome to Only Deals. Please confirm your email address using the
             code below to activate your session and keep your account secure.
           </Text>
 
@@ -117,7 +117,7 @@ export function OtpEmail({
           </Text>
 
           <Text style={signoffBold}>Best regards,</Text>
-          <Text style={signoffTeam}>Retention+ Team</Text>
+          <Text style={signoffTeam}>Only Deals Team</Text>
         </Container>
       </Body>
     </Html>

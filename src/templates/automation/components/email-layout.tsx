@@ -52,7 +52,7 @@ export function AutomationEmailLayout({
       <Body style={automationEmailMain}>
         <Container style={automationEmailContainer}>
           <Section style={automationBrandRow}>
-            <Text style={automationBrandName}>Retention+</Text>
+            <Text style={automationBrandName}>Only Deals</Text>
           </Section>
 
           <Heading as="h1" style={automationTitle}>
@@ -78,7 +78,7 @@ export function AutomationEmailLayout({
           ) : null}
 
           <Text style={automationSignoffBold}>Best regards,</Text>
-          <Text style={automationSignoffTeam}>Retention+ Team</Text>
+          <Text style={automationSignoffTeam}>Only Deals Team</Text>
         </Container>
       </Body>
     </Html>
