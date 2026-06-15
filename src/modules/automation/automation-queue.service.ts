@@ -60,6 +60,13 @@ export class AutomationQueueService {
     return job.id ?? '';
   }
 
+  async removeResumeExecutionJob(executionId: number): Promise<void> {
+    const job = await this.queue.getJob(`resume-execution-${executionId}`);
+    if (job) {
+      await job.remove();
+    }
+  }
+
   async upsertCronSchedule(
     automationId: number,
     intervalMs: number,

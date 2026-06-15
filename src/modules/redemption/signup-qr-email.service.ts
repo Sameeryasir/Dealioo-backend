@@ -11,6 +11,9 @@ import {
   CouponPaymentStatus,
 } from '../../db/entities/coupon.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
+import { getPurposeEmailDefaults } from '../automation/automation-email-catalog';
+import { PaymentConfirmationEmail } from '../../templates/automation/payment-confirmation-email';
 import { SignupQrWelcomeEmail } from '../../templates/automation/signup-qr-welcome-email';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
@@ -117,9 +120,14 @@ export class SignupQrEmailService {
     );
   }
 
-  async cancelScheduledSignupQrEmail(
+  /**
+   * When a customer pays before the delayed signup email fires, send the QR pass
+   * immediately instead of cancelling — they still need their pass link.
+   */
+  async sendSignupPassEmailOnPayment(
     customerId: number,
     funnelId: number,
+    funnelPaymentId?: number,
   ): Promise<void> {
     if (!this.handlesSignupWelcomeEmail()) {
       return;
@@ -133,23 +141,56 @@ export class SignupQrEmailService {
       return;
     }
 
+    await this.removePendingSignupPassEmailJob(customerId, funnelId);
+
+    const sendApproved = await this.dataSource.transaction(async (manager) => {
+      const locked = await manager.findOne(Coupon, {
+        where: { id: coupon.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) {
+        return false;
+      }
+
+      return !locked.signupPassEmailSentAt;
+    });
+
+    if (!sendApproved) {
+      this.logger.log(
+        `Skipping signup pass email on payment for coupon ${coupon.id} — already sent`,
+      );
+      return;
+    }
+
+    const sent = await this.deliverPaymentPassEmail({
+      couponId: coupon.id,
+      funnelId,
+      customerId,
+      funnelPaymentId,
+    });
+    if (!sent) {
+      return;
+    }
+
+    await this.couponRepository.update(coupon.id, {
+      signupPassEmailSentAt: new Date(),
+      signupPassEmailScheduledAt: null,
+      signupPassEmailCancelledAt: null,
+    });
+
+    this.logger.log(
+      `Payment pass email sent for coupon ${coupon.id}`,
+    );
+  }
+
+  private async removePendingSignupPassEmailJob(
+    customerId: number,
+    funnelId: number,
+  ): Promise<void> {
     const jobId = signupQrEmailJobId(customerId, funnelId);
     const job = await this.signupQrQueue.getJob(jobId);
     if (job) {
       await job.remove();
-    }
-
-    if (
-      !coupon.signupPassEmailSentAt &&
-      !coupon.signupPassEmailCancelledAt
-    ) {
-      await this.couponRepository.update(coupon.id, {
-        signupPassEmailCancelledAt: new Date(),
-        signupPassEmailScheduledAt: null,
-      });
-      this.logger.log(
-        `Cancelled pending signup pass email for coupon ${coupon.id}`,
-      );
     }
   }
 
@@ -215,6 +256,94 @@ export class SignupQrEmailService {
     });
   }
 
+  private async deliverPaymentPassEmail(
+    params: ScheduleSignupQrEmailParams & { funnelPaymentId?: number },
+  ): Promise<boolean> {
+    const customer = await this.customerRepository.findOne({
+      where: { id: params.customerId },
+    });
+    const email = customer?.email?.trim();
+    if (!email) {
+      this.logger.warn(
+        `Skipping payment pass email — missing email for customer ${params.customerId}`,
+      );
+      return false;
+    }
+
+    const coupon = await this.couponRepository.findOne({
+      where: { id: params.couponId },
+    });
+    if (!coupon) {
+      this.logger.warn(
+        `Skipping payment pass email — coupon ${params.couponId} not found`,
+      );
+      return false;
+    }
+
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: params.funnelId },
+      relations: ['campaign'],
+    });
+    const campaignName =
+      funnel?.campaign?.campaignName?.trim() || 'your campaign';
+    const customerName = customer?.name?.trim() || 'Guest';
+    const defaults = getPurposeEmailDefaults(
+      AutomationPurpose.FUNNEL_PAYMENT,
+      campaignName,
+    );
+
+    const passUrl =
+      params.funnelPaymentId != null
+        ? `${getFrontendBaseUrl()}/pass/${params.funnelPaymentId}`
+        : `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
+
+    const subject = defaults.subject ?? 'Your payment is confirmed';
+    const html = await render(
+      React.createElement(PaymentConfirmationEmail, {
+        customerName,
+        customerEmail: email,
+        subject,
+        headline: defaults.headline,
+        message: defaults.message,
+        ctaLabel: 'View QR code',
+        ctaUrl: passUrl,
+      }),
+    );
+
+    const text = [
+      `Hi ${customerName},`,
+      '',
+      defaults.message ??
+        'Thank you for trusting us. Your payment is confirmed.',
+      '',
+      'Tap the link below to view your QR code.',
+      '',
+      `View QR code: ${passUrl}`,
+      '',
+      'Best regards,',
+      'Only Deals Team',
+    ].join('\n');
+
+    try {
+      await this.mailDeliveryService.sendHtmlEmail({
+        to: email,
+        subject,
+        html,
+        text,
+        tags: ['payment', 'qr-pass'],
+      });
+      this.logger.log(
+        `Payment pass email sent to ${email} (coupon ${params.couponId})`,
+      );
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send payment pass email to ${email}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
+  }
+
   private async deliverSignupPassEmail(
     params: ScheduleSignupQrEmailParams,
   ): Promise<boolean> {
@@ -268,7 +397,7 @@ export class SignupQrEmailService {
         subject,
         html,
         text,
-        tags: ['signup', 'qr-pass', 'unpaid'],
+        tags: ['signup', 'qr-pass'],
       });
       this.logger.log(
         `Signup pass email sent to ${email} (coupon ${params.couponId})`,

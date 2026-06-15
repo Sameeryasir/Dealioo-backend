@@ -94,23 +94,24 @@ export class FunnelEventService {
     if (
       dto.eventType === FunnelEventType.PAYMENT &&
       tracked.event.customerId &&
-      this.isPaidFunnelEvent(tracked.event)
-    ) {
-      await this.signupQrEmailService.cancelScheduledSignupQrEmail(
-        tracked.event.customerId,
-        dto.funnelId,
-      );
-    }
-
-    if (
-      dto.eventType === FunnelEventType.PAYMENT &&
-      tracked.event.customerId &&
       tracked.event.funnelPaymentId
     ) {
       await this.couponService.issueFromPayment(
         tracked.event.funnelPaymentId,
         dto.funnelId,
         tracked.event.customerId,
+      );
+    }
+
+    if (
+      dto.eventType === FunnelEventType.PAYMENT &&
+      tracked.event.customerId &&
+      this.isPaidFunnelEvent(tracked.event)
+    ) {
+      await this.signupQrEmailService.sendSignupPassEmailOnPayment(
+        tracked.event.customerId,
+        dto.funnelId,
+        tracked.event.funnelPaymentId ?? undefined,
       );
     }
 

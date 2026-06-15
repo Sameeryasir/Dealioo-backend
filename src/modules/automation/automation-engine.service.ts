@@ -22,6 +22,7 @@ import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationQueueService } from './automation-queue.service';
 import { MAX_AUTOMATION_EXECUTION_STEPS } from './automation-queue.constants';
+import { resolveWaitDelayMinutes } from './automation-wait.util';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
 
@@ -289,8 +290,8 @@ export class AutomationEngineService {
       }
 
       case AutomationNodeType.WAIT: {
-        const delayMinutes = Number(config.delayMinutes ?? 0);
-        if (!Number.isFinite(delayMinutes) || delayMinutes <= 0) {
+        const delayMinutes = resolveWaitDelayMinutes(config);
+        if (delayMinutes <= 0) {
           await this.logService.createLog({
             executionId: execution.id,
             nodeId: node.id,
@@ -440,7 +441,11 @@ export class AutomationEngineService {
         });
         return 'advance';
 
-      case AutomationNodeType.TAG:
+      case AutomationNodeType.TAG: {
+        if (String(config.workflowKind ?? '') === 'actions') {
+          return this.runBundledActionsNode(execution, node, config);
+        }
+
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
@@ -448,6 +453,7 @@ export class AutomationEngineService {
           message: `Tag applied (${String(config.tag ?? 'default')})`,
         });
         return 'advance';
+      }
 
       default:
         await this.logService.createLog({
@@ -472,6 +478,7 @@ export class AutomationEngineService {
 
     const normalized = conditionType.toLowerCase();
     if (
+      normalized.includes('not prepaid') ||
       normalized.includes('not completed payment') ||
       normalized.includes('not paid') ||
       normalized === 'payment_not_paid'
@@ -509,6 +516,84 @@ export class AutomationEngineService {
     }
 
     return false;
+  }
+
+  private async runBundledActionsNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    config: Record<string, unknown>,
+  ): Promise<NodeRunResult> {
+    const actions = Array.isArray(config.actions) ? config.actions : [];
+    const purpose = execution.automation.purpose;
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
+    const to = execution.customer?.email?.trim() ?? '';
+    const customerName = execution.customer?.name ?? '';
+
+    if (!to) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Actions skipped (missing customer email)',
+      });
+      return 'advance';
+    }
+
+    let sentCount = 0;
+    let lastError: string | undefined;
+
+    for (const rawAction of actions) {
+      if (!rawAction || typeof rawAction !== 'object') {
+        continue;
+      }
+      const action = rawAction as Record<string, unknown>;
+      if (String(action.type) !== 'send_text') {
+        continue;
+      }
+
+      const message = String(action.message ?? '').trim();
+      if (!message) {
+        continue;
+      }
+
+      const sendResult = await this.automationEmailService.sendToCustomer(
+        purpose,
+        {
+          customerId: execution.customerId,
+          email: to,
+          name: customerName,
+        },
+        { message },
+        campaignName,
+      );
+
+      if (sendResult.sent) {
+        sentCount += 1;
+        await this.executionService.incrementEmailsSent(execution.id);
+      } else if (sendResult.error) {
+        lastError = sendResult.error;
+      }
+    }
+
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: node.id,
+      customerId: execution.customerId,
+      message:
+        sentCount > 0
+          ? `Actions sent ${sentCount} email(s) to ${to}`
+          : 'Actions completed — no emails sent',
+      error: lastError,
+    });
+
+    if (lastError && sentCount === 0) {
+      return 'failed';
+    }
+
+    return 'advance';
   }
 
   private async customerHasPaidOnFunnel(
@@ -575,7 +660,7 @@ export class AutomationEngineService {
       enriched.ctaUrl = passUrl;
     }
     if (!String(enriched.ctaLabel ?? '').trim()) {
-      enriched.ctaLabel = 'View your pass';
+      enriched.ctaLabel = 'View QR code';
     }
     return enriched;
   }

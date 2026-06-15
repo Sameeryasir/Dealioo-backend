@@ -231,6 +231,22 @@ export class AutomationExecutionService {
     });
   }
 
+  async findActiveExecutionsForCustomer(
+    customerId: number,
+  ): Promise<AutomationExecution[]> {
+    return this.executionRepository.find({
+      where: {
+        customerId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+        ]),
+      },
+      relations: ['automation'],
+    });
+  }
+
   async getNextNodeId(
     automationId: number,
     sourceNodeId: number,

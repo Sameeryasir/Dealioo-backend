@@ -66,7 +66,7 @@ export function getPurposeEmailDefaults(
     case AutomationPurpose.FUNNEL_PAYMENT:
       return {
         subject: 'Thank you for trusting us — your payment is confirmed',
-        message: `Thank you for trusting us. Your payment is confirmed for ${campaign}. Tap the button below to open your pass QR code and show it at the restaurant.`,
+        message: `Thank you for trusting us. Your payment is confirmed for ${campaign}. Tap the button below to view your QR code and show it at the restaurant.`,
         headline: 'Your payment is confirmed',
       };
     case AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER:

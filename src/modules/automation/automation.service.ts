@@ -959,26 +959,6 @@ export class AutomationService {
       return;
     }
 
-    const trigger = this.mapFunnelEventToTrigger(event.eventType);
-    if (!trigger) {
-      return;
-    }
-
-    const purpose = this.mapFunnelEventToAutoPurpose(event.eventType);
-    if (!purpose) {
-      return;
-    }
-
-    if (
-      purpose === AutomationPurpose.FUNNEL_SIGNUP &&
-      isBuiltinSignupPassEmailEnabled()
-    ) {
-      this.logger.log(
-        `Skipping FUNNEL_SIGNUP automation for customer ${event.customerId} — built-in signup pass email is enabled`,
-      );
-      return;
-    }
-
     const funnel = await this.funnelRepository.findOne({
       where: { id: event.funnelId },
       relations: ['campaign'],
@@ -987,66 +967,155 @@ export class AutomationService {
       return;
     }
 
-    const automations = await this.automationRepository.find({
-      where: {
-        trigger,
-        purpose,
-        isActive: true,
-      } as FindOptionsWhere<Automation>,
-    });
+    if (
+      event.eventType === FunnelEventType.PAYMENT &&
+      this.isPaidFunnelEvent(event)
+    ) {
+      await this.cancelPendingExecutionsForCustomer(
+        event.customerId,
+        event.funnelId,
+      );
+    }
 
+    const automations = await this.findAutomationsForFunnelEvent(event);
     for (const automation of automations) {
-      if (!this.matchesAutomationScope(automation, event, funnel)) {
-        continue;
-      }
-
-      const hasActive = await this.executionService.hasActiveExecution(
-        automation.id,
-        event.customerId,
-      );
-      if (hasActive) {
-        continue;
-      }
-
-      const alreadyCompleted =
-        await this.executionService.hasCompletedExecutionForCustomer(
-          automation.id,
-          event.customerId,
+      if (
+        automation.purpose === AutomationPurpose.FUNNEL_SIGNUP &&
+        isBuiltinSignupPassEmailEnabled()
+      ) {
+        this.logger.log(
+          `Skipping FUNNEL_SIGNUP automation for customer ${event.customerId} — built-in signup pass email is enabled`,
         );
-      if (alreadyCompleted) {
         continue;
       }
 
-      const startNodeId = await this.executionService.resolveStartNodeId(
-        automation.id,
-      );
-      if (!startNodeId) {
+      await this.tryStartAutomationForEvent(automation, event, funnel);
+    }
+  }
+
+  async cancelPendingExecutionsForCustomer(
+    customerId: number,
+    funnelId: number,
+  ): Promise<void> {
+    const activeExecutions =
+      await this.executionService.findActiveExecutionsForCustomer(customerId);
+
+    for (const execution of activeExecutions) {
+      const automation = execution.automation;
+      if (!automation) {
+        continue;
+      }
+      if (automation.funnelId && automation.funnelId !== funnelId) {
         continue;
       }
 
-      const triggerMatches = await this.startNodeMatchesEvent(
-        automation,
-        startNodeId,
-        event.eventType,
-      );
-      if (!triggerMatches) {
-        continue;
-      }
-
-      const execution = await this.executionService.createExecution(
-        {
-          automationId: automation.id,
-          currentNodeId: startNodeId,
-          purpose: automation.purpose,
-        },
-        event.customerId,
-      );
-
-      await this.queueService.addProcessExecution({
+      await this.queueService.removeResumeExecutionJob(execution.id);
+      await this.logService.createLog({
         executionId: execution.id,
-        nodeId: startNodeId,
+        nodeId: execution.currentNodeId,
+        customerId,
+        message: 'Workflow stopped — customer completed payment',
+      });
+      await this.executionService.markCompleted(execution.id);
+    }
+  }
+
+  private async findAutomationsForFunnelEvent(
+    event: FunnelEvent,
+  ): Promise<Automation[]> {
+    if (event.eventType === FunnelEventType.SIGNUP) {
+      return this.automationRepository.find({
+        where: {
+          isActive: true,
+          trigger: In([
+            AutomationTrigger.SIGNUP,
+            AutomationTrigger.ABANDONED_CHECKOUT,
+          ]),
+          purpose: In([
+            AutomationPurpose.FUNNEL_SIGNUP,
+            AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+            AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
+          ]),
+        },
       });
     }
+
+    if (event.eventType === FunnelEventType.PAYMENT) {
+      return this.automationRepository.find({
+        where: {
+          isActive: true,
+          trigger: AutomationTrigger.PAYMENT,
+          purpose: AutomationPurpose.FUNNEL_PAYMENT,
+        },
+      });
+    }
+
+    return [];
+  }
+
+  private async tryStartAutomationForEvent(
+    automation: Automation,
+    event: FunnelEvent,
+    funnel: Funnel,
+  ): Promise<void> {
+    if (!this.matchesAutomationScope(automation, event, funnel)) {
+      return;
+    }
+
+    if (!event.customerId) {
+      return;
+    }
+
+    const hasActive = await this.executionService.hasActiveExecution(
+      automation.id,
+      event.customerId,
+    );
+    if (hasActive) {
+      return;
+    }
+
+    const alreadyCompleted =
+      await this.executionService.hasCompletedExecutionForCustomer(
+        automation.id,
+        event.customerId,
+      );
+    if (alreadyCompleted) {
+      return;
+    }
+
+    const startNodeId = await this.executionService.resolveStartNodeId(
+      automation.id,
+    );
+    if (!startNodeId) {
+      return;
+    }
+
+    const triggerMatches = await this.startNodeMatchesEvent(
+      automation,
+      startNodeId,
+      event.eventType,
+    );
+    if (!triggerMatches) {
+      return;
+    }
+
+    const execution = await this.executionService.createExecution(
+      {
+        automationId: automation.id,
+        currentNodeId: startNodeId,
+        purpose: automation.purpose,
+      },
+      event.customerId,
+    );
+
+    await this.queueService.addProcessExecution({
+      executionId: execution.id,
+      nodeId: startNodeId,
+    });
+  }
+
+  private isPaidFunnelEvent(event: FunnelEvent): boolean {
+    return event.paymentStatus === FunnelPaymentStatus.PAID;
   }
 
   private mapFunnelEventToAutoPurpose(
@@ -1071,6 +1140,13 @@ export class AutomationService {
       return true;
     }
 
+    if (
+      eventType === FunnelEventType.SIGNUP &&
+      automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT
+    ) {
+      return true;
+    }
+
     const node = await this.nodeRepository.findOne({
       where: { id: startNodeId },
     });
@@ -1090,7 +1166,9 @@ export class AutomationService {
     }
 
     if (eventType === FunnelEventType.SIGNUP) {
-      return configured.includes('signup');
+      return (
+        configured.includes('signup') || configured.includes('abandoned')
+      );
     }
     if (eventType === FunnelEventType.PAYMENT) {
       return configured.includes('payment');

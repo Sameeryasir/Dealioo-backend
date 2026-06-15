@@ -55,6 +55,7 @@ export function isAllowedCorsOrigin(origin: string | undefined): boolean {
     return (
       protocol === 'https:' &&
       (hostname.endsWith('.ngrok-free.app') ||
+        hostname.endsWith('.ngrok-free.dev') ||
         hostname.endsWith('.ngrok.io') ||
         hostname.endsWith('.ngrok.app'))
     );
