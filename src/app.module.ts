@@ -16,6 +16,7 @@ import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
 import { StripeModule } from './modules/stripe/stripe.module';
 import { FacebookModule } from './modules/facebook/facebook.module';
+import { FacebookCampaignModule } from './modules/facebook-campaign/facebook-campaign.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
@@ -64,6 +65,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     CustomerModule,
     StripeModule,
     FacebookModule,
+    FacebookCampaignModule,
     PaymentModule,
     FunnelEventModule,
     AutomationModule,

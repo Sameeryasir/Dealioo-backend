@@ -83,6 +83,20 @@ export class Restaurant {
   @Column({ name: 'meta_ad_account_id', type: 'varchar', length: 64, nullable: true })
   metaAdAccountId: string | null;
 
+  @Column({
+    name: 'meta_connection_status',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  metaConnectionStatus: string | null;
+
+  @Column({ name: 'meta_token_expires_at', type: 'timestamptz', nullable: true })
+  metaTokenExpiresAt: Date | null;
+
+  @Column({ name: 'meta_oauth_scopes', type: 'text', nullable: true })
+  metaOauthScopes: string | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

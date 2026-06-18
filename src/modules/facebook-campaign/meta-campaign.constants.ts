@@ -1,0 +1,93 @@
+export enum MetaCampaignObjective {
+  OUTCOME_LEADS = 'OUTCOME_LEADS',
+  OUTCOME_TRAFFIC = 'OUTCOME_TRAFFIC',
+  OUTCOME_SALES = 'OUTCOME_SALES',
+  OUTCOME_ENGAGEMENT = 'OUTCOME_ENGAGEMENT',
+  OUTCOME_AWARENESS = 'OUTCOME_AWARENESS',
+}
+
+export enum MetaBuyingType {
+  AUCTION = 'AUCTION',
+}
+
+export enum MetaCampaignStatus {
+  PAUSED = 'PAUSED',
+  ACTIVE = 'ACTIVE',
+}
+
+export enum MetaAdSetBudgetType {
+  DAILY = 'daily',
+  LIFETIME = 'lifetime',
+}
+
+export enum MetaBidStrategy {
+  LOWEST_COST_WITHOUT_CAP = 'LOWEST_COST_WITHOUT_CAP',
+  LOWEST_COST_WITH_BID_CAP = 'LOWEST_COST_WITH_BID_CAP',
+  COST_CAP = 'COST_CAP',
+}
+
+export enum MetaBillingEvent {
+  IMPRESSIONS = 'IMPRESSIONS',
+  LINK_CLICKS = 'LINK_CLICKS',
+}
+
+export enum MetaOptimizationGoal {
+  LINK_CLICKS = 'LINK_CLICKS',
+  LANDING_PAGE_VIEWS = 'LANDING_PAGE_VIEWS',
+  LEAD_GENERATION = 'LEAD_GENERATION',
+  OFFSITE_CONVERSIONS = 'OFFSITE_CONVERSIONS',
+  POST_ENGAGEMENT = 'POST_ENGAGEMENT',
+  REACH = 'REACH',
+  IMPRESSIONS = 'IMPRESSIONS',
+}
+
+export enum MetaDestinationType {
+  WEBSITE = 'WEBSITE',
+  MESSENGER = 'MESSENGER',
+  WHATSAPP = 'WHATSAPP',
+  INSTAGRAM_DIRECT = 'INSTAGRAM_DIRECT',
+}
+
+export enum MetaCallToAction {
+  LEARN_MORE = 'LEARN_MORE',
+  SIGN_UP = 'SIGN_UP',
+  BOOK_NOW = 'BOOK_NOW',
+  SHOP_NOW = 'SHOP_NOW',
+  GET_OFFER = 'GET_OFFER',
+  ORDER_NOW = 'ORDER_NOW',
+  CALL_NOW = 'CALL_NOW',
+  SEND_MESSAGE = 'SEND_MESSAGE',
+  CONTACT_US = 'CONTACT_US',
+}
+
+export enum MetaCreativeFormat {
+  SINGLE_IMAGE = 'SINGLE_IMAGE',
+  SINGLE_VIDEO = 'SINGLE_VIDEO',
+  CAROUSEL = 'CAROUSEL',
+}
+
+export enum MetaGender {
+  ALL = 'all',
+  MALE = 'male',
+  FEMALE = 'female',
+}
+
+export enum MetaDistanceUnit {
+  MILE = 'mile',
+  KILOMETER = 'kilometer',
+}
+
+export enum MetaSpecialAdCategory {
+  HOUSING = 'HOUSING',
+  EMPLOYMENT = 'EMPLOYMENT',
+  CREDIT = 'CREDIT',
+  ISSUES_ELECTIONS_POLITICS = 'ISSUES_ELECTIONS_POLITICS',
+  FINANCIAL_PRODUCTS_SERVICES = 'FINANCIAL_PRODUCTS_SERVICES',
+}
+
+export type MetaCreationStep =
+  | 'campaign'
+  | 'adset'
+  | 'media'
+  | 'creative'
+  | 'ad';

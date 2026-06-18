@@ -1,4 +1,4 @@
-import { mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 
@@ -46,6 +46,39 @@ export function toAbsoluteAssetUrlIfRelative(
   if (t.startsWith('http://') || t.startsWith('https://')) return t;
   if (t.startsWith('/uploads/')) return `${getPublicAssetsBaseUrl()}${t}`;
   return t;
+}
+
+/** Maps a public /uploads/{subdir}/… URL to a local disk path when the file exists. */
+export function resolveLocalUploadFilePath(
+  url: string,
+  subdir: string,
+): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  let pathname: string;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      pathname = new URL(trimmed).pathname;
+    } else if (trimmed.startsWith('/')) {
+      pathname = trimmed.split(/[?#]/)[0];
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  const prefix = `/uploads/${subdir}/`;
+  if (!pathname.startsWith(prefix)) return null;
+
+  const filename = pathname.slice(prefix.length);
+  if (!filename || filename.includes('..') || filename.includes('/')) {
+    return null;
+  }
+
+  const localPath = join(process.cwd(), 'uploads', subdir, filename);
+  return existsSync(localPath) ? localPath : null;
 }
 
 export type DiskFileUploadMulterOptions = {

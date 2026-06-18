@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 
-/** OAuth state expires after 1 hour — limits replay window. */
-const OAUTH_STATE_TTL_MS = 60 * 60 * 1000;
+/** OAuth state expires after 10 minutes — limits replay window. */
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Builds a signed OAuth state that embeds the restaurant ID.

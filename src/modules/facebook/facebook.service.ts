@@ -9,16 +9,25 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
+import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
+import { FacebookPageDto } from './dto/facebook-page.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
+import { FacebookConnectionStatus } from './facebook-connection-status';
+import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
+import { FacebookMetaTokenService, META_REQUIRED_SCOPES } from './facebook-meta-token.service';
+import {
+  createFacebookOAuthState,
+  parseFacebookOAuthState,
+} from './facebook-oauth-state';
 
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
 const FACEBOOK_OAUTH_SCOPES =
-  'pages_show_list,pages_read_engagement,ads_read';
+  'ads_management,ads_read,business_management,pages_show_list,pages_read_engagement';
 
 type FacebookTokenResponse = {
   access_token?: string;
@@ -29,6 +38,13 @@ type FacebookTokenResponse = {
 type FacebookMeResponse = {
   id?: string;
   name?: string;
+  error?: { message?: string };
+};
+
+type FacebookAdAccountMetaResponse = {
+  id?: string;
+  name?: string;
+  currency?: string;
   error?: { message?: string };
 };
 
@@ -75,6 +91,8 @@ export class FacebookService {
   constructor(
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    private readonly auditService: FacebookIntegrationAuditService,
+    private readonly metaTokenService: FacebookMetaTokenService,
   ) {}
 
   async connect(user: User, restaurantId: number): Promise<{ url: string }> {
@@ -93,6 +111,14 @@ export class FacebookService {
         'Restaurant not found or you do not own this restaurant.',
       );
     }
+
+    await this.restaurantRepository.update(restaurantId, {
+      metaConnectionStatus: FacebookConnectionStatus.INITIATED,
+    });
+
+    await this.auditService.log(restaurantId, 'oauth_started', {
+      status: FacebookConnectionStatus.INITIATED,
+    });
 
     return this.createOAuthConnectUrl(restaurantId);
   }
@@ -122,12 +148,20 @@ export class FacebookService {
       );
     }
 
+    const stateSecret = this.getStateSecret();
+    if (!stateSecret) {
+      throw new InternalServerErrorException(
+        'Set FACEBOOK_APP_SECRET for signed OAuth state.',
+      );
+    }
+
     const params = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
-      state: String(restaurantId),
+      state: createFacebookOAuthState(restaurantId, stateSecret),
       scope: FACEBOOK_OAUTH_SCOPES,
       response_type: 'code',
+      auth_type: 'rerequest',
     });
 
     return {
@@ -141,96 +175,144 @@ export class FacebookService {
     oauthError: string | undefined,
     oauthErrorDescription: string | undefined,
   ): Promise<FacebookOAuthCallbackResultDto> {
-    if (oauthError) {
-      throw new BadRequestException(
-        oauthErrorDescription?.trim() ||
-          oauthError ||
-          'Facebook connection was cancelled.',
+    let restaurantId: number | null = null;
+
+    try {
+      if (oauthError) {
+        throw new BadRequestException(
+          oauthErrorDescription?.trim() ||
+            oauthError ||
+            'Facebook connection was cancelled.',
+        );
+      }
+
+      if (!code?.trim()) {
+        throw new BadRequestException('Missing Facebook OAuth code.');
+      }
+
+      if (!state?.trim()) {
+        throw new BadRequestException('Missing Facebook OAuth state.');
+      }
+
+      const stateSecret = this.getStateSecret();
+      if (!stateSecret) {
+        throw new InternalServerErrorException(
+          'Set FACEBOOK_APP_SECRET for signed OAuth state.',
+        );
+      }
+
+      restaurantId = parseFacebookOAuthState(state, stateSecret);
+
+      await this.auditService.log(restaurantId, 'oauth_callback_received', {
+        status: FacebookConnectionStatus.AUTHENTICATED,
+      });
+
+      const restaurant = await this.restaurantRepository.findOne({
+        where: { id: restaurantId },
+      });
+
+      if (!restaurant) {
+        throw new NotFoundException('Restaurant not found.');
+      }
+
+      const appId = this.getAppId();
+      const appSecret = this.getAppSecret();
+      const redirectUri = this.getRedirectUri();
+
+      if (!appId || !appSecret || !redirectUri) {
+        throw new InternalServerErrorException(
+          'Set FACEBOOK_APP_ID, FACEBOOK_APP_SECRET, and FACEBOOK_REDIRECT_URI.',
+        );
+      }
+
+      const tokenJson = await this.exchangeCodeForAccessToken(
+        code.trim(),
+        appId,
+        appSecret,
+        redirectUri,
       );
-    }
 
-    if (!code?.trim()) {
-      throw new BadRequestException('Missing Facebook OAuth code.');
-    }
+      let accessToken = tokenJson.access_token;
+      if (!accessToken) {
+        throw new BadRequestException(
+          tokenJson.error?.message ??
+            'Facebook did not return an access token. Try connecting again.',
+        );
+      }
 
-    if (!state?.trim()) {
-      throw new BadRequestException('Missing Facebook OAuth state.');
-    }
-
-    const restaurantId = Number.parseInt(state, 10);
-
-    if (!Number.isFinite(restaurantId) || restaurantId < 1) {
-      throw new BadRequestException('Invalid Facebook OAuth state.');
-    }
-
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
-    });
-
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found.');
-    }
-
-    const appId = this.getAppId();
-    const appSecret = this.getAppSecret();
-    const redirectUri = this.getRedirectUri();
-
-    if (!appId || !appSecret || !redirectUri) {
-      throw new InternalServerErrorException(
-        'Set FACEBOOK_APP_ID, FACEBOOK_APP_SECRET, and FACEBOOK_REDIRECT_URI.',
+      const longLived = await this.exchangeForLongLivedToken(
+        accessToken,
+        appId,
+        appSecret,
       );
-    }
+      accessToken = longLived.accessToken;
 
-    const tokenJson = await this.exchangeCodeForAccessToken(
-      code.trim(),
-      appId,
-      appSecret,
-      redirectUri,
-    );
+      const me = await this.fetchFacebookUser(accessToken);
+      if (!me.id?.trim()) {
+        throw new BadRequestException(
+          'Facebook did not return a user id. Try connecting again.',
+        );
+      }
 
-    let accessToken = tokenJson.access_token;
-    if (!accessToken) {
-      throw new BadRequestException(
-        tokenJson.error?.message ??
-          'Facebook did not return an access token. Try connecting again.',
+      const { grantedScopes } =
+        await this.metaTokenService.validateAccessTokenForStorage(
+          accessToken,
+          me.id.trim(),
+        );
+
+      const tokenExpiresAt =
+        longLived.expiresIn != null
+          ? new Date(Date.now() + longLived.expiresIn * 1000)
+          : null;
+
+      await this.restaurantRepository.update(restaurantId, {
+        metaUserId: me.id.trim(),
+        metaAccessToken: encryptSecret(accessToken),
+        metaConnectedAt: new Date(),
+        metaAdAccountId: null,
+        metaConnectionStatus: FacebookConnectionStatus.TOKEN_EXCHANGED,
+        metaTokenExpiresAt: tokenExpiresAt,
+        metaOauthScopes: grantedScopes.join(','),
+      });
+
+      await this.auditService.log(restaurantId, 'token_exchanged', {
+        status: FacebookConnectionStatus.TOKEN_EXCHANGED,
+        metadata: { metaUserId: me.id, grantedScopes },
+      });
+
+      this.logger.log(
+        `Facebook connected for restaurant ${restaurantId} (user ${me.id})`,
       );
+
+      return { connected: true, restaurantId };
+    } catch (err) {
+      if (restaurantId != null) {
+        await this.restaurantRepository.update(restaurantId, {
+          metaUserId: null,
+          metaAccessToken: null,
+          metaConnectedAt: null,
+          metaAdAccountId: null,
+          metaConnectionStatus: FacebookConnectionStatus.FAILED,
+          metaTokenExpiresAt: null,
+          metaOauthScopes: null,
+        });
+        await this.auditService.log(restaurantId, 'oauth_failed', {
+          status: FacebookConnectionStatus.FAILED,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+      }
+      throw err;
     }
-
-    accessToken = await this.exchangeForLongLivedToken(
-      accessToken,
-      appId,
-      appSecret,
-    );
-
-    const me = await this.fetchFacebookUser(accessToken);
-
-    await this.restaurantRepository.update(restaurantId, {
-      metaUserId: me.id,
-      metaAccessToken: accessToken,
-      metaConnectedAt: new Date(),
-      metaAdAccountId: null,
-    });
-
-    this.logger.log(
-      `Facebook connected for restaurant ${restaurantId} (user ${me.id})`,
-    );
-
-    return { connected: true, restaurantId };
   }
 
   async getAdCampaignStats(
     restaurant: Restaurant,
   ): Promise<FacebookAdCampaignStatsDto> {
-    const accessToken = restaurant.metaAccessToken?.trim();
-    if (!accessToken || !restaurant.metaUserId?.trim()) {
-      throw new BadRequestException(
-        'Facebook is not connected for this restaurant. Connect Facebook in settings first.',
-      );
-    }
+    const { accessToken } =
+      await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
 
     const adAccount = this.requireRestaurantAdAccount(restaurant);
-    const accounts = await this.listAccessibleAdAccounts(accessToken);
-    const accountMeta = accounts.find((a) => a.id === adAccount.id);
+    const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
 
     const campaignsResponse =
       await this.graphGetWithToken<FacebookCampaignsResponse>(
@@ -242,9 +324,12 @@ export class FacebookService {
         },
       );
 
-    const rows = (campaignsResponse.data ?? []).filter(
-      (row) => row.id && row.name,
-    );
+    const rows = (campaignsResponse.data ?? []).filter((row) => {
+      if (!row.id?.trim() || !row.name?.trim()) return false;
+      const effective = row.effective_status?.toUpperCase() ?? '';
+      const status = row.status?.toUpperCase() ?? '';
+      return effective !== 'DELETED' && status !== 'DELETED';
+    });
 
     const campaigns = await Promise.all(
       rows.map(async (row) => {
@@ -265,23 +350,38 @@ export class FacebookService {
 
     return {
       adAccountId: adAccount.id,
-      adAccountName: accountMeta?.name ?? null,
-      currency: accountMeta?.currency ?? null,
+      adAccountName: accountMeta.name,
+      currency: accountMeta.currency,
       datePreset: META_AD_STATS_DATE_PRESET,
       campaigns,
     };
   }
 
   getConnectionStatus(restaurant: Restaurant): FacebookConnectionStatusDto {
+    const grantedScopes = (restaurant.metaOauthScopes ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const missingRequiredScopes = META_REQUIRED_SCOPES.filter(
+      (scope) => !grantedScopes.includes(scope),
+    );
+
     const connected = Boolean(
-      restaurant.metaUserId?.trim() && restaurant.metaAccessToken?.trim(),
+      restaurant.metaUserId?.trim() &&
+        restaurant.metaAccessToken?.trim() &&
+        restaurant.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
+        missingRequiredScopes.length === 0,
     );
 
     return {
       connected,
+      status: restaurant.metaConnectionStatus ?? null,
       metaUserId: restaurant.metaUserId,
       metaConnectedAt: restaurant.metaConnectedAt,
       metaAdAccountId: restaurant.metaAdAccountId,
+      metaTokenExpiresAt: restaurant.metaTokenExpiresAt,
+      metaOauthScopes: grantedScopes,
+      missingRequiredScopes: [...missingRequiredScopes],
     };
   }
 
@@ -304,14 +404,51 @@ export class FacebookService {
       );
     }
 
-    const accessToken = restaurant.metaAccessToken?.trim();
-    if (!accessToken) {
-      throw new BadRequestException(
-        'Facebook is not connected for this restaurant. Connect Facebook first.',
+    const { accessToken } =
+      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
+
+    const accounts = await this.listAccessibleAdAccounts(accessToken);
+
+    await this.auditService.log(restaurantId, 'ad_accounts_fetched', {
+      status: FacebookConnectionStatus.TOKEN_EXCHANGED,
+      metadata: { count: accounts.length },
+    });
+
+    return accounts;
+  }
+
+  async listPagesForRestaurant(
+    user: User,
+    restaurantId: number,
+  ): Promise<FacebookPageDto[]> {
+    requireAdminRole(
+      user,
+      'You do not have permission to list Facebook pages.',
+    );
+
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId, owner: { id: user.id } },
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException(
+        'Restaurant not found or you do not own this restaurant.',
       );
     }
 
-    return this.listAccessibleAdAccounts(accessToken);
+    const { accessToken } =
+      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
+
+    const response = await this.graphGetWithToken<{
+      data?: Array<{ id?: string; name?: string }>;
+    }>('/me/accounts', accessToken, { fields: 'id,name', limit: '50' });
+
+    return (response.data ?? [])
+      .filter((row) => row.id?.trim())
+      .map((row) => ({
+        id: row.id!.trim(),
+        name: row.name?.trim() ?? null,
+      }));
   }
 
   async setRestaurantAdAccount(
@@ -334,12 +471,8 @@ export class FacebookService {
       );
     }
 
-    const accessToken = restaurant.metaAccessToken?.trim();
-    if (!accessToken) {
-      throw new BadRequestException(
-        'Facebook is not connected for this restaurant. Connect Facebook first.',
-      );
-    }
+    const { accessToken } =
+      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
 
     const normalizedId = this.normalizeAdAccountId(adAccountId);
     const accounts = await this.listAccessibleAdAccounts(accessToken);
@@ -353,13 +486,74 @@ export class FacebookService {
 
     await this.restaurantRepository.update(restaurantId, {
       metaAdAccountId: normalizedId,
+      metaConnectionStatus: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
+    });
+
+    await this.auditService.log(restaurantId, 'ad_account_selected', {
+      status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
+      metadata: { adAccountId: normalizedId },
     });
 
     this.logger.log(
       `Restaurant ${restaurantId} linked to Meta ad account ${normalizedId}`,
     );
 
+    this.triggerBackgroundSync(restaurantId);
+
     return { metaAdAccountId: normalizedId };
+  }
+
+  async disconnectFacebookForRestaurant(
+    user: User,
+    restaurantId: number,
+  ): Promise<{ disconnected: true }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to disconnect Facebook.',
+    );
+
+    const restaurant = await this.restaurantRepository.findOne({
+      where: { id: restaurantId, owner: { id: user.id } },
+    });
+
+    if (!restaurant) {
+      throw new NotFoundException(
+        'Restaurant not found or you do not own this restaurant.',
+      );
+    }
+
+    const hadConnection = Boolean(
+      restaurant.metaUserId?.trim() || restaurant.metaAccessToken?.trim(),
+    );
+
+    if (!hadConnection) {
+      throw new BadRequestException(
+        'Facebook is not connected for this restaurant.',
+      );
+    }
+
+    const previousAdAccountId = restaurant.metaAdAccountId?.trim() ?? null;
+    const previousMetaUserId = restaurant.metaUserId?.trim() ?? null;
+
+    await this.restaurantRepository.update(restaurantId, {
+      metaUserId: null,
+      metaAccessToken: null,
+      metaConnectedAt: null,
+      metaAdAccountId: null,
+      metaConnectionStatus: null,
+      metaTokenExpiresAt: null,
+      metaOauthScopes: null,
+    });
+
+    await this.auditService.log(restaurantId, 'meta_disconnected', {
+      metadata: { previousAdAccountId, previousMetaUserId },
+    });
+
+    this.logger.log(
+      `Facebook disconnected for restaurant ${restaurantId} (removed ad account ${previousAdAccountId ?? 'none'})`,
+    );
+
+    return { disconnected: true };
   }
 
   verifyWebhook(
@@ -385,6 +579,72 @@ export class FacebookService {
     this.logger.log(
       `Facebook webhook received: ${JSON.stringify(payload).slice(0, 4000)}`,
     );
+  }
+
+  private getStateSecret(): string | undefined {
+    return this.getAppSecret();
+  }
+
+  private getRestaurantAccessToken(restaurant: Restaurant): string | null {
+    const stored = restaurant.metaAccessToken?.trim();
+    if (!stored) {
+      return null;
+    }
+
+    try {
+      return decryptSecret(stored);
+    } catch (err) {
+      this.logger.error(
+        `Could not decrypt Meta token for restaurant ${restaurant.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  private triggerBackgroundSync(restaurantId: number): void {
+    void this.runBackgroundSync(restaurantId);
+  }
+
+  private async runBackgroundSync(restaurantId: number): Promise<void> {
+    await this.restaurantRepository.update(restaurantId, {
+      metaConnectionStatus: FacebookConnectionStatus.SYNCING,
+    });
+
+    await this.auditService.log(restaurantId, 'sync_started', {
+      status: FacebookConnectionStatus.SYNCING,
+    });
+
+    try {
+      const restaurant = await this.restaurantRepository.findOne({
+        where: { id: restaurantId },
+      });
+
+      if (!restaurant) {
+        throw new NotFoundException('Restaurant not found.');
+      }
+
+      await this.getAdCampaignStats(restaurant);
+
+      await this.restaurantRepository.update(restaurantId, {
+        metaConnectionStatus: FacebookConnectionStatus.ACTIVE,
+      });
+
+      await this.auditService.log(restaurantId, 'sync_completed', {
+        status: FacebookConnectionStatus.ACTIVE,
+        metadata: { adAccountId: restaurant.metaAdAccountId },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      await this.restaurantRepository.update(restaurantId, {
+        metaConnectionStatus: FacebookConnectionStatus.FAILED,
+      });
+
+      await this.auditService.log(restaurantId, 'sync_failed', {
+        status: FacebookConnectionStatus.FAILED,
+        errorMessage: message,
+      });
+    }
   }
 
   private getAppId(): string | undefined {
@@ -428,7 +688,7 @@ export class FacebookService {
     shortLivedToken: string,
     appId: string,
     appSecret: string,
-  ): Promise<string> {
+  ): Promise<{ accessToken: string; expiresIn: number | null }> {
     const url = new URL(`${FACEBOOK_GRAPH}/oauth/access_token`);
     url.searchParams.set('grant_type', 'fb_exchange_token');
     url.searchParams.set('client_id', appId);
@@ -436,7 +696,10 @@ export class FacebookService {
     url.searchParams.set('fb_exchange_token', shortLivedToken);
 
     const longJson = await this.graphGet<FacebookTokenResponse>(url.toString());
-    return longJson.access_token ?? shortLivedToken;
+    return {
+      accessToken: longJson.access_token ?? shortLivedToken,
+      expiresIn: longJson.expires_in ?? null,
+    };
   }
 
   private async fetchCampaignInsights(
@@ -503,6 +766,29 @@ export class FacebookService {
       throw new BadRequestException('Ad account id is required.');
     }
     return trimmed.startsWith('act_') ? trimmed : `act_${trimmed}`;
+  }
+
+  private async fetchAdAccountMeta(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<{ name: string | null; currency: string | null }> {
+    try {
+      const response = await this.graphGetWithToken<FacebookAdAccountMetaResponse>(
+        `/${adAccountId}`,
+        accessToken,
+        { fields: 'name,currency' },
+      );
+
+      return {
+        name: response.name ?? null,
+        currency: response.currency ?? null,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `Ad account meta skipped for ${adAccountId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { name: null, currency: null };
+    }
   }
 
   private async listAccessibleAdAccounts(

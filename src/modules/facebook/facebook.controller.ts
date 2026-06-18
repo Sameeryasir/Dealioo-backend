@@ -18,6 +18,7 @@ import { RestaurantService } from '../restaurant/restaurant.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
+import { FacebookPageDto } from './dto/facebook-page.dto';
 import { SetFacebookAdAccountDto } from './dto/set-facebook-ad-account.dto';
 import { FacebookService } from './facebook.service';
 
@@ -105,6 +106,15 @@ export class FacebookController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('pages/:restaurantId')
+  async listPages(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  ): Promise<FacebookPageDto[]> {
+    return this.facebookService.listPagesForRestaurant(req.user, restaurantId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('ad-accounts/:restaurantId')
   async listAdAccounts(
     @Req() req,
@@ -127,6 +137,18 @@ export class FacebookController {
       req.user,
       restaurantId,
       body.adAccountId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('disconnect/:restaurantId')
+  async disconnect(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  ): Promise<{ disconnected: true }> {
+    return this.facebookService.disconnectFacebookForRestaurant(
+      req.user,
+      restaurantId,
     );
   }
 }
