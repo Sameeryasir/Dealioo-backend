@@ -213,7 +213,6 @@ export class FacebookCampaignService {
     let metaCreativeId: string | null = null;
 
     try {
-      // --- Step 1: Campaign ---
       this.logger.log(
         `Creating Meta campaign for restaurant ${restaurantId} (tracking ${tracking.id})`,
       );
@@ -232,7 +231,6 @@ export class FacebookCampaignService {
         metaCampaignId: campaign.id,
       });
 
-      // --- Step 2: Ad Set ---
       const adSet = await graphPostWithToken<{ id: string }>(
         `/${adAccountId}/adsets`,
         accessToken,
@@ -259,7 +257,6 @@ export class FacebookCampaignService {
         metaAdsetId: adSet.id,
       });
 
-      // --- Step 3: Media upload ---
       let imageHash: string | undefined;
       let videoId: string | undefined;
 
@@ -273,7 +270,6 @@ export class FacebookCampaignService {
         videoId = await uploadAdVideoId(adAccountId, accessToken, videoUrl);
       }
 
-      // --- Step 4: Creative ---
       const creative = await graphPostWithToken<{ id: string }>(
         `/${adAccountId}/adcreatives`,
         accessToken,
@@ -296,7 +292,6 @@ export class FacebookCampaignService {
         metaCreativeId: creative.id,
       });
 
-      // --- Step 5: Ad (success only after this step) ---
       const ad = await graphPostWithToken<{ id: string }>(
         `/${adAccountId}/ads`,
         accessToken,

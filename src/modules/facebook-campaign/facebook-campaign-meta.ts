@@ -1,6 +1,11 @@
 import { readFileSync } from 'fs';
 import { BadRequestException } from '@nestjs/common';
 import {
+  logMetaApiRequest,
+  logMetaApiResponse,
+  logMetaPublishStep,
+} from './meta-publish-trace';
+import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   resolveLocalUploadFilePath,
 } from '../../utils/disk-file-upload-multer';
@@ -23,7 +28,6 @@ type GraphErrorBody = {
   };
 };
 
-/** Structured Meta API failure for step-level error logging. */
 export class MetaApiStepError extends BadRequestException {
   constructor(
     public readonly step: MetaCreationStep,
@@ -329,7 +333,6 @@ export function adsManagerCampaignsUrl(adAccountId: string): string {
   return `https://www.facebook.com/adsmanager/manage/campaigns?act=${numeric}`;
 }
 
-/** Meta Marketing API expects form fields; nested objects are JSON-encoded strings. */
 function toMetaFormBody(body: Record<string, unknown>): URLSearchParams {
   const params = new URLSearchParams();
 
@@ -391,7 +394,6 @@ function isFolderUploadPath(pathname: string): boolean {
   return false;
 }
 
-/** Meta adimages requires a direct HTTPS file URL — not a folder or uploads root. */
 export function assertDirectMetaImageUrl(imageUrl: string): void {
   const trimmed = imageUrl.trim();
   if (!trimmed) {
@@ -466,7 +468,6 @@ function extractAdImageHashFromResponse(
   return hash;
 }
 
-/** Uploads image to Meta ad library; prefers local file bytes over URL fetch. */
 export async function uploadAdImageHash(
   adAccountId: string,
   accessToken: string,
@@ -501,7 +502,6 @@ export async function uploadAdImageHash(
   return extractAdImageHashFromResponse(response);
 }
 
-/** Uploads video to Meta from a public HTTPS URL; returns video_id for creatives. */
 export async function uploadAdVideoId(
   adAccountId: string,
   accessToken: string,
@@ -531,7 +531,6 @@ export async function uploadAdVideoId(
   return videoId;
 }
 
-/** Resolves Meta city targeting key for radius-based local targeting. */
 export async function resolveCityTargetingKey(
   accessToken: string,
   country: string,
@@ -564,6 +563,9 @@ async function graphPostMeta<T>(
   step: MetaCreationStep = 'campaign',
 ): Promise<T & GraphErrorBody> {
   const normalized = path.startsWith('/') ? path : `/${path}`;
+  logMetaPublishStep(step, 'start', { path: normalized });
+  logMetaApiRequest(step, 'POST', normalized, body);
+
   const url = new URL(`${FACEBOOK_GRAPH}${normalized}`);
   url.searchParams.set('access_token', accessToken);
 
@@ -579,6 +581,8 @@ async function graphPostMeta<T>(
   try {
     parsed = JSON.parse(raw) as T & GraphErrorBody;
   } catch {
+    logMetaApiResponse(step, res.status, raw);
+    logMetaPublishStep(step, 'error', { reason: 'invalid_json' });
     throw new MetaApiStepError(
       step,
       null,
@@ -588,12 +592,18 @@ async function graphPostMeta<T>(
     );
   }
 
+  logMetaApiResponse(step, res.status, parsed);
+
   if (!res.ok || parsed.error) {
     const rawMessage =
       parsed.error?.error_user_msg?.trim() ||
       parsed.error?.message?.trim() ||
       `Facebook API request failed (${res.status}).`;
     const message = mapMetaMarketingApiError(rawMessage, parsed.error?.code);
+    logMetaPublishStep(step, 'error', {
+      metaErrorCode: parsed.error?.code ?? null,
+      metaErrorMessage: rawMessage,
+    });
     if (parsed.error?.code === 190) {
       throw new MetaApiStepError(
         step,
@@ -612,10 +622,13 @@ async function graphPostMeta<T>(
     );
   }
 
+  logMetaPublishStep(step, 'success', {
+    id: (parsed as { id?: string }).id ?? null,
+  });
+
   return parsed;
 }
 
-/** Marks a Meta campaign (or ad set / ad) as deleted in Ads Manager. */
 export async function deleteMetaObject(
   objectId: string,
   accessToken: string,

@@ -88,7 +88,6 @@ export class SaveCampaignStepDto {
   @IsEnum(MetaCampaignStatus)
   status: MetaCampaignStatus;
 
-  /** @deprecated use budgetStrategy — kept for backward compat in stored drafts */
   @IsOptional()
   @IsBoolean()
   campaignBudgetOptimization?: boolean;

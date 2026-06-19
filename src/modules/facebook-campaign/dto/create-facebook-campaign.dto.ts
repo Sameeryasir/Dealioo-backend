@@ -56,7 +56,6 @@ export class CreateFacebookCampaignDto {
   @IsString()
   adName?: string;
 
-  /** Daily budget in major currency units (e.g. 10 = $10). Converted to cents for Meta. */
   @IsNumber()
   @Min(1)
   @Max(1_000_000)

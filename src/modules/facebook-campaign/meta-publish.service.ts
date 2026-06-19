@@ -42,6 +42,7 @@ import {
   buildCampaignPayloadFromDraft,
   buildCreativePayloadFromDraft,
 } from './meta-draft-payload-builders';
+import { logMetaPublishStep } from './meta-publish-trace';
 
 type MetaPageListResponse = {
   data?: Array<{ id?: string; name?: string }>;
@@ -88,6 +89,7 @@ export class MetaPublishService {
     );
 
     const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+
     const draft = await this.draftRepository.findOne({
       where: {
         id: draftId.trim(),
@@ -112,21 +114,25 @@ export class MetaPublishService {
       );
     }
 
-    if (draft.status === 'publishing') {
-      const staleMs = 15 * 60 * 1000;
-      const updatedAtMs = draft.updatedAt?.getTime?.() ?? 0;
-      if (updatedAtMs && Date.now() - updatedAtMs > staleMs) {
-        await this.draftRepository.update(draft.id, {
-          status: 'failed',
-          errorMessage:
-            'Previous publish timed out. You can try publishing again.',
-        });
-        draft.status = 'failed';
-      } else {
-        throw new BadRequestException(
-          'Publish is already in progress for this draft. Please wait.',
-        );
-      }
+    await this.recoverStalePublishingDraft(draft);
+
+    const lockResult = await this.draftRepository.update(
+      {
+        id: draft.id,
+        restaurantId,
+        userId: user.id,
+        status: In(['draft', 'failed']),
+      },
+      {
+        status: 'publishing',
+        errorMessage: null,
+      },
+    );
+
+    if (!lockResult.affected) {
+      throw new BadRequestException(
+        'This campaign cannot be published right now. It may already be publishing or published.',
+      );
     }
 
     const campaign = draft.campaignData as CampaignStepDataDto;
@@ -140,6 +146,10 @@ export class MetaPublishService {
       await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
 
     const adAccountId = normalizeAdAccountId(storedAdAccountId ?? '');
+    this.logger.log(
+      `Publish started: metaUserId=${restaurant.metaUserId} adAccountId=${adAccountId} draft=${draft.id}`,
+    );
+
     await this.ensureAdAccountActive(adAccountId, accessToken);
     await this.assertPageAccessible(creative.facebookPageId, accessToken);
 
@@ -155,24 +165,6 @@ export class MetaPublishService {
     let metaAdsetId: string | null = draft.metaAdsetId;
     let metaCreativeId: string | null = draft.metaCreativeId;
 
-    const lockResult = await this.draftRepository.update(
-      {
-        id: draft.id,
-        restaurantId,
-        userId: user.id,
-        status: In(['draft', 'failed']),
-      },
-      { status: 'publishing', errorMessage: null },
-    );
-
-    if (!lockResult.affected) {
-      throw new BadRequestException(
-        'This campaign cannot be published right now. It may already be publishing or published.',
-      );
-    }
-
-    draft.status = 'publishing';
-
     const tracking = await this.findOrCreateTrackingRow(
       user.id,
       restaurantId,
@@ -185,46 +177,49 @@ export class MetaPublishService {
 
     try {
       if (!metaCampaignId) {
+        logMetaPublishStep('campaign', 'start', {
+          adAccountId: ctx.adAccountId,
+          campaignName: ctx.campaign.name,
+        });
         metaCampaignId = await this.createCampaign(ctx);
+        this.logger.log(`Meta campaign created: ${metaCampaignId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
         });
-      } else {
-        this.logger.log(
-          `Resuming publish: reusing Meta campaign ${metaCampaignId}`,
-        );
       }
 
       if (!metaAdsetId) {
+        logMetaPublishStep('adset', 'start', { metaCampaignId });
         metaAdsetId = await this.createAdSet(ctx, metaCampaignId);
+        this.logger.log(`Meta ad set created: ${metaAdsetId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
           metaAdsetId,
         });
-      } else {
-        this.logger.log(`Resuming publish: reusing Meta ad set ${metaAdsetId}`);
       }
 
       let metaAdId: string | null = draft.metaAdId;
 
       if (!metaCreativeId) {
+        logMetaPublishStep('media', 'start', {
+          format: ctx.creative.creativeFormat,
+        });
         const mediaRefs = await this.uploadCreativeMedia(ctx);
+
+        logMetaPublishStep('creative', 'start', { mediaRefs });
         metaCreativeId = await this.createCreative(ctx, mediaRefs);
+        this.logger.log(`Meta creative created: ${metaCreativeId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
           metaAdsetId,
           metaCreativeId,
         });
-      } else {
-        this.logger.log(
-          `Resuming publish: reusing Meta creative ${metaCreativeId}`,
-        );
       }
 
       if (!metaAdId) {
+        logMetaPublishStep('ad', 'start', { metaAdsetId, metaCreativeId });
         metaAdId = await this.createAd(ctx, metaAdsetId, metaCreativeId);
-      } else {
-        this.logger.log(`Resuming publish: reusing Meta ad ${metaAdId}`);
+        this.logger.log(`Meta ad created: ${metaAdId}`);
       }
 
       if (!metaCampaignId || !metaAdsetId || !metaCreativeId || !metaAdId) {
@@ -320,8 +315,7 @@ export class MetaPublishService {
     imageUrl: string,
   ): Promise<string> {
     const trimmed = imageUrl.trim();
-    const forMeta =
-      toAbsoluteAssetUrlIfRelative(trimmed) ?? trimmed;
+    const forMeta = toAbsoluteAssetUrlIfRelative(trimmed) ?? trimmed;
     return uploadAdImageHash(adAccountId, accessToken, forMeta);
   }
 
@@ -395,7 +389,10 @@ export class MetaPublishService {
       ctx.creative.urlParameters,
     );
 
-    if (!destinationUrl.trim() && ctx.creative.creativeFormat !== MetaCreativeFormat.CAROUSEL) {
+    if (
+      !destinationUrl.trim() &&
+      ctx.creative.creativeFormat !== MetaCreativeFormat.CAROUSEL
+    ) {
       throw new BadRequestException('Landing page URL is required.');
     }
 
@@ -558,14 +555,33 @@ export class MetaPublishService {
     });
 
     this.logger.error(
-      `Draft publish failed at step=${step} for restaurant ${restaurantId}: ${metaErrorMessage}`,
+      `Draft publish failed at step=${step} for restaurant ${restaurantId}: code=${metaErrorCode} message=${metaErrorMessage} partialIds=${JSON.stringify(partial)}`,
     );
 
-    if (err instanceof MetaApiStepError || err instanceof BadRequestException) {
-      throw new BadRequestException(userMessage);
+    throw new BadRequestException(userMessage);
+  }
+
+  private async recoverStalePublishingDraft(
+    draft: MetaCampaignDraft,
+  ): Promise<void> {
+    if (draft.status !== 'publishing') {
+      return;
     }
 
-    throw new BadRequestException(userMessage);
+    const updatedAt = draft.updatedAt?.getTime?.() ?? 0;
+    const staleMs = 15 * 60 * 1000;
+    if (Date.now() - updatedAt < staleMs) {
+      throw new BadRequestException(
+        'Publish is already in progress. Wait a few minutes and try again.',
+      );
+    }
+
+    await this.draftRepository.update(draft.id, {
+      status: 'failed',
+      errorMessage:
+        'Previous publish timed out. Retry to continue from saved Meta IDs.',
+    });
+    draft.status = 'failed';
   }
 
   private async loadOwnedRestaurant(

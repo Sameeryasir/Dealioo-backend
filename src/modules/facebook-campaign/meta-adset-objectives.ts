@@ -1,6 +1,5 @@
 import { MetaCampaignObjective, MetaOptimizationGoal } from './meta-campaign.constants';
 
-/** Optimization goals allowed per campaign objective (Meta Marketing API). */
 export const OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   MetaCampaignObjective,
   MetaOptimizationGoal[]

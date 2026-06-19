@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
@@ -39,7 +39,6 @@ import {
 import { MetaCreativeFormat } from './meta-campaign.constants';
 
 @Injectable()
-/** Builder steps 1–3: draft JSON only — never calls Meta Marketing API. */
 export class MetaCampaignDraftService {
   constructor(
     @InjectRepository(MetaCampaignDraft)
@@ -79,18 +78,11 @@ export class MetaCampaignDraftService {
     };
 
     if (dto.draftId?.trim()) {
-      const existing = await this.draftRepository.findOne({
-        where: {
-          id: dto.draftId.trim(),
-          restaurantId,
-          userId: user.id,
-          status: 'draft',
-        },
-      });
-
-      if (!existing) {
-        throw new NotFoundException('Campaign draft not found.');
-      }
+      const existing = await this.findEditableDraft(
+        user.id,
+        restaurantId,
+        dto.draftId.trim(),
+      );
 
       existing.campaignData = campaignData;
       existing.currentStep = Math.max(existing.currentStep, 2);
@@ -124,16 +116,13 @@ export class MetaCampaignDraftService {
 
     await this.loadOwnedRestaurant(user, restaurantId);
 
-    const draft = await this.draftRepository.findOne({
-      where: {
-        id: dto.draftId.trim(),
-        restaurantId,
-        userId: user.id,
-        status: 'draft',
-      },
-    });
+    const draft = await this.findEditableDraft(
+      user.id,
+      restaurantId,
+      dto.draftId.trim(),
+    );
 
-    if (!draft?.campaignData) {
+    if (!draft.campaignData) {
       throw new NotFoundException(
         'Campaign draft not found. Complete Step 1 (Campaign) first.',
       );
@@ -232,16 +221,13 @@ export class MetaCampaignDraftService {
 
     await this.loadOwnedRestaurant(user, restaurantId);
 
-    const draft = await this.draftRepository.findOne({
-      where: {
-        id: dto.draftId.trim(),
-        restaurantId,
-        userId: user.id,
-        status: 'draft',
-      },
-    });
+    const draft = await this.findEditableDraft(
+      user.id,
+      restaurantId,
+      dto.draftId.trim(),
+    );
 
-    if (!draft?.campaignData || !draft.adSetData) {
+    if (!draft.campaignData || !draft.adSetData) {
       throw new NotFoundException(
         'Campaign draft not found. Complete Steps 1 and 2 first.',
       );
@@ -322,7 +308,11 @@ export class MetaCampaignDraftService {
     await this.loadOwnedRestaurant(user, restaurantId);
 
     const drafts = await this.draftRepository.find({
-      where: { restaurantId, userId: user.id, status: 'draft' },
+      where: {
+        restaurantId,
+        userId: user.id,
+        status: In(['draft', 'failed', 'publishing']),
+      },
       order: { updatedAt: 'DESC' },
     });
 
@@ -446,6 +436,47 @@ export class MetaCampaignDraftService {
         throw new BadRequestException('Call to action is required.');
       }
     }
+  }
+
+  private async findEditableDraft(
+    userId: number,
+    restaurantId: number,
+    draftId: string,
+  ): Promise<MetaCampaignDraft> {
+    const draft = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        restaurantId,
+        userId,
+      },
+    });
+
+    if (!draft) {
+      throw new NotFoundException('Campaign draft not found.');
+    }
+
+    if (draft.status === 'published' && draft.metaAdId) {
+      throw new BadRequestException(
+        'This campaign was already published. Create a new campaign to make changes.',
+      );
+    }
+
+    if (draft.status === 'publishing') {
+      const updatedAt = draft.updatedAt?.getTime?.() ?? 0;
+      const staleMs = 15 * 60 * 1000;
+      if (Date.now() - updatedAt < staleMs) {
+        throw new BadRequestException(
+          'Publish is in progress. Wait for it to finish before editing this draft.',
+        );
+      }
+    }
+
+    if (draft.status !== 'draft') {
+      draft.status = 'draft';
+      draft.errorMessage = null;
+    }
+
+    return draft;
   }
 
   private async loadOwnedRestaurant(

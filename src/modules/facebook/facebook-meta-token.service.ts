@@ -31,6 +31,16 @@ type DebugTokenResponse = {
   error?: { message?: string };
 };
 
+type MePermissionRow = {
+  permission?: string;
+  status?: string;
+};
+
+type MePermissionsResponse = {
+  data?: MePermissionRow[];
+  error?: { message?: string; code?: number };
+};
+
 /** Throws if any required advertising scope is missing from debug_token.scopes. */
 export function assertMetaPermissions(scopes: string[]): void {
   const missing = META_REQUIRED_SCOPES.filter((scope) => !scopes.includes(scope));
@@ -209,6 +219,37 @@ export class FacebookMetaTokenService {
     }
 
     return body.data;
+  }
+
+  /** Returns permission → status map from GET /me/permissions (e.g. ads_management → granted). */
+  async fetchMePermissions(
+    accessToken: string,
+  ): Promise<Record<string, string>> {
+    const url = new URL(`${FACEBOOK_GRAPH}/me/permissions`);
+    url.searchParams.set('access_token', accessToken);
+
+    const res = await fetch(url.toString(), {
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    const body = (await res.json()) as MePermissionsResponse;
+    if (!res.ok || body.error) {
+      throw new BadRequestException(
+        body.error?.message ??
+          'Could not read Meta permissions. Reconnect Facebook.',
+      );
+    }
+
+    const map: Record<string, string> = {};
+    for (const row of body.data ?? []) {
+      const permission = row.permission?.trim();
+      const status = row.status?.trim();
+      if (permission && status) {
+        map[permission] = status;
+      }
+    }
+
+    return map;
   }
 }
 

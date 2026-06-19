@@ -27,7 +27,9 @@ import { SaveCampaignStepDto } from './dto/save-campaign-step.dto';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
 import { MetaPublishService } from './meta-publish.service';
+import { MetaPublishDiagnosticService } from './meta-publish-diagnostic.service';
 import { PublishMetaCampaignResponseDto } from './dto/publish-meta-campaign-response.dto';
+import { PublishMetaCampaignDiagnosticDto } from './dto/publish-meta-campaign-diagnostic.dto';
 
 @Controller('facebook-campaigns')
 export class FacebookCampaignController {
@@ -35,6 +37,7 @@ export class FacebookCampaignController {
     private readonly facebookCampaignService: FacebookCampaignService,
     private readonly metaCampaignDraftService: MetaCampaignDraftService,
     private readonly metaPublishService: MetaPublishService,
+    private readonly metaPublishDiagnosticService: MetaPublishDiagnosticService,
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
@@ -96,6 +99,20 @@ export class FacebookCampaignController {
     @Param('draftId') draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
     return this.metaCampaignDraftService.getDraft(
+      req.user,
+      restaurantId,
+      draftId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('restaurant/:restaurantId/drafts/:draftId/publish-diagnostic')
+  async getPublishDiagnostic(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<PublishMetaCampaignDiagnosticDto> {
+    return this.metaPublishDiagnosticService.runPublishDiagnostic(
       req.user,
       restaurantId,
       draftId,
