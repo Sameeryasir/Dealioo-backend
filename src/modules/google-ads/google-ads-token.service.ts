@@ -11,6 +11,7 @@ export type GoogleRestaurantCredentials = {
   accessToken: string;
   googleUserId: string;
   customerId: string | null;
+  loginCustomerId: string;
 };
 
 type TokenRefreshResponse = {
@@ -51,7 +52,7 @@ export class GoogleAdsTokenService {
     );
     if (!hasAdsScope) {
       throw new BadRequestException(
-        'Google Ads permission missing. Reconnect and approve Google Ads access.',
+        'Google Ads permission was not granted. Choose the Google account that owns your ads, approve Google Ads on the consent screen, then try again. If needed, remove this app at https://myaccount.google.com/permissions and reconnect.',
       );
     }
   }
@@ -94,6 +95,9 @@ export class GoogleAdsTokenService {
       accessToken,
       googleUserId,
       customerId: restaurant.googleCustomerId.trim(),
+      loginCustomerId:
+        restaurant.googleLoginCustomerId?.trim() ||
+        restaurant.googleCustomerId.trim(),
     };
   }
 
@@ -133,9 +137,7 @@ export class GoogleAdsTokenService {
     if (cached && expiresAt > Date.now() + 60_000) {
       try {
         return decryptSecret(cached);
-      } catch {
-        /* fall through to refresh */
-      }
+      } catch {}
     }
 
     const refreshed = await this.refreshAccessToken(refreshToken);

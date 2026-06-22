@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpException,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -21,6 +22,28 @@ import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { SetGoogleAdsCustomerDto } from './dto/set-google-ads-customer.dto';
 import { GoogleAdsService } from './google-ads.service';
 
+function readHttpErrorMessage(err: unknown): string {
+  if (err instanceof HttpException) {
+    const response = err.getResponse();
+    if (typeof response === 'string') {
+      return response;
+    }
+    if (typeof response === 'object' && response && 'message' in response) {
+      const message = (response as { message?: string | string[] }).message;
+      if (Array.isArray(message)) {
+        return message.join(' ');
+      }
+      if (typeof message === 'string') {
+        return message;
+      }
+    }
+  }
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  return 'Google connection failed. Try again from Settings → Integrations.';
+}
+
 @Controller('google-ads')
 export class GoogleAdsController {
   constructor(
@@ -32,20 +55,39 @@ export class GoogleAdsController {
   async oauthCallback(
     @Query('code') code: string,
     @Query('state') state: string,
+    @Query('scope') scope: string,
     @Query('error') error: string,
     @Query('error_description') errorDescription: string,
     @Res() res: Response,
   ) {
-    const result = await this.googleAdsService.handleOAuthCallback(
-      code,
-      state,
-      error,
-      errorDescription,
-    );
+    const frontendBase = getFrontendBaseUrl();
 
-    return res.redirect(
-      `${getFrontendBaseUrl()}/google/select-customer?restaurantId=${result.restaurantId}`,
-    );
+    try {
+      const result = await this.googleAdsService.handleOAuthCallback(
+        code,
+        state,
+        error,
+        errorDescription,
+        scope,
+      );
+
+      return res.redirect(
+        `${frontendBase}/google/select-customer?restaurantId=${result.restaurantId}`,
+      );
+    } catch (err) {
+      const restaurantId =
+        this.googleAdsService.parseRestaurantIdFromOAuthState(state);
+      const params = new URLSearchParams({
+        error: readHttpErrorMessage(err),
+      });
+      if (restaurantId != null) {
+        params.set('restaurantId', String(restaurantId));
+      }
+
+      return res.redirect(
+        `${frontendBase}/google/select-customer?${params.toString()}`,
+      );
+    }
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -55,6 +97,15 @@ export class GoogleAdsController {
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
   ): Promise<{ url: string }> {
     return this.googleAdsService.connect(req.user, restaurantId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('connect-abort/:restaurantId')
+  async abortConnect(
+    @Req() req,
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  ): Promise<{ restored: true }> {
+    return this.googleAdsService.abortOAuthConnect(req.user, restaurantId);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -120,6 +171,7 @@ export class GoogleAdsController {
       req.user,
       restaurantId,
       body.customerId,
+      body.managerCustomerId,
     );
   }
 
@@ -135,3 +187,4 @@ export class GoogleAdsController {
     );
   }
 }
+

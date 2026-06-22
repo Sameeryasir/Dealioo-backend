@@ -17,20 +17,45 @@ import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { GoogleOAuthCallbackResultDto } from './dto/google-oauth-callback-result.dto';
 import { GoogleAdsConnectionStatus } from './google-ads-connection-status';
+import type { GoogleAdsConnectionStatusValue } from './google-ads-connection-status';
 import { GoogleAdsIntegrationAuditService } from './google-ads-integration-audit.service';
-import {
-  GOOGLE_ADS_REQUIRED_SCOPE,
-  GoogleAdsTokenService,
-} from './google-ads-token.service';
 import {
   createGoogleOAuthState,
   parseGoogleOAuthState,
 } from './google-oauth-state';
+import {
+  GOOGLE_ADS_REQUIRED_SCOPE,
+  GoogleAdsTokenService,
+} from './google-ads-token.service';
 
 const GOOGLE_OAUTH_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_OAUTH_TOKEN = 'https://oauth2.googleapis.com/token';
 const GOOGLE_USERINFO = 'https://www.googleapis.com/oauth2/v2/userinfo';
-const GOOGLE_ADS_API = 'https://googleads.googleapis.com/v18';
+const DEFAULT_GOOGLE_ADS_API_VERSION = 'v22';
+
+function googleAdsApiBaseUrl(): string {
+  const version =
+    process.env.GOOGLE_ADS_API_VERSION?.trim() || DEFAULT_GOOGLE_ADS_API_VERSION;
+  return `https://googleads.googleapis.com/${version}`;
+}
+
+type GoogleAdsApiErrorBody = {
+  error?: {
+    message?: string;
+    status?: string;
+    code?: number;
+    details?: GoogleAdsFailureDetail[];
+  };
+  details?: GoogleAdsFailureDetail[];
+};
+
+type GoogleAdsFailureDetail = {
+  '@type'?: string;
+  errors?: Array<{
+    errorCode?: Record<string, string>;
+    message?: string;
+  }>;
+};
 const GOOGLE_OAUTH_SCOPES = [
   GOOGLE_ADS_REQUIRED_SCOPE,
   'openid',
@@ -69,7 +94,23 @@ type GoogleAdsSearchRow = {
   };
   customer?: {
     descriptiveName?: string;
+    descriptive_name?: string;
     currencyCode?: string;
+    currency_code?: string;
+    manager?: boolean;
+  };
+};
+
+type GoogleAdsCustomerClientRow = {
+  customerClient?: {
+    id?: string;
+    descriptiveName?: string;
+    descriptive_name?: string;
+    currencyCode?: string;
+    currency_code?: string;
+    manager?: boolean;
+    level?: string | number;
+    status?: string;
   };
 };
 
@@ -100,15 +141,55 @@ export class GoogleAdsService {
       );
     }
 
-    await this.restaurantRepository.update(restaurantId, {
-      googleConnectionStatus: GoogleAdsConnectionStatus.INITIATED,
-    });
+    if (!restaurant.googleRefreshToken?.trim()) {
+      await this.restaurantRepository.update(restaurantId, {
+        googleConnectionStatus: GoogleAdsConnectionStatus.INITIATED,
+      });
+    }
 
     await this.auditService.log(restaurantId, 'oauth_started', {
       status: GoogleAdsConnectionStatus.INITIATED,
     });
 
     return this.createOAuthConnectUrl(restaurantId);
+  }
+
+  async abortOAuthConnect(
+    user: User,
+    restaurantId: number,
+  ): Promise<{ restored: true }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to update Google Ads for this account.',
+    );
+
+    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+
+    if (restaurant.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED) {
+      return { restored: true };
+    }
+
+    const hasGoogleLogin = Boolean(
+      restaurant.googleUserId?.trim() && restaurant.googleRefreshToken?.trim(),
+    );
+
+    let restoredStatus: GoogleAdsConnectionStatusValue | null = null;
+
+    if (hasGoogleLogin && restaurant.googleCustomerId?.trim()) {
+      restoredStatus = GoogleAdsConnectionStatus.CUSTOMER_SELECTED;
+    } else if (hasGoogleLogin) {
+      restoredStatus = GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
+    }
+
+    await this.restaurantRepository.update(restaurantId, {
+      googleConnectionStatus: restoredStatus,
+    });
+
+    await this.auditService.log(restaurantId, 'oauth_aborted', {
+      status: restoredStatus,
+    });
+
+    return { restored: true };
   }
 
   createOAuthConnectUrl(restaurantId: number): { url: string } {
@@ -123,11 +204,21 @@ export class GoogleAdsService {
       scope: GOOGLE_OAUTH_SCOPES,
       state: createGoogleOAuthState(restaurantId, clientSecret),
       access_type: 'offline',
-      prompt: 'consent',
-      include_granted_scopes: 'true',
+      prompt: 'consent select_account',
     });
 
     return { url: `${GOOGLE_OAUTH_AUTH}?${params.toString()}` };
+  }
+
+  parseRestaurantIdFromOAuthState(state: string | undefined): number | null {
+    if (!state?.trim()) {
+      return null;
+    }
+    try {
+      return parseGoogleOAuthState(state, this.tokenService.getClientSecret());
+    } catch {
+      return null;
+    }
   }
 
   async handleOAuthCallback(
@@ -135,6 +226,7 @@ export class GoogleAdsService {
     state: string | undefined,
     oauthError: string | undefined,
     oauthErrorDescription: string | undefined,
+    grantedScope: string | undefined,
   ): Promise<GoogleOAuthCallbackResultDto> {
     let restaurantId: number | null = null;
 
@@ -157,6 +249,11 @@ export class GoogleAdsService {
 
       const clientSecret = this.tokenService.getClientSecret();
       restaurantId = parseGoogleOAuthState(state, clientSecret);
+
+      const callbackScopes = this.parseScopeList(grantedScope);
+      if (callbackScopes.length > 0) {
+        this.tokenService.assertGoogleScopes(callbackScopes);
+      }
 
       await this.auditService.log(restaurantId, 'oauth_callback_received', {
         status: GoogleAdsConnectionStatus.AUTHENTICATED,
@@ -197,9 +294,10 @@ export class GoogleAdsService {
         );
       }
 
-      const grantedScopes = (tokenJson.scope ?? GOOGLE_OAUTH_SCOPES)
-        .split(' ')
-        .filter(Boolean);
+      const grantedScopes = this.mergeScopeLists(
+        callbackScopes,
+        this.parseScopeList(tokenJson.scope),
+      );
       this.tokenService.assertGoogleScopes(grantedScopes);
 
       const tokenExpiresAt =
@@ -213,6 +311,7 @@ export class GoogleAdsService {
         googleAccessToken: encryptSecret(tokenJson.access_token),
         googleConnectedAt: new Date(),
         googleCustomerId: null,
+        googleLoginCustomerId: null,
         googleConnectionStatus: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
         googleTokenExpiresAt: tokenExpiresAt,
         googleOauthScopes: grantedScopes.join(','),
@@ -236,6 +335,7 @@ export class GoogleAdsService {
           googleAccessToken: null,
           googleConnectedAt: null,
           googleCustomerId: null,
+          googleLoginCustomerId: null,
           googleConnectionStatus: GoogleAdsConnectionStatus.FAILED,
           googleTokenExpiresAt: null,
           googleOauthScopes: null,
@@ -250,7 +350,9 @@ export class GoogleAdsService {
   }
 
   getConnectionStatus(restaurant: Restaurant): GoogleAdsConnectionStatusDto {
-    const grantedScopes = (restaurant.googleOauthScopes ?? '')
+    const normalized = this.normalizeConnectionStatus(restaurant);
+
+    const grantedScopes = (normalized.googleOauthScopes ?? '')
       .split(',')
       .map((scope) => scope.trim())
       .filter(Boolean);
@@ -262,23 +364,55 @@ export class GoogleAdsService {
       ? []
       : [GOOGLE_ADS_REQUIRED_SCOPE];
 
+    const hasGoogleLogin = Boolean(
+      normalized.googleUserId?.trim() &&
+        normalized.googleRefreshToken?.trim(),
+    );
+
+    const status = normalized.googleConnectionStatus ?? null;
+
     const connected = Boolean(
-      restaurant.googleUserId?.trim() &&
-        restaurant.googleRefreshToken?.trim() &&
-        restaurant.googleConnectionStatus !== GoogleAdsConnectionStatus.FAILED &&
-        missingRequiredScopes.length === 0,
+      hasGoogleLogin &&
+        missingRequiredScopes.length === 0 &&
+        status !== GoogleAdsConnectionStatus.INITIATED,
     );
 
     return {
       connected,
-      status: restaurant.googleConnectionStatus ?? null,
-      googleUserId: restaurant.googleUserId,
-      googleConnectedAt: restaurant.googleConnectedAt,
-      googleCustomerId: restaurant.googleCustomerId,
-      googleTokenExpiresAt: restaurant.googleTokenExpiresAt,
+      status,
+      googleUserId: normalized.googleUserId,
+      googleConnectedAt: normalized.googleConnectedAt,
+      googleCustomerId: normalized.googleCustomerId,
+      googleTokenExpiresAt: normalized.googleTokenExpiresAt,
       googleOauthScopes: grantedScopes,
       missingRequiredScopes,
     };
+  }
+
+  private normalizeConnectionStatus(restaurant: Restaurant): Restaurant {
+    const hasGoogleLogin = Boolean(
+      restaurant.googleUserId?.trim() && restaurant.googleRefreshToken?.trim(),
+    );
+
+    if (
+      hasGoogleLogin &&
+      restaurant.googleConnectionStatus === GoogleAdsConnectionStatus.FAILED
+    ) {
+      const repairedStatus = restaurant.googleCustomerId?.trim()
+        ? GoogleAdsConnectionStatus.CUSTOMER_SELECTED
+        : GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
+
+      void this.restaurantRepository.update(restaurant.id, {
+        googleConnectionStatus: repairedStatus,
+      });
+
+      return {
+        ...restaurant,
+        googleConnectionStatus: repairedStatus,
+      };
+    }
+
+    return restaurant;
   }
 
   async listCustomersForRestaurant(
@@ -294,6 +428,12 @@ export class GoogleAdsService {
     const { accessToken } =
       await this.tokenService.assertRestaurantGoogleToken(restaurant);
 
+    const scopes = (restaurant.googleOauthScopes ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    this.tokenService.assertGoogleScopes(scopes);
+
     const customers = await this.listAccessibleCustomers(accessToken);
 
     await this.auditService.log(restaurantId, 'customers_fetched', {
@@ -308,6 +448,7 @@ export class GoogleAdsService {
     user: User,
     restaurantId: number,
     customerId: string,
+    managerCustomerId?: string,
   ): Promise<{ googleCustomerId: string }> {
     requireAdminRole(
       user,
@@ -328,14 +469,23 @@ export class GoogleAdsService {
       );
     }
 
+    const loginCustomerId = match.managerCustomerId?.trim()
+      ? this.normalizeCustomerId(match.managerCustomerId)
+      : normalizedId;
+
     await this.restaurantRepository.update(restaurantId, {
       googleCustomerId: normalizedId,
+      googleLoginCustomerId: loginCustomerId,
       googleConnectionStatus: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
     });
 
     await this.auditService.log(restaurantId, 'customer_selected', {
       status: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
-      metadata: { customerId: normalizedId },
+      metadata: {
+        customerId: normalizedId,
+        loginCustomerId,
+        isManager: match.isManager,
+      },
     });
 
     this.logger.log(
@@ -377,6 +527,7 @@ export class GoogleAdsService {
       googleAccessToken: null,
       googleConnectedAt: null,
       googleCustomerId: null,
+      googleLoginCustomerId: null,
       googleConnectionStatus: null,
       googleTokenExpiresAt: null,
       googleOauthScopes: null,
@@ -396,11 +547,19 @@ export class GoogleAdsService {
   async getAdCampaignStats(
     restaurant: Restaurant,
   ): Promise<GoogleAdsCampaignStatsDto> {
-    const { accessToken, customerId } =
+    const { accessToken, customerId, loginCustomerId } =
       await this.tokenService.assertRestaurantGoogleCredentials(restaurant);
 
-    const customerMeta = await this.fetchCustomerMeta(accessToken, customerId!);
-    const campaigns = await this.fetchCampaignStats(accessToken, customerId!);
+    const customerMeta = await this.fetchCustomerMeta(
+      accessToken,
+      customerId!,
+      loginCustomerId,
+    );
+    const campaigns = await this.fetchCampaignStats(
+      accessToken,
+      customerId!,
+      loginCustomerId,
+    );
 
     return {
       customerId,
@@ -414,6 +573,7 @@ export class GoogleAdsService {
   private async fetchCampaignStats(
     accessToken: string,
     customerId: string,
+    loginCustomerId: string = customerId,
   ): Promise<GoogleAdsCampaignStatsDto['campaigns']> {
     const query = `
       SELECT
@@ -433,6 +593,7 @@ export class GoogleAdsService {
       accessToken,
       customerId,
       query,
+      loginCustomerId,
     );
 
     const aggregated = new Map<
@@ -490,46 +651,235 @@ export class GoogleAdsService {
   private async fetchCustomerMeta(
     accessToken: string,
     customerId: string,
-  ): Promise<{ name: string | null; currency: string | null }> {
+    loginCustomerId: string = customerId,
+  ): Promise<{
+    name: string | null;
+    currency: string | null;
+    isManager: boolean;
+  }> {
     const query =
-      'SELECT customer.descriptive_name, customer.currency_code FROM customer LIMIT 1';
+      'SELECT customer.descriptive_name, customer.currency_code, customer.manager FROM customer LIMIT 1';
 
     const rows = await this.googleAdsSearch<GoogleAdsSearchRow>(
       accessToken,
       customerId,
       query,
+      loginCustomerId,
     );
 
-    const customer = rows[0]?.customer;
+    return this.parseCustomerResource(rows[0]?.customer);
+  }
+
+  private parseCustomerResource(
+    customer?: GoogleAdsSearchRow['customer'],
+  ): { name: string | null; currency: string | null; isManager: boolean } {
+    if (!customer) {
+      return { name: null, currency: null, isManager: false };
+    }
+
+    const name =
+      customer.descriptiveName?.trim() ||
+      customer.descriptive_name?.trim() ||
+      null;
+    const currency =
+      customer.currencyCode?.trim() ||
+      customer.currency_code?.trim() ||
+      null;
+
     return {
-      name: customer?.descriptiveName?.trim() ?? null,
-      currency: customer?.currencyCode?.trim() ?? null,
+      name,
+      currency,
+      isManager: customer.manager === true,
     };
+  }
+
+  private async tryFetchCustomerMeta(
+    accessToken: string,
+    customerId: string,
+    loginCustomerId: string,
+  ): Promise<{
+    name: string | null;
+    currency: string | null;
+    isManager: boolean;
+  } | null> {
+    try {
+      return await this.fetchCustomerMeta(
+        accessToken,
+        customerId,
+        loginCustomerId,
+      );
+    } catch (err) {
+      this.logger.debug(
+        `Google Ads customer meta lookup failed (customer=${customerId}, login=${loginCustomerId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  private async enrichAccessibleCustomers(
+    accessToken: string,
+    ids: string[],
+  ): Promise<GoogleAdsCustomerDto[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const metaById = new Map<
+      string,
+      { name: string | null; currency: string | null; isManager: boolean }
+    >();
+
+    for (const id of ids) {
+      const meta = await this.tryFetchCustomerMeta(accessToken, id, id);
+      if (meta) {
+        metaById.set(id, meta);
+      }
+    }
+
+    const managerIds = ids.filter((id) => metaById.get(id)?.isManager);
+
+    for (const id of ids) {
+      const existing = metaById.get(id);
+      if (existing?.name) {
+        continue;
+      }
+
+      const loginCandidates = [
+        ...managerIds.filter((managerId) => managerId !== id),
+        ...ids.filter((otherId) => otherId !== id),
+      ];
+
+      for (const loginId of loginCandidates) {
+        const meta = await this.tryFetchCustomerMeta(accessToken, id, loginId);
+        if (!meta?.name) {
+          continue;
+        }
+
+        metaById.set(id, {
+          name: meta.name,
+          currency: meta.currency ?? existing?.currency ?? null,
+          isManager: meta.isManager || existing?.isManager || false,
+        });
+        break;
+      }
+    }
+
+    return ids.map((id) => {
+      const meta = metaById.get(id);
+      return {
+        id,
+        name: meta?.name ?? null,
+        currency: meta?.currency ?? null,
+        isManager: meta?.isManager ?? false,
+        managerCustomerId: null,
+        status: null,
+      };
+    });
+  }
+
+  private async fetchDirectClientAccounts(
+    accessToken: string,
+    managerCustomerId: string,
+  ): Promise<GoogleAdsCustomerDto[]> {
+    const query = `
+      SELECT
+        customer_client.id,
+        customer_client.descriptive_name,
+        customer_client.currency_code,
+        customer_client.manager,
+        customer_client.status
+      FROM customer_client
+      WHERE customer_client.level = 1
+    `.trim();
+
+    try {
+      const rows = await this.googleAdsSearch<GoogleAdsCustomerClientRow>(
+        accessToken,
+        managerCustomerId,
+        query,
+        managerCustomerId,
+      );
+
+      const clients: GoogleAdsCustomerDto[] = [];
+
+      for (const row of rows) {
+        const client = row.customerClient;
+        const id = String(client?.id ?? '').replace(/\D/g, '');
+        if (!id || id === managerCustomerId.replace(/\D/g, '')) {
+          continue;
+        }
+
+        clients.push({
+          id,
+          name:
+            client?.descriptiveName?.trim() ||
+            client?.descriptive_name?.trim() ||
+            null,
+          currency:
+            client?.currencyCode?.trim() ||
+            client?.currency_code?.trim() ||
+            null,
+          isManager: client?.manager === true,
+          managerCustomerId,
+          status: client?.status?.trim() ?? null,
+        });
+      }
+
+      return clients;
+    } catch (err) {
+      this.logger.debug(
+        `Google Ads client account lookup failed (manager=${managerCustomerId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  private async buildFullCustomerList(
+    accessToken: string,
+    rootIds: string[],
+  ): Promise<GoogleAdsCustomerDto[]> {
+    const enriched = await this.enrichAccessibleCustomers(accessToken, rootIds);
+    const byId = new Map(enriched.map((customer) => [customer.id, customer]));
+
+    for (const id of rootIds) {
+      const children = await this.fetchDirectClientAccounts(accessToken, id);
+      for (const child of children) {
+        if (!byId.has(child.id)) {
+          byId.set(child.id, child);
+        }
+      }
+    }
+
+    return [...byId.values()].sort((a, b) => {
+      if (a.isManager !== b.isManager) {
+        return a.isManager ? -1 : 1;
+      }
+      return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+    });
   }
 
   private async listAccessibleCustomers(
     accessToken: string,
   ): Promise<GoogleAdsCustomerDto[]> {
     const developerToken = this.tokenService.getDeveloperToken();
-    const url = `${GOOGLE_ADS_API}/customers:listAccessibleCustomers`;
+    const url = `${googleAdsApiBaseUrl()}/customers:listAccessibleCustomers`;
 
     const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'developer-token': developerToken,
-      },
+      method: 'GET',
+      headers: this.googleAdsReadHeaders(accessToken, developerToken),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
-    const body = (await res.json()) as {
+    const body = await this.readGoogleAdsJson<{
       resourceNames?: string[];
-      error?: { message?: string; status?: string };
-    };
+    }>(res, 'listAccessibleCustomers');
 
     if (!res.ok) {
       throw new BadRequestException(
-        body.error?.message ??
-          'Could not list Google Ads accounts. Check your developer token and reconnect.',
+        this.googleAdsErrorMessage(
+          body,
+          'Could not list Google Ads accounts. Check your developer token, enable Google Ads API in Google Cloud Console, and reconnect.',
+        ),
       );
     }
 
@@ -537,62 +887,157 @@ export class GoogleAdsService {
       .map((name) => name.replace(/^customers\//, '').trim())
       .filter(Boolean);
 
-    const customers: GoogleAdsCustomerDto[] = [];
-
-    for (const id of ids) {
-      try {
-        const meta = await this.fetchCustomerMeta(accessToken, id);
-        customers.push({
-          id,
-          name: meta.name,
-          currency: meta.currency,
-          isManager: false,
-        });
-      } catch {
-        customers.push({
-          id,
-          name: null,
-          currency: null,
-          isManager: false,
-        });
-      }
-    }
-
-    return customers;
+    return this.buildFullCustomerList(accessToken, ids);
   }
 
   private async googleAdsSearch<T>(
     accessToken: string,
     customerId: string,
     query: string,
+    loginCustomerId?: string,
   ): Promise<T[]> {
     const developerToken = this.tokenService.getDeveloperToken();
-    const url = `${GOOGLE_ADS_API}/customers/${customerId}/googleAds:search`;
+    const normalizedCustomerId = this.normalizeCustomerId(customerId);
+    const normalizedLoginCustomerId = loginCustomerId
+      ? this.normalizeCustomerId(loginCustomerId)
+      : normalizedCustomerId;
+    const url = `${googleAdsApiBaseUrl()}/customers/${normalizedCustomerId}/googleAds:search`;
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'developer-token': developerToken,
-        'Content-Type': 'application/json',
-      },
+      headers: this.googleAdsWriteHeaders(
+        accessToken,
+        developerToken,
+        normalizedLoginCustomerId,
+      ),
       body: JSON.stringify({ query }),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
-    const body = (await res.json()) as {
-      results?: T[];
-      error?: { message?: string; status?: string };
-    };
+    const body = await this.readGoogleAdsJson<{ results?: T[] }>(
+      res,
+      'googleAds:search',
+    );
 
     if (!res.ok) {
       throw new BadRequestException(
-        body.error?.message ??
+        this.googleAdsErrorMessage(
+          body,
           'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
+        ),
       );
     }
 
     return body.results ?? [];
+  }
+
+  private googleAdsReadHeaders(
+    accessToken: string,
+    developerToken: string,
+  ): Record<string, string> {
+    return {
+      Authorization: `Bearer ${accessToken}`,
+      'developer-token': developerToken,
+    };
+  }
+
+  private googleAdsWriteHeaders(
+    accessToken: string,
+    developerToken: string,
+    loginCustomerId: string,
+  ): Record<string, string> {
+    return {
+      Authorization: `Bearer ${accessToken}`,
+      'developer-token': developerToken,
+      'login-customer-id': loginCustomerId,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async readGoogleAdsJson<T>(
+    res: Response,
+    context: string,
+  ): Promise<T & GoogleAdsApiErrorBody> {
+    const raw = await res.text();
+    const trimmed = raw.trim();
+
+    if (!trimmed || trimmed.startsWith('<')) {
+      this.logger.error(
+        `Google Ads API non-JSON response (${context}) status=${res.status} url=${res.url} body=${trimmed.slice(0, 400)}`,
+      );
+      throw new BadRequestException(
+        res.status === 404
+          ? 'Google Ads API endpoint was not found. Enable Google Ads API in Google Cloud Console (Only Deals project) and verify GOOGLE_ADS_DEVELOPER_TOKEN.'
+          : `Google Ads API returned an unexpected HTML response (HTTP ${res.status}). Enable Google Ads API in Google Cloud Console and verify your developer token.`,
+      );
+    }
+
+    try {
+      return JSON.parse(trimmed) as T & GoogleAdsApiErrorBody;
+    } catch {
+      this.logger.error(
+        `Google Ads API invalid JSON (${context}) status=${res.status} body=${trimmed.slice(0, 400)}`,
+      );
+      throw new BadRequestException(
+        `Google Ads API returned invalid data (HTTP ${res.status}). Check developer token and Google Ads API setup.`,
+      );
+    }
+  }
+
+  private googleAdsErrorMessage(
+    body: GoogleAdsApiErrorBody,
+    fallback: string,
+  ): string {
+    const failureMessage = this.extractGoogleAdsFailureMessage(body);
+    const message = failureMessage ?? body.error?.message?.trim();
+    if (!message) {
+      return fallback;
+    }
+
+    if (
+      message.includes('DEVELOPER_TOKEN_PROHIBITED') ||
+      message.includes('not allowed with project')
+    ) {
+      return `${message} Your developer token is tied to a different Google Cloud project. Use matching OAuth credentials or request a new developer token for this project.`;
+    }
+
+    if (body.error?.status === 'PERMISSION_DENIED') {
+      return `${message} Ensure Google Ads API is enabled and your developer token is approved.`;
+    }
+
+    if (body.error?.status === 'INVALID_ARGUMENT' && message === 'Request contains an invalid argument.') {
+      const specific = this.extractGoogleAdsFailureMessage(body, true);
+      if (specific && specific !== message) {
+        return specific;
+      }
+    }
+
+    return message;
+  }
+
+  private extractGoogleAdsFailureMessage(
+    body: GoogleAdsApiErrorBody,
+    preferSpecific = false,
+  ): string | null {
+    const details = body.error?.details ?? body.details ?? [];
+    const messages: string[] = [];
+
+    for (const detail of details) {
+      for (const err of detail.errors ?? []) {
+        const codeKey = err.errorCode ? Object.keys(err.errorCode)[0] : null;
+        const codeValue = codeKey ? err.errorCode?.[codeKey] : null;
+        const text = err.message?.trim();
+        if (codeValue === 'DEVELOPER_TOKEN_PROHIBITED') {
+          return `Developer token is not allowed with this Google Cloud project (${codeValue}).`;
+        }
+        if (text) {
+          messages.push(preferSpecific && codeValue ? `${text} (${codeValue})` : text);
+        }
+      }
+    }
+
+    return messages.length > 0 ? messages.join(' ') : null;
   }
 
   private async exchangeCodeForTokens(
@@ -645,6 +1090,17 @@ export class GoogleAdsService {
     return digits;
   }
 
+  private parseScopeList(raw: string | undefined): string[] {
+    return (raw ?? '')
+      .split(/[\s+]+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+  }
+
+  private mergeScopeLists(...groups: string[][]): string[] {
+    return [...new Set(groups.flat())];
+  }
+
   private getRedirectUri(): string {
     const uri = process.env.GOOGLE_REDIRECT_URI?.trim();
     if (!uri) {
@@ -690,14 +1146,26 @@ export class GoogleAdsService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
+      const restaurant = await this.restaurantRepository.findOne({
+        where: { id: restaurantId },
+      });
+
+      const fallbackStatus = restaurant?.googleCustomerId?.trim()
+        ? GoogleAdsConnectionStatus.CUSTOMER_SELECTED
+        : GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
+
       await this.restaurantRepository.update(restaurantId, {
-        googleConnectionStatus: GoogleAdsConnectionStatus.FAILED,
+        googleConnectionStatus: fallbackStatus,
       });
 
       await this.auditService.log(restaurantId, 'sync_failed', {
-        status: GoogleAdsConnectionStatus.FAILED,
+        status: fallbackStatus,
         errorMessage: message,
       });
+
+      this.logger.warn(
+        `Google Ads sync failed for restaurant ${restaurantId}: ${message}`,
+      );
     }
   }
 

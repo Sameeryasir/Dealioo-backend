@@ -113,6 +113,14 @@ export class Restaurant {
   googleCustomerId: string | null;
 
   @Column({
+    name: 'google_login_customer_id',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  googleLoginCustomerId: string | null;
+
+  @Column({
     name: 'google_connection_status',
     type: 'varchar',
     length: 32,
