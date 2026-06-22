@@ -97,6 +97,35 @@ export class Restaurant {
   @Column({ name: 'meta_oauth_scopes', type: 'text', nullable: true })
   metaOauthScopes: string | null;
 
+  @Column({ name: 'google_user_id', type: 'varchar', length: 128, nullable: true })
+  googleUserId: string | null;
+
+  @Column({ name: 'google_refresh_token', type: 'text', nullable: true })
+  googleRefreshToken: string | null;
+
+  @Column({ name: 'google_access_token', type: 'text', nullable: true })
+  googleAccessToken: string | null;
+
+  @Column({ name: 'google_connected_at', type: 'timestamptz', nullable: true })
+  googleConnectedAt: Date | null;
+
+  @Column({ name: 'google_customer_id', type: 'varchar', length: 32, nullable: true })
+  googleCustomerId: string | null;
+
+  @Column({
+    name: 'google_connection_status',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  googleConnectionStatus: string | null;
+
+  @Column({ name: 'google_token_expires_at', type: 'timestamptz', nullable: true })
+  googleTokenExpiresAt: Date | null;
+
+  @Column({ name: 'google_oauth_scopes', type: 'text', nullable: true })
+  googleOauthScopes: string | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

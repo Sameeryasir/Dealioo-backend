@@ -1,0 +1,6 @@
+export class GoogleAdsCustomerDto {
+  id: string;
+  name: string | null;
+  currency: string | null;
+  isManager: boolean;
+}
