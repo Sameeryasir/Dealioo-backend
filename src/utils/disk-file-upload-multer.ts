@@ -31,24 +31,87 @@ export function getPublicAssetsBaseUrl(): string {
   );
 }
 
+export function absoluteCampaignUploadFileUrl(storedFileName: string): string {
+  const fileName = storedFileName.trim().replace(/^\/+/, '');
+  if (!fileName) {
+    return getPublicAssetsBaseUrl();
+  }
+  return `${getPublicAssetsBaseUrl()}/uploads/${CAMPAIGNS_UPLOAD_SUBDIR}/${fileName}`;
+}
+
 export function absolutePublicUploadFileUrl(
   subdir: string,
   storedFileName: string,
 ): string {
+  if (subdir === CAMPAIGNS_UPLOAD_SUBDIR) {
+    return absoluteCampaignUploadFileUrl(storedFileName);
+  }
   return `${getPublicAssetsBaseUrl()}${publicUploadFileUrl(subdir, storedFileName)}`;
+}
+
+function normalizeUploadPathname(pathname: string): string {
+  const path = pathname.split(/[?#]/)[0].replace(/\/+$/, '');
+  if (path.startsWith('/backend/uploads/')) {
+    return path.slice('/backend'.length);
+  }
+  return path;
+}
+
+export function normalizeCampaignImageUrlForMeta(
+  url: string | null | undefined,
+): string | null {
+  if (url == null || url === '') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const parsed = new URL(trimmed);
+      const normalizedPath = normalizeUploadPathname(parsed.pathname);
+      if (normalizedPath.startsWith(`/uploads/${CAMPAIGNS_UPLOAD_SUBDIR}/`)) {
+        const fileName = normalizedPath.slice(
+          `/uploads/${CAMPAIGNS_UPLOAD_SUBDIR}/`.length,
+        );
+        if (fileName && !fileName.includes('/')) {
+          return absoluteCampaignUploadFileUrl(fileName);
+        }
+      }
+    } catch {
+      return trimmed;
+    }
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/backend/uploads/')) {
+    const base = getPublicAssetsBaseUrl().replace(/\/backend$/, '');
+    return `${base}${trimmed}`;
+  }
+
+  if (trimmed.startsWith('/uploads/')) {
+    return `${getPublicAssetsBaseUrl()}${trimmed}`;
+  }
+
+  if (!trimmed.includes('/')) {
+    return absoluteCampaignUploadFileUrl(trimmed);
+  }
+
+  return trimmed;
 }
 
 export function toAbsoluteAssetUrlIfRelative(
   url: string | null | undefined,
 ): string | null {
   if (url == null || url === '') return null;
+  const normalized = normalizeCampaignImageUrlForMeta(url);
+  if (normalized?.includes(`/uploads/${CAMPAIGNS_UPLOAD_SUBDIR}/`)) {
+    return normalized;
+  }
   const t = url.trim();
   if (t.startsWith('http://') || t.startsWith('https://')) return t;
   if (t.startsWith('/uploads/')) return `${getPublicAssetsBaseUrl()}${t}`;
-  return t;
+  return normalized ?? t;
 }
 
-/** Maps a public /uploads/{subdir}/… URL to a local disk path when the file exists. */
 export function resolveLocalUploadFilePath(
   url: string,
   subdir: string,
@@ -59,9 +122,9 @@ export function resolveLocalUploadFilePath(
   let pathname: string;
   try {
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      pathname = new URL(trimmed).pathname;
+      pathname = normalizeUploadPathname(new URL(trimmed).pathname);
     } else if (trimmed.startsWith('/')) {
-      pathname = trimmed.split(/[?#]/)[0];
+      pathname = normalizeUploadPathname(trimmed);
     } else {
       return null;
     }

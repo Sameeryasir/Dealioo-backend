@@ -29,4 +29,7 @@ export type AdCreativeStepDataDto = {
   callToAction?: string;
   pixelId?: string;
   conversionEvent?: string;
+  brandingEnabled?: boolean;
+  brandName?: string;
+  brandLogoUrl?: string;
 };

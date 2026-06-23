@@ -12,7 +12,10 @@ import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity'
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
-import { toAbsoluteAssetUrlIfRelative } from '../../utils/disk-file-upload-multer';
+import {
+  normalizeCampaignImageUrlForMeta,
+  toAbsoluteAssetUrlIfRelative,
+} from '../../utils/disk-file-upload-multer';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
@@ -32,7 +35,6 @@ import {
 } from './facebook-campaign-meta';
 import {
   assertAdCreativeMedia,
-  assertInstagramActorIfNeeded,
   buildDestinationUrlWithParams,
 } from './meta-ad-creative-draft-validation';
 import { MetaCreativeFormat, MetaCreationStep } from './meta-campaign.constants';
@@ -89,18 +91,7 @@ export class MetaPublishService {
     );
 
     const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
-
-    const draft = await this.draftRepository.findOne({
-      where: {
-        id: draftId.trim(),
-        restaurantId,
-        userId: user.id,
-      },
-    });
-
-    if (!draft) {
-      throw new NotFoundException('Campaign draft not found.');
-    }
+    const draft = await this.loadDraftForUser(user.id, restaurantId, draftId);
 
     if (!draft.campaignData || !draft.adSetData || !draft.adCreativeData) {
       throw new BadRequestException(
@@ -135,12 +126,20 @@ export class MetaPublishService {
       );
     }
 
+    return this.runPublishPipeline(user, restaurant, draft);
+  }
+
+  private async runPublishPipeline(
+    user: User,
+    restaurant: Restaurant,
+    draft: MetaCampaignDraft,
+  ): Promise<PublishMetaCampaignResponseDto> {
+    const restaurantId = restaurant.id;
     const campaign = draft.campaignData as CampaignStepDataDto;
     const adSet = draft.adSetData as AdSetStepDataDto;
     const creative = draft.adCreativeData as AdCreativeStepDataDto;
 
     assertAdCreativeMedia(creative as never);
-    assertInstagramActorIfNeeded(adSet.placements, creative.instagramActorId);
 
     const { accessToken, adAccountId: storedAdAccountId } =
       await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
@@ -314,8 +313,8 @@ export class MetaPublishService {
     accessToken: string,
     imageUrl: string,
   ): Promise<string> {
-    const trimmed = imageUrl.trim();
-    const forMeta = toAbsoluteAssetUrlIfRelative(trimmed) ?? trimmed;
+    const forMeta =
+      normalizeCampaignImageUrlForMeta(imageUrl) ?? imageUrl.trim();
     return uploadAdImageHash(adAccountId, accessToken, forMeta);
   }
 
@@ -582,6 +581,26 @@ export class MetaPublishService {
         'Previous publish timed out. Retry to continue from saved Meta IDs.',
     });
     draft.status = 'failed';
+  }
+
+  private async loadDraftForUser(
+    userId: number,
+    restaurantId: number,
+    draftId: string,
+  ): Promise<MetaCampaignDraft> {
+    const draft = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        restaurantId,
+        userId,
+      },
+    });
+
+    if (!draft) {
+      throw new NotFoundException('Campaign draft not found.');
+    }
+
+    return draft;
   }
 
   private async loadOwnedRestaurant(

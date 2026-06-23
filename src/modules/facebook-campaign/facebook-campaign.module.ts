@@ -11,7 +11,6 @@ import { FacebookCampaignController } from './facebook-campaign.controller';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
 import { MetaPublishService } from './meta-publish.service';
-import { MetaPublishDiagnosticService } from './meta-publish-diagnostic.service';
 
 @Module({
   imports: [
@@ -29,13 +28,8 @@ import { MetaPublishDiagnosticService } from './meta-publish-diagnostic.service'
     FacebookCampaignService,
     MetaCampaignDraftService,
     MetaPublishService,
-    MetaPublishDiagnosticService,
     FacebookIntegrationAuditService,
   ],
-  exports: [
-    FacebookCampaignService,
-    MetaPublishService,
-    MetaPublishDiagnosticService,
-  ],
+  exports: [FacebookCampaignService, MetaPublishService],
 })
 export class FacebookCampaignModule {}

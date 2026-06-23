@@ -1,19 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
-import { AdSetPlacementsDto } from './dto/save-adset-step.dto';
 import { SaveAdCreativeStepDto } from './dto/save-ad-creative-step.dto';
 import { MetaCreativeFormat } from './meta-campaign.constants';
-
-export function hasInstagramPlacements(placements: AdSetPlacementsDto): boolean {
-  if (placements.advantagePlusPlacements) {
-    return true;
-  }
-
-  if (placements.publisherPlatforms.instagram) {
-    return true;
-  }
-
-  return Object.values(placements.instagramPositions).some(Boolean);
-}
+import {
+  assertDirectMetaImageUrl,
+  assertDirectMetaVideoUrl,
+} from './facebook-campaign-meta';
+import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
+import { normalizeMetaHttpsUrl } from '../../utils/normalize-meta-https-url';
 
 export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
   switch (dto.creativeFormat) {
@@ -21,11 +14,15 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
       if (!dto.imageUrl?.trim()) {
         throw new BadRequestException('Image is required for single image ads.');
       }
+      const imageForMeta =
+        normalizeCampaignImageUrlForMeta(dto.imageUrl) ?? dto.imageUrl.trim();
+      assertDirectMetaImageUrl(imageForMeta);
       break;
     case MetaCreativeFormat.SINGLE_VIDEO:
       if (!dto.videoUrl?.trim()) {
         throw new BadRequestException('Video is required for single video ads.');
       }
+      assertDirectMetaVideoUrl(String(normalizeMetaHttpsUrl(dto.videoUrl)));
       break;
     case MetaCreativeFormat.CAROUSEL:
       if (!dto.carouselCards?.length || dto.carouselCards.length < 2) {
@@ -41,6 +38,21 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
             `Carousel card ${index + 1} needs an image or video.`,
           );
         }
+        if (card.imageUrl?.trim()) {
+          const cardImage =
+            normalizeCampaignImageUrlForMeta(card.imageUrl) ??
+            card.imageUrl.trim();
+          assertDirectMetaImageUrl(cardImage);
+        }
+        if (card.videoUrl?.trim()) {
+          assertDirectMetaVideoUrl(String(normalizeMetaHttpsUrl(card.videoUrl)));
+        }
+        const dest = String(normalizeMetaHttpsUrl(card.destinationUrl));
+        if (!dest.startsWith('https://')) {
+          throw new BadRequestException(
+            `Carousel card ${index + 1}: destination URL must use HTTPS.`,
+          );
+        }
       }
       break;
     default:
@@ -48,17 +60,15 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
   }
 }
 
-export function assertInstagramActorIfNeeded(
-  placements: AdSetPlacementsDto,
-  instagramActorId?: string,
-): void {
-  if (!hasInstagramPlacements(placements)) {
+export function assertAdCreativeDestinationUrl(dto: SaveAdCreativeStepDto): void {
+  if (dto.creativeFormat === MetaCreativeFormat.CAROUSEL) {
     return;
   }
 
-  if (!instagramActorId?.trim()) {
+  const destination = String(normalizeMetaHttpsUrl(dto.destinationUrl ?? ''));
+  if (!destination.startsWith('https://')) {
     throw new BadRequestException(
-      'Instagram placements are enabled on your ad set. Select an Instagram account or remove Instagram placements on Step 2.',
+      'Landing page URL must use HTTPS. Set NEXT_PUBLIC_FRONTEND_URL or FRONTEND_URL to your public ngrok URL.',
     );
   }
 }

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
@@ -53,10 +54,18 @@ export class FunnelController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('campaign/:campaignId')
-  getFunnelByCampaign(
+  async getFunnelByCampaign(
+    @Req() req: AuthRequest,
     @Param('campaignId', ParseIntPipe) campaignId: number,
-  ): Promise<Funnel | null> {
-    return this.funnelService.getFunnelByCampaignId(campaignId);
+  ): Promise<Funnel> {
+    const funnel = await this.funnelService.getFunnelByCampaignId(
+      campaignId,
+      req.user,
+    );
+    if (!funnel) {
+      throw new NotFoundException('No funnel found for this campaign.');
+    }
+    return funnel;
   }
 
   @UseGuards(AuthGuard('jwt'))

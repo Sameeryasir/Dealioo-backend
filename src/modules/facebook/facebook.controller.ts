@@ -90,6 +90,7 @@ export class FacebookController {
   async adCampaignStats(
     @Req() req,
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Query('websiteUrl') websiteUrl?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const restaurant = await this.restaurantService.findOwnedByUserId(
       req.user.id,
@@ -102,7 +103,7 @@ export class FacebookController {
       );
     }
 
-    return this.facebookService.getAdCampaignStats(restaurant);
+    return this.facebookService.getAdCampaignStats(restaurant, websiteUrl);
   }
 
   @UseGuards(AuthGuard('jwt'))

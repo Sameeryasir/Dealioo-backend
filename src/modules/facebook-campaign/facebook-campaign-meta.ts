@@ -7,6 +7,7 @@ import {
 } from './meta-publish-trace';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
+  normalizeCampaignImageUrlForMeta,
   resolveLocalUploadFilePath,
 } from '../../utils/disk-file-upload-multer';
 import { mapMetaMarketingApiError } from '../facebook/facebook-meta-token.service';
@@ -141,7 +142,6 @@ export function buildCampaignPayload(input: {
     if (input.campaignLifetimeBudgetMinor) {
       body.lifetime_budget = input.campaignLifetimeBudgetMinor;
     }
-    body.is_adset_budget_sharing_enabled = true;
     if (input.campaignBidStrategy) {
       body.bid_strategy = input.campaignBidStrategy;
     }
@@ -473,7 +473,8 @@ export async function uploadAdImageHash(
   accessToken: string,
   imageUrl: string,
 ): Promise<string> {
-  const trimmed = imageUrl.trim();
+  const trimmed =
+    normalizeCampaignImageUrlForMeta(imageUrl)?.trim() ?? imageUrl.trim();
   const localPath = resolveLocalUploadFilePath(
     trimmed,
     CAMPAIGNS_UPLOAD_SUBDIR,

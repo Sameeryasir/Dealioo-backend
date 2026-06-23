@@ -10,6 +10,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
 import { RestaurantFunnelSummary } from './funnelDto/restaurant-funnel-summary.dto';
 import { UpdateFunnelDto } from './funnelDto/update-funnel.dto';
@@ -23,6 +24,7 @@ export class FunnelService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    private readonly redemptionService: RedemptionService,
   ) {}
 
   async createOrUpdateFunnel(
@@ -114,17 +116,25 @@ export class FunnelService {
     }));
   }
 
-  /** One funnel per campaign: returns that row or null if none exists yet. */
-  async getFunnelByCampaignId(campaignId: number): Promise<Funnel | null> {
+  async getFunnelByCampaignId(
+    campaignId: number,
+    user: Pick<User, 'id'> & { role: { name: string } },
+  ): Promise<Funnel | null> {
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
     });
     if (!campaign) {
-      throw new NotFoundException('Campaign not found');
+      return null;
     }
+
+    await this.redemptionService.verifyRestaurantAccess(
+      campaign.restaurantId,
+      user.id,
+      user.role.name,
+    );
+
     return this.funnelRepository.findOne({
       where: { campaignId },
-      relations: ['updatedBy'],
     });
   }
 

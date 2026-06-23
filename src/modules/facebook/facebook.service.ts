@@ -23,6 +23,12 @@ import {
   createFacebookOAuthState,
   parseFacebookOAuthState,
 } from './facebook-oauth-state';
+import {
+  destinationUrlMatchesCampaignLanding,
+  extractCreativeDestinationUrl,
+  resolveExpectedCampaignLandingUrl,
+  type MetaCreativeLinkPayload,
+} from './meta-campaign-destination-filter';
 
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
@@ -307,12 +313,14 @@ export class FacebookService {
 
   async getAdCampaignStats(
     restaurant: Restaurant,
+    filterWebsiteUrl?: string | null,
   ): Promise<FacebookAdCampaignStatsDto> {
     const { accessToken } =
       await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
 
     const adAccount = this.requireRestaurantAdAccount(restaurant);
     const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
+    const expectedLanding = resolveExpectedCampaignLandingUrl(filterWebsiteUrl);
 
     const campaignsResponse =
       await this.graphGetWithToken<FacebookCampaignsResponse>(
@@ -324,11 +332,28 @@ export class FacebookService {
         },
       );
 
+    const campaignDestinationLinks = expectedLanding
+      ? await this.fetchCampaignDestinationLinks(adAccount.id, accessToken)
+      : new Map<string, string>();
+
     const rows = (campaignsResponse.data ?? []).filter((row) => {
       if (!row.id?.trim() || !row.name?.trim()) return false;
       const effective = row.effective_status?.toUpperCase() ?? '';
       const status = row.status?.toUpperCase() ?? '';
-      return effective !== 'DELETED' && status !== 'DELETED';
+      if (effective === 'DELETED' || status === 'DELETED') {
+        return false;
+      }
+
+      if (!expectedLanding) {
+        return true;
+      }
+
+      const destination = campaignDestinationLinks.get(row.id!.trim());
+      if (!destination) {
+        return false;
+      }
+
+      return destinationUrlMatchesCampaignLanding(destination, expectedLanding);
     });
 
     const campaigns = await Promise.all(
@@ -700,6 +725,44 @@ export class FacebookService {
       accessToken: longJson.access_token ?? shortLivedToken,
       expiresIn: longJson.expires_in ?? null,
     };
+  }
+
+  private async fetchCampaignDestinationLinks(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          campaign_id?: string;
+          creative?: MetaCreativeLinkPayload;
+        }>;
+      }>(`/${adAccountId}/ads`, accessToken, {
+        fields:
+          'campaign_id,creative{link_url,object_story_spec,asset_feed_spec}',
+        limit: '500',
+      });
+
+      for (const row of response.data ?? []) {
+        const campaignId = row.campaign_id?.trim();
+        if (!campaignId || map.has(campaignId)) {
+          continue;
+        }
+
+        const link = extractCreativeDestinationUrl(row.creative);
+        if (link) {
+          map.set(campaignId, link);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Could not load ad destination links for ${adAccountId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return map;
   }
 
   private async fetchCampaignInsights(

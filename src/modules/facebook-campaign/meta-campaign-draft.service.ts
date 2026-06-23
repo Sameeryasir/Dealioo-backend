@@ -9,6 +9,7 @@ import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity'
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
 import {
@@ -33,7 +34,7 @@ import {
 } from './meta-adset-draft-validation';
 import {
   assertAdCreativeMedia,
-  assertInstagramActorIfNeeded,
+  assertAdCreativeDestinationUrl,
   buildDestinationUrlWithParams,
 } from './meta-ad-creative-draft-validation';
 import { MetaCreativeFormat } from './meta-campaign.constants';
@@ -233,11 +234,9 @@ export class MetaCampaignDraftService {
       );
     }
 
-    const adSetData = draft.adSetData as AdSetStepDataDto;
-
     this.assertAdCreativeStepBusinessRules(dto);
     assertAdCreativeMedia(dto);
-    assertInstagramActorIfNeeded(adSetData.placements, dto.instagramActorId);
+    assertAdCreativeDestinationUrl(dto);
 
     const destinationUrl =
       dto.creativeFormat !== MetaCreativeFormat.CAROUSEL && dto.destinationUrl
@@ -251,7 +250,9 @@ export class MetaCampaignDraftService {
       instagramActorId: dto.instagramActorId?.trim() || undefined,
       status: dto.status,
       creativeFormat: dto.creativeFormat,
-      imageUrl: dto.imageUrl?.trim(),
+      imageUrl: dto.imageUrl
+        ? (normalizeCampaignImageUrlForMeta(dto.imageUrl) ?? dto.imageUrl.trim())
+        : undefined,
       imageAltText: dto.imageAltText?.trim() || undefined,
       videoUrl: dto.videoUrl?.trim(),
       thumbnailUrl: dto.thumbnailUrl?.trim(),
@@ -271,6 +272,9 @@ export class MetaCampaignDraftService {
       callToAction: dto.callToAction,
       pixelId: dto.pixelId?.trim() || undefined,
       conversionEvent: dto.conversionEvent?.trim() || undefined,
+      brandingEnabled: dto.brandingEnabled ?? undefined,
+      brandName: dto.brandName?.trim() || undefined,
+      brandLogoUrl: dto.brandLogoUrl?.trim() || undefined,
     };
 
     draft.adCreativeData = adCreativeData;

@@ -1,16 +1,17 @@
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
   ValidateIf,
   ValidateNested,
   ArrayMinSize,
 } from 'class-validator';
+import { normalizeMetaHttpsUrl } from '../../../utils/normalize-meta-https-url';
 import {
   MetaCallToAction,
   MetaCampaignStatus,
@@ -23,11 +24,13 @@ export class CarouselCardDto {
   mediaType?: 'image' | 'video';
 
   @IsOptional()
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
   imageUrl?: string;
 
   @IsOptional()
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
   videoUrl?: string;
 
   @IsString()
@@ -38,7 +41,9 @@ export class CarouselCardDto {
   @IsString()
   description?: string;
 
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
+  @IsNotEmpty()
   destinationUrl: string;
 
   @IsEnum(MetaCallToAction)
@@ -67,23 +72,37 @@ export class SaveAdCreativeStepDto {
   @IsEnum(MetaCreativeFormat)
   creativeFormat: MetaCreativeFormat;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat === MetaCreativeFormat.SINGLE_IMAGE)
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat === MetaCreativeFormat.SINGLE_IMAGE,
+  )
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
+  @IsNotEmpty()
   imageUrl?: string;
 
   @IsOptional()
   @IsString()
   imageAltText?: string;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat === MetaCreativeFormat.SINGLE_VIDEO)
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat === MetaCreativeFormat.SINGLE_VIDEO,
+  )
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
+  @IsNotEmpty()
   videoUrl?: string;
 
   @IsOptional()
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
   thumbnailUrl?: string;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat === MetaCreativeFormat.CAROUSEL)
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat === MetaCreativeFormat.CAROUSEL,
+  )
   @IsArray()
   @ArrayMinSize(2)
   @ValidateNested({ each: true })
@@ -94,7 +113,10 @@ export class SaveAdCreativeStepDto {
   @IsNotEmpty()
   primaryText: string;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat !== MetaCreativeFormat.CAROUSEL)
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat !== MetaCreativeFormat.CAROUSEL,
+  )
   @IsString()
   @IsNotEmpty()
   headline?: string;
@@ -107,15 +129,23 @@ export class SaveAdCreativeStepDto {
   @IsString()
   displayLink?: string;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat !== MetaCreativeFormat.CAROUSEL)
-  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat !== MetaCreativeFormat.CAROUSEL,
+  )
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
+  @IsNotEmpty()
   destinationUrl?: string;
 
   @IsOptional()
   @IsString()
   urlParameters?: string;
 
-  @ValidateIf((dto: SaveAdCreativeStepDto) => dto.creativeFormat !== MetaCreativeFormat.CAROUSEL)
+  @ValidateIf(
+    (dto: SaveAdCreativeStepDto) =>
+      dto.creativeFormat !== MetaCreativeFormat.CAROUSEL,
+  )
   @IsEnum(MetaCallToAction)
   callToAction?: MetaCallToAction;
 
@@ -126,4 +156,17 @@ export class SaveAdCreativeStepDto {
   @IsOptional()
   @IsString()
   conversionEvent?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  brandingEnabled?: boolean;
+
+  @IsOptional()
+  @IsString()
+  brandName?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => normalizeMetaHttpsUrl(value))
+  @IsString()
+  brandLogoUrl?: string;
 }

@@ -232,7 +232,7 @@ export function buildAdSetPayloadFromDraft(
     optimization_goal: adSet.optimizationGoal,
     bid_strategy: adSet.bidStrategy,
     destination_type: adSet.destinationType,
-    is_adset_budget_sharing_enabled: cboEnabled,
+    is_adset_budget_sharing_enabled: false,
     targeting,
     start_time: draftDateTimeToUnix(adSet.startDateTime),
     end_time: draftDateTimeToUnix(adSet.endDateTime),
