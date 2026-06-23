@@ -33,10 +33,10 @@ export class AutomationEmailRendererService {
       `Hi ${name},`,
       '',
       props.message?.trim() ||
-        'Please check your account for an important update from Only Deals.',
+        'Please check your account for an important update from Dealioo.',
       '',
       'Best regards,',
-      'Only Deals Team',
+      'Dealioo Team',
     ].filter((line): line is string => line !== null);
 
     if (props.ctaUrl) {

@@ -968,7 +968,7 @@ export class GoogleAdsService {
       );
       throw new BadRequestException(
         res.status === 404
-          ? 'Google Ads API endpoint was not found. Enable Google Ads API in Google Cloud Console (Only Deals project) and verify GOOGLE_ADS_DEVELOPER_TOKEN.'
+          ? 'Google Ads API endpoint was not found. Enable Google Ads API in Google Cloud Console (Dealioo project) and verify GOOGLE_ADS_DEVELOPER_TOKEN.'
           : `Google Ads API returned an unexpected HTML response (HTTP ${res.status}). Enable Google Ads API in Google Cloud Console and verify your developer token.`,
       );
     }

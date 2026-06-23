@@ -82,7 +82,7 @@ export function OtpEmail({
         <Container className="email-container" style={container}>
           <Section style={brandRow}>
             <Text style={brandIcon}>◇</Text>
-            <Text style={brandName}>Only Deals</Text>
+            <Text style={brandName}>Dealioo</Text>
           </Section>
 
           <Heading as="h1" className="email-title" style={title}>
@@ -92,7 +92,7 @@ export function OtpEmail({
           <Text style={greeting}>Hi {greetingName},</Text>
 
           <Text style={body}>
-            Welcome to Only Deals. Please confirm your email address using the
+            Welcome to Dealioo. Please confirm your email address using the
             code below to activate your session and keep your account secure.
           </Text>
 
@@ -117,7 +117,7 @@ export function OtpEmail({
           </Text>
 
           <Text style={signoffBold}>Best regards,</Text>
-          <Text style={signoffTeam}>Only Deals Team</Text>
+          <Text style={signoffTeam}>Dealioo Team</Text>
         </Container>
       </Body>
     </Html>

@@ -282,7 +282,7 @@ export function mapMetaMarketingApiError(
     lower.includes('on behalf of user')
   ) {
     return (
-      'Meta blocked this action for your Facebook user. Add your Facebook account as a Tester/Developer on the OnlyDeals Meta app, complete Marketing API testing, then reconnect Facebook in Settings → Integrations with ads permissions.'
+      'Meta blocked this action for your Facebook user. Add your Facebook account as a Tester/Developer on the Dealioo Meta app, complete Marketing API testing, then reconnect Facebook in Settings → Integrations with ads permissions.'
     );
   }
   if (lower.includes('permission') || lower.includes('oauth')) {

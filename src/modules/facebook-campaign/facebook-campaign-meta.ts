@@ -678,7 +678,7 @@ export function stepFailureUserMessage(
   detail: string,
 ): string {
   const resumeHint =
-    ' After you fix this, publish again from OnlyDeals — we will resume from where it stopped (no duplicate campaign/ad set).';
+    ' After you fix this, publish again from Dealioo — we will resume from where it stopped (no duplicate campaign/ad set).';
 
   switch (step) {
     case 'adset':

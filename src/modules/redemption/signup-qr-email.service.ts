@@ -321,7 +321,7 @@ export class SignupQrEmailService {
       `View QR code: ${passUrl}`,
       '',
       'Best regards,',
-      'Only Deals Team',
+      'Dealioo Team',
     ].join('\n');
 
     try {
@@ -388,7 +388,7 @@ export class SignupQrEmailService {
       `View your pass: ${passUrl}`,
       '',
       'Best regards,',
-      'Only Deals Team',
+      'Dealioo Team',
     ].join('\n');
 
     try {

@@ -227,12 +227,18 @@ export class MetaPublishService {
         );
       }
 
+      const deliveryStatus = campaign.status ?? 'PAUSED';
+      const publishMessage =
+        deliveryStatus === 'ACTIVE'
+          ? 'Campaign published to Meta as Active.'
+          : 'Campaign published successfully to Meta (paused).';
+
       await this.facebookCampaignRepository.update(tracking.id, {
         metaCampaignId,
         metaAdsetId,
         metaCreativeId,
         metaAdId,
-        status: 'PAUSED',
+        status: deliveryStatus,
         errorMessage: null,
       });
 
@@ -267,9 +273,9 @@ export class MetaPublishService {
         metaAdsetId,
         metaCreativeId,
         metaAdId,
-        status: 'PAUSED',
+        status: deliveryStatus,
         adsManagerUrl: adsManagerCampaignsUrl(adAccountId),
-        message: 'Campaign published successfully to Meta (paused).',
+        message: publishMessage,
       };
     } catch (err) {
       throw await this.handlePublishFailure(
