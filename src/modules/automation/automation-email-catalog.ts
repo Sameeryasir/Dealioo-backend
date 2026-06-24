@@ -8,6 +8,7 @@ export type PurposeEmailDefaults = {
   subject?: string;
   message?: string;
   headline?: string;
+  ctaLabel?: string;
 };
 
 export function parseEmailNodeConfig(
@@ -71,9 +72,11 @@ export function getPurposeEmailDefaults(
       };
     case AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER:
       return {
-        subject: `Complete your payment for ${campaign}`,
-        message: `You signed up for ${campaign} but have not completed payment yet. Please finish checkout when you can.`,
-        headline: 'Payment reminder',
+        subject: `Complete your payment — your offer is waiting`,
+        message:
+          'Hi — thank you for signing up! Your offer is almost ready. Please complete your payment to unlock it. If you already paid, you can ignore this email.',
+        headline: 'Complete your payment',
+        ctaLabel: 'Complete payment',
       };
     case AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER:
       return {

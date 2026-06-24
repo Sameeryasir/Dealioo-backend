@@ -25,4 +25,9 @@ export class CreatePaymentIntentDto {
   @Type(() => Number)
   @IsInt()
   customerId?: number;
+
+  /** Updates the server checkout session with the created payment row. */
+  @IsOptional()
+  @IsString()
+  checkoutSessionToken?: string;
 }

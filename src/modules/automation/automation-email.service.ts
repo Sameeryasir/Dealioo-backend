@@ -33,6 +33,53 @@ export class AutomationEmailService {
     private readonly emailRenderer: AutomationEmailRendererService,
   ) {}
 
+  /** Build email content from either a Send Email or Send Text step (payment reminders send email). */
+  prepareFromActionNode(
+    actionNode: { type: string; config?: Record<string, unknown> | null },
+    purpose: AutomationPurpose,
+    options?: { requireSubject?: boolean; campaignName?: string },
+  ): PreparedAutomationEmail {
+    const config = actionNode.config ?? {};
+    const nodeType = String(actionNode.type ?? '').toLowerCase();
+
+    if (nodeType === 'email') {
+      return this.prepareFromEmailNode(config, purpose, options);
+    }
+
+    const campaignName = options?.campaignName?.trim() || 'the campaign';
+    const defaults = getPurposeEmailDefaults(purpose, campaignName);
+    const message = String(config.message ?? '').trim();
+    const ctaLabel = String(
+      config.ctaLabel ?? config.linkLabel ?? defaults.ctaLabel ?? 'Complete payment',
+    ).trim();
+
+    const subject = resolveSubjectForPurpose(
+      purpose,
+      String(config.subject ?? '').trim(),
+      campaignName,
+      String(config.template ?? config.templateId ?? '').trim(),
+    );
+
+    if (options?.requireSubject && !subject) {
+      throw new BadRequestException(
+        'Action step must include a subject or use a template with a default subject.',
+      );
+    }
+
+    return {
+      subject: subject || defaults.subject || 'Complete your payment',
+      templateKey: resolveEmailTemplateKey(
+        purpose,
+        String(config.template ?? config.templateId ?? 'Payment reminder').trim(),
+      ),
+      templateProps: {
+        message: message || defaults.message,
+        headline: String(config.headline ?? defaults.headline ?? '').trim() || undefined,
+        ctaLabel: ctaLabel || undefined,
+      },
+    };
+  }
+
   prepareFromEmailNode(
     emailNodeConfig: Record<string, unknown>,
     purpose: AutomationPurpose,
@@ -69,6 +116,8 @@ export class AutomationEmailService {
     }
     if (parsed.ctaLabel) {
       templateProps.ctaLabel = parsed.ctaLabel;
+    } else if (defaults.ctaLabel) {
+      templateProps.ctaLabel = defaults.ctaLabel;
     }
     if (parsed.ctaUrl) {
       templateProps.ctaUrl = parsed.ctaUrl;
@@ -123,11 +172,28 @@ export class AutomationEmailService {
     prepared: PreparedAutomationEmail,
     recipients: EmailRecipient[],
     subject: string,
+    recipientTemplateOverrides?: Map<
+      number,
+      Partial<PreparedAutomationEmail['templateProps']>
+    >,
   ): Promise<RenderedRecipientEmail[]> {
     return Promise.all(
       recipients.map(async (recipient) => {
+        const overrides =
+          recipient.customerId != null
+            ? recipientTemplateOverrides?.get(recipient.customerId)
+            : undefined;
+        const mergedPrepared: PreparedAutomationEmail = overrides
+          ? {
+              ...prepared,
+              templateProps: {
+                ...prepared.templateProps,
+                ...overrides,
+              },
+            }
+          : prepared;
         const { html, text } = await this.renderForRecipient(
-          prepared,
+          mergedPrepared,
           recipient,
           subject,
         );
@@ -145,6 +211,7 @@ export class AutomationEmailService {
     rendered: RenderedRecipientEmail[],
     subject: string,
     extraTags: string[] = [],
+    options?: { preferRenderedHtml?: boolean },
   ): Promise<AutomationEmailSendResult> {
     if (rendered.length === 0) {
       return {
@@ -162,7 +229,8 @@ export class AutomationEmailService {
     );
 
     try {
-      if (templateId) {
+      // Use rendered HTML when the flow step has custom body copy (not a static Brevo template).
+      if (templateId && !options?.preferRenderedHtml) {
         const bulk = await this.withTimeout(
           this.brevo.sendBulkTransactionalEmail({
             recipients: rendered.map((recipient) => ({
@@ -239,17 +307,25 @@ export class AutomationEmailService {
     recipients: EmailRecipient[],
     prepared: PreparedAutomationEmail,
     extraTags: string[] = [],
+    recipientTemplateOverrides?: Map<
+      number,
+      Partial<PreparedAutomationEmail['templateProps']>
+    >,
   ): Promise<AutomationEmailSendResult> {
     const rendered = await this.renderRecipients(
       prepared,
       recipients,
       prepared.subject,
+      recipientTemplateOverrides,
     );
     return this.deliverRendered(
       purpose,
       rendered,
       prepared.subject,
       extraTags,
+      {
+        preferRenderedHtml: Boolean(prepared.templateProps.message?.trim()),
+      },
     );
   }
 
@@ -293,6 +369,9 @@ export class AutomationEmailService {
       rendered,
       prepared.subject,
       extraTags,
+      {
+        preferRenderedHtml: Boolean(prepared.templateProps.message?.trim()),
+      },
     );
   }
 

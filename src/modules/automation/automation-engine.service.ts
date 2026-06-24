@@ -6,6 +6,7 @@ import { AutomationExecutionStatus } from '../../db/entities/automation-executio
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type { AutomationExecution } from '../../db/entities/automation-execution.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -23,6 +24,7 @@ import { AutomationEmailService } from './automation-email.service';
 import { AutomationQueueService } from './automation-queue.service';
 import { MAX_AUTOMATION_EXECUTION_STEPS } from './automation-queue.constants';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
+import { isCustomerVisitedCondition } from './automation-visit.util';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
 
@@ -41,6 +43,8 @@ export class AutomationEngineService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(CustomerVisit)
+    private readonly customerVisitRepository: Repository<CustomerVisit>,
     private readonly couponService: CouponService,
     private readonly activityService: ActivityService,
   ) {}
@@ -414,6 +418,35 @@ export class AutomationEngineService {
         const conditionType = String(
           config.conditionType ?? config.type ?? '',
         );
+
+        if (isCustomerVisitedCondition(conditionType)) {
+          const visited = await this.customerHasVisitedForAutomation(execution);
+          if (visited) {
+            await this.logService.createLog({
+              executionId: execution.id,
+              nodeId: node.id,
+              customerId: execution.customerId,
+              message: 'Customer visited — continuing workflow',
+            });
+            return 'advance';
+          }
+
+          await this.executionService.updateCurrentNode(
+            execution.id,
+            node.id,
+            AutomationExecutionStatus.WAITING,
+            null,
+          );
+          await this.logService.createLog({
+            executionId: execution.id,
+            nodeId: node.id,
+            customerId: execution.customerId,
+            message:
+              'Waiting for customer visit (pass scan at restaurant — no visit date required)',
+          });
+          return 'wait';
+        }
+
         const stopFlow = await this.shouldStopAfterCondition(
           execution,
           conditionType,
@@ -442,6 +475,10 @@ export class AutomationEngineService {
         return 'advance';
 
       case AutomationNodeType.TAG: {
+        if (String(config.workflowKind ?? '') === 'prepaid_payment_actions') {
+          return this.runPrepaidPaymentActionsNode(execution, node, config);
+        }
+
         if (String(config.workflowKind ?? '') === 'actions') {
           return this.runBundledActionsNode(execution, node, config);
         }
@@ -516,6 +553,72 @@ export class AutomationEngineService {
     }
 
     return false;
+  }
+
+  /** Prepaid Offer: confirmation / follow-up emails in one Actions node. */
+  private async runPrepaidPaymentActionsNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    config: Record<string, unknown>,
+  ): Promise<NodeRunResult> {
+    const actions = Array.isArray(config.actions) ? config.actions : [];
+    const purpose = execution.automation.purpose;
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
+    const to = execution.customer?.email?.trim() ?? '';
+    let emailFailed = false;
+
+    for (const rawAction of actions) {
+      if (!rawAction || typeof rawAction !== 'object') {
+        continue;
+      }
+
+      const action = rawAction as Record<string, unknown>;
+      const actionType = String(action.type ?? '').trim().toLowerCase();
+
+      if (actionType !== 'send_email') {
+        continue;
+      }
+
+      const emailConfig = await this.enrichPaymentEmailConfig(
+        purpose,
+        execution,
+        action,
+      );
+
+      const sendResult = await this.automationEmailService.sendToCustomer(
+        purpose,
+        {
+          customerId: execution.customerId,
+          email: to,
+          name: execution.customer?.name ?? '',
+        },
+        emailConfig,
+        campaignName,
+      );
+
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: sendResult.sent
+          ? `Email sent to ${to}`
+          : to
+            ? `Email failed: ${sendResult.error ?? 'unknown error'}`
+            : 'Email skipped (missing customer email)',
+        error: sendResult.error,
+      });
+
+      if (sendResult.sent) {
+        await this.executionService.incrementEmailsSent(execution.id);
+      } else if (to && sendResult.error) {
+        emailFailed = true;
+      }
+    }
+
+    return emailFailed ? 'failed' : 'advance';
   }
 
   private async runBundledActionsNode(
@@ -695,5 +798,21 @@ export class AutomationEngineService {
     }
 
     return `${getFrontendBaseUrl()}/pass/${event.funnelPaymentId}`;
+  }
+
+  private async customerHasVisitedForAutomation(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+  ): Promise<boolean> {
+    const campaignId = execution.automation?.campaignId;
+    if (!campaignId) {
+      return false;
+    }
+
+    return this.customerVisitRepository.exist({
+      where: {
+        customerId: execution.customerId,
+        campaignId,
+      },
+    });
   }
 }

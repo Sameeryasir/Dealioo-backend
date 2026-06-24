@@ -96,6 +96,36 @@ export class AutomationLogService {
     return map;
   }
 
+  async hasBatchPhaseEmailSent(
+    executionId: number,
+    nodeId: number,
+    phase: 'payment' | 'pass',
+  ): Promise<boolean> {
+    const pattern =
+      phase === 'pass' ? 'QR pass email sent%' : 'Payment reminder email sent%';
+
+    return this.automationLogRepository
+      .createQueryBuilder('log')
+      .where('log.executionId = :executionId', { executionId })
+      .andWhere('log.nodeId = :nodeId', { nodeId })
+      .andWhere('log.message ILIKE :pattern', { pattern })
+      .getExists();
+  }
+
+  async hasPassFollowUpScheduled(executionId: number): Promise<boolean> {
+    return this.automationLogRepository
+      .createQueryBuilder('log')
+      .where('log.executionId = :executionId', { executionId })
+      .andWhere(
+        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
+        {
+          wait: 'Wait % minute(s) before sending QR pass email',
+          schedule: 'Scheduling QR pass email',
+        },
+      )
+      .getExists();
+  }
+
   async countDistinctEmailRecipientsForAutomation(
     automationId: number,
   ): Promise<number> {

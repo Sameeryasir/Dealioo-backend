@@ -1,5 +1,5 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AUTOMATION_QUEUE, AUTOMATION_JOB_CLEANUP_OPTIONS } from './automation-queue.constants';
@@ -10,6 +10,7 @@ import { AutomationLog } from '../../db/entities/automation-log.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
@@ -17,6 +18,7 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
+import { PaymentModule } from '../payment/payment.module';
 import { AutomationController } from './automation.controller';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationEmailService } from './automation-email.service';
@@ -58,10 +60,12 @@ import { AutomationService } from './automation.service';
       FunnelEvent,
       FunnelPayment,
       Customer,
+      CustomerVisit,
     ]),
     ActivityModule,
     AuthModule,
-    RedemptionModule,
+    forwardRef(() => RedemptionModule),
+    forwardRef(() => PaymentModule),
   ],
   controllers: [AutomationController],
   providers: [

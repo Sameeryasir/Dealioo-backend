@@ -37,7 +37,9 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { ActivityService } from '../activity/activity.service';
+import { CheckoutResumeService } from '../payment/checkout-resume.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
@@ -49,10 +51,14 @@ import {
   clampAutomationNodeOrder,
   isCronTriggerAutomationNode,
   isCronTriggerNodePayload,
+  resolveCronFromAutomationNodes,
 } from './automation-cron.config';
 import { AutomationQueueService } from './automation-queue.service';
-import type { EmailRecipient } from './automation-email.types';
-import type { UnpaidReminderBatchJob } from './automation-queue.types';
+import type { EmailRecipient, PreparedAutomationEmail } from './automation-email.types';
+import type {
+  UnpaidReminderBatchJob,
+  UnpaidReminderBatchPhase,
+} from './automation-queue.types';
 import {
   AutomationExecutionStatusDto,
   ExecuteAutomationResponseDto,
@@ -68,6 +74,9 @@ import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
+import { resolveWaitDelayMinutes } from './automation-wait.util';
+import { isCustomerVisitedCondition } from './automation-visit.util';
+import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
 
 @Injectable()
 export class AutomationService {
@@ -95,6 +104,7 @@ export class AutomationService {
     private readonly queueService: AutomationQueueService,
     private readonly cronScheduler: AutomationCronSchedulerService,
     private readonly activityService: ActivityService,
+    private readonly checkoutResumeService: CheckoutResumeService,
   ) {}
 
   async createAutomation(
@@ -134,6 +144,8 @@ export class AutomationService {
 
     const automation = await this.findAutomationById(id);
 
+    const wasActive = automation.isActive;
+
     if (dto.name !== undefined) {
       automation.name = dto.name;
     }
@@ -155,6 +167,13 @@ export class AutomationService {
     if (dto.published !== undefined) {
       automation.published = dto.published;
     }
+
+    const willBeActive =
+      dto.isActive !== undefined ? dto.isActive : automation.isActive;
+    if (willBeActive) {
+      await this.assertPaymentReminderScheduleForAutomation(automation);
+    }
+
     if (dto.isTemplate !== undefined) {
       automation.isTemplate = dto.isTemplate;
     }
@@ -170,6 +189,16 @@ export class AutomationService {
 
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
+
+    if (
+      !wasActive &&
+      saved.isActive &&
+      saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
+      !(await this.isCronDrivenAutomation(saved.id))
+    ) {
+      await this.startSignupPaymentReminderForEligibleCustomers(saved);
+    }
+
     return saved;
   }
 
@@ -214,15 +243,28 @@ export class AutomationService {
     requireAdminRole(user, 'You do not have permission to publish automations.');
     const automation = await this.findAutomationById(id);
     automation.published = true;
-    return this.automationRepository.save(automation);
+    const saved = await this.automationRepository.save(automation);
+    await this.cronScheduler.syncAutomationCron(saved.id);
+    return saved;
   }
 
   async activateAutomation(id: number, user: User): Promise<Automation> {
     requireAdminRole(user, 'You do not have permission to activate automations.');
     const automation = await this.findAutomationById(id);
+    await this.assertPaymentReminderScheduleForAutomation(automation);
+    const wasActive = automation.isActive;
     automation.isActive = true;
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
+
+    if (
+      !wasActive &&
+      saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
+      !(await this.isCronDrivenAutomation(saved.id))
+    ) {
+      await this.startSignupPaymentReminderForEligibleCustomers(saved);
+    }
+
     return saved;
   }
 
@@ -357,6 +399,23 @@ export class AutomationService {
         order: { order: 'ASC', id: 'ASC' },
       });
       node.order = clampAutomationNodeOrder(node, dto.order, siblings);
+    }
+
+    const automation = await this.automationRepository.findOne({
+      where: { id: node.automationId },
+    });
+    if (automation) {
+      const siblings = await this.nodeRepository.find({
+        where: { automationId: node.automationId },
+        order: { order: 'ASC', id: 'ASC' },
+      });
+      const nodesForValidation = siblings.map((sibling) =>
+        sibling.id === node.id ? node : sibling,
+      );
+      assertPaymentReminderScheduleValid(
+        automation.purpose,
+        nodesForValidation,
+      );
     }
 
     const saved = await this.nodeRepository.save(node);
@@ -630,10 +689,10 @@ export class AutomationService {
     }
 
     if (
-      await this.executionService.hasActiveExecutionForAutomation(automationId)
+      await this.executionService.hasBlockingBatchSendForAutomation(automationId)
     ) {
       this.logger.log(
-        `Cron tick skipped for automation ${automationId}: execution already running`,
+        `Cron tick skipped for automation ${automationId}: batch send already in progress`,
       );
       return;
     }
@@ -662,14 +721,49 @@ export class AutomationService {
     options: { skipIfNoRecipients: boolean; triggeredByCron: boolean },
   ): Promise<StartAutomationExecutionResponseDto | null> {
     const plan = await this.flowService.buildExecutionPlan(automation.id);
+    const actionNode = plan.emailNode ?? plan.smsNode;
+    if (!actionNode) {
+      throw new BadRequestException(
+        'Flow must include an email or SMS node (check node_order and type).',
+      );
+    }
 
     const campaignName =
       automation.campaign?.campaignName?.trim() || 'the campaign';
-    const prepared = this.automationEmailService.prepareFromEmailNode(
-      plan.emailNode!.config ?? {},
+    const prepared = this.automationEmailService.prepareFromActionNode(
+      actionNode,
       automation.purpose,
-      { requireSubject: true, campaignName },
+      {
+        requireSubject: Boolean(plan.emailNode),
+        campaignName,
+      },
     );
+
+    if (
+      automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
+    ) {
+      if (!String(prepared.templateProps.ctaLabel ?? '').trim()) {
+        prepared.templateProps.ctaLabel = 'Complete payment';
+      }
+    }
+
+    let passPrepared: PreparedAutomationEmail | null = null;
+    let waitDelayMs = 0;
+    if (plan.passEmailNode) {
+      passPrepared = this.automationEmailService.prepareFromActionNode(
+        plan.passEmailNode,
+        automation.purpose,
+        { requireSubject: false, campaignName },
+      );
+      if (!String(passPrepared.templateProps.ctaLabel ?? '').trim()) {
+        passPrepared.templateProps.ctaLabel = 'View my pass';
+      }
+      if (plan.waitBeforePassNode) {
+        waitDelayMs =
+          resolveWaitDelayMinutes(plan.waitBeforePassNode.config ?? {}) *
+          60_000;
+      }
+    }
 
     let recipients: EmailRecipient[] = [];
     if (plan.sendToUnpaidOnly) {
@@ -711,13 +805,20 @@ export class AutomationService {
     const batch: UnpaidReminderBatchJob = {
       executionId: execution.id,
       restaurantId: automation.restaurantId,
-      emailNodeId: plan.emailNode!.id,
-      conditionNodeId: plan.conditionNode?.id ?? plan.emailNode!.id,
+      funnelId: automation.funnelId!,
+      campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
+      emailNodeId: actionNode.id,
+      conditionNodeId: plan.conditionNode?.id ?? actionNode.id,
       purpose: automation.purpose,
       prepared,
       plan,
       recipients,
       anchorStepOnTrigger,
+      batchPhase: 'payment',
+      passPrepared,
+      passEmailNodeId: plan.passEmailNode?.id ?? null,
+      waitBeforePassNodeId: plan.waitBeforePassNode?.id ?? null,
+      waitDelayMs,
     };
 
     const queueJobId =
@@ -730,9 +831,64 @@ export class AutomationService {
   }
 
   async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
+    const batchPhase = batch.batchPhase ?? 'payment';
+    const actionNode = batch.plan.emailNode ?? batch.plan.smsNode;
+    const isSmsBatch = Boolean(batch.plan.smsNode && !batch.plan.emailNode);
+    const sendAsEmail =
+      Boolean(batch.prepared) &&
+      (batch.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+        batch.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
+        Boolean(batch.plan.emailNode));
+
+    const firstCustomerId = batch.recipients[0]?.customerId;
+    if (firstCustomerId == null) {
+      await this.executionService.markFailed(
+        batch.executionId,
+        'No recipients in batch',
+      );
+      return;
+    }
+
+    const phaseAlreadySent = await this.logService.hasBatchPhaseEmailSent(
+      batch.executionId,
+      batch.emailNodeId,
+      batchPhase,
+    );
+
+    if (batchPhase === 'pass') {
+      batch.recipients = await this.recipientsService.filterStillUnpaidRecipients(
+        batch.funnelId,
+        batch.recipients,
+      );
+
+      if (batch.recipients.length === 0) {
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          customerId: firstCustomerId,
+          message:
+            'QR pass email skipped — all recipients completed payment during wait',
+        });
+        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+          allowEmptySent: true,
+        });
+        return;
+      }
+
+      if (phaseAlreadySent) {
+        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+          allowEmptySent: true,
+        });
+        return;
+      }
+    } else if (phaseAlreadySent) {
+      await this.schedulePassFollowUpIfNeeded(batch, firstCustomerId);
+      return;
+    }
+
     await this.executionService.markProcessing(batch.executionId);
 
-    if (!batch.anchorStepOnTrigger) {
+    if (!batch.anchorStepOnTrigger && batchPhase === 'payment') {
       if (batch.plan.conditionNode) {
         await this.executionService.updateCurrentNode(
           batch.executionId,
@@ -746,17 +902,29 @@ export class AutomationService {
       );
     }
 
+    if (batchPhase === 'pass' && batch.waitBeforePassNodeId) {
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.waitBeforePassNodeId,
+      );
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+      );
+    }
+
     const sent: { customerId: number; email: string }[] = [];
     const pathSummary = batch.plan.nodes
       .map((node) => `order ${node.order}:${node.type}`)
       .join(' → ');
-    const firstCustomerId = batch.recipients[0].customerId;
 
     await this.logService.createLog({
       executionId: batch.executionId,
       nodeId: batch.emailNodeId,
       customerId: firstCustomerId,
-      message: `Step 0 email node: subject "${batch.prepared.subject}" loaded. Flow: ${pathSummary}`,
+      message: isSmsBatch
+        ? `Step 0 SMS node loaded. Flow: ${pathSummary}`
+        : `Step 0 email node: subject "${batch.prepared?.subject ?? ''}" loaded. Flow: ${pathSummary}`,
     });
 
     if (batch.plan.conditionNode) {
@@ -773,20 +941,8 @@ export class AutomationService {
       });
     }
 
-    try {
-      const sendResult = await this.automationEmailService.sendBulkToRecipients(
-        batch.purpose,
-        batch.recipients,
-        batch.prepared,
-        ['unpaid_reminder_batch'],
-      );
-
-      if (!sendResult.sent) {
-        throw new Error(sendResult.error ?? 'Bulk email send failed');
-      }
-
-      const messagePreview =
-        this.automationEmailService.resolvePreparedEmailPreview(batch.prepared);
+    if (isSmsBatch && !sendAsEmail) {
+      const smsMessage = String(actionNode?.config?.message ?? '').trim();
 
       for (const recipient of batch.recipients) {
         if (!recipient.customerId) {
@@ -800,7 +956,148 @@ export class AutomationService {
           executionId: batch.executionId,
           nodeId: batch.emailNodeId,
           customerId: recipient.customerId,
-          message: `Payment reminder email sent to ${recipient.email} (bulk)`,
+          message: `Payment reminder text sent to ${recipient.email} (bulk)`,
+        });
+        sent.push({
+          customerId: recipient.customerId,
+          email: recipient.email,
+        });
+      }
+
+      if (sent.length === 0 && batch.recipients[0]) {
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          customerId: batch.recipients[0].customerId,
+          message: 'Workflow completed. No texts were sent.',
+          error: 'All send attempts failed',
+        });
+        if (batch.anchorStepOnTrigger) {
+          await this.executionService.updateCurrentNode(
+            batch.executionId,
+            batch.plan.startNodeId,
+          );
+        }
+        await this.executionService.markFailed(
+          batch.executionId,
+          'All send attempts failed',
+        );
+        return;
+      }
+
+      if (sent.length > 0) {
+        const summary = sent
+          .map((recipient) => `${recipient.email} (#${recipient.customerId})`)
+          .join(', ');
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.plan.nodes[batch.plan.nodes.length - 1].id,
+          customerId: sent[sent.length - 1].customerId,
+          message: `Flow completed (node_order end). Texts sent to ${sent.length} customer(s): ${summary}`,
+        });
+        if (smsMessage) {
+          await this.executionService.incrementEmailsSentBy(
+            batch.executionId,
+            sent.length,
+          );
+        }
+      }
+
+      if (batch.anchorStepOnTrigger) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.startNodeId,
+        );
+      } else {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.endNodeId,
+        );
+      }
+      await this.executionService.markCompleted(batch.executionId);
+      return;
+    }
+
+    try {
+      const recipientTemplateOverrides = new Map<
+        number,
+        Partial<PreparedAutomationEmail['templateProps']>
+      >();
+
+      if (
+        batchPhase === 'payment' &&
+        batch.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
+      ) {
+        for (const recipient of batch.recipients) {
+          if (!recipient.customerId) {
+            continue;
+          }
+          try {
+            const issued = await this.checkoutResumeService.createSession({
+              customerId: recipient.customerId,
+              funnelId: batch.funnelId,
+              restaurantId: batch.restaurantId,
+              campaignId: batch.campaignId,
+            });
+            recipientTemplateOverrides.set(recipient.customerId, {
+              ctaUrl: issued.checkoutUrl,
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Could not create checkout link';
+            this.logger.warn(
+              `Checkout link skipped for customer ${recipient.customerId}: ${message}`,
+            );
+          }
+        }
+      }
+
+      if (batchPhase === 'pass') {
+        for (const recipient of batch.recipients) {
+          if (!recipient.customerId) {
+            continue;
+          }
+          recipientTemplateOverrides.set(recipient.customerId, {
+            ctaUrl: `${getFrontendBaseUrl()}/pass/guest/${recipient.customerId}/${batch.funnelId}`,
+          });
+        }
+      }
+
+      const sendResult = await this.automationEmailService.sendBulkToRecipients(
+        batch.purpose,
+        batch.recipients,
+        batch.prepared!,
+        ['unpaid_reminder_batch'],
+        recipientTemplateOverrides.size > 0
+          ? recipientTemplateOverrides
+          : undefined,
+      );
+
+      if (!sendResult.sent) {
+        throw new Error(sendResult.error ?? 'Bulk email send failed');
+      }
+
+      const messagePreview =
+        this.automationEmailService.resolvePreparedEmailPreview(batch.prepared!);
+
+      for (const recipient of batch.recipients) {
+        if (!recipient.customerId) {
+          continue;
+        }
+        await this.executionService.updateCustomerId(
+          batch.executionId,
+          recipient.customerId,
+        );
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          customerId: recipient.customerId,
+          message:
+            batchPhase === 'pass'
+              ? `QR pass email sent to ${recipient.email} (bulk)`
+              : `Payment reminder email sent to ${recipient.email} (bulk)`,
         });
         await this.activityService.logMessageSent({
           restaurantId: batch.restaurantId,
@@ -823,6 +1120,15 @@ export class AutomationService {
         batch.executionId,
         sendResult.recipientCount,
       );
+
+      if (
+        batchPhase === 'payment' &&
+        batch.passPrepared &&
+        batch.passEmailNodeId
+      ) {
+        await this.schedulePassFollowUpIfNeeded(batch, firstCustomerId);
+        return;
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Bulk email send failed';
@@ -843,6 +1149,69 @@ export class AutomationService {
       return;
     }
 
+    await this.finishUnpaidReminderBatchExecution(batch, batchPhase, sent);
+  }
+
+  private async schedulePassFollowUpIfNeeded(
+    batch: UnpaidReminderBatchJob,
+    customerId: number,
+  ): Promise<void> {
+    if (!batch.passPrepared || !batch.passEmailNodeId) {
+      return;
+    }
+
+    if (await this.logService.hasPassFollowUpScheduled(batch.executionId)) {
+      const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        batch.waitDelayMs && batch.waitDelayMs > 0
+          ? new Date(Date.now() + batch.waitDelayMs)
+          : null,
+      );
+      return;
+    }
+
+    const waitMinutes = Math.round((batch.waitDelayMs ?? 0) / 60_000);
+    await this.logService.createLog({
+      executionId: batch.executionId,
+      nodeId: batch.waitBeforePassNodeId ?? batch.passEmailNodeId,
+      customerId,
+      message:
+        waitMinutes > 0
+          ? `Wait ${waitMinutes} minute(s) before sending QR pass email`
+          : 'Scheduling QR pass email',
+    });
+
+    await this.queueService.addUnpaidReminderBatch(
+      {
+        ...batch,
+        batchPhase: 'pass',
+        emailNodeId: batch.passEmailNodeId,
+        prepared: batch.passPrepared,
+        anchorStepOnTrigger: false,
+      },
+      batch.waitDelayMs ?? 0,
+    );
+
+    const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
+    await this.executionService.updateCurrentNode(
+      batch.executionId,
+      waitNodeId,
+      AutomationExecutionStatus.WAITING,
+      batch.waitDelayMs && batch.waitDelayMs > 0
+        ? new Date(Date.now() + batch.waitDelayMs)
+        : null,
+    );
+  }
+
+  private async finishUnpaidReminderBatchExecution(
+    batch: UnpaidReminderBatchJob,
+    batchPhase: UnpaidReminderBatchPhase,
+    sent: { customerId: number; email: string }[] = [],
+    options?: { allowEmptySent?: boolean },
+  ): Promise<void> {
     if (sent.length > 0) {
       const summary = sent
         .map((recipient) => `${recipient.email} (#${recipient.customerId})`)
@@ -851,9 +1220,12 @@ export class AutomationService {
         executionId: batch.executionId,
         nodeId: batch.plan.nodes[batch.plan.nodes.length - 1].id,
         customerId: sent[sent.length - 1].customerId,
-        message: `Flow completed (node_order end). Emails sent to ${sent.length} customer(s): ${summary}`,
+        message:
+          batchPhase === 'pass'
+            ? `Flow completed (node_order end). QR pass emails sent to ${sent.length} customer(s): ${summary}`
+            : `Flow completed (node_order end). Emails sent to ${sent.length} customer(s): ${summary}`,
       });
-    } else if (batch.recipients[0]) {
+    } else if (!options?.allowEmptySent && batch.recipients[0]?.customerId) {
       await this.logService.createLog({
         executionId: batch.executionId,
         nodeId: batch.emailNodeId,
@@ -1066,6 +1438,23 @@ export class AutomationService {
       return;
     }
 
+    if (
+      automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
+      automation.funnelId
+    ) {
+      if (await this.isCronDrivenAutomation(automation.id)) {
+        return;
+      }
+
+      const eligible = await this.recipientsService.isSignedUpAndUnpaidOnFunnel(
+        automation.funnelId,
+        event.customerId,
+      );
+      if (!eligible) {
+        return;
+      }
+    }
+
     const hasActive = await this.executionService.hasActiveExecution(
       automation.id,
       event.customerId,
@@ -1200,10 +1589,11 @@ export class AutomationService {
 
     if (
       signupPurposes.has(purpose) &&
-      trigger !== AutomationTrigger.SIGNUP
+      trigger !== AutomationTrigger.SIGNUP &&
+      trigger !== AutomationTrigger.CRON
     ) {
       throw new BadRequestException(
-        'Signup payment reminder automations require trigger "signup".',
+        'Signup payment reminder automations require trigger "signup" or "cron".',
       );
     }
 
@@ -1222,6 +1612,57 @@ export class AutomationService {
     ) {
       throw new BadRequestException(
         'Abandoned checkout automations require trigger "abandoned_checkout".',
+      );
+    }
+  }
+
+  private async assertPaymentReminderScheduleForAutomation(
+    automation: Automation,
+  ): Promise<void> {
+    const nodes = await this.nodeRepository.find({
+      where: { automationId: automation.id },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+    assertPaymentReminderScheduleValid(automation.purpose, nodes);
+  }
+
+  private async isCronDrivenAutomation(automationId: number): Promise<boolean> {
+    const nodes = await this.nodeRepository.find({
+      where: { automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+    return resolveCronFromAutomationNodes(nodes) !== null;
+  }
+
+  private async startSignupPaymentReminderForEligibleCustomers(
+    automation: Automation,
+  ): Promise<void> {
+    if (!automation.funnelId) {
+      return;
+    }
+
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: automation.funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
+      return;
+    }
+
+    const customerIds =
+      await this.recipientsService.findSignedUpUnpaidCustomerIdsForFunnel(
+        automation.funnelId,
+      );
+
+    for (const customerId of customerIds) {
+      await this.tryStartAutomationForEvent(
+        automation,
+        {
+          funnelId: automation.funnelId,
+          customerId,
+          eventType: FunnelEventType.SIGNUP,
+        } as FunnelEvent,
+        funnel,
       );
     }
   }
@@ -1247,6 +1688,58 @@ export class AutomationService {
     }
 
     return true;
+  }
+
+  /**
+   * Resumes Prepaid Offer flows paused on "Customer visited" after a pass scan.
+   * No scheduled visit date is stored — we only react to actual visits in customer_visits.
+   */
+  async resumeWaitingExecutionsAfterCustomerVisit(
+    customerId: number,
+    campaignId: number,
+  ): Promise<void> {
+    const executions =
+      await this.executionService.findActiveExecutionsForCustomer(customerId);
+
+    for (const execution of executions) {
+      if (execution.status !== AutomationExecutionStatus.WAITING) {
+        continue;
+      }
+      if (execution.automation?.campaignId !== campaignId) {
+        continue;
+      }
+      if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+        continue;
+      }
+      if (!execution.currentNodeId) {
+        continue;
+      }
+
+      const node = await this.nodeRepository.findOne({
+        where: {
+          id: execution.currentNodeId,
+          automationId: execution.automationId,
+        },
+      });
+      if (!node || node.type !== AutomationNodeType.CONDITION) {
+        continue;
+      }
+
+      const config = (node.config ?? {}) as Record<string, unknown>;
+      const conditionType = String(config.conditionType ?? config.type ?? '');
+      if (!isCustomerVisitedCondition(conditionType)) {
+        continue;
+      }
+
+      this.logger.log(
+        `Resuming execution ${execution.id} after customer ${customerId} visited campaign ${campaignId}`,
+      );
+
+      await this.queueService.addProcessExecution({
+        executionId: execution.id,
+        nodeId: execution.currentNodeId,
+      });
+    }
   }
 
   private async resolveScopeFromCampaign(

@@ -12,7 +12,9 @@ import type {
   ProcessExecutionJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
+  UnpaidReminderBatchPhase,
 } from './automation-queue.types';
+import { unpaidReminderBatchJobId } from './automation-queue.types';
 
 @Injectable()
 export class AutomationQueueService {
@@ -23,17 +25,47 @@ export class AutomationQueueService {
 
   async addUnpaidReminderBatch(
     data: UnpaidReminderBatchJob,
+    delayMs = 0,
   ): Promise<string> {
+    const phase = data.batchPhase ?? 'payment';
+    const jobId = unpaidReminderBatchJobId(data.executionId, phase);
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'completed'
+      ) {
+        return jobId;
+      }
+      await existing.remove();
+    }
+
     const job = await this.queue.add(
       AutomationJobName.UNPAID_REMINDER_BATCH,
       data,
       {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
+        jobId,
+        attempts: 1,
+        ...(delayMs > 0 ? { delay: delayMs } : {}),
         ...AUTOMATION_JOB_CLEANUP_OPTIONS,
       },
     );
-    return job.id ?? '';
+    return job.id ?? jobId;
+  }
+
+  async removeUnpaidReminderBatchJob(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase = 'pass',
+  ): Promise<void> {
+    const job = await this.queue.getJob(
+      unpaidReminderBatchJobId(executionId, phase),
+    );
+    if (job) {
+      await job.remove();
+    }
   }
 
   async addProcessExecution(data: ProcessExecutionJob): Promise<string> {

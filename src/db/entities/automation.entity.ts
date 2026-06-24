@@ -24,6 +24,7 @@ export enum AutomationTrigger {
   ABANDONED_CHECKOUT = 'abandoned_checkout',
   FIRST_PURCHASE = 'first_purchase',
   NO_VISIT = 'no_visit',
+  CRON = 'cron',
 }
 
 @Entity('automation')

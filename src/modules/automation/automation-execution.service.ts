@@ -231,6 +231,21 @@ export class AutomationExecutionService {
     });
   }
 
+  /** True while a batch is actively sending (cron may still run during pass wait). */
+  async hasBlockingBatchSendForAutomation(
+    automationId: number,
+  ): Promise<boolean> {
+    return this.executionRepository.exist({
+      where: {
+        automationId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+        ]),
+      },
+    });
+  }
+
   async findActiveExecutionsForCustomer(
     customerId: number,
   ): Promise<AutomationExecution[]> {

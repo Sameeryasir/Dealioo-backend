@@ -11,6 +11,7 @@ import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
+import { AutomationModule } from '../automation/automation.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
 import { RedemptionValidationService } from './redemption-validation.service';
@@ -34,6 +35,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     ]),
     AuthModule,
     forwardRef(() => ActivityModule),
+    forwardRef(() => AutomationModule),
   ],
   controllers: [RedemptionController],
   providers: [

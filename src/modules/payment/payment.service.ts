@@ -27,6 +27,7 @@ import {
 } from './payment-logger';
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
+import { CheckoutResumeService } from './checkout-resume.service';
 
 @Injectable()
 export class PaymentService implements OnModuleInit {
@@ -45,6 +46,7 @@ export class PaymentService implements OnModuleInit {
     private readonly stripeWebhookService: StripeWebhookService,
     private readonly paymentWebhookHandler: PaymentWebhookHandler,
     private readonly couponService: CouponService,
+    private readonly checkoutResumeService: CheckoutResumeService,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -221,8 +223,10 @@ export class PaymentService implements OnModuleInit {
     reused: boolean;
     alreadyCompleted?: boolean;
   }> {
+    const checkoutIdentity = await this.resolveCheckoutIdentity(dto);
+
     const restaurant = await this.restaurantRepository.findOne({
-      where: { id: dto.restaurantId },
+      where: { id: checkoutIdentity.restaurantId },
     });
 
     if (!restaurant) {
@@ -236,7 +240,7 @@ export class PaymentService implements OnModuleInit {
     }
 
     const funnel = await this.funnelRepository.findOne({
-      where: { id: dto.funnelId },
+      where: { id: checkoutIdentity.funnelId },
       relations: ['campaign'],
     });
 
@@ -248,7 +252,7 @@ export class PaymentService implements OnModuleInit {
       throw new NotFoundException('Campaign not found for this funnel');
     }
 
-    if (funnel.campaign.restaurantId !== dto.restaurantId) {
+    if (funnel.campaign.restaurantId !== checkoutIdentity.restaurantId) {
       throw new BadRequestException(
         'This funnel does not belong to the given restaurant.',
       );
@@ -257,7 +261,7 @@ export class PaymentService implements OnModuleInit {
     const stripeAccountId = restaurant.stripeAccountId.trim();
     await this.stripeService.validateConnectedAccount(stripeAccountId);
 
-    const currency = dto.currency.toLowerCase().trim();
+    const currency = checkoutIdentity.currency;
     const amount = campaignPriceToStripeAmount(
       funnel.campaign.price,
       currency,
@@ -282,25 +286,29 @@ export class PaymentService implements OnModuleInit {
     }
 
     const reused = await this.tryReusePendingPayment({
-      funnelId: dto.funnelId,
-      restaurantId: dto.restaurantId,
-      customerEmail: dto.customerEmail,
+      funnelId: checkoutIdentity.funnelId,
+      restaurantId: checkoutIdentity.restaurantId,
+      customerEmail: checkoutIdentity.customerEmail,
       stripeAccountId,
-      customerId: dto.customerId,
+      customerId: checkoutIdentity.customerId,
     });
     if (reused) {
+      await this.attachCheckoutSessionPayment(
+        checkoutIdentity.checkoutSessionToken,
+        reused.paymentId,
+      );
       return reused;
     }
 
     const payment = this.funnelPaymentRepository.create({
-      funnelId: dto.funnelId,
-      restaurantId: dto.restaurantId,
+      funnelId: checkoutIdentity.funnelId,
+      restaurantId: checkoutIdentity.restaurantId,
       campaignId: funnel.campaign.id,
       stripeConnectedAccountId: stripeAccountId,
       amount,
       currency,
       platformFeeAmount: applicationFeeAmount,
-      customerEmail: dto.customerEmail.trim(),
+      customerEmail: checkoutIdentity.customerEmail.trim(),
       status: FunnelPaymentStatus.PENDING,
       stripePaymentIntentId: null,
       refundedAmount: 0,
@@ -316,7 +324,7 @@ export class PaymentService implements OnModuleInit {
         amount,
         currency,
         applicationFeeAmount,
-        receiptEmail: dto.customerEmail.trim(),
+        receiptEmail: checkoutIdentity.customerEmail.trim(),
         idempotencyKey: `payment-intent-${payment.id}`,
         metadata,
       });
@@ -326,8 +334,13 @@ export class PaymentService implements OnModuleInit {
     });
 
     await this.linkSignupPassToPayment(
-      dto.customerId,
-      dto.funnelId,
+      checkoutIdentity.customerId,
+      checkoutIdentity.funnelId,
+      payment.id,
+    );
+
+    await this.attachCheckoutSessionPayment(
+      checkoutIdentity.checkoutSessionToken,
       payment.id,
     );
 
@@ -532,5 +545,69 @@ export class PaymentService implements OnModuleInit {
       createdAt: payment.createdAt,
       updatedAt: payment.updatedAt,
     };
+  }
+
+  private async resolveCheckoutIdentity(dto: CreatePaymentIntentDto): Promise<{
+    funnelId: number;
+    restaurantId: number;
+    currency: string;
+    customerEmail: string;
+    customerId?: number;
+    checkoutSessionToken?: string;
+  }> {
+    const token = dto.checkoutSessionToken?.trim();
+    if (token) {
+      const session = await this.checkoutResumeService.resolveSession(token);
+      if (session.funnelId !== dto.funnelId) {
+        throw new BadRequestException(
+          'Checkout token does not match this funnel.',
+        );
+      }
+      if (session.restaurantId !== dto.restaurantId) {
+        throw new BadRequestException(
+          'Checkout token does not match this restaurant.',
+        );
+      }
+      return {
+        funnelId: session.funnelId,
+        restaurantId: session.restaurantId,
+        currency: dto.currency.toLowerCase().trim(),
+        customerEmail: session.customerEmail,
+        customerId: session.customerId,
+        checkoutSessionToken: token,
+      };
+    }
+
+    return {
+      funnelId: dto.funnelId,
+      restaurantId: dto.restaurantId,
+      currency: dto.currency.toLowerCase().trim(),
+      customerEmail: dto.customerEmail.trim(),
+      customerId: dto.customerId,
+      checkoutSessionToken: undefined,
+    };
+  }
+
+  private async attachCheckoutSessionPayment(
+    checkoutSessionToken: string | undefined,
+    paymentId: number,
+  ): Promise<void> {
+    const token = checkoutSessionToken?.trim();
+    if (!token) {
+      return;
+    }
+
+    try {
+      await this.checkoutResumeService.attachPaymentToSession(token, paymentId);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Checkout session update failed';
+      warnStripePayment({
+        phase: 'checkout_session_attach',
+        outcome: 'failed',
+        paymentId,
+        error: message,
+      });
+    }
   }
 }

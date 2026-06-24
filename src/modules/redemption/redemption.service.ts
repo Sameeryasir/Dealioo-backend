@@ -23,6 +23,7 @@ import {
 } from '../../db/entities/redemption-log.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { ActivityService } from '../activity/activity.service';
+import { AutomationService } from '../automation/automation.service';
 import { CouponService } from './coupon.service';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
@@ -101,6 +102,12 @@ export type ScanPreviewResult =
       message: string;
     };
 
+type CustomerVisitRecordResult = {
+  recorded: boolean;
+  customerId: number;
+  campaignId: number | null;
+};
+
 export type GuestProfileResult = {
   customerId: number;
   customerName: string;
@@ -144,6 +151,8 @@ export class RedemptionService {
     private readonly restaurantRepository: Repository<Restaurant>,
     @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService,
+    @Inject(forwardRef(() => AutomationService))
+    private readonly automationService: AutomationService,
   ) {}
 
   extractToken(raw: string): string {
@@ -287,11 +296,12 @@ export class RedemptionService {
 
     const validation = this.validationService.validateCouponForRedemption(coupon);
 
-    await this.recordVisitFromQrScan({
+    const visit = await this.recordVisitFromQrScan({
       coupon,
       restaurantId,
       audit,
     });
+    await this.notifyAutomationAfterVisit(visit);
 
     const profile = await this.getCustomerRestaurantProfile(
       coupon.customerId,
@@ -465,8 +475,9 @@ export class RedemptionService {
     }
 
     const redeemedAt = new Date();
+    let visitToResume: CustomerVisitRecordResult | null = null;
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const lockedCoupons: Coupon[] = [];
       const restaurant = await manager.findOne(Restaurant, {
         where: { id: restaurantId },
@@ -588,7 +599,7 @@ export class RedemptionService {
 
       const primaryCoupon = lockedCoupons[0];
 
-      await this.recordVisitFromQrScan({
+      const visit = await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         restaurantId,
         audit,
@@ -597,6 +608,9 @@ export class RedemptionService {
         manager,
         restaurantName,
       });
+      if (visit.recorded) {
+        visitToResume = visit;
+      }
 
       return this.buildRedeemSuccessResult(
         manager,
@@ -605,6 +619,12 @@ export class RedemptionService {
         redeemedAt,
       );
     });
+
+    if (visitToResume) {
+      await this.notifyAutomationAfterVisit(visitToResume);
+    }
+
+    return result;
   }
 
   private async recordVisitFromQrScan(params: {
@@ -615,7 +635,7 @@ export class RedemptionService {
     orderSubtotal?: number | null;
     manager?: EntityManager;
     restaurantName?: string;
-  }): Promise<void> {
+  }): Promise<CustomerVisitRecordResult> {
     const visitedAt = params.visitedAt ?? new Date();
     const manager = params.manager ?? this.dataSource.manager;
 
@@ -623,7 +643,11 @@ export class RedemptionService {
       where: { couponId: params.coupon.id },
     });
     if (existingVisit) {
-      return;
+      return {
+        recorded: false,
+        customerId: params.coupon.customerId,
+        campaignId: params.coupon.campaignId,
+      };
     }
 
     let restaurantName = params.restaurantName?.trim();
@@ -653,6 +677,30 @@ export class RedemptionService {
       occurredAt: visitedAt,
       manager: params.manager,
     });
+
+    return {
+      recorded: true,
+      customerId: params.coupon.customerId,
+      campaignId: params.coupon.campaignId,
+    };
+  }
+
+  private async notifyAutomationAfterVisit(
+    visit: CustomerVisitRecordResult,
+  ): Promise<void> {
+    if (!visit.recorded || !visit.campaignId) {
+      return;
+    }
+
+    try {
+      await this.automationService.resumeWaitingExecutionsAfterCustomerVisit(
+        visit.customerId,
+        visit.campaignId,
+      );
+    } catch (error) {
+      // Visit recording must succeed even if automation resume fails.
+      console.error('Failed to resume prepaid-offer automation after visit', error);
+    }
   }
 
   private async buildRedeemSuccessResult(
