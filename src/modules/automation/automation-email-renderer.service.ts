@@ -9,6 +9,7 @@ import type {
   AutomationEmailRenderResult,
   AutomationEmailTemplateProps,
 } from '../../templates/automation/types';
+import { splitAutomationEmailBody } from './automation-email-merge.util';
 
 @Injectable()
 export class AutomationEmailRendererService {
@@ -25,6 +26,21 @@ export class AutomationEmailRendererService {
   }
 
   private buildPlainText(props: AutomationEmailTemplateProps): string {
+    const message = props.message?.trim();
+    if (props.directBody && message) {
+      const lines = [
+        ...splitAutomationEmailBody(message),
+        '',
+        props.ctaUrl
+          ? `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`
+          : null,
+        '',
+        'Best regards,',
+        'Dealioo Team',
+      ].filter((line): line is string => line !== null);
+      return lines.join('\n');
+    }
+
     const name = props.customerName?.trim() || 'there';
     const title = props.headline?.trim() || props.subject?.trim();
     const lines = [

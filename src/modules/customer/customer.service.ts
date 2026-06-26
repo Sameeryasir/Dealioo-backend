@@ -6,10 +6,15 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { AutomationExecution } from '../../db/entities/automation-execution.entity';
+import { AutomationLog } from '../../db/entities/automation-log.entity';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
+import { AutomationQueueService } from '../automation/automation-queue.service';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
 
 @Injectable()
@@ -17,7 +22,10 @@ export class CustomerService {
   constructor(
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(AutomationExecution)
+    private readonly automationExecutionRepository: Repository<AutomationExecution>,
     private readonly dataSource: DataSource,
+    private readonly automationQueueService: AutomationQueueService,
   ) {}
 
   async findAllPaginated(
@@ -126,6 +134,15 @@ export class CustomerService {
   async deleteCustomer(id: number): Promise<void> {
     await this.findById(id);
 
+    const executions = await this.automationExecutionRepository.find({
+      where: { customerId: id },
+      select: ['id'],
+    });
+    const executionIds = executions.map((execution) => execution.id);
+
+    // Stop queued automation jobs before removing execution rows.
+    await this.automationQueueService.purgeExecutionJobs(executionIds);
+
     await this.dataSource.transaction(async (manager) => {
       const coupons = await manager.find(Coupon, {
         where: { customerId: id },
@@ -137,10 +154,15 @@ export class CustomerService {
 
       if (couponIds.length > 0) {
         await manager.delete(RedemptionLog, { couponId: In(couponIds) });
+        await manager.delete(CustomerVisit, { couponId: In(couponIds) });
       }
 
       await manager.delete(RedemptionLog, { customerId: id });
       await manager.delete(Coupon, { customerId: id });
+      await manager.delete(AutomationLog, { customerId: id });
+      await manager.delete(AutomationExecution, { customerId: id });
+      await manager.delete(FunnelEvent, { customerId: id });
+      await manager.delete(CheckoutAccessToken, { customerId: id });
       await manager.delete(Customer, { id });
     });
   }

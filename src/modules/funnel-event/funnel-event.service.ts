@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { And, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
   buildPaginationMeta,
@@ -53,6 +54,8 @@ export class FunnelEventService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(CustomerVisit)
     private readonly customerVisitRepository: Repository<CustomerVisit>,
+    @InjectRepository(CheckoutAccessToken)
+    private readonly checkoutAccessTokenRepository: Repository<CheckoutAccessToken>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly automationService: AutomationService,
@@ -108,10 +111,15 @@ export class FunnelEventService {
       tracked.event.customerId &&
       this.isPaidFunnelEvent(tracked.event)
     ) {
+      const skipBuiltinPaymentPassEmail =
+        await this.automationService.isBuiltinPaymentPassEmailSuperseded(
+          dto.funnelId,
+        );
       await this.signupQrEmailService.sendSignupPassEmailOnPayment(
         tracked.event.customerId,
         dto.funnelId,
         tracked.event.funnelPaymentId ?? undefined,
+        { skipDelivery: skipBuiltinPaymentPassEmail },
       );
     }
 
@@ -132,6 +140,36 @@ export class FunnelEventService {
     }
 
     return tracked.event;
+  }
+
+
+  async syncPaidFunnelPaymentAutomation(
+    funnelPaymentId: number,
+  ): Promise<void> {
+    const payment = await this.funnelPaymentRepository.findOne({
+      where: { id: funnelPaymentId },
+    });
+    if (!payment || payment.status !== FunnelPaymentStatus.PAID) {
+      return;
+    }
+
+    const customerId = await this.resolveCustomerIdForPayment(payment);
+    if (!customerId) {
+      return;
+    }
+
+    await this.track({
+      eventType: FunnelEventType.PAYMENT,
+      funnelId: payment.funnelId,
+      funnelPaymentId: payment.id,
+      customerId,
+      paymentStatus: FunnelPaymentStatus.PAID,
+      amount: payment.amount,
+      currency: payment.currency,
+      customerEmail: payment.customerEmail,
+      stripePaymentIntentId: payment.stripePaymentIntentId ?? undefined,
+      receiptUrl: payment.receiptUrl ?? undefined,
+    });
   }
 
   /** Scanner walk-in: enroll guest in selected deals and record payment + visit. */
@@ -521,6 +559,16 @@ export class FunnelEventService {
     }
 
     if (!dto.customerId) {
+      if (payment) {
+        const resolvedCustomerId =
+          await this.resolveCustomerIdForPayment(payment);
+        if (resolvedCustomerId) {
+          dto.customerId = resolvedCustomerId;
+        }
+      }
+    }
+
+    if (!dto.customerId) {
       throw new BadRequestException('customerId is required for payment events');
     }
 
@@ -616,6 +664,48 @@ export class FunnelEventService {
       where: { id: customerId },
     });
     return exists ? customerId : null;
+  }
+
+  private async resolveCustomerIdForPayment(
+    payment: FunnelPayment,
+  ): Promise<number | null> {
+    const checkoutToken = await this.checkoutAccessTokenRepository.findOne({
+      where: { funnelPaymentId: payment.id },
+      order: { createdAt: 'DESC' },
+    });
+    if (checkoutToken?.customerId) {
+      return checkoutToken.customerId;
+    }
+
+    const coupon = await this.couponService.findByPaymentId(payment.id);
+    if (coupon?.customerId) {
+      return coupon.customerId;
+    }
+
+    const email = payment.customerEmail?.trim();
+    if (email) {
+      const customer = await this.customerRepository
+        .createQueryBuilder('customer')
+        .where('LOWER(customer.email) = LOWER(:email)', { email })
+        .orderBy('customer.id', 'DESC')
+        .getOne();
+      if (customer) {
+        return customer.id;
+      }
+    }
+
+    const funnelEvent = await this.funnelEventRepository.findOne({
+      where: { funnelId: payment.funnelId },
+      order: { createdAt: 'DESC', id: 'DESC' },
+    });
+    if (funnelEvent?.customerId) {
+      const resolved = await this.resolveCustomerId(funnelEvent.customerId);
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    return null;
   }
 
   async getRestaurantFunnelEvents(

@@ -6,6 +6,7 @@ export type AutomationEmailTemplateProps = {
   message?: string;
   ctaLabel?: string;
   ctaUrl?: string;
+  directBody?: boolean;
 };
 
 export type AutomationEmailRenderResult = {

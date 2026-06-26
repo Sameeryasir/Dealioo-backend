@@ -7,6 +7,7 @@ import {
   type PaginationMeta,
   type PaginationParams,
 } from '../../common/pagination';
+import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import {
   AutomationNode,
@@ -16,7 +17,9 @@ import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { PusherService } from '../pusher/pusher.service';
+import { isCustomerVisitedCondition } from './automation-visit.util';
 import { CreateAutomationExecutionDto } from './automationDto/create-automation-execution.dto';
 
 @Injectable()
@@ -28,6 +31,8 @@ export class AutomationExecutionService {
     private readonly connectionRepository: Repository<AutomationConnection>,
     @InjectRepository(AutomationNode)
     private readonly nodeRepository: Repository<AutomationNode>,
+    @InjectRepository(Automation)
+    private readonly automationRepository: Repository<Automation>,
     private readonly pusherService: PusherService,
   ) {}
 
@@ -46,6 +51,11 @@ export class AutomationExecutionService {
       throw new NotFoundException('Start node not found for this automation');
     }
 
+    const automation = await this.automationRepository.findOne({
+      where: { id: dto.automationId },
+      select: ['id', 'version'],
+    });
+
     const execution = this.executionRepository.create({
       automationId: dto.automationId,
       customerId,
@@ -57,6 +67,9 @@ export class AutomationExecutionService {
       emailsSentCount: 0,
       queueJobId: null,
       lastError: null,
+      automationVersion: automation?.version ?? 1,
+      executionContext: {},
+      lastEventId: null,
     });
 
     return this.executionRepository.save(execution);
@@ -109,6 +122,137 @@ export class AutomationExecutionService {
     return node;
   }
 
+  async findNodeByWorkflowKind(
+    automationId: number,
+    workflowKind: string,
+  ): Promise<AutomationNode | null> {
+    const normalized = workflowKind.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const nodes = await this.nodeRepository.find({
+      where: { automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    return (
+      nodes.find(
+        (node) => String(node.config?.workflowKind ?? '').trim() === normalized,
+      ) ?? null
+    );
+  }
+
+  async findCustomerVisitedGateOrder(
+    automationId: number,
+  ): Promise<number | null> {
+    const nodes = await this.nodeRepository.find({
+      where: { automationId, type: AutomationNodeType.CONDITION },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    for (const node of nodes) {
+      const config = node.config ?? {};
+      const conditionType = String(
+        config.conditionType ?? config.type ?? '',
+      ).trim();
+      if (isCustomerVisitedCondition(conditionType)) {
+        return node.order;
+      }
+    }
+
+    return null;
+  }
+
+  async findPrepaidVisitReminderLoopNode(
+    automationId: number,
+  ): Promise<AutomationNode | null> {
+    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    const nodes = await this.nodeRepository.find({
+      where: { automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    let lastEmailBeforeVisitGate: AutomationNode | null = null;
+
+    for (const node of nodes) {
+      if (node.type === AutomationNodeType.TRIGGER) {
+        continue;
+      }
+      if (visitGateOrder != null && node.order >= visitGateOrder) {
+        break;
+      }
+      if (node.type === AutomationNodeType.EMAIL) {
+        lastEmailBeforeVisitGate = node;
+      }
+    }
+
+    return lastEmailBeforeVisitGate;
+  }
+
+  async findPrepaidVisitReminderWaitLoopNode(
+    automationId: number,
+  ): Promise<AutomationNode | null> {
+    const reminderNode = await this.findPrepaidVisitReminderLoopNode(automationId);
+    if (!reminderNode) {
+      return null;
+    }
+
+    const inbound = await this.connectionRepository.findOne({
+      where: { automationId, targetNodeId: reminderNode.id },
+    });
+    if (inbound) {
+      const source = await this.nodeRepository.findOne({
+        where: { id: inbound.sourceNodeId, automationId },
+      });
+      if (source?.type === AutomationNodeType.WAIT) {
+        return source;
+      }
+    }
+
+    const waitNodes = await this.nodeRepository.find({
+      where: { automationId, type: AutomationNodeType.WAIT },
+      order: { order: 'DESC', id: 'ASC' },
+    });
+    return waitNodes.find((node) => node.order < reminderNode.order) ?? null;
+  }
+
+  async findPrepaidLoopRestartNode(
+    automationId: number,
+    config: Record<string, unknown>,
+  ): Promise<AutomationNode | null> {
+    const workflowKind = String(
+      config.onFalseLoopWorkflowKind ?? 'prepaid_visit_reminder_wait',
+    ).trim();
+
+    if (
+      workflowKind &&
+      workflowKind !== 'prepaid_payment_actions' &&
+      workflowKind !== 'prepaid_visit_reminder' &&
+      workflowKind !== 'prepaid_visit_reminder_wait'
+    ) {
+      const byKind = await this.findNodeByWorkflowKind(
+        automationId,
+        workflowKind,
+      );
+      if (byKind) {
+        return byKind;
+      }
+    }
+
+    if (workflowKind === 'prepaid_visit_reminder_wait') {
+      const byKind = await this.findNodeByWorkflowKind(
+        automationId,
+        workflowKind,
+      );
+      if (byKind) {
+        return byKind;
+      }
+    }
+
+    return this.findPrepaidVisitReminderWaitLoopNode(automationId);
+  }
+
   async findById(id: number): Promise<AutomationExecution> {
     const execution = await this.executionRepository.findOne({
       where: { id },
@@ -154,7 +298,7 @@ export class AutomationExecutionService {
 
     const [items, total] = await this.executionRepository.findAndCount({
       where,
-      relations: ['currentNode'],
+      relations: ['currentNode', 'customer'],
       order: { createdAt: 'DESC' },
       skip: pagination.skip,
       take: pagination.limit,
@@ -178,11 +322,7 @@ export class AutomationExecutionService {
     const inProgress = await this.executionRepository.count({
       where: {
         automationId,
-        status: In([
-          AutomationExecutionStatus.QUEUED,
-          AutomationExecutionStatus.RUNNING,
-          AutomationExecutionStatus.WAITING,
-        ]),
+        status: In(this.inProgressExecutionStatuses()),
       },
     });
     return { completed, inProgress };
@@ -201,6 +341,15 @@ export class AutomationExecutionService {
     });
   }
 
+  private inProgressExecutionStatuses(): AutomationExecutionStatus[] {
+    return [
+      AutomationExecutionStatus.QUEUED,
+      AutomationExecutionStatus.RUNNING,
+      AutomationExecutionStatus.WAITING,
+      AutomationExecutionStatus.PAUSED,
+    ];
+  }
+
   async hasActiveExecution(
     automationId: number,
     customerId: number,
@@ -209,11 +358,7 @@ export class AutomationExecutionService {
       where: {
         automationId,
         customerId,
-        status: In([
-          AutomationExecutionStatus.QUEUED,
-          AutomationExecutionStatus.RUNNING,
-          AutomationExecutionStatus.WAITING,
-        ]),
+        status: In(this.inProgressExecutionStatuses()),
       },
     });
   }
@@ -222,16 +367,11 @@ export class AutomationExecutionService {
     return this.executionRepository.exist({
       where: {
         automationId,
-        status: In([
-          AutomationExecutionStatus.QUEUED,
-          AutomationExecutionStatus.RUNNING,
-          AutomationExecutionStatus.WAITING,
-        ]),
+        status: In(this.inProgressExecutionStatuses()),
       },
     });
   }
 
-  /** True while a batch is actively sending (cron may still run during pass wait). */
   async hasBlockingBatchSendForAutomation(
     automationId: number,
   ): Promise<boolean> {
@@ -252,14 +392,251 @@ export class AutomationExecutionService {
     return this.executionRepository.find({
       where: {
         customerId,
+        status: In(this.inProgressExecutionStatuses()),
+      },
+      relations: ['automation'],
+    });
+  }
+
+  async pauseExecution(executionId: number): Promise<void> {
+    const execution = await this.findById(executionId);
+    if (
+      execution.status === AutomationExecutionStatus.PAUSED ||
+      execution.status === AutomationExecutionStatus.COMPLETED ||
+      execution.status === AutomationExecutionStatus.FAILED
+    ) {
+      return;
+    }
+
+    const executionContext = {
+      ...(execution.executionContext ?? {}),
+      pausedFromStatus: execution.status,
+      pausedAt: new Date().toISOString(),
+    };
+
+    await this.executionRepository.update(executionId, {
+      status: AutomationExecutionStatus.PAUSED,
+      executionContext: executionContext as object,
+    });
+  }
+
+  async pauseInProgressExecutionsForAutomation(
+    automationId: number,
+  ): Promise<number[]> {
+    const executions = await this.executionRepository.find({
+      where: {
+        automationId,
         status: In([
           AutomationExecutionStatus.QUEUED,
           AutomationExecutionStatus.RUNNING,
           AutomationExecutionStatus.WAITING,
         ]),
       },
-      relations: ['automation'],
     });
+
+    const pausedIds: number[] = [];
+    for (const execution of executions) {
+      const executionContext = {
+        ...(execution.executionContext ?? {}),
+        pausedFromStatus: execution.status,
+        pausedAt: new Date().toISOString(),
+      };
+
+      await this.executionRepository.update(execution.id, {
+        status: AutomationExecutionStatus.PAUSED,
+        executionContext: executionContext as object,
+      });
+      pausedIds.push(execution.id);
+    }
+
+    return pausedIds;
+  }
+
+  async findPausedExecutionsForAutomation(
+    automationId: number,
+  ): Promise<AutomationExecution[]> {
+    return this.executionRepository.find({
+      where: {
+        automationId,
+        status: AutomationExecutionStatus.PAUSED,
+      },
+      relations: ['automation', 'currentNode', 'customer'],
+      order: { id: 'ASC' },
+    });
+  }
+
+  async clearPauseState(
+    executionId: number,
+    status: AutomationExecutionStatus,
+    scheduledAt: Date | null,
+  ): Promise<void> {
+    const execution = await this.findById(executionId);
+    const executionContext = { ...(execution.executionContext ?? {}) };
+    delete executionContext.pausedFromStatus;
+    delete executionContext.pausedAt;
+
+    await this.executionRepository.update(executionId, {
+      status,
+      scheduledAt,
+      executionContext: executionContext as object,
+    });
+  }
+
+  async findPostVisitEntryNodeId(automationId: number): Promise<number | null> {
+    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    if (visitGateOrder == null) {
+      return null;
+    }
+
+    const visitGate = await this.nodeRepository.findOne({
+      where: { automationId, order: visitGateOrder },
+    });
+    if (!visitGate) {
+      return null;
+    }
+
+    const connection = await this.connectionRepository.findOne({
+      where: { automationId, sourceNodeId: visitGate.id },
+    });
+    return connection?.targetNodeId ?? null;
+  }
+
+  isExecutionPastVisitGate(execution: AutomationExecution): boolean {
+    const config = execution.currentNode?.config ?? {};
+    if (String(config.flowBranch ?? '').trim() === 'visited_yes') {
+      return true;
+    }
+    return false;
+  }
+
+  async isExecutionPastVisitGateAsync(
+    execution: AutomationExecution,
+  ): Promise<boolean> {
+    if (this.isExecutionPastVisitGate(execution)) {
+      return true;
+    }
+
+    const visitGateOrder = await this.findCustomerVisitedGateOrder(
+      execution.automationId,
+    );
+    const currentOrder = execution.currentNode?.order;
+    if (visitGateOrder == null || currentOrder == null) {
+      return false;
+    }
+
+    return currentOrder > visitGateOrder;
+  }
+
+  async findPrepaidExecutionsForVisitResume(
+    customerId: number,
+    campaignId: number,
+  ): Promise<AutomationExecution[]> {
+    const executions = await this.executionRepository.find({
+      where: {
+        customerId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+          AutomationExecutionStatus.COMPLETED,
+        ]),
+      },
+      relations: ['automation', 'currentNode'],
+    });
+
+    return executions.filter((execution) => {
+      if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+        return false;
+      }
+      return execution.automation?.campaignId === campaignId;
+    });
+  }
+
+  async findPrepaidVisitGateExecutionsForCustomer(
+    customerId: number,
+    campaignId: number,
+    statuses: AutomationExecutionStatus[],
+  ): Promise<AutomationExecution[]> {
+    if (statuses.length === 0) {
+      return [];
+    }
+
+    const executions = await this.executionRepository.find({
+      where: {
+        customerId,
+        status: In(statuses),
+      },
+      relations: ['automation', 'currentNode'],
+    });
+
+    return executions.filter((execution) => {
+      if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+        return false;
+      }
+      if (execution.automation?.campaignId !== campaignId) {
+        return false;
+      }
+      if (execution.currentNode?.type !== AutomationNodeType.CONDITION) {
+        return false;
+      }
+
+      const config = execution.currentNode.config ?? {};
+      const conditionType = String(
+        config.conditionType ?? config.type ?? '',
+      ).trim();
+      return isCustomerVisitedCondition(conditionType);
+    });
+  }
+
+  async reopenForVisitResume(executionId: number): Promise<AutomationExecution> {
+    await this.executionRepository.update(executionId, {
+      status: AutomationExecutionStatus.RUNNING,
+      lastError: null,
+      scheduledAt: null,
+    });
+    return this.findById(executionId);
+  }
+
+  async applyRecoveredState(
+    executionId: number,
+    state: {
+      currentNodeId: number;
+      status: AutomationExecutionStatus;
+      scheduledAt: Date | null;
+      automationVersion: number | null;
+      executionContext: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    await this.executionRepository.update(executionId, {
+      currentNodeId: state.currentNodeId,
+      status: state.status,
+      scheduledAt: state.scheduledAt,
+      automationVersion: state.automationVersion,
+      executionContext: state.executionContext as object,
+      lastError: null,
+    });
+  }
+
+  async updateExecutionContext(
+    executionId: number,
+    executionContext: Record<string, unknown>,
+  ): Promise<void> {
+    await this.executionRepository.update(executionId, {
+      executionContext: executionContext as object,
+    });
+  }
+
+  async bumpAutomationVersion(automationId: number): Promise<number> {
+    const automation = await this.automationRepository.findOne({
+      where: { id: automationId },
+      select: ['id', 'version'],
+    });
+    if (!automation) {
+      throw new NotFoundException('Automation not found');
+    }
+    const nextVersion = (automation.version ?? 1) + 1;
+    await this.automationRepository.update(automationId, { version: nextVersion });
+    return nextVersion;
   }
 
   async getNextNodeId(
@@ -284,11 +661,12 @@ export class AutomationExecutionService {
     status: AutomationExecutionStatus = AutomationExecutionStatus.RUNNING,
     scheduledAt: Date | null = null,
   ): Promise<AutomationExecution> {
-    const execution = await this.findById(executionId);
-    execution.currentNodeId = nodeId;
-    execution.status = status;
-    execution.scheduledAt = scheduledAt;
-    return this.executionRepository.save(execution);
+    await this.executionRepository.update(executionId, {
+      currentNodeId: nodeId,
+      status,
+      scheduledAt,
+    });
+    return this.findById(executionId);
   }
 
   async updateCustomerId(
@@ -351,5 +729,13 @@ export class AutomationExecutionService {
       order: { order: 'ASC' },
     });
     return firstNode?.id ?? null;
+  }
+
+  async findExecutionIdsByAutomationId(automationId: number): Promise<number[]> {
+    const rows = await this.executionRepository.find({
+      where: { automationId },
+      select: ['id'],
+    });
+    return rows.map((row) => row.id);
   }
 }

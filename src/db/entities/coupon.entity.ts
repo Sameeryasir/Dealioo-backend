@@ -1,7 +1,3 @@
-/**
- * Per-customer pass issued after a paid funnel purchase.
- * Each coupon gets its own unique qrToken — not shared at campaign/funnel level.
- */
 import {
   Column,
   CreateDateColumn,
@@ -22,6 +18,7 @@ export enum CouponStatus {
   ACTIVE = 'ACTIVE',
   REDEEMED = 'REDEEMED',
   EXPIRED = 'EXPIRED',
+  REVOKED = 'REVOKED',
 }
 
 export enum CouponPaymentStatus {

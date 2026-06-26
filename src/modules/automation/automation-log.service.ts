@@ -44,6 +44,21 @@ export class AutomationLogService {
     return this.automationLogRepository.count({ where: { executionId } });
   }
 
+  async findLastScheduledWaitNodeId(
+    executionId: number,
+  ): Promise<number | null> {
+    const rows = await this.automationLogRepository.find({
+      where: { executionId },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+
+    const waitLog = rows.find((entry) =>
+      entry.message.startsWith('Delay scheduled'),
+    );
+    return waitLog?.nodeId ?? null;
+  }
+
   async getVisitedNodeIds(executionId: number): Promise<number[]> {
     const rows = await this.automationLogRepository
       .createQueryBuilder('log')

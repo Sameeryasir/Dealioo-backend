@@ -14,6 +14,10 @@ import {
 } from './automation-email-catalog';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
+import {
+  interpolateAutomationEmailMessage,
+  splitAutomationEmailBody,
+} from './automation-email-merge.util';
 import type {
   AutomationEmailSendResult,
   EmailRecipient,
@@ -103,20 +107,21 @@ export class AutomationEmailService {
     const templateKey = resolveEmailTemplateKey(purpose, parsed.rawTemplate);
     const defaults = getPurposeEmailDefaults(purpose, campaignName);
     const templateProps: Partial<AutomationEmailTemplateProps> = {};
+    const useAutomationCopyOnly = purpose === AutomationPurpose.FUNNEL_PAYMENT;
 
     if (parsed.message) {
       templateProps.message = parsed.message;
-    } else if (defaults.message) {
+    } else if (!useAutomationCopyOnly && defaults.message) {
       templateProps.message = defaults.message;
     }
     if (parsed.headline) {
       templateProps.headline = parsed.headline;
-    } else if (defaults.headline) {
+    } else if (!useAutomationCopyOnly && defaults.headline) {
       templateProps.headline = defaults.headline;
     }
     if (parsed.ctaLabel) {
       templateProps.ctaLabel = parsed.ctaLabel;
-    } else if (defaults.ctaLabel) {
+    } else if (!useAutomationCopyOnly && defaults.ctaLabel) {
       templateProps.ctaLabel = defaults.ctaLabel;
     }
     if (parsed.ctaUrl) {
@@ -145,25 +150,59 @@ export class AutomationEmailService {
     prepared: PreparedAutomationEmail,
     recipient: EmailRecipient,
     subject: string,
+    purpose: AutomationPurpose,
   ): AutomationEmailTemplateProps {
     const customerName = customerDisplayName(recipient.name, recipient.email);
+    const paymentLink = prepared.templateProps.ctaUrl?.trim();
+    const message = prepared.templateProps.message?.trim();
+    const interpolatedMessage = message
+      ? interpolateAutomationEmailMessage(message, {
+          customerName,
+          paymentLink,
+          passLink: paymentLink,
+        })
+      : undefined;
+    const usesDirectBody = this.purposeUsesDirectEmailBody(purpose);
+
     return {
       customerName,
       customerEmail: recipient.email,
       subject,
       ...prepared.templateProps,
+      ...(interpolatedMessage ? { message: interpolatedMessage } : {}),
+      ...(usesDirectBody ? { directBody: true } : {}),
     };
+  }
+
+  private purposeUsesDirectEmailBody(purpose: AutomationPurpose): boolean {
+    return (
+      purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+      purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
+      purpose === AutomationPurpose.FUNNEL_PAYMENT
+    );
+  }
+
+  private shouldPreferRenderedHtml(
+    purpose: AutomationPurpose,
+    prepared: PreparedAutomationEmail,
+  ): boolean {
+    if (this.purposeUsesDirectEmailBody(purpose)) {
+      return true;
+    }
+    return Boolean(prepared.templateProps.message?.trim());
   }
 
   async renderForRecipient(
     prepared: PreparedAutomationEmail,
     recipient: EmailRecipient,
     subject: string,
+    purpose: AutomationPurpose,
   ) {
     const props = this.buildTemplatePropsForRecipient(
       prepared,
       recipient,
       subject,
+      purpose,
     );
     return this.emailRenderer.render(prepared.templateKey, props);
   }
@@ -172,6 +211,7 @@ export class AutomationEmailService {
     prepared: PreparedAutomationEmail,
     recipients: EmailRecipient[],
     subject: string,
+    purpose: AutomationPurpose,
     recipientTemplateOverrides?: Map<
       number,
       Partial<PreparedAutomationEmail['templateProps']>
@@ -196,6 +236,7 @@ export class AutomationEmailService {
           mergedPrepared,
           recipient,
           subject,
+          purpose,
         );
         return {
           ...recipient,
@@ -229,7 +270,6 @@ export class AutomationEmailService {
     );
 
     try {
-      // Use rendered HTML when the flow step has custom body copy (not a static Brevo template).
       if (templateId && !options?.preferRenderedHtml) {
         const bulk = await this.withTimeout(
           this.brevo.sendBulkTransactionalEmail({
@@ -316,6 +356,7 @@ export class AutomationEmailService {
       prepared,
       recipients,
       prepared.subject,
+      purpose,
       recipientTemplateOverrides,
     );
     return this.deliverRendered(
@@ -324,7 +365,7 @@ export class AutomationEmailService {
       prepared.subject,
       extraTags,
       {
-        preferRenderedHtml: Boolean(prepared.templateProps.message?.trim()),
+        preferRenderedHtml: this.shouldPreferRenderedHtml(purpose, prepared),
       },
     );
   }
@@ -363,6 +404,7 @@ export class AutomationEmailService {
       prepared,
       [recipient],
       prepared.subject,
+      purpose,
     );
     return this.deliverRendered(
       purpose,
@@ -370,7 +412,7 @@ export class AutomationEmailService {
       prepared.subject,
       extraTags,
       {
-        preferRenderedHtml: Boolean(prepared.templateProps.message?.trim()),
+        preferRenderedHtml: this.shouldPreferRenderedHtml(purpose, prepared),
       },
     );
   }

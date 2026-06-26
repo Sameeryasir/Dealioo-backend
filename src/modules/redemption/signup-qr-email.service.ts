@@ -120,14 +120,11 @@ export class SignupQrEmailService {
     );
   }
 
-  /**
-   * When a customer pays before the delayed signup email fires, send the QR pass
-   * immediately instead of cancelling — they still need their pass link.
-   */
   async sendSignupPassEmailOnPayment(
     customerId: number,
     funnelId: number,
     funnelPaymentId?: number,
+    options?: { skipDelivery?: boolean },
   ): Promise<void> {
     if (!this.handlesSignupWelcomeEmail()) {
       return;
@@ -142,6 +139,17 @@ export class SignupQrEmailService {
     }
 
     await this.removePendingSignupPassEmailJob(customerId, funnelId);
+
+    if (options?.skipDelivery) {
+      await this.couponRepository.update(coupon.id, {
+        signupPassEmailCancelledAt: new Date(),
+        signupPassEmailScheduledAt: null,
+      });
+      this.logger.log(
+        `Skipping builtin payment pass email for coupon ${coupon.id} — prepaid automation handles it`,
+      );
+      return;
+    }
 
     const sendApproved = await this.dataSource.transaction(async (manager) => {
       const locked = await manager.findOne(Coupon, {

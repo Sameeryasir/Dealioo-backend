@@ -38,7 +38,6 @@ export class PaymentController {
     return this.paymentService.createPaymentIntent(dto);
   }
 
-  /** Create a server checkout session after funnel signup. */
   @Post('checkout/session')
   @HttpCode(200)
   createCheckoutSession(@Body() dto: CreateCheckoutSessionDto) {
@@ -50,7 +49,6 @@ export class PaymentController {
     });
   }
 
-  /** Resolve checkout token (signup redirect or payment reminder email). */
   @Get('checkout/resume')
   resumeCheckout(@Query('token') token: string) {
     return this.checkoutResumeService.resolveSession(token);

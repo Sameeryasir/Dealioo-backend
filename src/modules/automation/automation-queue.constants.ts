@@ -2,6 +2,20 @@ export const AUTOMATION_QUEUE = 'automation';
 
 export const MAX_AUTOMATION_EXECUTION_STEPS = 50;
 
+export const DEFAULT_AUTOMATION_QUEUE_CONCURRENCY = 50;
+
+export function resolveAutomationQueueConcurrency(): number {
+  const parsed = parseInt(
+    process.env.AUTOMATION_QUEUE_CONCURRENCY ??
+      String(DEFAULT_AUTOMATION_QUEUE_CONCURRENCY),
+    10,
+  );
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_AUTOMATION_QUEUE_CONCURRENCY;
+  }
+  return parsed;
+}
+
 export enum AutomationJobName {
   UNPAID_REMINDER_BATCH = 'unpaid-reminder-batch',
   PROCESS_EXECUTION = 'process-execution',

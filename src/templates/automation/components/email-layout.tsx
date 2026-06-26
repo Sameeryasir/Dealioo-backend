@@ -31,6 +31,8 @@ export type AutomationEmailLayoutProps = {
   paragraphs: string[];
   ctaLabel?: string;
   ctaUrl?: string;
+  skipTitle?: boolean;
+  skipGreeting?: boolean;
   children?: React.ReactNode;
 };
 
@@ -41,6 +43,8 @@ export function AutomationEmailLayout({
   paragraphs,
   ctaLabel,
   ctaUrl,
+  skipTitle = false,
+  skipGreeting = false,
   children,
 }: AutomationEmailLayoutProps) {
   const greetingName = customerName?.trim() || 'there';
@@ -55,11 +59,15 @@ export function AutomationEmailLayout({
             <Text style={automationBrandName}>Dealioo</Text>
           </Section>
 
-          <Heading as="h1" style={automationTitle}>
-            {title}
-          </Heading>
+          {!skipTitle ? (
+            <Heading as="h1" style={automationTitle}>
+              {title}
+            </Heading>
+          ) : null}
 
-          <Text style={automationGreeting}>Hi {greetingName},</Text>
+          {!skipGreeting ? (
+            <Text style={automationGreeting}>Hi {greetingName},</Text>
+          ) : null}
 
           {paragraphs.map((paragraph, index) => (
             <Text key={`p-${index}`} style={automationBody}>

@@ -13,6 +13,12 @@ export class ExecutionListItemDto {
   status: AutomationExecutionStatus;
   startedAt: Date;
   customerCount: number;
+  customerId: number | null;
+  customerEmail: string | null;
+  customerName: string | null;
+  totalRecipients: number;
+  emailsSentCount: number;
+  scheduledAt: Date | null;
   stepType: string | null;
 }
 

@@ -54,6 +54,9 @@ import {
   resolveCronFromAutomationNodes,
 } from './automation-cron.config';
 import { AutomationQueueService } from './automation-queue.service';
+import { AutomationDeadLetterService } from './automation-dead-letter.service';
+import { AutomationExecutionRecoveryService } from './automation-execution-recovery.service';
+import { AutomationMetricsService } from './automation-metrics.service';
 import type { EmailRecipient, PreparedAutomationEmail } from './automation-email.types';
 import type {
   UnpaidReminderBatchJob,
@@ -75,7 +78,6 @@ import { CreateAutomationNodeDto } from './automationDto/create-automation-node.
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
-import { isCustomerVisitedCondition } from './automation-visit.util';
 import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
 
 @Injectable()
@@ -103,6 +105,9 @@ export class AutomationService {
     private readonly flowService: AutomationFlowService,
     private readonly queueService: AutomationQueueService,
     private readonly cronScheduler: AutomationCronSchedulerService,
+    private readonly recoveryService: AutomationExecutionRecoveryService,
+    private readonly deadLetterService: AutomationDeadLetterService,
+    private readonly metricsService: AutomationMetricsService,
     private readonly activityService: ActivityService,
     private readonly checkoutResumeService: CheckoutResumeService,
   ) {}
@@ -190,6 +195,10 @@ export class AutomationService {
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
 
+    if (wasActive && !saved.isActive) {
+      await this.pauseAutomationExecutions(saved.id);
+    }
+
     if (
       !wasActive &&
       saved.isActive &&
@@ -197,6 +206,10 @@ export class AutomationService {
       !(await this.isCronDrivenAutomation(saved.id))
     ) {
       await this.startSignupPaymentReminderForEligibleCustomers(saved);
+    }
+
+    if (!wasActive && saved.isActive) {
+      await this.resumePausedExecutionsForAutomation(saved.id);
     }
 
     return saved;
@@ -235,7 +248,9 @@ export class AutomationService {
   async deleteAutomation(id: number, user: User): Promise<void> {
     requireAdminRole(user, 'You do not have permission to delete automations.');
     const automation = await this.findAutomationById(id);
-    await this.queueService.removeCronSchedule(id);
+    const executionIds =
+      await this.executionService.findExecutionIdsByAutomationId(id);
+    await this.queueService.purgeAutomationJobs(id, executionIds);
     await this.automationRepository.remove(automation);
   }
 
@@ -244,6 +259,7 @@ export class AutomationService {
     const automation = await this.findAutomationById(id);
     automation.published = true;
     const saved = await this.automationRepository.save(automation);
+    await this.bumpAutomationGraphVersion(saved.id);
     await this.cronScheduler.syncAutomationCron(saved.id);
     return saved;
   }
@@ -265,6 +281,8 @@ export class AutomationService {
       await this.startSignupPaymentReminderForEligibleCustomers(saved);
     }
 
+    await this.resumePausedExecutionsForAutomation(saved.id);
+
     return saved;
   }
 
@@ -277,11 +295,147 @@ export class AutomationService {
     automation.isActive = false;
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
+
+    await this.pauseAutomationExecutions(saved.id);
+
     return saved;
+  }
+
+  private async pauseAutomationExecutions(automationId: number): Promise<void> {
+    const pausedExecutionIds =
+      await this.executionService.pauseInProgressExecutionsForAutomation(
+        automationId,
+      );
+    if (pausedExecutionIds.length > 0) {
+      await this.queueService.purgeExecutionJobs(pausedExecutionIds);
+      this.logger.log(
+        `Paused ${pausedExecutionIds.length} execution(s) for automation ${automationId}`,
+      );
+    }
+  }
+
+  private async resumePausedExecutionsForAutomation(
+    automationId: number,
+  ): Promise<void> {
+    const executions =
+      await this.executionService.findPausedExecutionsForAutomation(
+        automationId,
+      );
+
+    for (const execution of executions) {
+      await this.resumePausedExecution(execution);
+    }
+  }
+
+  private async resumePausedExecution(
+    execution: AutomationExecution,
+  ): Promise<void> {
+    const postVisitNodeId =
+      await this.engineService.resolvePostVisitResumeNodeId(execution);
+
+    if (postVisitNodeId) {
+      await this.executionService.clearPauseState(
+        execution.id,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      await this.executionService.updateCurrentNode(
+        execution.id,
+        postVisitNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: postVisitNodeId,
+        customerId: execution.customerId,
+        message:
+          'Automation reactivated after visit — continuing to post-visit thank-you emails',
+      });
+      const postVisitNode = await this.executionService.findNodeForAutomation(
+        execution.automationId,
+        postVisitNodeId,
+      );
+      await this.queueService.addProcessExecution({
+        executionId: execution.id,
+        nodeId: postVisitNodeId,
+        nodeType: postVisitNode.type,
+      });
+      return;
+    }
+
+    const node =
+      execution.currentNode ??
+      (await this.executionService.findNodeForAutomation(
+        execution.automationId,
+        execution.currentNodeId,
+      ));
+    const pausedFromStatus = String(
+      execution.executionContext?.pausedFromStatus ?? '',
+    );
+    const wasWaiting =
+      pausedFromStatus === AutomationExecutionStatus.WAITING ||
+      node.type === AutomationNodeType.WAIT;
+
+    if (wasWaiting && execution.scheduledAt) {
+      const delayMs = execution.scheduledAt.getTime() - Date.now();
+      if (delayMs > 0) {
+        await this.executionService.clearPauseState(
+          execution.id,
+          AutomationExecutionStatus.WAITING,
+          execution.scheduledAt,
+        );
+        await this.queueService.addResumeExecution(
+          { executionId: execution.id },
+          delayMs,
+        );
+        return;
+      }
+    }
+
+    if (wasWaiting || node.type === AutomationNodeType.WAIT) {
+      await this.executionService.clearPauseState(
+        execution.id,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      await this.queueService.addResumeExecution(
+        { executionId: execution.id },
+        0,
+      );
+      return;
+    }
+
+    await this.executionService.clearPauseState(
+      execution.id,
+      AutomationExecutionStatus.RUNNING,
+      null,
+    );
+    await this.queueService.addProcessExecution({
+      executionId: execution.id,
+      nodeId: execution.currentNodeId,
+      nodeType: node.type,
+    });
+  }
+
+  private async assertAutomationEditable(automationId: number): Promise<void> {
+    const automation = await this.automationRepository.findOne({
+      where: { id: automationId },
+      select: ['id', 'isActive'],
+    });
+    if (!automation) {
+      throw new NotFoundException('Automation not found');
+    }
+    if (automation.isActive) {
+      throw new BadRequestException(
+        'Deactivate this automation before editing it.',
+      );
+    }
   }
 
   async createNode(dto: CreateAutomationNodeDto): Promise<AutomationNode> {
     await this.findAutomationById(dto.automationId);
+    await this.assertAutomationEditable(dto.automationId);
 
     const existingNodes = await this.nodeRepository.find({
       where: { automationId: dto.automationId },
@@ -332,6 +486,7 @@ export class AutomationService {
     });
 
     const saved = await this.nodeRepository.save(node);
+    await this.bumpAutomationGraphVersion(saved.automationId);
     await this.cronScheduler.syncAutomationCron(saved.automationId);
     return saved;
   }
@@ -381,6 +536,8 @@ export class AutomationService {
       throw new NotFoundException('Automation node not found');
     }
 
+    await this.assertAutomationEditable(node.automationId);
+
     if (dto.type !== undefined) {
       node.type = dto.type;
     }
@@ -419,6 +576,7 @@ export class AutomationService {
     }
 
     const saved = await this.nodeRepository.save(node);
+    await this.bumpAutomationGraphVersion(saved.automationId);
     await this.cronScheduler.syncAutomationCron(saved.automationId);
     return saved;
   }
@@ -428,8 +586,10 @@ export class AutomationService {
     if (!node) {
       throw new NotFoundException('Automation node not found');
     }
+    await this.assertAutomationEditable(node.automationId);
     const automationId = node.automationId;
     await this.nodeRepository.remove(node);
+    await this.bumpAutomationGraphVersion(automationId);
     await this.cronScheduler.syncAutomationCron(automationId);
   }
 
@@ -437,6 +597,7 @@ export class AutomationService {
     dto: CreateAutomationConnectionDto,
   ): Promise<AutomationConnection> {
     await this.findAutomationById(dto.automationId);
+    await this.assertAutomationEditable(dto.automationId);
 
     const source = await this.nodeRepository.findOne({
       where: { id: dto.sourceNodeId, automationId: dto.automationId },
@@ -457,7 +618,9 @@ export class AutomationService {
       targetNodeId: dto.targetNodeId,
     });
 
-    return this.connectionRepository.save(connection);
+    const saved = await this.connectionRepository.save(connection);
+    await this.bumpAutomationGraphVersion(saved.automationId);
+    return saved;
   }
 
   async deleteConnection(id: number): Promise<void> {
@@ -467,7 +630,9 @@ export class AutomationService {
     if (!connection) {
       throw new NotFoundException('Automation connection not found');
     }
+    const automationId = connection.automationId;
     await this.connectionRepository.remove(connection);
+    await this.bumpAutomationGraphVersion(automationId);
   }
 
   async getExecutions(
@@ -530,6 +695,10 @@ export class AutomationService {
       );
     }
 
+    if (execution.status === AutomationExecutionStatus.PAUSED) {
+      await this.queueService.purgeExecutionJobs([id]);
+    }
+
     await this.executionService.deleteById(id);
   }
 
@@ -540,20 +709,33 @@ export class AutomationService {
     return this.buildExecutionStatusDto(execution);
   }
 
+  private resolveExecutionCustomerCount(
+    execution: AutomationExecution,
+  ): number {
+    if (execution.totalRecipients > 0) {
+      return execution.totalRecipients;
+    }
+    if (execution.customerId) {
+      return 1;
+    }
+    return 0;
+  }
+
   private toExecutionListItem(
     execution: AutomationExecution,
   ): ExecutionListItemDto {
-    const customerCount =
-      execution.totalRecipients > 0
-        ? execution.totalRecipients
-        : execution.emailsSentCount;
-
     return {
       runId: execution.id,
       id: execution.id,
       status: execution.status,
       startedAt: execution.createdAt,
-      customerCount,
+      customerCount: this.resolveExecutionCustomerCount(execution),
+      customerId: execution.customerId ?? null,
+      customerEmail: execution.customer?.email ?? null,
+      customerName: execution.customer?.name ?? null,
+      totalRecipients: execution.totalRecipients ?? 0,
+      emailsSentCount: execution.emailsSentCount ?? 0,
+      scheduledAt: execution.scheduledAt ?? null,
       stepType: execution.currentNode?.type ?? null,
     };
   }
@@ -1303,9 +1485,14 @@ export class AutomationService {
       'You do not have permission to process automation executions.',
     );
     const execution = await this.executionService.findById(id);
+    const node = await this.executionService.findNodeForAutomation(
+      execution.automationId,
+      execution.currentNodeId,
+    );
     await this.queueService.addProcessExecution({
       executionId: id,
       nodeId: execution.currentNodeId,
+      nodeType: node.type,
     });
   }
 
@@ -1316,6 +1503,32 @@ export class AutomationService {
     );
     await this.executionService.findById(id);
     await this.queueService.addResumeExecution({ executionId: id }, 0);
+  }
+
+  async isBuiltinPaymentPassEmailSuperseded(funnelId: number): Promise<boolean> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
+      return false;
+    }
+
+    const automations = await this.automationRepository.find({
+      where: {
+        isActive: true,
+        trigger: AutomationTrigger.PAYMENT,
+        purpose: AutomationPurpose.FUNNEL_PAYMENT,
+      },
+    });
+
+    return automations.some((automation) =>
+      this.matchesAutomationScope(
+        automation,
+        { funnelId } as FunnelEvent,
+        funnel,
+      ),
+    );
   }
 
   async handleEvent(event: FunnelEvent): Promise<void> {
@@ -1497,9 +1710,15 @@ export class AutomationService {
       event.customerId,
     );
 
+    const startNode = await this.executionService.findNodeForAutomation(
+      automation.id,
+      startNodeId,
+    );
+
     await this.queueService.addProcessExecution({
       executionId: execution.id,
       nodeId: startNodeId,
+      nodeType: startNode.type,
     });
   }
 
@@ -1690,56 +1909,116 @@ export class AutomationService {
     return true;
   }
 
-  /**
-   * Resumes Prepaid Offer flows paused on "Customer visited" after a pass scan.
-   * No scheduled visit date is stored — we only react to actual visits in customer_visits.
-   */
   async resumeWaitingExecutionsAfterCustomerVisit(
     customerId: number,
     campaignId: number,
   ): Promise<void> {
     const executions =
-      await this.executionService.findActiveExecutionsForCustomer(customerId);
+      await this.executionService.findPrepaidExecutionsForVisitResume(
+        customerId,
+        campaignId,
+      );
 
     for (const execution of executions) {
-      if (execution.status !== AutomationExecutionStatus.WAITING) {
-        continue;
-      }
-      if (execution.automation?.campaignId !== campaignId) {
-        continue;
-      }
-      if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
-        continue;
-      }
-      if (!execution.currentNodeId) {
+      if (!execution.automation?.isActive) {
         continue;
       }
 
-      const node = await this.nodeRepository.findOne({
-        where: {
-          id: execution.currentNodeId,
-          automationId: execution.automationId,
-        },
-      });
-      if (!node || node.type !== AutomationNodeType.CONDITION) {
+      if (
+        await this.executionService.isExecutionPastVisitGateAsync(execution)
+      ) {
         continue;
       }
 
-      const config = (node.config ?? {}) as Record<string, unknown>;
-      const conditionType = String(config.conditionType ?? config.type ?? '');
-      if (!isCustomerVisitedCondition(conditionType)) {
+      const postVisitNodeId =
+        await this.executionService.findPostVisitEntryNodeId(
+          execution.automationId,
+        );
+      if (!postVisitNodeId) {
         continue;
+      }
+
+      if (execution.status === AutomationExecutionStatus.COMPLETED) {
+        const atVisitGate =
+          execution.currentNode?.type === AutomationNodeType.CONDITION;
+        if (!atVisitGate) {
+          continue;
+        }
+        await this.executionService.reopenForVisitResume(execution.id);
+      } else {
+        await this.executionService.markProcessing(execution.id);
       }
 
       this.logger.log(
         `Resuming execution ${execution.id} after customer ${customerId} visited campaign ${campaignId}`,
       );
 
+      await this.executionService.updateCurrentNode(
+        execution.id,
+        postVisitNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: postVisitNodeId,
+        customerId,
+        message:
+          'Customer visit recorded — continuing to post-visit thank-you emails',
+      });
+
+      const postVisitNode = await this.executionService.findNodeForAutomation(
+        execution.automationId,
+        postVisitNodeId,
+      );
+
       await this.queueService.addProcessExecution({
         executionId: execution.id,
-        nodeId: execution.currentNodeId,
+        nodeId: postVisitNodeId,
+        nodeType: postVisitNode.type,
       });
     }
+  }
+
+  private async bumpAutomationGraphVersion(automationId: number): Promise<void> {
+    await this.executionService.bumpAutomationVersion(automationId);
+  }
+
+  async getAutomationMetrics() {
+    return this.metricsService.getSnapshot();
+  }
+
+  async listDeadLetters(limit?: number) {
+    return this.deadLetterService.listPending(limit);
+  }
+
+  async retryDeadLetter(id: number, user: User) {
+    requireAdminRole(
+      user,
+      'You do not have permission to retry dead-letter jobs.',
+    );
+    return this.deadLetterService.retryDeadLetter(id);
+  }
+
+  async discardDeadLetter(id: number, user: User) {
+    requireAdminRole(
+      user,
+      'You do not have permission to discard dead-letter jobs.',
+    );
+    await this.deadLetterService.discardDeadLetter(id);
+  }
+
+  async getExecutionEvents(id: number) {
+    return this.recoveryService.getExecutionEvents(id);
+  }
+
+  async recoverExecution(id: number, user: User) {
+    requireAdminRole(
+      user,
+      'You do not have permission to recover automation executions.',
+    );
+    return this.recoveryService.recoverExecution(id);
   }
 
   private async resolveScopeFromCampaign(

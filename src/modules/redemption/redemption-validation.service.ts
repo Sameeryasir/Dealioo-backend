@@ -96,6 +96,17 @@ export class RedemptionValidationService {
       };
     }
 
+    if (couponStatus === CouponStatus.REVOKED) {
+      return {
+        canRedeem: false,
+        requiresWalkInPayment: false,
+        redeemBlockedReason: 'This pass was replaced by a newer one',
+        paymentStatus,
+        couponStatus,
+        couponExpired,
+      };
+    }
+
     if (couponStatus !== CouponStatus.ACTIVE) {
       return {
         canRedeem: false,

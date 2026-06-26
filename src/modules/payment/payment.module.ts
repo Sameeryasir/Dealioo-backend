@@ -8,6 +8,7 @@ import { Customer } from '../../db/entities/customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { AuthModule } from '../auth/auth.module';
 import { ActivityModule } from '../activity/activity.module';
+import { FunnelEventModule } from '../funnel-event/funnel-event.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { StripeModule } from '../stripe/stripe.module';
 import { FeeService } from './fee.service';
@@ -30,6 +31,7 @@ import { CheckoutResumeService } from './checkout-resume.service';
     StripeModule,
     AuthModule,
     forwardRef(() => RedemptionModule),
+    forwardRef(() => FunnelEventModule),
     ActivityModule,
   ],
   controllers: [PaymentController],

@@ -88,6 +88,10 @@ export class Automation {
   @Column({ name: 'is_template', type: 'boolean', default: false })
   isTemplate: boolean;
 
+  /** Incremented when flow is published or graph changes — frozen on each execution start. */
+  @Column({ type: 'int', default: 1 })
+  version: number;
+
   @OneToMany(() => AutomationNode, (node) => node.automation)
   nodes: AutomationNode[];
 

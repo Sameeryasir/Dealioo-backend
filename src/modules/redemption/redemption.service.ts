@@ -475,7 +475,9 @@ export class RedemptionService {
     }
 
     const redeemedAt = new Date();
-    let visitToResume: CustomerVisitRecordResult | null = null;
+    const resumeTarget: {
+      value: { customerId: number; campaignId: number } | null;
+    } = { value: null };
 
     const result = await this.dataSource.transaction(async (manager) => {
       const lockedCoupons: Coupon[] = [];
@@ -599,7 +601,7 @@ export class RedemptionService {
 
       const primaryCoupon = lockedCoupons[0];
 
-      const visit = await this.recordVisitFromQrScan({
+      await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         restaurantId,
         audit,
@@ -608,9 +610,11 @@ export class RedemptionService {
         manager,
         restaurantName,
       });
-      if (visit.recorded) {
-        visitToResume = visit;
-      }
+
+      resumeTarget.value = {
+        customerId: primaryCoupon.customerId,
+        campaignId: primaryCoupon.campaignId,
+      };
 
       return this.buildRedeemSuccessResult(
         manager,
@@ -620,8 +624,12 @@ export class RedemptionService {
       );
     });
 
-    if (visitToResume) {
-      await this.notifyAutomationAfterVisit(visitToResume);
+    if (resumeTarget.value) {
+      await this.notifyAutomationAfterVisit({
+        recorded: true,
+        customerId: resumeTarget.value.customerId,
+        campaignId: resumeTarget.value.campaignId,
+      });
     }
 
     return result;

@@ -1,4 +1,3 @@
-/** Detects prepaid-offer "customer visited" gates (no scheduled visit date). */
 export function isCustomerVisitedCondition(conditionType: string): boolean {
   const normalized = conditionType.trim().toLowerCase();
   return (
