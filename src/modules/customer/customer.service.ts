@@ -13,6 +13,7 @@ import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
+import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { AutomationQueueService } from '../automation/automation-queue.service';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
@@ -132,7 +133,7 @@ export class CustomerService {
   }
 
   async deleteCustomer(id: number): Promise<void> {
-    await this.findById(id);
+    const customer = await this.findById(id);
 
     const executions = await this.automationExecutionRepository.find({
       where: { customerId: id },
@@ -140,7 +141,6 @@ export class CustomerService {
     });
     const executionIds = executions.map((execution) => execution.id);
 
-    // Stop queued automation jobs before removing execution rows.
     await this.automationQueueService.purgeExecutionJobs(executionIds);
 
     await this.dataSource.transaction(async (manager) => {
@@ -163,6 +163,24 @@ export class CustomerService {
       await manager.delete(AutomationExecution, { customerId: id });
       await manager.delete(FunnelEvent, { customerId: id });
       await manager.delete(CheckoutAccessToken, { customerId: id });
+
+      const payments = await manager
+        .createQueryBuilder(FunnelPayment, 'payment')
+        .select(['payment.id'])
+        .where('LOWER(payment.customerEmail) = LOWER(:email)', {
+          email: customer.email.trim(),
+        })
+        .getMany();
+      const paymentIds = payments.map((payment) => payment.id);
+
+      if (paymentIds.length > 0) {
+        await manager.delete(FunnelEvent, { funnelPaymentId: In(paymentIds) });
+        await manager.delete(CheckoutAccessToken, {
+          funnelPaymentId: In(paymentIds),
+        });
+        await manager.delete(FunnelPayment, { id: In(paymentIds) });
+      }
+
       await manager.delete(Customer, { id });
     });
   }

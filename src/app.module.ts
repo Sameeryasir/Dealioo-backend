@@ -24,6 +24,7 @@ import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 
@@ -73,6 +74,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     AutomationModule,
     RedemptionModule,
     ActivityModule,
+    ChatModule,
     OnboardingModule,
   ],
   controllers: [AppController],
