@@ -22,6 +22,8 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { ActivityService } from '../activity/activity.service';
+import { ChatMessageService } from '../chat/chat-message.service';
+import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CouponService } from '../redemption/coupon.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
@@ -59,6 +61,7 @@ export class AutomationEngineService {
     private readonly customerVisitRepository: Repository<CustomerVisit>,
     private readonly couponService: CouponService,
     private readonly activityService: ActivityService,
+    private readonly chatMessageService: ChatMessageService,
   ) {}
 
   async processExecution(executionId: number, nodeId: number): Promise<void> {
@@ -544,6 +547,30 @@ export class AutomationEngineService {
               purpose,
             },
           });
+          await this.chatMessageService.recordOutboundMessage({
+            restaurantId: execution.automation.restaurantId,
+            customerId: execution.customerId,
+            automationId: execution.automationId,
+            executionId: execution.id,
+            nodeId: node.id,
+            channel: ConversationMessageChannel.EMAIL,
+            bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
+              prepared,
+              {
+                customerId: execution.customerId,
+                email: to ?? '',
+                name: execution.customer?.name ?? '',
+              },
+              purpose,
+            ),
+            idempotencyKey: `chat_message:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
+            metadata: {
+              automationId: execution.automationId,
+              automationExecutionId: execution.id,
+              nodeId: node.id,
+              purpose,
+            },
+          });
           return 'advance';
         }
 
@@ -935,6 +962,30 @@ export class AutomationEngineService {
         messagePreview:
           this.automationEmailService.resolvePreparedEmailPreview(prepared),
         idempotencyKey: `message_sent:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
+        metadata: {
+          automationId: execution.automationId,
+          automationExecutionId: execution.id,
+          nodeId: node.id,
+          purpose,
+        },
+      });
+      await this.chatMessageService.recordOutboundMessage({
+        restaurantId: execution.automation.restaurantId,
+        customerId: execution.customerId,
+        automationId: execution.automationId,
+        executionId: execution.id,
+        nodeId: node.id,
+        channel: ConversationMessageChannel.EMAIL,
+        bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
+          prepared,
+          {
+            customerId: execution.customerId,
+            email: to,
+            name: execution.customer?.name ?? '',
+          },
+          purpose,
+        ),
+        idempotencyKey: `chat_message:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
         metadata: {
           automationId: execution.automationId,
           automationExecutionId: execution.id,

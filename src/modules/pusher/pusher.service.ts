@@ -9,8 +9,12 @@ import {
   PUSHER_EVENT,
   pusherAutomationChannel,
   pusherExecutionChannel,
+  pusherRestaurantChatChannel,
 } from './pusher.constants';
-import type { ExecutionTerminalPusherPayload } from './pusher.types';
+import type {
+  ChatMessagePusherPayload,
+  ExecutionTerminalPusherPayload,
+} from './pusher.types';
 
 @Injectable()
 export class PusherService implements OnModuleInit {
@@ -77,16 +81,43 @@ export class PusherService implements OnModuleInit {
   async notifyExecutionCompleted(
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {
-    await this.trigger(PUSHER_EVENT.EXECUTION_COMPLETED, payload);
+    await this.triggerExecution(PUSHER_EVENT.EXECUTION_COMPLETED, payload);
   }
 
   async notifyExecutionFailed(
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {
-    await this.trigger(PUSHER_EVENT.EXECUTION_FAILED, payload);
+    await this.triggerExecution(PUSHER_EVENT.EXECUTION_FAILED, payload);
   }
 
-  private async trigger(
+  async notifyChatMessageSent(
+    payload: ChatMessagePusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    const channel = pusherRestaurantChatChannel(payload.restaurantId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.CHAT_MESSAGE_SENT,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.CHAT_MESSAGE_SENT} | customer: ${payload.customerId} | message: ${payload.message.id}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher chat notify failed for restaurant ${payload.restaurantId}, customer ${payload.customerId}: ${message}`,
+      );
+    }
+  }
+
+  private async triggerExecution(
     event: string,
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {

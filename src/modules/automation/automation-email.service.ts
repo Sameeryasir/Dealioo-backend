@@ -37,7 +37,6 @@ export class AutomationEmailService {
     private readonly emailRenderer: AutomationEmailRendererService,
   ) {}
 
-  /** Build email content from either a Send Email or Send Text step (payment reminders send email). */
   prepareFromActionNode(
     actionNode: { type: string; config?: Record<string, unknown> | null },
     purpose: AutomationPurpose,
@@ -144,6 +143,37 @@ export class AutomationEmailService {
     }
 
     return truncateActivityMessagePreview(prepared.subject);
+  }
+
+  async resolveRecipientChatMessageBody(
+    prepared: PreparedAutomationEmail,
+    recipient: EmailRecipient,
+    purpose: AutomationPurpose,
+    templateOverrides?: Partial<PreparedAutomationEmail['templateProps']>,
+  ): Promise<string> {
+    const mergedPrepared: PreparedAutomationEmail = templateOverrides
+      ? {
+          ...prepared,
+          templateProps: {
+            ...prepared.templateProps,
+            ...templateOverrides,
+          },
+        }
+      : prepared;
+
+    const { text } = await this.renderForRecipient(
+      mergedPrepared,
+      recipient,
+      mergedPrepared.subject,
+      purpose,
+    );
+
+    const normalized = text.replace(/\r\n/g, '\n').trim();
+    if (normalized) {
+      return normalized;
+    }
+
+    return this.resolvePreparedEmailPreview(mergedPrepared);
   }
 
   buildTemplatePropsForRecipient(

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -14,13 +14,22 @@ import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
+import { Conversation } from '../../db/entities/conversation.entity';
+import {
+  ConversationMessage,
+  ConversationMessageChannel,
+} from '../../db/entities/conversation-message.entity';
 import {
   ActiveFlowCustomerDto,
+  ChatCustomerSummaryDto,
   ConversationDetailDto,
   ConversationMessageDirection,
   ConversationMessageDto,
   ConversationMessageKind,
+  ConversationMessageParticipantDto,
+  CustomerConversationDetailDto,
   PaginatedActiveFlowCustomersDto,
+  PaginatedChatCustomersDto,
 } from './chat.dto';
 
 @Injectable()
@@ -32,6 +41,10 @@ export class ChatService {
     private readonly logRepository: Repository<AutomationLog>,
     @InjectRepository(ActivityEvent)
     private readonly activityRepository: Repository<ActivityEvent>,
+    @InjectRepository(Conversation)
+    private readonly conversationRepository: Repository<Conversation>,
+    @InjectRepository(ConversationMessage)
+    private readonly messageRepository: Repository<ConversationMessage>,
   ) {}
 
   async getActiveFlowCustomers(
@@ -114,6 +127,89 @@ export class ChatService {
     };
   }
 
+  async getRestaurantChatCustomers(
+    restaurantId: number,
+    page?: number,
+    limit?: number,
+  ): Promise<PaginatedChatCustomersDto> {
+    const pagination = normalizePagination(page, limit);
+
+    const [conversations, total] = await this.conversationRepository.findAndCount(
+      {
+        where: {
+          restaurantId,
+          isPrivate: true,
+          messageCount: MoreThan(0),
+        },
+        relations: ['customer', 'lastAutomation'],
+        order: { lastMessageAt: 'DESC' },
+        skip: pagination.skip,
+        take: pagination.limit,
+      },
+    );
+
+    const data = conversations.map((conversation) => ({
+      customerId: conversation.customerId,
+      customerName: conversation.customer?.name ?? null,
+      customerEmail: conversation.customer?.email ?? null,
+      messageCount: conversation.messageCount,
+      lastMessagePreview: conversation.lastMessagePreview?.trim() ?? '',
+      lastMessageChannel: this.channelToMessageKind(
+        (conversation.lastMessageChannel as ConversationMessageChannel | null) ??
+          ConversationMessageChannel.EMAIL,
+      ),
+      lastMessageAt: conversation.lastMessageAt ?? conversation.updatedAt,
+      lastAutomationName:
+        conversation.lastAutomation?.name ??
+        (conversation.lastAutomationId
+          ? `Automation #${conversation.lastAutomationId}`
+          : null),
+    } satisfies ChatCustomerSummaryDto));
+
+    return {
+      data,
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  async getCustomerConversation(
+    restaurantId: number,
+    customerId: number,
+  ): Promise<CustomerConversationDetailDto> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { restaurantId, customerId, isPrivate: true },
+      relations: ['customer'],
+    });
+
+    if (!conversation || conversation.messageCount === 0) {
+      throw new NotFoundException(
+        'No messages found for this guest at this restaurant.',
+      );
+    }
+
+    const messages = await this.messageRepository.find({
+      where: { conversationId: conversation.id },
+      relations: [
+        'automation',
+        'node',
+        'sentByRestaurant',
+        'sentByCustomer',
+        'sentToRestaurant',
+        'sentToCustomer',
+      ],
+      order: { sentAt: 'ASC' },
+    });
+
+    return {
+      customerId,
+      customerName: conversation.customer?.name ?? null,
+      customerEmail: conversation.customer?.email ?? null,
+      messages: messages.map((message) =>
+        this.toConversationMessageFromStoredMessage(message),
+      ),
+    };
+  }
+
   private inProgressExecutionStatuses(): AutomationExecutionStatus[] {
     return [
       AutomationExecutionStatus.QUEUED,
@@ -158,6 +254,8 @@ export class ChatService {
       id: log.id,
       kind,
       direction,
+      sentBy: null,
+      sentTo: null,
       body: preview?.trim() || message,
       stepType,
       sentAt: log.createdAt,
@@ -204,5 +302,106 @@ export class ChatService {
     }
 
     return 'system';
+  }
+
+  private channelToMessageKind(
+    channel: ConversationMessageChannel,
+  ): ConversationMessageKind {
+    switch (channel) {
+      case ConversationMessageChannel.SMS:
+        return 'sms';
+      case ConversationMessageChannel.WHATSAPP:
+        return 'whatsapp';
+      case ConversationMessageChannel.EMAIL:
+      default:
+        return 'email';
+    }
+  }
+
+  private toConversationMessageFromStoredMessage(
+    message: ConversationMessage,
+  ): ConversationMessageDto {
+    const metadataError = message.metadata?.error;
+    const error =
+      typeof metadataError === 'string' && metadataError.trim()
+        ? metadataError.trim()
+        : null;
+
+    return {
+      id: message.id,
+      kind: error ? 'error' : this.channelToMessageKind(message.channel),
+      direction: 'outbound',
+      sentBy: this.toMessageParticipant(message, 'sentBy'),
+      sentTo: this.toMessageParticipant(message, 'sentTo'),
+      body: message.body.trim(),
+      stepType: message.node?.type ?? null,
+      sentAt: message.sentAt,
+      error,
+    };
+  }
+
+  private toMessageParticipant(
+    message: ConversationMessage,
+    side: 'sentBy' | 'sentTo',
+  ): ConversationMessageParticipantDto | null {
+    if (side === 'sentBy') {
+      if (message.sentByRestaurantId != null) {
+        return {
+          type: 'restaurant',
+          id: message.sentByRestaurantId,
+          name: message.sentByRestaurant?.name ?? null,
+          email: null,
+        };
+      }
+      if (message.sentByCustomerId != null) {
+        return {
+          type: 'customer',
+          id: message.sentByCustomerId,
+          name: message.sentByCustomer?.name ?? null,
+          email: message.sentByCustomer?.email ?? null,
+        };
+      }
+      return null;
+    }
+
+    if (message.sentToCustomerId != null) {
+      return {
+        type: 'customer',
+        id: message.sentToCustomerId,
+        name: message.sentToCustomer?.name ?? null,
+        email: message.sentToCustomer?.email ?? null,
+      };
+    }
+    if (message.sentToRestaurantId != null) {
+      return {
+        type: 'restaurant',
+        id: message.sentToRestaurantId,
+        name: message.sentToRestaurant?.name ?? null,
+        email: null,
+      };
+    }
+    return null;
+  }
+
+  /** Maps a stored conversation row for API and realtime chat payloads. */
+  mapStoredMessageToDto(message: ConversationMessage): ConversationMessageDto {
+    return this.toConversationMessageFromStoredMessage(message);
+  }
+
+  resolveChannelMessageKind(
+    channel: ConversationMessageChannel | string | null | undefined,
+  ): ConversationMessageKind {
+    if (!channel) {
+      return 'email';
+    }
+
+    const normalized = String(channel).toLowerCase();
+    if (normalized === ConversationMessageChannel.SMS) {
+      return 'sms';
+    }
+    if (normalized === ConversationMessageChannel.WHATSAPP) {
+      return 'whatsapp';
+    }
+    return 'email';
   }
 }

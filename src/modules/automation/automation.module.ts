@@ -18,6 +18,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { ActivityModule } from '../activity/activity.module';
+import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { PaymentModule } from '../payment/payment.module';
@@ -74,6 +75,7 @@ import { AutomationService } from './automation.service';
       CustomerVisit,
     ]),
     ActivityModule,
+    ChatModule,
     AuthModule,
     forwardRef(() => RedemptionModule),
     forwardRef(() => PaymentModule),

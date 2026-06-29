@@ -16,6 +16,7 @@ export function unpaidReminderBatchJobId(
 
 export type UnpaidReminderBatchJob = {
   executionId: number;
+  automationId: number;
   restaurantId: number;
   funnelId: number;
   campaignId: number | null;

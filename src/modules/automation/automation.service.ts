@@ -39,6 +39,8 @@ import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { ActivityService } from '../activity/activity.service';
+import { ChatMessageService } from '../chat/chat-message.service';
+import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CheckoutResumeService } from '../payment/checkout-resume.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
@@ -109,6 +111,7 @@ export class AutomationService {
     private readonly deadLetterService: AutomationDeadLetterService,
     private readonly metricsService: AutomationMetricsService,
     private readonly activityService: ActivityService,
+    private readonly chatMessageService: ChatMessageService,
     private readonly checkoutResumeService: CheckoutResumeService,
   ) {}
 
@@ -986,6 +989,7 @@ export class AutomationService {
 
     const batch: UnpaidReminderBatchJob = {
       executionId: execution.id,
+      automationId: automation.id,
       restaurantId: automation.restaurantId,
       funnelId: automation.funnelId!,
       campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
@@ -1140,6 +1144,21 @@ export class AutomationService {
           customerId: recipient.customerId,
           message: `Payment reminder text sent to ${recipient.email} (bulk)`,
         });
+        await this.chatMessageService.recordOutboundMessage({
+          restaurantId: batch.restaurantId,
+          customerId: recipient.customerId,
+          automationId: batch.automationId,
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          channel: ConversationMessageChannel.SMS,
+          bodyPreview: smsMessage || 'Text sent',
+          idempotencyKey: `chat_message:execution:${batch.executionId}:node:${batch.emailNodeId}:customer:${recipient.customerId}:phase:${batchPhase}:sms`,
+          metadata: {
+            batchPhase,
+            purpose: batch.purpose,
+            channel: 'sms',
+          },
+        });
         sent.push({
           customerId: recipient.customerId,
           email: recipient.email,
@@ -1290,6 +1309,30 @@ export class AutomationService {
             automationExecutionId: batch.executionId,
             emailNodeId: batch.emailNodeId,
             purpose: batch.purpose,
+          },
+        });
+        await this.chatMessageService.recordOutboundMessage({
+          restaurantId: batch.restaurantId,
+          customerId: recipient.customerId,
+          automationId: batch.automationId,
+          executionId: batch.executionId,
+          nodeId: batch.emailNodeId,
+          channel: ConversationMessageChannel.EMAIL,
+          bodyPreview:
+            await this.automationEmailService.resolveRecipientChatMessageBody(
+              batch.prepared!,
+              recipient,
+              batch.purpose,
+              recipient.customerId != null
+                ? recipientTemplateOverrides.get(recipient.customerId)
+                : undefined,
+            ),
+          idempotencyKey: `chat_message:execution:${batch.executionId}:node:${batch.emailNodeId}:customer:${recipient.customerId}:phase:${batchPhase}`,
+          metadata: {
+            batchPhase,
+            purpose: batch.purpose,
+            automationExecutionId: batch.executionId,
+            nodeId: batch.emailNodeId,
           },
         });
         sent.push({
