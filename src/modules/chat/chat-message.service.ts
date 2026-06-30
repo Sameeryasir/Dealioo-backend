@@ -15,6 +15,7 @@ import {
   ConversationMessageDirection,
 } from '../../db/entities/conversation-message.entity';
 import { PusherService } from '../pusher/pusher.service';
+import { TwilioService } from '../sms/twilio.service';
 import type { ConversationMessageDto } from './chat.dto';
 import type { RecordOutboundMessageDto } from './chat-message.dto';
 import { ChatService } from './chat.service';
@@ -42,6 +43,7 @@ export class ChatMessageService {
     private readonly customerRepository: Repository<Customer>,
     private readonly chatService: ChatService,
     private readonly pusherService: PusherService,
+    private readonly twilioService: TwilioService,
   ) {}
 
   async sendManualMessage(
@@ -60,6 +62,16 @@ export class ChatMessageService {
     const trimmed = body.trim();
     if (!trimmed) {
       throw new BadRequestException('Message cannot be empty.');
+    }
+
+    if (channel === ConversationMessageChannel.SMS) {
+      if (!customer.phone?.trim()) {
+        throw new BadRequestException(
+          'This guest does not have a phone number on file.',
+        );
+      }
+
+      await this.twilioService.sendSms(customer.phone, trimmed);
     }
 
     const idempotencyKey = `chat_message:manual:${restaurantId}:${customerId}:${randomUUID()}`;

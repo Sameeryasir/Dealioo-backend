@@ -18,6 +18,7 @@ import { Conversation } from '../../db/entities/conversation.entity';
 import {
   ConversationMessage,
   ConversationMessageChannel,
+  ConversationMessageDirection as StoredMessageDirection,
 } from '../../db/entities/conversation-message.entity';
 import {
   ActiveFlowCustomerDto,
@@ -418,7 +419,10 @@ export class ChatService {
     return {
       id: message.id,
       kind: error ? 'error' : this.channelToMessageKind(message.channel),
-      direction: 'outbound',
+      direction:
+        message.direction === StoredMessageDirection.INBOUND
+          ? 'inbound'
+          : 'outbound',
       sentBy: this.toMessageParticipant(message, 'sentBy'),
       sentTo: this.toMessageParticipant(message, 'sentTo'),
       body: message.body.trim(),
