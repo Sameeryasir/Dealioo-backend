@@ -378,10 +378,7 @@ export class AutomationExecutionService {
     return this.executionRepository.exist({
       where: {
         automationId,
-        status: In([
-          AutomationExecutionStatus.QUEUED,
-          AutomationExecutionStatus.RUNNING,
-        ]),
+        status: In(this.inProgressExecutionStatuses()),
       },
     });
   }

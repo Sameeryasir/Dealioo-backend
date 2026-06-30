@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Pusher from 'pusher';
 import {
@@ -49,6 +54,17 @@ export class PusherService implements OnModuleInit {
 
   isEnabled(): boolean {
     return this.client !== null;
+  }
+
+  authorizeChannel(
+    socketId: string,
+    channelName: string,
+  ): { auth: string; channel_data?: string } {
+    if (!this.client) {
+      throw new ServiceUnavailableException('Realtime messaging is not configured.');
+    }
+
+    return this.client.authorizeChannel(socketId, channelName);
   }
 
   buildExecutionTerminalPayload(

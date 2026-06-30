@@ -12,6 +12,20 @@ export function pusherAutomationChannel(automationId: number): string {
   return `automation-${automationId}`;
 }
 
+export const PUSHER_PRIVATE_CHANNEL_PREFIX = 'private-';
+
 export function pusherRestaurantChatChannel(restaurantId: number): string {
-  return `restaurant-chat-${restaurantId}`;
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}restaurant-chat-${restaurantId}`;
+}
+
+export function parseRestaurantIdFromChatChannel(
+  channelName: string,
+): number | null {
+  const prefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}restaurant-chat-`;
+  if (!channelName.startsWith(prefix)) {
+    return null;
+  }
+
+  const restaurantId = Number(channelName.slice(prefix.length));
+  return Number.isFinite(restaurantId) && restaurantId > 0 ? restaurantId : null;
 }

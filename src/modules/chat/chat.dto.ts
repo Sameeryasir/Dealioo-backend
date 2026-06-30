@@ -73,11 +73,17 @@ export class ChatCustomerSummaryDto {
   lastMessageChannel: ConversationMessageKind;
   lastMessageAt: Date;
   lastAutomationName: string | null;
+  createdAt: Date;
 }
 
 export class PaginatedChatCustomersDto {
   data: ChatCustomerSummaryDto[];
   meta: PaginationMeta;
+}
+
+/** New guest rows created after a cached sidebar cursor. */
+export class SyncChatCustomersDto {
+  data: ChatCustomerSummaryDto[];
 }
 
 /** Full message thread for one guest at a restaurant. */

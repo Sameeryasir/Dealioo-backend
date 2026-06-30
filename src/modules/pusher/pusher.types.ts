@@ -26,7 +26,7 @@ export type ChatMessagePusherPayload = {
   customerId: number;
   customerName: string | null;
   customerEmail: string | null;
-  message: ConversationMessageDto;
+  message: Omit<ConversationMessageDto, 'sentAt'> & { sentAt: string };
   lastMessagePreview: string;
   lastMessageChannel: ConversationMessageKind;
   lastMessageAt: string;

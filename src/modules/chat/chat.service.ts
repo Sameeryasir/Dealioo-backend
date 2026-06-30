@@ -30,6 +30,7 @@ import {
   CustomerConversationDetailDto,
   PaginatedActiveFlowCustomersDto,
   PaginatedChatCustomersDto,
+  SyncChatCustomersDto,
 } from './chat.dto';
 
 @Injectable()
@@ -148,27 +149,51 @@ export class ChatService {
       },
     );
 
-    const data = conversations.map((conversation) => ({
-      customerId: conversation.customerId,
-      customerName: conversation.customer?.name ?? null,
-      customerEmail: conversation.customer?.email ?? null,
-      messageCount: conversation.messageCount,
-      lastMessagePreview: conversation.lastMessagePreview?.trim() ?? '',
-      lastMessageChannel: this.channelToMessageKind(
-        (conversation.lastMessageChannel as ConversationMessageChannel | null) ??
-          ConversationMessageChannel.EMAIL,
-      ),
-      lastMessageAt: conversation.lastMessageAt ?? conversation.updatedAt,
-      lastAutomationName:
-        conversation.lastAutomation?.name ??
-        (conversation.lastAutomationId
-          ? `Automation #${conversation.lastAutomationId}`
-          : null),
-    } satisfies ChatCustomerSummaryDto));
+    const data = conversations.map((conversation) =>
+      this.toChatCustomerSummary(conversation),
+    );
 
     return {
       data,
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  async syncRestaurantChatCustomers(
+    restaurantId: number,
+    afterCustomerId: number,
+    limit?: number,
+  ): Promise<SyncChatCustomersDto> {
+    const pagination = normalizePagination(1, limit);
+
+    const cursor = await this.conversationRepository.findOne({
+      where: {
+        restaurantId,
+        customerId: afterCustomerId,
+        isPrivate: true,
+      },
+    });
+
+    if (!cursor) {
+      return { data: [] };
+    }
+
+    const conversations = await this.conversationRepository.find({
+      where: {
+        restaurantId,
+        isPrivate: true,
+        messageCount: MoreThan(0),
+        createdAt: MoreThan(cursor.createdAt),
+      },
+      relations: ['customer', 'lastAutomation'],
+      order: { createdAt: 'ASC' },
+      take: pagination.limit,
+    });
+
+    return {
+      data: conversations.map((conversation) =>
+        this.toChatCustomerSummary(conversation),
+      ),
     };
   }
 
@@ -189,6 +214,48 @@ export class ChatService {
 
     const messages = await this.messageRepository.find({
       where: { conversationId: conversation.id },
+      relations: [
+        'automation',
+        'node',
+        'sentByRestaurant',
+        'sentByCustomer',
+        'sentToRestaurant',
+        'sentToCustomer',
+      ],
+      order: { sentAt: 'ASC' },
+    });
+
+    return {
+      customerId,
+      customerName: conversation.customer?.name ?? null,
+      customerEmail: conversation.customer?.email ?? null,
+      messages: messages.map((message) =>
+        this.toConversationMessageFromStoredMessage(message),
+      ),
+    };
+  }
+
+  async syncCustomerConversationMessages(
+    restaurantId: number,
+    customerId: number,
+    afterMessageId: number,
+  ): Promise<CustomerConversationDetailDto> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { restaurantId, customerId, isPrivate: true },
+      relations: ['customer'],
+    });
+
+    if (!conversation || conversation.messageCount === 0) {
+      throw new NotFoundException(
+        'No messages found for this guest at this restaurant.',
+      );
+    }
+
+    const messages = await this.messageRepository.find({
+      where: {
+        conversationId: conversation.id,
+        id: MoreThan(afterMessageId),
+      },
       relations: [
         'automation',
         'node',
@@ -235,6 +302,27 @@ export class ChatService {
       scheduledAt: execution.scheduledAt ?? null,
       startedAt: execution.createdAt,
       updatedAt: execution.updatedAt,
+    };
+  }
+
+  private toChatCustomerSummary(conversation: Conversation): ChatCustomerSummaryDto {
+    return {
+      customerId: conversation.customerId,
+      customerName: conversation.customer?.name ?? null,
+      customerEmail: conversation.customer?.email ?? null,
+      messageCount: conversation.messageCount,
+      lastMessagePreview: conversation.lastMessagePreview?.trim() ?? '',
+      lastMessageChannel: this.channelToMessageKind(
+        (conversation.lastMessageChannel as ConversationMessageChannel | null) ??
+          ConversationMessageChannel.EMAIL,
+      ),
+      lastMessageAt: conversation.lastMessageAt ?? conversation.updatedAt,
+      lastAutomationName:
+        conversation.lastAutomation?.name ??
+        (conversation.lastAutomationId
+          ? `Automation #${conversation.lastAutomationId}`
+          : null),
+      createdAt: conversation.createdAt,
     };
   }
 

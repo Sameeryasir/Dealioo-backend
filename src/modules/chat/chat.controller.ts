@@ -84,6 +84,48 @@ export class ChatController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('restaurant/:restaurantId/customers/sync')
+  async syncRestaurantChatCustomers(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Query('afterCustomerId', ParseIntPipe) afterCustomerId: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyRestaurantAccess(
+      restaurantId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.syncRestaurantChatCustomers(
+      restaurantId,
+      afterCustomerId,
+      limit,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('restaurant/:restaurantId/customers/:customerId/messages/sync')
+  async syncCustomerConversationMessages(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('customerId', ParseIntPipe) customerId: number,
+    @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyRestaurantAccess(
+      restaurantId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.syncCustomerConversationMessages(
+      restaurantId,
+      customerId,
+      afterMessageId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('restaurant/:restaurantId/customers/:customerId/messages')
   async getCustomerConversation(
     @Param('restaurantId', ParseIntPipe) restaurantId: number,

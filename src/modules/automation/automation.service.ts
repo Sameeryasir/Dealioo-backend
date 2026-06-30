@@ -877,7 +877,7 @@ export class AutomationService {
       await this.executionService.hasBlockingBatchSendForAutomation(automationId)
     ) {
       this.logger.log(
-        `Cron tick skipped for automation ${automationId}: batch send already in progress`,
+        `Cron tick skipped for automation ${automationId}: a run is already in progress (queued, running, waiting, or paused)`,
       );
       return;
     }

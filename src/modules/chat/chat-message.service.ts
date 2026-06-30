@@ -233,12 +233,17 @@ export class ChatMessageService {
       return;
     }
 
+    const messageDto = this.chatService.mapStoredMessageToDto(message);
+
     await this.pusherService.notifyChatMessageSent({
       restaurantId,
       customerId,
       customerName: conversationSnapshot.customerName,
       customerEmail: conversationSnapshot.customerEmail,
-      message: this.chatService.mapStoredMessageToDto(message),
+      message: {
+        ...messageDto,
+        sentAt: message.sentAt.toISOString(),
+      },
       lastMessagePreview: conversationSnapshot.lastMessagePreview,
       lastMessageChannel: this.chatService.resolveChannelMessageKind(
         conversationSnapshot.lastMessageChannel,
