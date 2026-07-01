@@ -59,7 +59,6 @@ export class CustomerService {
       .getOne();
 
     if (existing) {
-      // Same guest may sign up on multiple funnels — reuse profile, refresh details.
       let changed = false;
       if (name && existing.name !== name) {
         existing.name = name;

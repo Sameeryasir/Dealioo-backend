@@ -8,7 +8,6 @@ export type ParsedCronTriggerConfig = {
   intervalMinutes: number;
 };
 
-/** Used only when a cron trigger node has no valid interval saved in the DB (15 minutes). */
 export const DEFAULT_CRON_INTERVAL_MS = 15 * 60_000;
 
 type IntervalUnit = 'ms' | 'seconds' | 'minutes' | 'hours';
@@ -31,7 +30,6 @@ export function parseCronTriggerConfig(
     return buildCronConfig(intervalMs);
   }
 
-  // Interval cron with no saved value — use product default (not 1 second).
   if (!frequency || frequency === 'interval') {
     return buildCronConfig(DEFAULT_CRON_INTERVAL_MS);
   }

@@ -164,6 +164,38 @@ export class AutomationExecutionService {
     return null;
   }
 
+  async findPrepaidFirstEmailLoopNode(
+    automationId: number,
+  ): Promise<AutomationNode | null> {
+    const byKind = await this.findNodeByWorkflowKind(
+      automationId,
+      'prepaid_payment_actions',
+    );
+    if (byKind?.type === AutomationNodeType.EMAIL) {
+      return byKind;
+    }
+
+    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    const nodes = await this.nodeRepository.find({
+      where: { automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    for (const node of nodes) {
+      if (node.type === AutomationNodeType.TRIGGER) {
+        continue;
+      }
+      if (visitGateOrder != null && node.order >= visitGateOrder) {
+        break;
+      }
+      if (node.type === AutomationNodeType.EMAIL) {
+        return node;
+      }
+    }
+
+    return null;
+  }
+
   async findPrepaidVisitReminderLoopNode(
     automationId: number,
   ): Promise<AutomationNode | null> {
@@ -225,32 +257,60 @@ export class AutomationExecutionService {
       config.onFalseLoopWorkflowKind ?? 'prepaid_visit_reminder_wait',
     ).trim();
 
-    if (
-      workflowKind &&
-      workflowKind !== 'prepaid_payment_actions' &&
-      workflowKind !== 'prepaid_visit_reminder' &&
-      workflowKind !== 'prepaid_visit_reminder_wait'
-    ) {
-      const byKind = await this.findNodeByWorkflowKind(
+    if (workflowKind === 'prepaid_visit_reminder_wait') {
+      const waitNode = await this.findPrepaidVisitReminderWaitLoopNode(
         automationId,
-        workflowKind,
       );
-      if (byKind) {
-        return byKind;
+      if (waitNode) {
+        return waitNode;
       }
     }
 
-    if (workflowKind === 'prepaid_visit_reminder_wait') {
-      const byKind = await this.findNodeByWorkflowKind(
+    if (workflowKind === 'prepaid_visit_reminder') {
+      const reminderNode = await this.findPrepaidVisitReminderLoopNode(
         automationId,
-        workflowKind,
       );
-      if (byKind) {
-        return byKind;
+      if (reminderNode) {
+        return reminderNode;
       }
+    }
+
+    if (workflowKind === 'prepaid_payment_actions') {
+      return this.findPrepaidFirstEmailLoopNode(automationId);
+    }
+
+    const byKind = await this.findNodeByWorkflowKind(
+      automationId,
+      workflowKind,
+    );
+    if (byKind) {
+      return byKind;
     }
 
     return this.findPrepaidVisitReminderWaitLoopNode(automationId);
+  }
+
+  async findPaymentReminderLoopRestartNode(
+    automationId: number,
+    config: Record<string, unknown>,
+  ): Promise<AutomationNode | null> {
+    const workflowKind = String(
+      config.onFalseLoopWorkflowKind ?? 'payment_reminder_email',
+    ).trim();
+
+    const byKind = await this.findNodeByWorkflowKind(
+      automationId,
+      workflowKind,
+    );
+    if (byKind) {
+      return byKind;
+    }
+
+    const nodes = await this.nodeRepository.find({
+      where: { automationId, type: AutomationNodeType.EMAIL },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+    return nodes[0] ?? null;
   }
 
   async findById(id: number): Promise<AutomationExecution> {

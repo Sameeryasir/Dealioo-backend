@@ -34,6 +34,10 @@ import { AutomationExecutionEventService } from './automation-execution-event.se
 import { normalizeExecutionContext } from './automation-execution-context.types';
 import { AutomationMetricsService } from './automation-metrics.service';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
+import {
+  hasConditionLoopRestartConfig,
+  isUnpaidGuestCondition,
+} from './automation-payment-condition.util';
 import { isCustomerVisitedCondition } from './automation-visit.util';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
@@ -290,7 +294,9 @@ export class AutomationEngineService {
       execution.customerId,
       {
         skipCycleCheck:
-          execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT,
+          execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT ||
+          execution.automation?.purpose ===
+            AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
       },
     );
     if (!advanced) {
@@ -505,48 +511,18 @@ export class AutomationEngineService {
           error: sendResult.error,
         });
 
-        if (sendResult.sent) {
-          await this.executionService.incrementEmailsSent(execution.id);
-          this.metricsService.recordEmailSend(true);
-          await this.activityService.logMessageSent({
-            restaurantId: execution.automation.restaurantId,
-            customerId: execution.customerId,
-            messagePreview:
-              this.automationEmailService.resolvePreparedEmailPreview(prepared),
-            idempotencyKey: `message_sent:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
-            metadata: {
-              automationId: execution.automationId,
-              automationExecutionId: execution.id,
-              nodeId: node.id,
-              purpose,
-            },
-          });
-          await this.chatMessageService.recordOutboundMessage({
-            restaurantId: execution.automation.restaurantId,
-            customerId: execution.customerId,
-            automationId: execution.automationId,
-            executionId: execution.id,
-            nodeId: node.id,
-            channel: ConversationMessageChannel.EMAIL,
-            bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
-              prepared,
-              {
-                customerId: execution.customerId,
-                email: to ?? '',
-                name: execution.customer?.name ?? '',
-              },
-              purpose,
-            ),
-            idempotencyKey: `chat_message:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
-            metadata: {
-              automationId: execution.automationId,
-              automationExecutionId: execution.id,
-              nodeId: node.id,
-              purpose,
-            },
-          });
-          return 'advance';
-        }
+      if (sendResult.sent) {
+        await this.executionService.incrementEmailsSent(execution.id);
+        this.metricsService.recordEmailSend(true);
+        await this.recordAutomationEmailInChat(
+          execution,
+          node.id,
+          purpose,
+          prepared,
+          to ?? '',
+        );
+        return 'advance';
+      }
 
         if (to && sendResult.error) {
           this.metricsService.recordEmailSend(false);
@@ -620,9 +596,20 @@ export class AutomationEngineService {
             return 'advance';
           }
 
+          await this.reissuePassForPrepaidLoop(execution);
+
+          const loopConfig = {
+            ...config,
+            onFalseLoopWorkflowKind:
+              String(config.onFalseLoopWorkflowKind ?? '').trim() ===
+              'prepaid_payment_actions'
+                ? 'prepaid_visit_reminder_wait'
+                : (config.onFalseLoopWorkflowKind ??
+                  'prepaid_visit_reminder_wait'),
+          };
           const loopNode = await this.resolvePrepaidVisitLoopNode(
             execution.automationId,
-            config,
+            loopConfig,
           );
           if (!loopNode) {
             await this.logService.createLog({
@@ -639,46 +626,67 @@ export class AutomationEngineService {
             executionId: execution.id,
             nodeId: node.id,
             customerId: execution.customerId,
-            message: 'Customer has not visited — waiting before visit reminder again',
+            message:
+              'Customer has not visited — waiting before visit reminder email',
           });
 
-          await this.reissuePassForPrepaidLoop(execution);
+          return this.restartExecutionAtLoopNode(execution, node, loopNode);
+        }
 
-          const loopContext = this.eventService.mergeContext(
-            execution.executionContext,
-            {
-              loopCount:
-                (normalizeExecutionContext(execution.executionContext)
-                  .loopCount ?? 0) + 1,
-              branchMemory: { lastLoopTargetNodeId: loopNode.id },
-            },
-          );
-          await this.executionService.updateExecutionContext(
-            execution.id,
-            loopContext as Record<string, unknown>,
-          );
-          execution.executionContext = loopContext as Record<string, unknown>;
-          this.metricsService.recordPrepaidLoopRestart();
+        if (
+          isUnpaidGuestCondition(conditionType) &&
+          hasConditionLoopRestartConfig(config)
+        ) {
+          const funnelId = execution.automation.funnelId;
+          const paid =
+            funnelId != null &&
+            (await this.customerHasPaidOnFunnel(
+              funnelId,
+              execution.customerId,
+            ));
 
           await this.recordExecutionEvent(
             execution,
-            AutomationExecutionEventType.LOOP_RESTART,
+            AutomationExecutionEventType.CONDITION_EVALUATED,
             node.id,
-            { loopTargetNodeId: loopNode.id },
+            { conditionType, paid },
           );
 
-          await this.executionService.updateCurrentNode(
-            execution.id,
-            loopNode.id,
-            AutomationExecutionStatus.RUNNING,
-            null,
-          );
-          await this.queueService.addProcessExecution({
+          if (paid) {
+            await this.logService.createLog({
+              executionId: execution.id,
+              nodeId: node.id,
+              customerId: execution.customerId,
+              message: 'Guest completed payment — workflow stops',
+            });
+            return 'complete';
+          }
+
+          const loopNode =
+            await this.executionService.findPaymentReminderLoopRestartNode(
+              execution.automationId,
+              config,
+            );
+          if (!loopNode) {
+            await this.logService.createLog({
+              executionId: execution.id,
+              nodeId: node.id,
+              customerId: execution.customerId,
+              message: 'Guest still unpaid — could not restart reminder loop',
+              error: 'Missing loop target for payment reminder branch',
+            });
+            return 'failed';
+          }
+
+          await this.logService.createLog({
             executionId: execution.id,
-            nodeId: loopNode.id,
-            nodeType: loopNode.type,
+            nodeId: node.id,
+            customerId: execution.customerId,
+            message:
+              'Guest still unpaid — sending reminder emails again after wait',
           });
-          return 'wait';
+
+          return this.restartExecutionAtLoopNode(execution, node, loopNode);
         }
 
         const stopFlow = await this.shouldStopAfterCondition(
@@ -816,6 +824,12 @@ export class AutomationEngineService {
         node.id,
       );
 
+      const prepared = this.automationEmailService.prepareFromEmailNode(
+        emailConfig,
+        purpose,
+        { campaignName },
+      );
+
       const sendResult = await this.automationEmailService.sendToCustomer(
         purpose,
         {
@@ -841,6 +855,13 @@ export class AutomationEngineService {
 
       if (sendResult.sent) {
         await this.executionService.incrementEmailsSent(execution.id);
+        await this.recordAutomationEmailInChat(
+          execution,
+          node.id,
+          purpose,
+          prepared,
+          to,
+        );
       } else if (to && sendResult.error) {
         emailFailed = true;
       }
@@ -930,43 +951,13 @@ export class AutomationEngineService {
 
     if (sendResult.sent) {
       await this.executionService.incrementEmailsSent(execution.id);
-      await this.activityService.logMessageSent({
-        restaurantId: execution.automation.restaurantId,
-        customerId: execution.customerId,
-        messagePreview:
-          this.automationEmailService.resolvePreparedEmailPreview(prepared),
-        idempotencyKey: `message_sent:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
-        metadata: {
-          automationId: execution.automationId,
-          automationExecutionId: execution.id,
-          nodeId: node.id,
-          purpose,
-        },
-      });
-      await this.chatMessageService.recordOutboundMessage({
-        restaurantId: execution.automation.restaurantId,
-        customerId: execution.customerId,
-        automationId: execution.automationId,
-        executionId: execution.id,
-        nodeId: node.id,
-        channel: ConversationMessageChannel.EMAIL,
-        bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
-          prepared,
-          {
-            customerId: execution.customerId,
-            email: to,
-            name: execution.customer?.name ?? '',
-          },
-          purpose,
-        ),
-        idempotencyKey: `chat_message:execution:${execution.id}:node:${node.id}:customer:${execution.customerId}`,
-        metadata: {
-          automationId: execution.automationId,
-          automationExecutionId: execution.id,
-          nodeId: node.id,
-          purpose,
-        },
-      });
+      await this.recordAutomationEmailInChat(
+        execution,
+        node.id,
+        purpose,
+        prepared,
+        to,
+      );
       return 'advance';
     }
 
@@ -1049,6 +1040,69 @@ export class AutomationEngineService {
     }
 
     return 'advance';
+  }
+
+  private resolveAutomationChatIdempotencyKey(
+    execution: AutomationExecution,
+    nodeId: number,
+  ): string {
+    const loopCount =
+      normalizeExecutionContext(execution.executionContext).loopCount ?? 0;
+    return `chat_message:execution:${execution.id}:node:${nodeId}:customer:${execution.customerId}:loop:${loopCount}`;
+  }
+
+  private async recordAutomationEmailInChat(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    nodeId: number,
+    purpose: AutomationPurpose,
+    prepared: Awaited<
+      ReturnType<AutomationEmailService['prepareFromEmailNode']>
+    >,
+    to: string,
+  ): Promise<void> {
+    const idempotencyKey = this.resolveAutomationChatIdempotencyKey(
+      execution,
+      nodeId,
+    );
+
+    await this.activityService.logMessageSent({
+      restaurantId: execution.automation.restaurantId,
+      customerId: execution.customerId,
+      messagePreview:
+        this.automationEmailService.resolvePreparedEmailPreview(prepared),
+      idempotencyKey: `message_sent:execution:${execution.id}:node:${nodeId}:customer:${execution.customerId}:loop:${normalizeExecutionContext(execution.executionContext).loopCount ?? 0}`,
+      metadata: {
+        automationId: execution.automationId,
+        automationExecutionId: execution.id,
+        nodeId,
+        purpose,
+      },
+    });
+
+    await this.chatMessageService.recordOutboundMessage({
+      restaurantId: execution.automation.restaurantId,
+      customerId: execution.customerId,
+      automationId: execution.automationId,
+      executionId: execution.id,
+      nodeId,
+      channel: ConversationMessageChannel.EMAIL,
+      bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
+        prepared,
+        {
+          customerId: execution.customerId,
+          email: to,
+          name: execution.customer?.name ?? '',
+        },
+        purpose,
+      ),
+      idempotencyKey,
+      metadata: {
+        automationId: execution.automationId,
+        automationExecutionId: execution.id,
+        nodeId,
+        purpose,
+      },
+    });
   }
 
   private async customerHasPaidOnFunnel(
@@ -1205,6 +1259,50 @@ export class AutomationEngineService {
       automationId,
       config,
     );
+  }
+
+  private async restartExecutionAtLoopNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    conditionNode: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    loopNode: AutomationNode,
+  ): Promise<NodeRunResult> {
+    const loopContext = this.eventService.mergeContext(
+      execution.executionContext,
+      {
+        loopCount:
+          (normalizeExecutionContext(execution.executionContext).loopCount ??
+            0) + 1,
+        branchMemory: { lastLoopTargetNodeId: loopNode.id },
+      },
+    );
+    await this.executionService.updateExecutionContext(
+      execution.id,
+      loopContext as Record<string, unknown>,
+    );
+    execution.executionContext = loopContext as Record<string, unknown>;
+    this.metricsService.recordPrepaidLoopRestart();
+
+    await this.recordExecutionEvent(
+      execution,
+      AutomationExecutionEventType.LOOP_RESTART,
+      conditionNode.id,
+      { loopTargetNodeId: loopNode.id },
+    );
+
+    await this.executionService.updateCurrentNode(
+      execution.id,
+      loopNode.id,
+      AutomationExecutionStatus.RUNNING,
+      null,
+    );
+    await this.queueService.addProcessExecution({
+      executionId: execution.id,
+      nodeId: loopNode.id,
+      nodeType: loopNode.type,
+    });
+    return 'wait';
   }
 
   private async reissuePassForPrepaidLoop(

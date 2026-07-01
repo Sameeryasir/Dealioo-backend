@@ -123,6 +123,7 @@ export class ChatMessageService {
       select: ['id'],
     });
     if (existing) {
+      await this.replayChatMessagePusher(existing.id);
       return;
     }
 
@@ -424,6 +425,35 @@ export class ChatMessageService {
     }
 
     return savedMessageId;
+  }
+
+  private async replayChatMessagePusher(messageId: number): Promise<void> {
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId },
+      relations: ['conversation', 'conversation.customer'],
+    });
+
+    if (!message?.conversation) {
+      return;
+    }
+
+    const conversation = message.conversation;
+
+    await this.notifyChatMessagePusher(
+      message.id,
+      conversation.restaurantId,
+      conversation.customerId,
+      {
+        messageCount: conversation.messageCount,
+        lastMessagePreview:
+          conversation.lastMessagePreview?.trim() || message.body.trim(),
+        lastMessageChannel:
+          conversation.lastMessageChannel ?? message.channel,
+        lastMessageAt: conversation.lastMessageAt ?? message.sentAt,
+        customerName: conversation.customer?.name ?? null,
+        customerEmail: conversation.customer?.email ?? null,
+      },
+    );
   }
 
   private async notifyChatMessagePusher(
