@@ -48,13 +48,35 @@ export class AutomationCronSchedulerService implements OnModuleInit {
     automationId: number,
     options?: { silent?: boolean },
   ): Promise<VerifiedCronSchedule | null> {
+    const verified = await this.resolvePublishedCronSchedule(automationId);
+
+    if (!verified) {
+      await this.queueService.removeCronSchedule(automationId);
+      return null;
+    }
+
+    const intervalMs = cronIntervalMs(verified.config);
+    await this.queueService.upsertCronSchedule(automationId, intervalMs);
+
+    if (!options?.silent) {
+      this.logger.log(
+        `Cron schedule synced for automation ${automationId} (every ${verified.interval} ${verified.unit}, ${intervalMs}ms)`,
+      );
+    }
+
+    return verified;
+  }
+
+  /** Read cron config from DB only — does not touch the BullMQ scheduler. */
+  async resolvePublishedCronSchedule(
+    automationId: number,
+  ): Promise<VerifiedCronSchedule | null> {
     const automation = await this.automationRepository.findOne({
       where: { id: automationId },
       select: ['id', 'published'],
     });
 
-    if (!automation) {
-      await this.queueService.removeCronSchedule(automationId);
+    if (!automation?.published) {
       return null;
     }
 
@@ -63,29 +85,16 @@ export class AutomationCronSchedulerService implements OnModuleInit {
       order: { order: 'ASC', id: 'ASC' },
     });
 
-    const cronConfig = automation.published
-      ? resolveCronFromAutomationNodes(nodes)
-      : null;
-
+    const cronConfig = resolveCronFromAutomationNodes(nodes);
     if (!cronConfig) {
-      await this.queueService.removeCronSchedule(automationId);
       return null;
     }
-
-    const intervalMs = cronIntervalMs(cronConfig);
-    await this.queueService.upsertCronSchedule(automationId, intervalMs);
 
     const triggerConfig = sortAutomationNodes(nodes)[0]?.config ?? {};
     const interval = triggerConfig.interval;
     const unit = String(
       triggerConfig.unit ?? triggerConfig.intervalUnit ?? 'minutes',
     );
-
-    if (!options?.silent) {
-      this.logger.log(
-        `Cron schedule synced for automation ${automationId} (every ${interval} ${unit}, ${intervalMs}ms)`,
-      );
-    }
 
     return {
       config: cronConfig,
@@ -97,7 +106,7 @@ export class AutomationCronSchedulerService implements OnModuleInit {
   async verifyAndRefreshBeforeRun(
     automationId: number,
   ): Promise<VerifiedCronSchedule | null> {
-    const verified = await this.syncAutomationCron(automationId, { silent: true });
+    const verified = await this.resolvePublishedCronSchedule(automationId);
     if (!verified) {
       this.logger.log(
         `Cron run blocked for automation ${automationId}: not published, missing cron trigger, or invalid interval/unit in DB`,

@@ -5,23 +5,20 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import Twilio from 'twilio';
 
 @Injectable()
 export class TwilioService implements OnModuleInit {
   private readonly logger = new Logger(TwilioService.name);
   private client: Twilio.Twilio | null = null;
-  private fromNumber: string | null = null;
-
-  constructor(private readonly config: ConfigService) {}
+  private fromPhoneNumber: string | null = null;
 
   onModuleInit(): void {
-    const accountSid = this.resolveAccountSid();
-    const authToken = this.config.get<string>('TWILIO_AUTH_TOKEN')?.trim();
-    const fromNumber = this.config.get<string>('TWILIO_PHONE_NUMBER')?.trim();
+    const accountSid = resolveAccountSid();
+    const authToken = envTrim('TWILIO_AUTH_TOKEN');
+    this.fromPhoneNumber = envTrim('TWILIO_PHONE_NUMBER') ?? null;
 
-    if (!accountSid || !authToken || !fromNumber) {
+    if (!accountSid || !authToken || !this.fromPhoneNumber) {
       this.logger.warn(
         'Twilio SMS is not configured. Set TWILIO_ACCOUNT_SID (or ACCOUNT_SID), TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in .env.',
       );
@@ -29,16 +26,15 @@ export class TwilioService implements OnModuleInit {
     }
 
     this.client = Twilio(accountSid, authToken);
-    this.fromNumber = fromNumber;
-    this.logger.log(`Twilio SMS ready (from: ${fromNumber})`);
+    this.logger.log(`Twilio SMS ready (from: ${this.fromPhoneNumber})`);
   }
 
   isConfigured(): boolean {
-    return this.client != null && this.fromNumber != null;
+    return this.client != null && this.fromPhoneNumber != null;
   }
 
   async sendSms(to: string, body: string): Promise<{ sid: string }> {
-    if (!this.client || !this.fromNumber) {
+    if (!this.client || !this.fromPhoneNumber) {
       throw new ServiceUnavailableException(
         'Twilio SMS is not configured on the server.',
       );
@@ -60,7 +56,7 @@ export class TwilioService implements OnModuleInit {
     try {
       const message = await this.client.messages.create({
         body: trimmedBody,
-        from: this.fromNumber,
+        from: this.fromPhoneNumber,
         to: toNumber,
       });
 
@@ -73,16 +69,35 @@ export class TwilioService implements OnModuleInit {
     }
   }
 
-  private resolveAccountSid(): string | undefined {
-    return (
-      this.config.get<string>('TWILIO_ACCOUNT_SID')?.trim() ||
-      this.config.get<string>('ACCOUNT_SID')?.trim() ||
-      undefined
+  validateInboundWebhook(
+    signature: string | undefined,
+    webhookUrl: string,
+    params: Record<string, string>,
+  ): boolean {
+    const authToken = envTrim('TWILIO_AUTH_TOKEN');
+    if (!authToken || !signature?.trim()) {
+      return false;
+    }
+
+    return Twilio.validateRequest(
+      authToken,
+      signature.trim(),
+      webhookUrl.trim(),
+      params,
     );
   }
 }
 
-function normalizePhoneNumber(raw: string): string | null {
+function envTrim(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value || undefined;
+}
+
+function resolveAccountSid(): string | undefined {
+  return envTrim('TWILIO_ACCOUNT_SID') ?? envTrim('ACCOUNT_SID');
+}
+
+export function normalizePhoneNumber(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -92,7 +107,11 @@ function normalizePhoneNumber(raw: string): string | null {
     return trimmed;
   }
 
-  const digits = trimmed.replace(/\D/g, '');
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) {
+    return null;
+  }
+
   if (digits.length === 10) {
     return `+1${digits}`;
   }
@@ -101,5 +120,17 @@ function normalizePhoneNumber(raw: string): string | null {
     return `+${digits}`;
   }
 
+  if (digits.startsWith('0') && digits.length > 10) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length >= 11 && digits.length <= 15 && /^[1-9]/.test(digits)) {
+    return `+${digits}`;
+  }
+
   return null;
+}
+
+export function phoneDigitsOnly(normalizedPhone: string): string {
+  return normalizedPhone.replace(/\D/g, '');
 }

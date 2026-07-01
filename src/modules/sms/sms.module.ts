@@ -1,11 +1,14 @@
 import { Global, Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ChatModule } from '../chat/chat.module';
+import { SmsController } from './sms.controller';
+import { TwilioInboundService } from './twilio-inbound.service';
 import { TwilioService } from './twilio.service';
 
 @Global()
 @Module({
-  imports: [ConfigModule],
-  providers: [TwilioService],
+  imports: [ChatModule],
+  controllers: [SmsController],
+  providers: [TwilioService, TwilioInboundService],
   exports: [TwilioService],
 })
 export class SmsModule {}

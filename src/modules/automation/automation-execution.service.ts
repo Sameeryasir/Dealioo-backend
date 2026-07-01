@@ -350,6 +350,13 @@ export class AutomationExecutionService {
     ];
   }
 
+  isTerminalExecutionStatus(status: AutomationExecutionStatus): boolean {
+    return (
+      status === AutomationExecutionStatus.COMPLETED ||
+      status === AutomationExecutionStatus.FAILED
+    );
+  }
+
   async hasActiveExecution(
     automationId: number,
     customerId: number,

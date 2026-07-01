@@ -891,6 +891,10 @@ export class AutomationService {
         this.logger.log(
           `Cron tick for automation ${automationId}: no unpaid recipients`,
         );
+      } else {
+        this.logger.log(
+          `Cron tick started new payment-reminder run for automation ${automationId} (execution=${result.status.executionId})`,
+        );
       }
     } catch (error) {
       const message =
@@ -1018,6 +1022,15 @@ export class AutomationService {
 
   async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
     const batchPhase = batch.batchPhase ?? 'payment';
+    const execution = await this.executionService.findById(batch.executionId);
+
+    if (this.executionService.isTerminalExecutionStatus(execution.status)) {
+      this.logger.log(
+        `Skipping stale ${batchPhase} batch for terminal execution ${batch.executionId} (status=${execution.status}) — cron may proceed on next tick`,
+      );
+      return;
+    }
+
     const actionNode = batch.plan.emailNode ?? batch.plan.smsNode;
     const isSmsBatch = Boolean(batch.plan.smsNode && !batch.plan.emailNode);
     const sendAsEmail =
@@ -1068,6 +1081,13 @@ export class AutomationService {
         return;
       }
     } else if (phaseAlreadySent) {
+      if (this.executionService.isTerminalExecutionStatus(execution.status)) {
+        this.logger.log(
+          `Skipping duplicate payment batch for terminal execution ${batch.executionId}`,
+        );
+        return;
+      }
+
       await this.schedulePassFollowUpIfNeeded(batch, firstCustomerId);
       return;
     }
@@ -1385,7 +1405,16 @@ export class AutomationService {
       return;
     }
 
+    const execution = await this.executionService.findById(batch.executionId);
+    if (this.executionService.isTerminalExecutionStatus(execution.status)) {
+      return;
+    }
+
     if (await this.logService.hasPassFollowUpScheduled(batch.executionId)) {
+      if (execution.status === AutomationExecutionStatus.WAITING) {
+        return;
+      }
+
       const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
       await this.executionService.updateCurrentNode(
         batch.executionId,
@@ -1415,7 +1444,7 @@ export class AutomationService {
         batchPhase: 'pass',
         emailNodeId: batch.passEmailNodeId,
         prepared: batch.passPrepared,
-        anchorStepOnTrigger: false,
+        anchorStepOnTrigger: batch.anchorStepOnTrigger,
       },
       batch.waitDelayMs ?? 0,
     );
@@ -1483,6 +1512,12 @@ export class AutomationService {
       );
     }
     await this.executionService.markCompleted(batch.executionId);
+
+    if (batch.anchorStepOnTrigger) {
+      this.logger.log(
+        `Cron payment-reminder run completed (execution=${batch.executionId}) — next cron tick may start a new run`,
+      );
+    }
   }
 
   async executeAutomation(
