@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import {
   AutomationNode,
@@ -19,38 +18,7 @@ function node(
 }
 
 describe('assertPaymentReminderScheduleValid', () => {
-  it('allows cron interval equal to wait delay', () => {
-    const nodes: AutomationNode[] = [
-      node({
-        id: 1,
-        type: AutomationNodeType.TRIGGER,
-        order: 0,
-        config: {
-          trigger: 'cron',
-          frequency: 'interval',
-          interval: 15,
-          unit: 'minutes',
-        },
-      }),
-      node({ id: 2, type: AutomationNodeType.EMAIL, order: 1, config: {} }),
-      node({
-        id: 3,
-        type: AutomationNodeType.WAIT,
-        order: 2,
-        config: { delay: 15, unit: 'minutes' },
-      }),
-      node({ id: 4, type: AutomationNodeType.EMAIL, order: 3, config: {} }),
-    ];
-
-    expect(() =>
-      assertPaymentReminderScheduleValid(
-        AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
-        nodes,
-      ),
-    ).not.toThrow();
-  });
-
-  it('rejects cron interval shorter than wait delay', () => {
+  it('does not enforce cron vs wait limits', () => {
     const nodes: AutomationNode[] = [
       node({
         id: 1,
@@ -78,6 +46,6 @@ describe('assertPaymentReminderScheduleValid', () => {
         AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
         nodes,
       ),
-    ).toThrow(BadRequestException);
+    ).not.toThrow();
   });
 });

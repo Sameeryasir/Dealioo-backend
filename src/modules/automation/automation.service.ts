@@ -1754,13 +1754,19 @@ export class AutomationService {
       return;
     }
 
-    const alreadyCompleted =
-      await this.executionService.hasCompletedExecutionForCustomer(
-        automation.id,
-        event.customerId,
-      );
-    if (alreadyCompleted) {
-      return;
+    const allowsRepeatRuns =
+      automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+      automation.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER;
+
+    if (!allowsRepeatRuns) {
+      const alreadyCompleted =
+        await this.executionService.hasCompletedExecutionForCustomer(
+          automation.id,
+          event.customerId,
+        );
+      if (alreadyCompleted) {
+        return;
+      }
     }
 
     const startNodeId = await this.executionService.resolveStartNodeId(

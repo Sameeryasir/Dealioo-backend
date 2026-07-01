@@ -29,7 +29,6 @@ import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationQueueService } from './automation-queue.service';
-import { MAX_AUTOMATION_EXECUTION_STEPS } from './automation-queue.constants';
 import { AutomationConditionRegistry } from './automation-condition.registry';
 import { AutomationExecutionEventService } from './automation-execution-event.service';
 import { normalizeExecutionContext } from './automation-execution-context.types';
@@ -82,31 +81,6 @@ export class AutomationEngineService {
     ) {
       return;
     }
-
-    const context = normalizeExecutionContext(execution.executionContext);
-    const stepCount = context.stepsProcessed ?? 0;
-    if (stepCount >= MAX_AUTOMATION_EXECUTION_STEPS) {
-      const message = `Workflow exceeded maximum steps (${MAX_AUTOMATION_EXECUTION_STEPS})`;
-      this.logger.warn(`Execution ${executionId}: ${message}`);
-      await this.logService.createLog({
-        executionId,
-        nodeId,
-        customerId: execution.customerId,
-        message: 'Workflow stopped (step limit)',
-        error: message,
-      });
-      await this.executionService.markFailed(executionId, message);
-      return;
-    }
-
-    await this.executionService.updateExecutionContext(executionId, {
-      ...(execution.executionContext ?? {}),
-      stepsProcessed: stepCount + 1,
-    });
-    execution.executionContext = {
-      ...(execution.executionContext ?? {}),
-      stepsProcessed: stepCount + 1,
-    };
 
     if (execution.status === AutomationExecutionStatus.WAITING) {
       if (

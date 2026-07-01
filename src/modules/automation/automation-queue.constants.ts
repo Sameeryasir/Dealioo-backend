@@ -1,7 +1,5 @@
 export const AUTOMATION_QUEUE = 'automation';
 
-export const MAX_AUTOMATION_EXECUTION_STEPS = 50;
-
 export const DEFAULT_AUTOMATION_QUEUE_CONCURRENCY = 50;
 
 export function resolveAutomationQueueConcurrency(): number {
