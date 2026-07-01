@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import {
@@ -48,17 +48,34 @@ export class CustomerService {
   }
 
   async registerCustomer(dto: RegisterCustomerDto): Promise<Customer> {
-    const existing = await this.customerRepository.findOne({
-      where: { email: dto.email },
-    });
+    const email = dto.email.trim();
+    const name = dto.name.trim();
+    const phone = dto.phone?.trim() || null;
+
+    const existing = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('LOWER(customer.email) = LOWER(:email)', { email })
+      .orderBy('customer.id', 'DESC')
+      .getOne();
+
     if (existing) {
-      throw new ConflictException('A customer with this email already exists');
+      // Same guest may sign up on multiple funnels — reuse profile, refresh details.
+      let changed = false;
+      if (name && existing.name !== name) {
+        existing.name = name;
+        changed = true;
+      }
+      if (phone !== null && existing.phone !== phone) {
+        existing.phone = phone;
+        changed = true;
+      }
+      return changed ? this.customerRepository.save(existing) : existing;
     }
 
     const customer = this.customerRepository.create({
-      name: dto.name,
-      email: dto.email,
-      phone: dto.phone?.trim() || null,
+      name,
+      email,
+      phone,
     });
 
     return this.customerRepository.save(customer);
