@@ -16,10 +16,3 @@ export type RecordOutboundMessageDto = {
   sentAt?: Date;
   metadata?: Record<string, unknown> | null;
 };
-
-export type RecordInboundSmsMessageDto = {
-  fromPhone: string;
-  body: string;
-  messageSid: string;
-  toPhone?: string | null;
-};

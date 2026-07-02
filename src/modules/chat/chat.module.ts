@@ -9,8 +9,10 @@ import { Customer } from '../../db/entities/customer.entity';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { ChatController } from './chat.controller';
+import { ChatMessageNotificationService } from './chat-message-notification.service';
 import { ChatMessageService } from './chat-message.service';
 import { ChatService } from './chat.service';
+import { InboundMessageRecorderService } from './inbound-message-recorder.service';
 
 @Module({
   imports: [
@@ -26,7 +28,17 @@ import { ChatService } from './chat.service';
     forwardRef(() => RedemptionModule),
   ],
   controllers: [ChatController],
-  providers: [ChatService, ChatMessageService],
-  exports: [ChatService, ChatMessageService],
+  providers: [
+    ChatService,
+    ChatMessageService,
+    ChatMessageNotificationService,
+    InboundMessageRecorderService,
+  ],
+  exports: [
+    ChatService,
+    ChatMessageService,
+    ChatMessageNotificationService,
+    InboundMessageRecorderService,
+  ],
 })
 export class ChatModule {}

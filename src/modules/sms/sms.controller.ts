@@ -8,9 +8,10 @@ import {
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { TWILIO_SIGNATURE_HEADER } from './constants/twilio-inbound.constants';
 import { TwilioInboundService } from './twilio-inbound.service';
 
-type TwilioInboundRequest = Request & {
+type TwilioWebhookRequest = Request & {
   body: Record<string, string>;
 };
 
@@ -23,10 +24,24 @@ export class SmsController {
   @HttpCode(200)
   @Header('Content-Type', 'text/xml')
   handleInboundSms(
-    @Req() req: TwilioInboundRequest,
-    @Headers('x-twilio-signature') signature: string | undefined,
+    @Req() req: TwilioWebhookRequest,
+    @Headers(TWILIO_SIGNATURE_HEADER) signature: string | undefined,
   ): Promise<string> {
     return this.twilioInboundService.handleInbound(
+      req.body ?? {},
+      signature,
+      req,
+    );
+  }
+
+  @Post('status')
+  @HttpCode(200)
+  @Header('Content-Type', 'text/xml')
+  handleStatusCallback(
+    @Req() req: TwilioWebhookRequest,
+    @Headers(TWILIO_SIGNATURE_HEADER) signature: string | undefined,
+  ): Promise<string> {
+    return this.twilioInboundService.handleStatusCallback(
       req.body ?? {},
       signature,
       req,
