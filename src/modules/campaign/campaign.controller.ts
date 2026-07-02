@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
@@ -67,8 +69,24 @@ export class CampaignController {
   @Get('restaurant/:id')
   getCampaignsByRestaurant(
     @Param('id', ParseIntPipe) restaurantId: number,
-  ): Promise<Campaign[]> {
-    return this.campaignService.getCampaignsByRestaurantId(restaurantId);
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(6), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+  ): Promise<{ data: Campaign[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
+    return this.campaignService.getCampaignsByRestaurantId(
+      restaurantId,
+      page,
+      limit,
+      search,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get(':id')
+  getCampaignById(
+    @Param('id', ParseIntPipe) campaignId: number,
+  ): Promise<Campaign> {
+    return this.campaignService.getCampaignById(campaignId);
   }
 
   @UseGuards(AuthGuard('jwt'))

@@ -1,12 +1,14 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Delete,
   Get,
   Param,
   ParseIntPipe,
   Post,
   Put,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -51,9 +53,14 @@ export class RestaurantController {
   }
   @UseGuards(AuthGuard('jwt'))
   @Get('all')
-  async getAllRestaurants(@Req() req): Promise<Restaurant[]> {
+  async getAllRestaurants(
+    @Req() req,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(6), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+  ): Promise<{ data: Restaurant[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
     const user = req.user;
-    return this.restaurantService.getAllRestaurants(user);
+    return this.restaurantService.getAllRestaurants(user, page, limit, search);
   }
   @UseGuards(AuthGuard('jwt'))
   @Get(':id')
