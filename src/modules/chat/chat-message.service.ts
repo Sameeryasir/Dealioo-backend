@@ -67,9 +67,7 @@ export class ChatMessageService {
         );
       }
 
-      await this.twilioService.sendSms(customer.phone, trimmed, {
-        replyable: true,
-      });
+      await this.twilioService.sendSms(customer.phone, trimmed);
     }
 
     const idempotencyKey = `chat_message:manual:${restaurantId}:${customerId}:${randomUUID()}`;

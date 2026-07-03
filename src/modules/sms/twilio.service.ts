@@ -7,14 +7,11 @@ import {
 } from '@nestjs/common';
 import Twilio from 'twilio';
 
-const MAX_ALPHANUMERIC_SENDER_LENGTH = 11;
-
 @Injectable()
 export class TwilioService implements OnModuleInit {
   private readonly logger = new Logger(TwilioService.name);
   private client: Twilio.Twilio | null = null;
   private fromPhoneNumber: string | null = null;
-  private smsSenderName: string | null = null;
 
   async onModuleInit(): Promise<void> {
     const accountSid = resolveAccountSid();
@@ -22,7 +19,6 @@ export class TwilioService implements OnModuleInit {
     this.fromPhoneNumber = normalizeTwilioPhoneNumber(
       envTrim('TWILIO_PHONE_NUMBER'),
     );
-    this.smsSenderName = resolveSmsSenderName();
 
     if (!accountSid || !authToken || !this.fromPhoneNumber) {
       this.logger.warn(
@@ -32,9 +28,7 @@ export class TwilioService implements OnModuleInit {
     }
 
     this.client = Twilio(accountSid, authToken);
-    this.logger.log(
-      `Twilio SMS ready (from: ${this.fromPhoneNumber}, brand: ${this.smsSenderName ?? 'none'})`,
-    );
+    this.logger.log(`Twilio SMS ready (from: ${this.fromPhoneNumber})`);
 
     await this.syncInboundWebhookUrl();
   }
@@ -43,11 +37,7 @@ export class TwilioService implements OnModuleInit {
     return this.client != null && this.fromPhoneNumber != null;
   }
 
-  async sendSms(
-    to: string,
-    body: string,
-    options?: { replyable?: boolean },
-  ): Promise<{ sid: string }> {
+  async sendSms(to: string, body: string): Promise<{ sid: string }> {
     if (!this.client || !this.fromPhoneNumber) {
       throw new ServiceUnavailableException(
         'Twilio SMS is not configured on the server.',
@@ -67,67 +57,20 @@ export class TwilioService implements OnModuleInit {
       throw new BadRequestException('Message cannot be empty.');
     }
 
-    const { from, brandInBody } = options?.replyable
-      ? {
-          from: this.fromPhoneNumber!,
-          brandInBody: Boolean(this.smsSenderName),
-        }
-      : this.resolveSmsFrom(toNumber);
-    const messageBody = brandInBody
-      ? prefixSmsWithBrand(trimmedBody, this.smsSenderName)
-      : trimmedBody;
-
     try {
       const message = await this.client.messages.create({
-        body: messageBody,
-        from,
+        body: trimmedBody,
+        from: this.fromPhoneNumber,
         to: toNumber,
       });
 
       return { sid: message.sid };
     } catch (error) {
-      if (from !== this.fromPhoneNumber && this.fromPhoneNumber) {
-        try {
-          const fallbackBody = prefixSmsWithBrand(
-            trimmedBody,
-            this.smsSenderName,
-          );
-          const message = await this.client.messages.create({
-            body: fallbackBody,
-            from: this.fromPhoneNumber,
-            to: toNumber,
-          });
-          this.logger.warn(
-            `Twilio alphanumeric sender "${from}" failed for ${toNumber}; sent with phone number instead.`,
-          );
-          return { sid: message.sid };
-        } catch (fallbackError) {
-          error = fallbackError;
-        }
-      }
-
       const detail =
         error instanceof Error ? error.message : 'Twilio rejected this SMS.';
       this.logger.warn(`Twilio send failed → ${toNumber}: ${detail}`);
       throw new BadRequestException(`Could not send SMS: ${detail}`);
     }
-  }
-
-  private resolveSmsFrom(toNumber: string): {
-    from: string;
-    brandInBody: boolean;
-  } {
-    const senderName = this.smsSenderName;
-    const requiresPhoneSender = isUsOrCanadaNumber(toNumber);
-
-    if (senderName && !requiresPhoneSender) {
-      return { from: senderName, brandInBody: false };
-    }
-
-    return {
-      from: this.fromPhoneNumber!,
-      brandInBody: Boolean(senderName),
-    };
   }
 
   private async syncInboundWebhookUrl(): Promise<void> {
@@ -176,20 +119,6 @@ function resolveAccountSid(): string | undefined {
   return envTrim('TWILIO_ACCOUNT_SID') ?? envTrim('ACCOUNT_SID');
 }
 
-function resolveSmsSenderName(): string | null {
-  const raw = envTrim('TWILIO_SMS_SENDER_NAME');
-  if (!raw) {
-    return null;
-  }
-
-  const cleaned = raw.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-  if (!cleaned) {
-    return null;
-  }
-
-  return cleaned.slice(0, MAX_ALPHANUMERIC_SENDER_LENGTH);
-}
-
 function normalizeTwilioPhoneNumber(raw: string | undefined): string | null {
   if (!raw) {
     return null;
@@ -197,23 +126,6 @@ function normalizeTwilioPhoneNumber(raw: string | undefined): string | null {
 
   const compact = raw.replace(/\s/g, '');
   return normalizePhoneNumber(compact) ?? compact;
-}
-
-function isUsOrCanadaNumber(toNumber: string): boolean {
-  return /^\+1\d{10}$/.test(toNumber);
-}
-
-function prefixSmsWithBrand(body: string, brand: string | null): string {
-  if (!brand) {
-    return body;
-  }
-
-  const prefix = `${brand}:`;
-  if (body.toLowerCase().startsWith(prefix.toLowerCase())) {
-    return body;
-  }
-
-  return `${prefix} ${body}`;
 }
 
 export function normalizePhoneNumber(raw: string): string | null {
