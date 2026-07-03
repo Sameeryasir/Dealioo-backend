@@ -31,7 +31,6 @@ import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import {
   buildRecentMonthBuckets,
-  type OverviewMonthBucket,
 } from './overview-monthly.util';
 import {
   buildRestaurantOrderPaymentSummary,
@@ -386,109 +385,89 @@ export class FunnelEventService {
   }> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
+      select: ['id'],
     });
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
 
     const buckets = buildRecentMonthBuckets(monthCount);
-    let currency: string | null = null;
-    const data: {
-      month: string;
-      signups: number;
-      payments: number;
-      signupOnly: number;
-      paidAfterSignup: number;
-      revenue: number;
-    }[] = [];
-
-    for (const bucket of buckets) {
-      const point = await this.aggregateStatsForMonth(funnelId, bucket);
-      data.push(point);
-      if (!currency && point.revenue > 0) {
-        const sample = await this.funnelPaymentRepository.findOne({
-          where: {
-            funnelId,
-            status: FunnelPaymentStatus.PAID,
-            createdAt: And(
-              MoreThanOrEqual(bucket.start),
-              LessThan(bucket.end),
-            ),
-          },
-          select: ['currency'],
-        });
-        currency = sample?.currency ?? null;
-      }
+    if (buckets.length === 0) {
+      return { funnelId, months: monthCount, currency: null, data: [] };
     }
 
-    if (!currency) {
-      const anyPaid = await this.funnelPaymentRepository.findOne({
+    const rangeStart = buckets[0]!.start;
+
+    const [eventRows, paymentRows, currencyRow] = await Promise.all([
+      this.funnelEventRepository
+        .createQueryBuilder('e')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NULL)`,
+          'signupOnly',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NOT NULL)`,
+          'paidAfterSignup',
+        )
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.created_at >= :rangeStart', { rangeStart })
+        .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
+        .getRawMany<{
+          month: string;
+          signupOnly: string;
+          paidAfterSignup: string;
+        }>(),
+      this.funnelPaymentRepository
+        .createQueryBuilder('p')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', p.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect('COUNT(*)', 'payments')
+        .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+        .where('p.funnel_id = :funnelId', { funnelId })
+        .andWhere('p.status = :paid', { paid: FunnelPaymentStatus.PAID })
+        .andWhere('p.created_at >= :rangeStart', { rangeStart })
+        .groupBy(`DATE_TRUNC('month', p.created_at AT TIME ZONE 'UTC')`)
+        .getRawMany<{
+          month: string;
+          payments: string;
+          revenue: string;
+        }>(),
+      this.funnelPaymentRepository.findOne({
         where: { funnelId, status: FunnelPaymentStatus.PAID },
         select: ['currency'],
-      });
-      currency = anyPaid?.currency ?? null;
-    }
+      }),
+    ]);
 
-    return { funnelId, months: monthCount, currency, data };
-  }
+    const eventsByMonth = new Map(eventRows.map((row) => [row.month, row]));
+    const paymentsByMonth = new Map(paymentRows.map((row) => [row.month, row]));
 
-  private async aggregateStatsForMonth(
-    funnelId: number,
-    bucket: OverviewMonthBucket,
-  ): Promise<{
-    month: string;
-    signups: number;
-    payments: number;
-    signupOnly: number;
-    paidAfterSignup: number;
-    revenue: number;
-  }> {
-    const createdInMonth = And(
-      MoreThanOrEqual(bucket.start),
-      LessThan(bucket.end),
-    );
+    const data = buckets.map((bucket) => {
+      const eventRow = eventsByMonth.get(bucket.month);
+      const paymentRow = paymentsByMonth.get(bucket.month);
+      const signupOnly = Number(eventRow?.signupOnly ?? 0);
+      const paidAfterSignup = Number(eventRow?.paidAfterSignup ?? 0);
 
-    const rows = await this.funnelEventRepository.find({
-      where: { funnelId, createdAt: createdInMonth },
+      return {
+        month: bucket.month,
+        signups: signupOnly + paidAfterSignup,
+        payments: Number(paymentRow?.payments ?? 0),
+        signupOnly,
+        paidAfterSignup,
+        revenue: Number(paymentRow?.revenue ?? 0),
+      };
     });
-
-    let signupOnly = 0;
-    let paidAfterSignup = 0;
-
-    for (const row of rows) {
-      if (row.customerId === null) {
-        continue;
-      }
-      if (row.funnelPaymentId !== null) {
-        paidAfterSignup += 1;
-      } else {
-        signupOnly += 1;
-      }
-    }
-
-    const paidPayments = await this.funnelPaymentRepository.find({
-      where: {
-        funnelId,
-        status: FunnelPaymentStatus.PAID,
-        createdAt: createdInMonth,
-      },
-      select: ['amount'],
-    });
-
-    let revenue = 0;
-    for (const payment of paidPayments) {
-      revenue += payment.amount;
-    }
-
-    const payments = paidPayments.length;
 
     return {
-      month: bucket.month,
-      signups: signupOnly + paidAfterSignup,
-      payments,
-      signupOnly,
-      paidAfterSignup,
-      revenue,
+      funnelId,
+      months: monthCount,
+      currency: currencyRow?.currency ?? null,
+      data,
     };
   }
 

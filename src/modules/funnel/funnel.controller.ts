@@ -53,6 +53,22 @@ export class FunnelController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('campaign/:campaignId/summary')
+  async getFunnelSummaryByCampaign(
+    @Req() req: AuthRequest,
+    @Param('campaignId', ParseIntPipe) campaignId: number,
+  ): Promise<{ id: number }> {
+    const funnel = await this.funnelService.getFunnelSummaryByCampaignId(
+      campaignId,
+      req.user,
+    );
+    if (!funnel) {
+      throw new NotFoundException('No funnel found for this campaign.');
+    }
+    return funnel;
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('campaign/:campaignId')
   async getFunnelByCampaign(
     @Req() req: AuthRequest,

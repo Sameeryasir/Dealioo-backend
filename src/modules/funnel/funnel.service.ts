@@ -138,6 +138,32 @@ export class FunnelService {
     });
   }
 
+  async getFunnelSummaryByCampaignId(
+    campaignId: number,
+    user: Pick<User, 'id'> & { role: { name: string } },
+  ): Promise<{ id: number } | null> {
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+      select: ['id', 'restaurantId'],
+    });
+    if (!campaign) {
+      return null;
+    }
+
+    await this.redemptionService.verifyRestaurantAccess(
+      campaign.restaurantId,
+      user.id,
+      user.role.name,
+    );
+
+    const funnel = await this.funnelRepository.findOne({
+      where: { campaignId },
+      select: ['id'],
+    });
+
+    return funnel ? { id: funnel.id } : null;
+  }
+
   async updateFunnel(
     id: number,
     dto: UpdateFunnelDto,

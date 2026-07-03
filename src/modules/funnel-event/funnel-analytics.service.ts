@@ -10,7 +10,6 @@ import { Customer } from '../../db/entities/customer.entity';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
 import {
   buildRecentMonthBuckets,
-  type OverviewMonthBucket,
 } from './overview-monthly.util';
 import { And, LessThan, MoreThanOrEqual } from 'typeorm';
 
@@ -141,77 +140,55 @@ export class FunnelAnalyticsService {
     await this.assertFunnelExists(funnelId);
 
     const buckets = buildRecentMonthBuckets(monthCount);
-    const data: {
-      month: string;
-      pageViews: number;
-      buttonClicks: number;
-      uniqueVisitors: number;
-      sessions: number;
-    }[] = [];
-
-    for (const bucket of buckets) {
-      data.push(await this.aggregateAnalyticsForMonth(funnelId, bucket));
+    if (buckets.length === 0) {
+      return { funnelId, months: monthCount, data: [] };
     }
 
+    const rangeStart = buckets[0]!.start;
+    const rows = await this.analyticsRepository
+      .createQueryBuilder('e')
+      .select(
+        `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+        'month',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
+        'pageViews',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
+        'buttonClicks',
+      )
+      .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
+      .addSelect(`COUNT(DISTINCT e.session_id)`, 'sessions')
+      .where('e.funnel_id = :funnelId', { funnelId })
+      .andWhere('e.created_at >= :rangeStart', { rangeStart })
+      .setParameters({
+        pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+        buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
+      })
+      .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
+      .getRawMany<{
+        month: string;
+        pageViews: string;
+        buttonClicks: string;
+        uniqueVisitors: string;
+        sessions: string;
+      }>();
+
+    const byMonth = new Map(rows.map((row) => [row.month, row]));
+    const data = buckets.map((bucket) => {
+      const row = byMonth.get(bucket.month);
+      return {
+        month: bucket.month,
+        pageViews: Number(row?.pageViews ?? 0),
+        buttonClicks: Number(row?.buttonClicks ?? 0),
+        uniqueVisitors: Number(row?.uniqueVisitors ?? 0),
+        sessions: Number(row?.sessions ?? 0),
+      };
+    });
+
     return { funnelId, months: monthCount, data };
-  }
-
-  private async aggregateAnalyticsForMonth(
-    funnelId: number,
-    bucket: OverviewMonthBucket,
-  ): Promise<{
-    month: string;
-    pageViews: number;
-    buttonClicks: number;
-    uniqueVisitors: number;
-    sessions: number;
-  }> {
-    const createdInMonth = And(
-      MoreThanOrEqual(bucket.start),
-      LessThan(bucket.end),
-    );
-
-    const pageViews = await this.analyticsRepository.count({
-      where: {
-        funnelId,
-        eventType: FunnelAnalyticsEventType.PAGE_VIEW,
-        createdAt: createdInMonth,
-      },
-    });
-
-    const buttonClicks = await this.analyticsRepository.count({
-      where: {
-        funnelId,
-        eventType: FunnelAnalyticsEventType.BUTTON_CLICK,
-        createdAt: createdInMonth,
-      },
-    });
-
-    const uniqueVisitorsRaw = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select('COUNT(DISTINCT e.customer_id)', 'count')
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.customer_id IS NOT NULL')
-      .andWhere('e.created_at >= :start', { start: bucket.start })
-      .andWhere('e.created_at < :end', { end: bucket.end })
-      .getRawOne<{ count: string }>();
-
-    const sessionsRaw = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select('COUNT(DISTINCT e.session_id)', 'count')
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.session_id IS NOT NULL')
-      .andWhere('e.created_at >= :start', { start: bucket.start })
-      .andWhere('e.created_at < :end', { end: bucket.end })
-      .getRawOne<{ count: string }>();
-
-    return {
-      month: bucket.month,
-      pageViews,
-      buttonClicks,
-      uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
-      sessions: Number(sessionsRaw?.count ?? 0),
-    };
   }
 
   async getFunnelDropoff(funnelId: number): Promise<FunnelDropoffStep[]> {
