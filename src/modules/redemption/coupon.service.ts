@@ -379,6 +379,52 @@ export class CouponService {
     }
   }
 
+  /** Whether a guest pass page may show a scannable QR (revoked/expired/redeemed passes are blocked). */
+  resolveGuestPassDisplay(coupon: Coupon): {
+    passAvailable: boolean;
+    passUnavailableReason: 'revoked' | 'expired' | 'redeemed' | null;
+    passMessage: string | null;
+  } {
+    if (coupon.status === CouponStatus.REVOKED) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'revoked',
+        passMessage:
+          'This QR code is no longer valid. Check your email or messages for your latest QR pass.',
+      };
+    }
+
+    if (coupon.status === CouponStatus.REDEEMED) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'redeemed',
+        passMessage: 'This QR code has already been redeemed at the restaurant.',
+      };
+    }
+
+    if (coupon.status === CouponStatus.EXPIRED || this.isExpired(coupon)) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'expired',
+        passMessage: 'This QR code has passed its expiry date.',
+      };
+    }
+
+    if (coupon.status !== CouponStatus.ACTIVE) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'expired',
+        passMessage: 'This QR pass is no longer available.',
+      };
+    }
+
+    return {
+      passAvailable: true,
+      passUnavailableReason: null,
+      passMessage: null,
+    };
+  }
+
   /** Build QR payload and image for a coupon pass. */
   async buildQrPayload(coupon: Coupon): Promise<{
     couponId: number;
