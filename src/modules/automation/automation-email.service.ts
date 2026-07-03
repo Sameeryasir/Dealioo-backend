@@ -18,6 +18,7 @@ import {
   interpolateAutomationEmailMessage,
   splitAutomationEmailBody,
 } from './automation-email-merge.util';
+import { stripEmailSignoffForChat } from '../../utils/strip-email-signoff-for-chat';
 import type {
   AutomationEmailSendResult,
   EmailRecipient,
@@ -168,7 +169,9 @@ export class AutomationEmailService {
       purpose,
     );
 
-    const normalized = text.replace(/\r\n/g, '\n').trim();
+    const normalized = stripEmailSignoffForChat(
+      text.replace(/\r\n/g, '\n').trim(),
+    );
     if (normalized) {
       return normalized;
     }

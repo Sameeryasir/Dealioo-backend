@@ -379,7 +379,6 @@ export class CouponService {
     }
   }
 
-  /** Whether a guest pass page may show a scannable QR (revoked/expired/redeemed passes are blocked). */
   resolveGuestPassDisplay(coupon: Coupon): {
     passAvailable: boolean;
     passUnavailableReason: 'revoked' | 'expired' | 'redeemed' | null;

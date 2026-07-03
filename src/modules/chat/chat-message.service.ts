@@ -23,6 +23,7 @@ import {
 } from './chat-message-notification.service';
 import { ChatService } from './chat.service';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
+import { stripEmailSignoffForChat } from '../../utils/strip-email-signoff-for-chat';
 
 @Injectable()
 export class ChatMessageService {
@@ -136,7 +137,7 @@ export class ChatMessageService {
       return null;
     }
 
-    const body = params.bodyPreview.trim() || 'Message sent';
+    const body = stripEmailSignoffForChat(params.bodyPreview.trim()) || 'Message sent';
     const sentAt = params.sentAt ?? new Date();
     let savedMessageId: number | null = null;
     let conversationSnapshot: ConversationSnapshot | null = null;
