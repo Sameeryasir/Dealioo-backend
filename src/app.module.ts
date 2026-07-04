@@ -26,6 +26,7 @@ import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
+import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { PusherModule } from './modules/pusher/pusher.module';
     RedemptionModule,
     ActivityModule,
     OnboardingModule,
+    MeetingRequestModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
