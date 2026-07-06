@@ -22,7 +22,8 @@
     "migration:generate": "npm run typeorm -- -d src/data-source.ts migration:generate",
     "migration:run": "npm run typeorm -- -d src/data-source.ts migration:run",
     "migration:revert": "npm run typeorm -- -d src/data-source.ts migration:revert",
-    "migration:show": "npm run typeorm -- -d src/data-source.ts migration:show"
+    "migration:show": "npm run typeorm -- -d src/data-source.ts migration:show",
+    "simulate:canadian-reply": "ts-node -r tsconfig-paths/register scripts/simulate-canadian-guest-reply.ts"
   },
   "dependencies": {
     "@getbrevo/brevo": "^5.0.4",

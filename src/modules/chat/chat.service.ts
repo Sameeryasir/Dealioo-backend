@@ -20,9 +20,11 @@ import {
   ConversationMessageChannel,
   ConversationMessageDirection as StoredMessageDirection,
 } from '../../db/entities/conversation-message.entity';
+import { RestaurantUserChatReadState } from '../../db/entities/restaurant-user-chat-read-state.entity';
 import {
   ActiveFlowCustomerDto,
   ChatCustomerSummaryDto,
+  ChatUnreadSummaryDto,
   ConversationDetailDto,
   ConversationMessageDirection,
   ConversationMessageDto,
@@ -47,7 +49,75 @@ export class ChatService {
     private readonly conversationRepository: Repository<Conversation>,
     @InjectRepository(ConversationMessage)
     private readonly messageRepository: Repository<ConversationMessage>,
+    @InjectRepository(RestaurantUserChatReadState)
+    private readonly chatReadStateRepository: Repository<RestaurantUserChatReadState>,
   ) {}
+
+  async getChatUnreadSummary(
+    restaurantId: number,
+    userId: number,
+  ): Promise<ChatUnreadSummaryDto> {
+    const readState = await this.chatReadStateRepository.findOne({
+      where: { restaurantId, userId },
+    });
+
+    const unreadCount = await this.countUnreadInboundMessages(
+      restaurantId,
+      readState?.chatsLastViewedAt ?? null,
+    );
+
+    return {
+      hasUnread: unreadCount > 0,
+      unreadCount,
+      chatsLastViewedAt: readState?.chatsLastViewedAt ?? null,
+    };
+  }
+
+  async markRestaurantChatsRead(
+    restaurantId: number,
+    userId: number,
+  ): Promise<Date> {
+    const viewedAt = new Date();
+    const existing = await this.chatReadStateRepository.findOne({
+      where: { restaurantId, userId },
+    });
+
+    if (existing) {
+      existing.chatsLastViewedAt = viewedAt;
+      await this.chatReadStateRepository.save(existing);
+      return viewedAt;
+    }
+
+    await this.chatReadStateRepository.save(
+      this.chatReadStateRepository.create({
+        restaurantId,
+        userId,
+        chatsLastViewedAt: viewedAt,
+      }),
+    );
+
+    return viewedAt;
+  }
+
+  private async countUnreadInboundMessages(
+    restaurantId: number,
+    lastViewedAt: Date | null,
+  ): Promise<number> {
+    const qb = this.messageRepository
+      .createQueryBuilder('message')
+      .innerJoin('message.conversation', 'conversation')
+      .where('conversation.restaurantId = :restaurantId', { restaurantId })
+      .andWhere('message.direction = :direction', {
+        direction: StoredMessageDirection.INBOUND,
+      })
+      .andWhere('message.sentByCustomerId IS NOT NULL');
+
+    if (lastViewedAt) {
+      qb.andWhere('message.sentAt > :lastViewedAt', { lastViewedAt });
+    }
+
+    return qb.getCount();
+  }
 
   async getActiveFlowCustomers(
     restaurantId: number,

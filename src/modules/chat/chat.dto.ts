@@ -93,3 +93,9 @@ export class CustomerConversationDetailDto {
   customerEmail: string | null;
   messages: ConversationMessageDto[];
 }
+
+export class ChatUnreadSummaryDto {
+  hasUnread: boolean;
+  unreadCount: number;
+  chatsLastViewedAt: Date | null;
+}

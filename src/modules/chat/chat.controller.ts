@@ -30,6 +30,41 @@ export class ChatController {
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('restaurant/:restaurantId/unread-summary')
+  async getChatUnreadSummary(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyRestaurantAccess(
+      restaurantId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.getChatUnreadSummary(restaurantId, req.user.id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('restaurant/:restaurantId/mark-read')
+  async markRestaurantChatsRead(
+    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyRestaurantAccess(
+      restaurantId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    const chatsLastViewedAt = await this.chatService.markRestaurantChatsRead(
+      restaurantId,
+      req.user.id,
+    );
+
+    return { chatsLastViewedAt };
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('restaurant/:restaurantId/active-flows')
   async getActiveFlowCustomers(
     @Param('restaurantId', ParseIntPipe) restaurantId: number,
