@@ -3,16 +3,19 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
+  HttpStatus,
   NotFoundException,
   Param,
   ParseIntPipe,
   Post,
   Put,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
@@ -72,15 +75,34 @@ export class FunnelController {
   @Get('campaign/:campaignId')
   async getFunnelByCampaign(
     @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
     @Param('campaignId', ParseIntPipe) campaignId: number,
-  ): Promise<Funnel> {
-    const funnel = await this.funnelService.getFunnelByCampaignId(
+  ): Promise<Funnel | undefined> {
+    const meta = await this.funnelService.getFunnelMetaByCampaignId(
       campaignId,
       req.user,
+    );
+    if (!meta) {
+      throw new NotFoundException('No funnel found for this campaign.');
+    }
+
+    const etag = `"funnel-${meta.id}-v${meta.version}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, no-cache');
+
+    if (ifNoneMatch === etag) {
+      res.status(HttpStatus.NOT_MODIFIED);
+      return undefined;
+    }
+
+    const funnel = await this.funnelService.getFunnelBodyByCampaignId(
+      campaignId,
     );
     if (!funnel) {
       throw new NotFoundException('No funnel found for this campaign.');
     }
+
     return funnel;
   }
 

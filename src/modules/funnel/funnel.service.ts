@@ -116,23 +116,38 @@ export class FunnelService {
     }));
   }
 
+  async getFunnelMetaByCampaignId(
+    campaignId: number,
+    user: Pick<User, 'id'> & { role: { name: string } },
+  ): Promise<{ id: number; version: number } | null> {
+    const qb = this.funnelRepository
+      .createQueryBuilder('funnel')
+      .select(['funnel.id', 'funnel.version'])
+      .where('funnel.campaignId = :campaignId', { campaignId });
+
+    if (user.role.name === 'Admin') {
+      qb.innerJoin('funnel.campaign', 'campaign')
+        .innerJoin('campaign.restaurant', 'restaurant')
+        .andWhere('restaurant.owner_id = :userId', { userId: user.id });
+    }
+
+    const funnel = await qb.getOne();
+    return funnel ? { id: funnel.id, version: funnel.version } : null;
+  }
+
   async getFunnelByCampaignId(
     campaignId: number,
     user: Pick<User, 'id'> & { role: { name: string } },
   ): Promise<Funnel | null> {
-    const campaign = await this.campaignRepository.findOne({
-      where: { id: campaignId },
-    });
-    if (!campaign) {
+    const meta = await this.getFunnelMetaByCampaignId(campaignId, user);
+    if (!meta) {
       return null;
     }
 
-    await this.redemptionService.verifyRestaurantAccess(
-      campaign.restaurantId,
-      user.id,
-      user.role.name,
-    );
+    return this.getFunnelBodyByCampaignId(campaignId);
+  }
 
+  getFunnelBodyByCampaignId(campaignId: number): Promise<Funnel | null> {
     return this.funnelRepository.findOne({
       where: { campaignId },
     });
@@ -142,25 +157,18 @@ export class FunnelService {
     campaignId: number,
     user: Pick<User, 'id'> & { role: { name: string } },
   ): Promise<{ id: number } | null> {
-    const campaign = await this.campaignRepository.findOne({
-      where: { id: campaignId },
-      select: ['id', 'restaurantId'],
-    });
-    if (!campaign) {
-      return null;
+    const qb = this.funnelRepository
+      .createQueryBuilder('funnel')
+      .select(['funnel.id'])
+      .where('funnel.campaignId = :campaignId', { campaignId });
+
+    if (user.role.name === 'Admin') {
+      qb.innerJoin('funnel.campaign', 'campaign')
+        .innerJoin('campaign.restaurant', 'restaurant')
+        .andWhere('restaurant.owner_id = :userId', { userId: user.id });
     }
 
-    await this.redemptionService.verifyRestaurantAccess(
-      campaign.restaurantId,
-      user.id,
-      user.role.name,
-    );
-
-    const funnel = await this.funnelRepository.findOne({
-      where: { campaignId },
-      select: ['id'],
-    });
-
+    const funnel = await qb.getOne();
     return funnel ? { id: funnel.id } : null;
   }
 
