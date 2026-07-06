@@ -10,6 +10,7 @@ import {
   Campaign,
   CampaignPublicationStatus,
 } from '../../db/entities/campaign.entity';
+import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import {
   absolutePublicUploadFileUrl,
@@ -26,6 +27,8 @@ export class CampaignService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Funnel)
+    private readonly funnelRepository: Repository<Funnel>,
   ) {}
 
   async createCampaign(
@@ -60,9 +63,20 @@ export class CampaignService {
       imageUrl,
       offer: offer ?? null,
       price: price ?? null,
-      status: status ?? CampaignPublicationStatus.UNPUBLISHED,
+      status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
-    return this.campaignRepository.save(campaign);
+    const savedCampaign = await this.campaignRepository.save(campaign);
+
+    const funnel = this.funnelRepository.create({
+      campaign: savedCampaign,
+      campaignId: savedCampaign.id,
+      pages: {},
+      published: false,
+      version: 1,
+    });
+    await this.funnelRepository.save(funnel);
+
+    return savedCampaign;
   }
 
   async getAllCampaigns(): Promise<Campaign[]> {
