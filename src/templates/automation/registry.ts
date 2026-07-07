@@ -4,6 +4,7 @@ import { AbandonedCheckoutReminderEmail } from './abandoned-checkout-reminder-em
 import { GenericAutomationEmail } from './generic-automation-email';
 import { PaymentConfirmationEmail } from './payment-confirmation-email';
 import { PaymentReminderEmail } from './payment-reminder-email';
+import { QrPassGuideEmail } from './qr-pass-guide-email';
 import { SignupWelcomeEmail } from './signup-welcome-email';
 import type { AutomationEmailTemplateProps } from './types';
 
@@ -13,6 +14,7 @@ export const AUTOMATION_EMAIL_TEMPLATE_IDS = {
   FUNNEL_SIGNUP_WELCOME: 'funnel_signup_welcome',
   FUNNEL_PAYMENT_CONFIRMATION: 'funnel_payment_confirmation',
   PAYMENT_REMINDER: 'payment_reminder',
+  QR_PASS_GUIDE: 'qr_pass_guide',
   GENERIC: 'generic',
 } as const;
 
@@ -30,6 +32,9 @@ const TEMPLATE_ALIASES: Record<string, AutomationEmailTemplateId> = {
     AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER,
   payment_reminder: AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER,
   signup_payment_reminder: AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER,
+  qr_pass_guide: AUTOMATION_EMAIL_TEMPLATE_IDS.QR_PASS_GUIDE,
+  qr_pass: AUTOMATION_EMAIL_TEMPLATE_IDS.QR_PASS_GUIDE,
+  pass_guide: AUTOMATION_EMAIL_TEMPLATE_IDS.QR_PASS_GUIDE,
   funnel_signup: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
   funnel_signup_welcome: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
   signup_welcome: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME,
@@ -50,6 +55,7 @@ const TEMPLATE_COMPONENTS: Record<
   [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER]:
     PaymentReminderEmail,
   [AUTOMATION_EMAIL_TEMPLATE_IDS.PAYMENT_REMINDER]: PaymentReminderEmail,
+  [AUTOMATION_EMAIL_TEMPLATE_IDS.QR_PASS_GUIDE]: QrPassGuideEmail,
   [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_WELCOME]: SignupWelcomeEmail,
   [AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION]:
     PaymentConfirmationEmail,

@@ -24,6 +24,7 @@ export enum AutomationTrigger {
   ABANDONED_CHECKOUT = 'abandoned_checkout',
   FIRST_PURCHASE = 'first_purchase',
   NO_VISIT = 'no_visit',
+  CRON = 'cron',
 }
 
 @Entity('automation')
@@ -86,6 +87,10 @@ export class Automation {
 
   @Column({ name: 'is_template', type: 'boolean', default: false })
   isTemplate: boolean;
+
+  /** Incremented when flow is published or graph changes — frozen on each execution start. */
+  @Column({ type: 'int', default: 1 })
+  version: number;
 
   @OneToMany(() => AutomationNode, (node) => node.automation)
   nodes: AutomationNode[];

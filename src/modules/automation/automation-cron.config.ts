@@ -8,8 +8,7 @@ export type ParsedCronTriggerConfig = {
   intervalMinutes: number;
 };
 
-const MIN_INTERVAL_MS = 1_000;
-const MAX_INTERVAL_MS = 10_080 * 60_000;
+export const DEFAULT_CRON_INTERVAL_MS = 15 * 60_000;
 
 type IntervalUnit = 'ms' | 'seconds' | 'minutes' | 'hours';
 
@@ -24,12 +23,18 @@ export function parseCronTriggerConfig(
     return null;
   }
 
+  const frequency = String(config.frequency ?? '').trim().toLowerCase();
   const intervalMs = resolveIntervalMsFromConfig(config);
-  if (intervalMs === null) {
-    return null;
+
+  if (intervalMs !== null) {
+    return buildCronConfig(intervalMs);
   }
 
-  return buildCronConfig(intervalMs);
+  if (!frequency || frequency === 'interval') {
+    return buildCronConfig(DEFAULT_CRON_INTERVAL_MS);
+  }
+
+  return null;
 }
 
 function resolveIntervalMsFromConfig(
@@ -128,7 +133,7 @@ function readMsField(source: Record<string, unknown>): number | null {
   if (!Number.isFinite(ms) || ms <= 0) {
     return null;
   }
-  return clampIntervalMs(ms);
+  return ms;
 }
 
 function readNumericField(
@@ -238,26 +243,25 @@ function parseIntervalValue(
 function toIntervalMs(amount: number, unit: IntervalUnit): number {
   switch (unit) {
     case 'ms':
-      return clampIntervalMs(Math.floor(amount));
+      return Math.floor(amount);
     case 'seconds':
-      return clampIntervalMs(Math.floor(amount * 1000));
+      return Math.floor(amount * 1000);
     case 'hours':
-      return clampIntervalMs(Math.floor(amount * 60 * 60_000));
+      return Math.floor(amount * 60 * 60_000);
     case 'minutes':
     default:
-      return clampIntervalMs(Math.floor(amount * 60_000));
+      return Math.floor(amount * 60_000);
   }
 }
 
-function clampIntervalMs(ms: number): number {
-  return Math.min(MAX_INTERVAL_MS, Math.max(MIN_INTERVAL_MS, ms));
-}
-
 function buildCronConfig(intervalMs: number): ParsedCronTriggerConfig {
-  const clamped = clampIntervalMs(intervalMs);
+  const safeMs =
+    Number.isFinite(intervalMs) && intervalMs > 0
+      ? Math.floor(intervalMs)
+      : DEFAULT_CRON_INTERVAL_MS;
   return {
-    intervalMs: clamped,
-    intervalMinutes: Math.max(1, Math.round(clamped / 60_000)),
+    intervalMs: safeMs,
+    intervalMinutes: Math.max(1, Math.round(safeMs / 60_000)),
   };
 }
 

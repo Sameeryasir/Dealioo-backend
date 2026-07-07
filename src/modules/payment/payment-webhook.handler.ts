@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
@@ -6,8 +6,9 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import { CouponService } from '../redemption/coupon.service';
 import { ActivityService } from '../activity/activity.service';
+import { FunnelEventService } from '../funnel-event/funnel-event.service';
+import { CouponService } from '../redemption/coupon.service';
 import { StripeService } from '../stripe/stripe.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 
@@ -59,6 +60,8 @@ export class PaymentWebhookHandler {
     private readonly stripeService: StripeService,
     private readonly couponService: CouponService,
     private readonly activityService: ActivityService,
+    @Inject(forwardRef(() => FunnelEventService))
+    private readonly funnelEventService: FunnelEventService,
   ) {}
 
   async routeEvent(
@@ -190,6 +193,8 @@ export class PaymentWebhookHandler {
       paymentId: payment.id,
       occurredAt: new Date(),
     });
+
+    await this.funnelEventService.syncPaidFunnelPaymentAutomation(payment.id);
   }
 
   private async handlePaymentIntentFailed(

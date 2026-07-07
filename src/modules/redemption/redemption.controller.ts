@@ -144,7 +144,9 @@ export class RedemptionController {
   async getCouponByPayment(
     @Param('funnelPaymentId', ParseIntPipe) funnelPaymentId: number,
   ) {
-    const coupon = await this.couponService.findByPaymentId(funnelPaymentId);
+    const coupon =
+      (await this.couponService.findByPaymentId(funnelPaymentId)) ??
+      (await this.couponService.findLatestByPaymentId(funnelPaymentId));
     if (!coupon) {
       throw new NotFoundException('Coupon not found for this payment');
     }
@@ -160,6 +162,25 @@ export class RedemptionController {
     await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
     const paymentConfirmed =
       await this.couponService.isPaymentConfirmed(coupon);
+    const passDisplay = this.couponService.resolveGuestPassDisplay(coupon);
+
+    if (!passDisplay.passAvailable) {
+      return {
+        id: coupon.id,
+        status: coupon.status,
+        paymentStatus: coupon.paymentStatus,
+        paymentConfirmed,
+        issuedAt: coupon.issuedAt,
+        expiresAt: coupon.expiresAt,
+        campaignName: coupon.campaign?.campaignName ?? null,
+        customerName: coupon.customer?.name ?? null,
+        passAvailable: false,
+        passUnavailableReason: passDisplay.passUnavailableReason,
+        passMessage: passDisplay.passMessage,
+        qr: null,
+      };
+    }
+
     const qr = await this.couponService.buildQrPayload(coupon);
     return {
       id: coupon.id,
@@ -170,6 +191,9 @@ export class RedemptionController {
       expiresAt: coupon.expiresAt,
       campaignName: coupon.campaign?.campaignName ?? null,
       customerName: coupon.customer?.name ?? null,
+      passAvailable: true,
+      passUnavailableReason: null,
+      passMessage: null,
       qr,
     };
   }

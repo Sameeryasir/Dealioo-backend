@@ -18,6 +18,7 @@ export enum AutomationExecutionStatus {
   QUEUED = 'queued',
   RUNNING = 'running',
   WAITING = 'waiting',
+  PAUSED = 'paused',
   FAILED = 'failed',
   COMPLETED = 'completed',
 }
@@ -71,6 +72,22 @@ export class AutomationExecution {
 
   @Column({ name: 'scheduled_at', type: 'timestamptz', nullable: true })
   scheduledAt: Date | null;
+
+  /** Automation.version captured when this run started. */
+  @Column({ name: 'automation_version', type: 'int', nullable: true })
+  automationVersion: number | null;
+
+  /** Mutable state bag: loop counts, branch memory, last condition result, etc. */
+  @Column({
+    name: 'execution_context',
+    type: 'jsonb',
+    default: () => "'{}'",
+  })
+  executionContext: Record<string, unknown>;
+
+  /** Pointer to latest append-only execution event for recovery. */
+  @Column({ name: 'last_event_id', type: 'int', nullable: true })
+  lastEventId: number | null;
 
   @Column({
     type: 'enum',

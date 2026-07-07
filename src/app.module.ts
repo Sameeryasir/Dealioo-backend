@@ -24,14 +24,17 @@ import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
+import { SmsModule } from './modules/sms/sms.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
     MailModule,
+    SmsModule,
     PusherModule,
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 200 }],
@@ -74,6 +77,7 @@ import { MeetingRequestModule } from './modules/meeting-request/meeting-request.
     AutomationModule,
     RedemptionModule,
     ActivityModule,
+    ChatModule,
     OnboardingModule,
     MeetingRequestModule,
   ],

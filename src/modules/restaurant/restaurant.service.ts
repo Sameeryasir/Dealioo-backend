@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+} from '../../common/pagination';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -91,15 +96,72 @@ export class RestaurantService {
 
     return restaurant;
   }
-  async getAllRestaurants(user: User): Promise<Restaurant[]> {
+  async getAllRestaurants(
+    user: User,
+    page?: number,
+    limit?: number,
+    search?: string,
+  ): Promise<{ data: Restaurant[]; meta: PaginationMeta }> {
     requireAdminRole(
       user,
       'You do not have permission to get all restaurants.',
     );
 
-    return this.restaurantRepository.find({
-      where: { owner: { id: user.id } },
-    });
+    const pagination = normalizePagination(page, limit);
+    const trimmedSearch = search?.trim();
+
+    const qb = this.restaurantRepository
+      .createQueryBuilder('restaurant')
+      .where('restaurant.owner_id = :ownerId', { ownerId: user.id });
+
+    if (trimmedSearch) {
+      const escaped = trimmedSearch.replace(/[%_\\]/g, '\\$&');
+      const containsPattern = `%${escaped}%`;
+
+      qb.andWhere(
+        new Brackets((sub) => {
+          sub
+            .where('restaurant.name ILIKE :containsPattern', {
+              containsPattern,
+            })
+            .orWhere(
+              "COALESCE(restaurant.description, '') ILIKE :containsPattern",
+              { containsPattern },
+            )
+            .orWhere("COALESCE(restaurant.email, '') ILIKE :containsPattern", {
+              containsPattern,
+            })
+            .orWhere(
+              "COALESCE(restaurant.cuisine_type, '') ILIKE :containsPattern",
+              { containsPattern },
+            )
+            .orWhere("COALESCE(restaurant.city, '') ILIKE :containsPattern", {
+              containsPattern,
+            })
+            .orWhere("COALESCE(restaurant.state, '') ILIKE :containsPattern", {
+              containsPattern,
+            })
+            .orWhere("COALESCE(restaurant.country, '') ILIKE :containsPattern", {
+              containsPattern,
+            })
+            .orWhere(
+              "COALESCE(restaurant.website_url, '') ILIKE :containsPattern",
+              { containsPattern },
+            );
+        }),
+      );
+    }
+
+    qb.orderBy('restaurant.id', 'ASC')
+      .skip(pagination.skip)
+      .take(pagination.limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
   }
   async getRestaurantById(
     restaurantId: number,

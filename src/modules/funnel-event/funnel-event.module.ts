@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
@@ -25,10 +26,11 @@ import { FunnelEventService } from './funnel-event.service';
       FunnelPayment,
       Customer,
       CustomerVisit,
+      CheckoutAccessToken,
       Restaurant,
     ]),
-    AutomationModule,
-    RedemptionModule,
+    forwardRef(() => AutomationModule),
+    forwardRef(() => RedemptionModule),
     ActivityModule,
   ],
   controllers: [FunnelEventController],

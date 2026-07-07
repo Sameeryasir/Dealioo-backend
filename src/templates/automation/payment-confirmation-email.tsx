@@ -1,6 +1,10 @@
 import * as React from 'react';
 import { AutomationEmailLayout } from './components/email-layout';
 import type { AutomationEmailTemplateProps } from './types';
+import { splitAutomationEmailBody } from '../../modules/automation/automation-email-merge.util';
+
+const DEFAULT_PAYMENT_CONFIRMATION_MESSAGE =
+  'Thank you for trusting us. Your payment is confirmed. Tap the button below to view your QR code and show it at the restaurant.';
 
 export function PaymentConfirmationEmail({
   customerName,
@@ -9,13 +13,11 @@ export function PaymentConfirmationEmail({
   message,
   ctaLabel,
   ctaUrl,
+  directBody,
 }: AutomationEmailTemplateProps) {
-  const paragraphs = message?.trim()
-    ? [message.trim()]
-    : [
-        'Thank you for trusting us. Your payment is confirmed.',
-        'Tap the button below to view your QR code and show it at the restaurant.',
-      ];
+  const body = message?.trim() || DEFAULT_PAYMENT_CONFIRMATION_MESSAGE;
+  const paragraphs = splitAutomationEmailBody(body);
+  const useDirectBody = directBody || Boolean(message?.trim());
 
   return (
     <AutomationEmailLayout
@@ -25,6 +27,8 @@ export function PaymentConfirmationEmail({
       paragraphs={paragraphs}
       ctaLabel={ctaLabel}
       ctaUrl={ctaUrl}
+      skipTitle={useDirectBody}
+      skipGreeting={useDirectBody}
     />
   );
 }

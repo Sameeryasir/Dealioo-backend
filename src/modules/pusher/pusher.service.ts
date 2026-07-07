@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Pusher from 'pusher';
 import {
@@ -9,8 +14,12 @@ import {
   PUSHER_EVENT,
   pusherAutomationChannel,
   pusherExecutionChannel,
+  pusherRestaurantChatChannel,
 } from './pusher.constants';
-import type { ExecutionTerminalPusherPayload } from './pusher.types';
+import type {
+  ChatMessagePusherPayload,
+  ExecutionTerminalPusherPayload,
+} from './pusher.types';
 
 @Injectable()
 export class PusherService implements OnModuleInit {
@@ -47,6 +56,17 @@ export class PusherService implements OnModuleInit {
     return this.client !== null;
   }
 
+  authorizeChannel(
+    socketId: string,
+    channelName: string,
+  ): { auth: string; channel_data?: string } {
+    if (!this.client) {
+      throw new ServiceUnavailableException('Realtime messaging is not configured.');
+    }
+
+    return this.client.authorizeChannel(socketId, channelName);
+  }
+
   buildExecutionTerminalPayload(
     execution: AutomationExecution,
   ): ExecutionTerminalPusherPayload {
@@ -77,16 +97,43 @@ export class PusherService implements OnModuleInit {
   async notifyExecutionCompleted(
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {
-    await this.trigger(PUSHER_EVENT.EXECUTION_COMPLETED, payload);
+    await this.triggerExecution(PUSHER_EVENT.EXECUTION_COMPLETED, payload);
   }
 
   async notifyExecutionFailed(
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {
-    await this.trigger(PUSHER_EVENT.EXECUTION_FAILED, payload);
+    await this.triggerExecution(PUSHER_EVENT.EXECUTION_FAILED, payload);
   }
 
-  private async trigger(
+  async notifyChatMessageSent(
+    payload: ChatMessagePusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    const channel = pusherRestaurantChatChannel(payload.restaurantId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.CHAT_MESSAGE_SENT,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.CHAT_MESSAGE_SENT} | customer: ${payload.customerId} | message: ${payload.message.id}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher chat notify failed for restaurant ${payload.restaurantId}, customer ${payload.customerId}: ${message}`,
+      );
+    }
+  }
+
+  private async triggerExecution(
     event: string,
     payload: ExecutionTerminalPusherPayload,
   ): Promise<void> {

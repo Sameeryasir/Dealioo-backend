@@ -172,6 +172,53 @@ export class AutomationController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('execution/:id/events')
+  getExecutionEvents(@Param('id', ParseIntPipe) id: number) {
+    return this.automationService.getExecutionEvents(id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('execution/:id/recover')
+  recoverExecution(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req,
+  ) {
+    return this.automationService.recoverExecution(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('metrics')
+  getAutomationMetrics() {
+    return this.automationService.getAutomationMetrics();
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('dead-letter')
+  listDeadLetters(
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit?: number,
+  ) {
+    return this.automationService.listDeadLetters(limit);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('dead-letter/:id/retry')
+  retryDeadLetter(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req,
+  ) {
+    return this.automationService.retryDeadLetter(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('dead-letter/:id/discard')
+  discardDeadLetter(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req,
+  ): Promise<void> {
+    return this.automationService.discardDeadLetter(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('log')
   getAutomationLogs(
     @Query('automationId', ParseIntPipe) automationId: number,

@@ -222,9 +222,72 @@ export class CouponService {
 
   async findByPaymentId(funnelPaymentId: number): Promise<Coupon | null> {
     return this.couponRepository.findOne({
+      where: { funnelPaymentId, status: CouponStatus.ACTIVE },
+      relations: ['customer', 'campaign', 'funnelPayment'],
+    });
+  }
+
+  async findLatestByPaymentId(funnelPaymentId: number): Promise<Coupon | null> {
+    const coupons = await this.couponRepository.find({
+      where: { funnelPaymentId },
+      relations: ['customer', 'campaign', 'funnelPayment'],
+      order: { id: 'DESC' },
+      take: 1,
+    });
+    return coupons[0] ?? null;
+  }
+
+  async reissuePassForPayment(funnelPaymentId: number): Promise<Coupon | null> {
+    const existing = await this.couponRepository.findOne({
       where: { funnelPaymentId },
       relations: ['customer', 'campaign', 'funnelPayment'],
     });
+    if (!existing) {
+      return null;
+    }
+
+    if (existing.status === CouponStatus.REDEEMED) {
+      return existing;
+    }
+
+    if (existing.status !== CouponStatus.ACTIVE) {
+      return existing;
+    }
+
+    await this.couponRepository.update(existing.id, {
+      status: CouponStatus.REVOKED,
+      funnelPaymentId: null,
+    });
+
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt);
+    expiresAt.setDate(expiresAt.getDate() + COUPON_VALIDITY_DAYS);
+
+    const replacement = this.couponRepository.create({
+      campaignId: existing.campaignId,
+      funnelId: existing.funnelId,
+      restaurantId: existing.restaurantId,
+      customerId: existing.customerId,
+      funnelPaymentId,
+      qrToken: randomUUID(),
+      status: CouponStatus.ACTIVE,
+      paymentStatus: existing.paymentStatus,
+      issuedAt,
+      expiresAt,
+    });
+
+    try {
+      return await this.couponRepository.save(replacement);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to reissue pass for payment ${funnelPaymentId}`,
+        err,
+      );
+      const raced = await this.couponRepository.findOne({
+        where: { funnelPaymentId, status: CouponStatus.ACTIVE },
+      });
+      return raced ?? null;
+    }
   }
 
   async isPaymentConfirmed(coupon: Coupon): Promise<boolean> {
@@ -314,6 +377,51 @@ export class CouponService {
       default:
         return CouponPaymentStatus.PENDING;
     }
+  }
+
+  resolveGuestPassDisplay(coupon: Coupon): {
+    passAvailable: boolean;
+    passUnavailableReason: 'revoked' | 'expired' | 'redeemed' | null;
+    passMessage: string | null;
+  } {
+    if (coupon.status === CouponStatus.REVOKED) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'revoked',
+        passMessage:
+          'This QR code is no longer valid. Check your email or messages for your latest QR pass.',
+      };
+    }
+
+    if (coupon.status === CouponStatus.REDEEMED) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'redeemed',
+        passMessage: 'This QR code has already been redeemed at the restaurant.',
+      };
+    }
+
+    if (coupon.status === CouponStatus.EXPIRED || this.isExpired(coupon)) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'expired',
+        passMessage: 'This QR code has passed its expiry date.',
+      };
+    }
+
+    if (coupon.status !== CouponStatus.ACTIVE) {
+      return {
+        passAvailable: false,
+        passUnavailableReason: 'expired',
+        passMessage: 'This QR pass is no longer available.',
+      };
+    }
+
+    return {
+      passAvailable: true,
+      passUnavailableReason: null,
+      passMessage: null,
+    };
   }
 
   /** Build QR payload and image for a coupon pass. */

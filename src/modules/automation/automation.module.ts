@@ -1,25 +1,36 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AUTOMATION_QUEUE, AUTOMATION_JOB_CLEANUP_OPTIONS } from './automation-queue.constants';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
+import { AutomationDeadLetter } from '../../db/entities/automation-dead-letter.entity';
 import { AutomationExecution } from '../../db/entities/automation-execution.entity';
+import { AutomationExecutionEvent } from '../../db/entities/automation-execution-event.entity';
 import { AutomationLog } from '../../db/entities/automation-log.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { ActivityModule } from '../activity/activity.module';
+import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
+import { PaymentModule } from '../payment/payment.module';
+import { AutomationConditionRegistry } from './automation-condition.registry';
+import { CustomerVisitedConditionEvaluator } from './conditions/customer-visited.condition';
 import { AutomationController } from './automation.controller';
+import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationEmailService } from './automation-email.service';
+import { AutomationExecutionEventService } from './automation-execution-event.service';
+import { AutomationExecutionRecoveryService } from './automation-execution-recovery.service';
+import { AutomationMetricsService } from './automation-metrics.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
 import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import { AutomationFlowService } from './automation-flow.service';
@@ -28,6 +39,7 @@ import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationQueueProcessor } from './automation-queue.processor';
 import { AutomationQueueService } from './automation-queue.service';
+import { AutomationWaitSchedulerService } from './automation-wait-scheduler.service';
 import { AutomationService } from './automation.service';
 
 @Module({
@@ -51,6 +63,8 @@ import { AutomationService } from './automation.service';
       AutomationNode,
       AutomationConnection,
       AutomationExecution,
+      AutomationExecutionEvent,
+      AutomationDeadLetter,
       AutomationLog,
       Restaurant,
       Campaign,
@@ -58,10 +72,13 @@ import { AutomationService } from './automation.service';
       FunnelEvent,
       FunnelPayment,
       Customer,
+      CustomerVisit,
     ]),
     ActivityModule,
+    ChatModule,
     AuthModule,
-    RedemptionModule,
+    forwardRef(() => RedemptionModule),
+    forwardRef(() => PaymentModule),
   ],
   controllers: [AutomationController],
   providers: [
@@ -72,11 +89,18 @@ import { AutomationService } from './automation.service';
     AutomationFlowService,
     AutomationEngineService,
     AutomationExecutionService,
+    AutomationExecutionEventService,
+    AutomationExecutionRecoveryService,
+    AutomationDeadLetterService,
+    AutomationMetricsService,
+    AutomationConditionRegistry,
+    CustomerVisitedConditionEvaluator,
     AutomationLogService,
     AutomationQueueService,
     AutomationQueueProcessor,
     AutomationCronSchedulerService,
+    AutomationWaitSchedulerService,
   ],
-  exports: [AutomationService],
+  exports: [AutomationService, AutomationQueueService],
 })
 export class AutomationModule {}

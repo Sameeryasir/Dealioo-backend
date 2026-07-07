@@ -1,6 +1,7 @@
 import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import compression from 'compression';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { isAllowedCorsOrigin } from './utils/frontend-base-url';
@@ -9,6 +10,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+  app.use(compression());
   const jsonBodyLimit = process.env.BODY_JSON_LIMIT ?? '10mb';
   app.useBodyParser('json', {
     limit: jsonBodyLimit,

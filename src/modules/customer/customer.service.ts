@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import {
@@ -6,10 +6,16 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { AutomationExecution } from '../../db/entities/automation-execution.entity';
+import { AutomationLog } from '../../db/entities/automation-log.entity';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { FunnelEvent } from '../../db/entities/funnel-event.entity';
+import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
+import { AutomationQueueService } from '../automation/automation-queue.service';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
 
 @Injectable()
@@ -17,7 +23,10 @@ export class CustomerService {
   constructor(
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(AutomationExecution)
+    private readonly automationExecutionRepository: Repository<AutomationExecution>,
     private readonly dataSource: DataSource,
+    private readonly automationQueueService: AutomationQueueService,
   ) {}
 
   async findAllPaginated(
@@ -39,17 +48,33 @@ export class CustomerService {
   }
 
   async registerCustomer(dto: RegisterCustomerDto): Promise<Customer> {
-    const existing = await this.customerRepository.findOne({
-      where: { email: dto.email },
-    });
+    const email = dto.email.trim();
+    const name = dto.name.trim();
+    const phone = dto.phone?.trim() || null;
+
+    const existing = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('LOWER(customer.email) = LOWER(:email)', { email })
+      .orderBy('customer.id', 'DESC')
+      .getOne();
+
     if (existing) {
-      throw new ConflictException('A customer with this email already exists');
+      let changed = false;
+      if (name && existing.name !== name) {
+        existing.name = name;
+        changed = true;
+      }
+      if (phone !== null && existing.phone !== phone) {
+        existing.phone = phone;
+        changed = true;
+      }
+      return changed ? this.customerRepository.save(existing) : existing;
     }
 
     const customer = this.customerRepository.create({
-      name: dto.name,
-      email: dto.email,
-      phone: dto.phone?.trim() || null,
+      name,
+      email,
+      phone,
     });
 
     return this.customerRepository.save(customer);
@@ -124,7 +149,15 @@ export class CustomerService {
   }
 
   async deleteCustomer(id: number): Promise<void> {
-    await this.findById(id);
+    const customer = await this.findById(id);
+
+    const executions = await this.automationExecutionRepository.find({
+      where: { customerId: id },
+      select: ['id'],
+    });
+    const executionIds = executions.map((execution) => execution.id);
+
+    await this.automationQueueService.purgeExecutionJobs(executionIds);
 
     await this.dataSource.transaction(async (manager) => {
       const coupons = await manager.find(Coupon, {
@@ -137,10 +170,33 @@ export class CustomerService {
 
       if (couponIds.length > 0) {
         await manager.delete(RedemptionLog, { couponId: In(couponIds) });
+        await manager.delete(CustomerVisit, { couponId: In(couponIds) });
       }
 
       await manager.delete(RedemptionLog, { customerId: id });
       await manager.delete(Coupon, { customerId: id });
+      await manager.delete(AutomationLog, { customerId: id });
+      await manager.delete(AutomationExecution, { customerId: id });
+      await manager.delete(FunnelEvent, { customerId: id });
+      await manager.delete(CheckoutAccessToken, { customerId: id });
+
+      const payments = await manager
+        .createQueryBuilder(FunnelPayment, 'payment')
+        .select(['payment.id'])
+        .where('LOWER(payment.customerEmail) = LOWER(:email)', {
+          email: customer.email.trim(),
+        })
+        .getMany();
+      const paymentIds = payments.map((payment) => payment.id);
+
+      if (paymentIds.length > 0) {
+        await manager.delete(FunnelEvent, { funnelPaymentId: In(paymentIds) });
+        await manager.delete(CheckoutAccessToken, {
+          funnelPaymentId: In(paymentIds),
+        });
+        await manager.delete(FunnelPayment, { id: In(paymentIds) });
+      }
+
       await manager.delete(Customer, { id });
     });
   }
