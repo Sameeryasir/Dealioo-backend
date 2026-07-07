@@ -55,19 +55,14 @@ export class OnboardingService {
 
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: {
-        id: true,
-        isTwoFactorVerified: true,
-        twoFactorEnabled: true,
-      },
+      select: { id: true },
     });
 
     if (!user) {
       throw new NotFoundException('User not found.');
     }
 
-    const twoFactorCompleted =
-      user.isTwoFactorVerified === true || user.twoFactorEnabled === true;
+    const twoFactorCompleted = true;
 
     const ownedRestaurants = await this.restaurantRepository.find({
       where: { owner: { id: userId } },
@@ -106,19 +101,16 @@ export class OnboardingService {
 
     const nextStep = this.resolveNextStep({
       restaurantCreated,
-      twoFactorCompleted,
       menuCreated,
       restaurantNeedingMenuId,
     });
 
     const onboardingCompleted =
-      restaurantCreated &&
-      twoFactorCompleted &&
-      restaurantNeedingMenuId == null;
+      restaurantCreated && restaurantNeedingMenuId == null;
 
     const redirectRestaurantId =
-      targetRestaurant?.id ??
       restaurantNeedingMenuId ??
+      targetRestaurant?.id ??
       ownedRestaurants[0]?.id ??
       null;
 
@@ -137,13 +129,6 @@ export class OnboardingService {
       nextStep,
       redirectPath,
     };
-  }
-
-  async markTwoFactorVerified(userId: number): Promise<void> {
-    await this.userRepository.update(userId, {
-      isTwoFactorVerified: true,
-      twoFactorEnabled: true,
-    });
   }
 
   async markMenuSetupComplete(restaurantId: number): Promise<void> {
@@ -168,16 +153,11 @@ export class OnboardingService {
 
   private resolveNextStep(input: {
     restaurantCreated: boolean;
-    twoFactorCompleted: boolean;
     menuCreated: boolean;
     restaurantNeedingMenuId: number | null;
   }): OnboardingNextStep {
     if (!input.restaurantCreated) {
       return 'restaurant_creation';
-    }
-
-    if (!input.twoFactorCompleted) {
-      return 'two_factor';
     }
 
     if (input.restaurantNeedingMenuId != null) {
@@ -218,8 +198,6 @@ export class OnboardingService {
     switch (nextStep) {
       case 'restaurant_creation':
         return '/restaurant/register';
-      case 'two_factor':
-        return '/auth/2fa';
       case 'menu_setup':
         return restaurantId != null
           ? `/restaurant/upload-menu?restaurantId=${restaurantId}`

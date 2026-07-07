@@ -1,6 +1,5 @@
 export type OnboardingNextStep =
   | 'restaurant_creation'
-  | 'two_factor'
   | 'menu_setup'
   | null;
 
