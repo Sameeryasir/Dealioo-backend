@@ -8,6 +8,7 @@ import { VerifyOtpDto } from './authDto/verify-otp.dto';
 import { VerifyTwoFactorDto } from './authDto/verify-2fa.dto';
 import { SetupPasswordDto } from './authDto/setup-password.dto';
 import { RefreshTokenDto } from './authDto/refresh-token.dto';
+import { ResendOtpDto } from './authDto/resend-otp.dto';
 import { JwtAuthGuard } from './jwt/jwt-auth.guard';
 
 @Controller('auth')
@@ -26,8 +27,19 @@ export class AuthController {
   @Post('login')
   async loginUsers(
     @Body() loginUserDto: LoginUserDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: User;
+  }> {
     return await this.authService.loginUser(loginUserDto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('resend-otp')
+  async resendOtp(@Body() dto: ResendOtpDto): Promise<{ message: string }> {
+    return this.authService.resendOtp(dto.email);
   }
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(JwtAuthGuard)

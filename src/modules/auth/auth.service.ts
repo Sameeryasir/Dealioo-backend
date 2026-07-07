@@ -121,7 +121,12 @@ export class AuthService {
 
   async loginUser(
     loginUserDto: LoginUserDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: User;
+  }> {
     const { email, password } = loginUserDto;
 
     const user = await this.userRepository.findOne({
@@ -145,22 +150,43 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Invalid email or password.');
     }
-  
+
     if (!user.isActive) {
       throw new ForbiddenException('This account is inactive.');
     }
-  
+
     const passwordValid = await bcrypt.compare(password, user.passwordHash);
-  
+
     if (!passwordValid) {
       throw new UnauthorizedException('Invalid email or password.');
     }
-  
-    await this.sendOtpForUser(user);
-  
+
+    const { token, refreshToken } = await this.issueAuthTokens(user);
+
     return {
-      message: 'OTP sent successfully',
+      message: 'Login successful.',
+      token,
+      refreshToken,
+      user,
     };
+  }
+
+  async resendOtp(email: string): Promise<{ message: string }> {
+    const user = await this.userRepository.findOne({
+      where: { email },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (!user.isActive) {
+      throw new ForbiddenException('This account is inactive.');
+    }
+
+    await this.sendOtpForUser(user);
+
+    return { message: 'OTP sent successfully.' };
   }
 
   private async sendOtpForUser(user: User): Promise<void> {
@@ -362,6 +388,11 @@ export class AuthService {
 
     otpRecord.isUsed = true;
     await this.otpRepository.save(otpRecord);
+
+    if (!user.emailVerified) {
+      user.emailVerified = true;
+      await this.userRepository.save(user);
+    }
 
     const { token, refreshToken } = await this.issueAuthTokens(user);
 

@@ -27,6 +27,7 @@ import { ActivityModule } from './modules/activity/activity.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
+import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 import { SmsModule } from './modules/sms/sms.module';
 
 @Module({
@@ -78,6 +79,7 @@ import { SmsModule } from './modules/sms/sms.module';
     ActivityModule,
     ChatModule,
     OnboardingModule,
+    MeetingRequestModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
