@@ -4,9 +4,11 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes, randomInt } from 'crypto';
@@ -25,9 +27,20 @@ import { RegisterUserDto } from './authDto/register.dto';
 import { LoginUserDto } from './authDto/login.dto';
 import { JwtAccessPayload } from './jwt/jwt-access-payload.interface';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
+import type {
+  GoogleAuthMode,
+  GoogleAuthProfile,
+  GoogleAuthResult,
+} from './interfaces/google-auth.interface';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+
+/** Default role for Google self-signup (mirrors restaurant owner register). */
+const GOOGLE_SIGNUP_ROLE = 'Admin';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -39,6 +52,7 @@ export class AuthService {
     private readonly refreshTokenRepository: Repository<RefreshToken>,
     private readonly jwtService: JwtService,
     private readonly mailDelivery: MailDeliveryService,
+    private readonly configService: ConfigService,
   ) {}
 
   async createUser(
@@ -117,11 +131,21 @@ export class AuthService {
       throw new ForbiddenException('This account is inactive.');
     }
 
+    // Google-only accounts have no password — block password login clearly.
+    if (!user.passwordHash) {
+      throw new UnauthorizedException(
+        'This account uses Google sign-in. Continue with Google instead.',
+      );
+    }
+
     const passwordValid = await bcrypt.compare(password, user.passwordHash);
 
     if (!passwordValid) {
       throw new UnauthorizedException('Invalid email or password.');
     }
+
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
 
     const { token, refreshToken } = await this.issueAuthTokens(user);
 
@@ -130,6 +154,229 @@ export class AuthService {
       token,
       refreshToken,
       user,
+    };
+  }
+
+ 
+  async handleGoogleLogin(
+    profile: GoogleAuthProfile,
+    mode: GoogleAuthMode = 'login',
+  ): Promise<{ redirectUrl: string }> {
+    this.logger.log(
+      `OAuth Started — Google ${mode} for ${profile.email}`,
+    );
+
+    try {
+      const { user, isNewUser } = await this.resolveGoogleUser(profile, mode);
+      const tokens = await this.issueAuthTokens(user);
+
+      this.logger.log(
+        isNewUser
+          ? `User Created — Google user id=${user.id} email=${user.email}`
+          : `User Logged In — Google user id=${user.id} email=${user.email}`,
+      );
+      this.logger.log(`OAuth Success — user id=${user.id}`);
+
+      const result: GoogleAuthResult = {
+        accessToken: tokens.token,
+        refreshToken: tokens.refreshToken,
+        isNewUser,
+        user: this.toGoogleAuthUser(user),
+      };
+
+      return { redirectUrl: this.buildGoogleFrontendRedirect(result) };
+    } catch (error) {
+      this.logger.error(
+        `OAuth Failed — Google ${mode} for ${profile.email}`,
+        error instanceof Error ? error.stack : error,
+      );
+      throw error;
+    }
+  }
+
+  buildGoogleFrontendRedirect(result: GoogleAuthResult): string {
+    const frontend =
+      this.configService.get<string>('FRONTEND_URL')?.split(',')[0]?.trim() ||
+      getFrontendBaseUrl();
+    const base = frontend.replace(/\/$/, '');
+    const params = new URLSearchParams({
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      isNewUser: result.isNewUser ? '1' : '0',
+      user: Buffer.from(JSON.stringify(result.user), 'utf8').toString('base64url'),
+    });
+    return `${base}/auth/google/complete#${params.toString()}`;
+  }
+
+  buildGoogleErrorRedirect(
+    message: string,
+    page: '/auth/login' | '/auth/signup' = '/auth/login',
+  ): string {
+    const frontend =
+      this.configService.get<string>('FRONTEND_URL')?.split(',')[0]?.trim() ||
+      getFrontendBaseUrl();
+    const base = frontend.replace(/\/$/, '');
+    const params = new URLSearchParams({
+      error: message.slice(0, 300),
+    });
+    return `${base}${page}?${params.toString()}`;
+  }
+
+  googleErrorPageFor(
+    mode: GoogleAuthMode,
+    error: unknown,
+  ): '/auth/login' | '/auth/signup' {
+    if (error instanceof NotFoundException) {
+      // No account on login → send to signup.
+      return '/auth/signup';
+    }
+    if (error instanceof ConflictException) {
+      return '/auth/login';
+    }
+    return mode === 'signup' ? '/auth/signup' : '/auth/login';
+  }
+
+  private async resolveGoogleUser(
+    profile: GoogleAuthProfile,
+    mode: GoogleAuthMode,
+  ): Promise<{ user: User; isNewUser: boolean }> {
+    const email = profile.email.trim().toLowerCase();
+
+    let user = await this.userRepository.findOne({
+      where: { googleId: profile.googleId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      user = await this.userRepository.findOne({
+        where: { email },
+        relations: ['role'],
+      });
+    }
+
+    if (user) {
+      if (!user.isActive) {
+        throw new ForbiddenException('This account is inactive.');
+      }
+
+      if (mode === 'signup') {
+        throw new ConflictException(
+          'An account with this email already exists. Please log in with Google instead.',
+        );
+      }
+
+      let dirty = false;
+      if (!user.googleId) {
+        user.googleId = profile.googleId;
+        dirty = true;
+      } else if (user.googleId !== profile.googleId) {
+        throw new ConflictException(
+          'This email is already linked to a different Google account.',
+        );
+      }
+
+      if (user.provider === 'LOCAL' && user.googleId) {
+        dirty = true;
+      }
+
+      const displayName = [profile.firstName, profile.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (displayName && user.name !== displayName) {
+        user.name = displayName;
+        dirty = true;
+      }
+      if (profile.firstName && user.firstName !== profile.firstName) {
+        user.firstName = profile.firstName;
+        dirty = true;
+      }
+      if (profile.lastName && user.lastName !== profile.lastName) {
+        user.lastName = profile.lastName;
+        dirty = true;
+      }
+      if (profile.avatar && user.avatar !== profile.avatar) {
+        user.avatar = profile.avatar;
+        dirty = true;
+      }
+      if (!user.emailVerified && profile.emailVerified) {
+        user.emailVerified = true;
+        dirty = true;
+      }
+
+      user.lastLoginAt = new Date();
+      dirty = true;
+
+      if (dirty) {
+        user = await this.userRepository.save(user);
+      }
+
+      return { user, isNewUser: false };
+    }
+
+    if (mode === 'login') {
+      throw new NotFoundException(
+        'No account found with this Google email. Please sign up with Google first.',
+      );
+    }
+
+    const role = await this.roleRepository.findOne({
+      where: { name: GOOGLE_SIGNUP_ROLE },
+    });
+    if (!role) {
+      throw new InternalServerErrorException(
+        `Role '${GOOGLE_SIGNUP_ROLE}' does not exist. Seed roles before Google signup.`,
+      );
+    }
+
+    const displayName = [profile.firstName, profile.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || email.split('@')[0];
+
+    const created = this.userRepository.create({
+      email,
+      name: displayName,
+      firstName: profile.firstName || null,
+      lastName: profile.lastName || null,
+      avatar: profile.avatar,
+      googleId: profile.googleId,
+      provider: 'GOOGLE',
+      emailVerified: true,
+      phone: null,
+      passwordHash: null,
+      role,
+      lastLoginAt: new Date(),
+    });
+
+    const saved = await this.userRepository.save(created);
+    const withRole = await this.userRepository.findOne({
+      where: { id: saved.id },
+      relations: ['role'],
+    });
+    if (!withRole) {
+      throw new InternalServerErrorException('Failed to load new Google user.');
+    }
+
+    return { user: withRole, isNewUser: true };
+  }
+
+  private toGoogleAuthUser(user: User): GoogleAuthResult['user'] {
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      avatar: user.avatar,
+      phone: user.phone,
+      emailVerified: user.emailVerified,
+      phoneVerified: user.phoneVerified,
+      isActive: user.isActive,
+      provider: user.provider,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      role: { id: user.role.id, name: user.role.name },
     };
   }
 

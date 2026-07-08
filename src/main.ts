@@ -2,6 +2,7 @@ import { ClassSerializerInterceptor, RequestMethod, ValidationPipe } from '@nest
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
+import session from 'express-session';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { isAllowedCorsOrigin } from './utils/frontend-base-url';
@@ -11,6 +12,28 @@ async function bootstrap() {
     rawBody: true,
   });
   app.use(compression());
+
+  // --- Google OAuth CSRF state (passport-google-oauth20 state: true) ---
+  // Session is only used for OAuth state cookies, not for app login (JWT stays primary).
+  const sessionSecret =
+    process.env.JWT_SECRET?.trim() ||
+    process.env.SESSION_SECRET?.trim() ||
+    'dealioo-oauth-session';
+  app.use(
+    session({
+      name: 'dealioo.sid',
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 10 * 60 * 1000,
+      },
+    }),
+  );
+
   const jsonBodyLimit = process.env.BODY_JSON_LIMIT ?? '10mb';
   app.useBodyParser('json', {
     limit: jsonBodyLimit,
