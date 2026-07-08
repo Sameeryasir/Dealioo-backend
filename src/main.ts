@@ -13,6 +13,16 @@ async function bootstrap() {
   });
   app.use(compression());
 
+  app.use((req, res, next) => {
+    const path = req.path;
+    if (path === '/auth/google' || path === '/auth/google/callback') {
+      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      res.redirect(307, `/api${path}${query}`);
+      return;
+    }
+    next();
+  });
+
   // --- Google OAuth CSRF state (passport-google-oauth20 state: true) ---
   // Session is only used for OAuth state cookies, not for app login (JWT stays primary).
   const sessionSecret =

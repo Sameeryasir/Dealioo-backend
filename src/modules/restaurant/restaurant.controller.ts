@@ -22,6 +22,7 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { UpdateRestaurantDto } from './restaurantDto/update-restaurant.dto';
 import {
   createDiskFileUploadMulterOptions,
+  RESTAURANT_LOGO_UPLOAD_MIMES,
   RESTAURANTS_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
 import type { Request } from 'express';
@@ -36,7 +37,11 @@ export class RestaurantController {
   @UseInterceptors(
     FileInterceptor(
       'file',
-      createDiskFileUploadMulterOptions(RESTAURANTS_UPLOAD_SUBDIR),
+      createDiskFileUploadMulterOptions(RESTAURANTS_UPLOAD_SUBDIR, {
+        allowedMimeTypes: RESTAURANT_LOGO_UPLOAD_MIMES,
+        fileFilterErrorMessage:
+          'Only image files are allowed for the restaurant logo (PNG, JPEG, WebP, GIF).',
+      }),
     ),
   )
   async createRestaurant(

@@ -9,7 +9,25 @@ export const DOCUMENT_IMAGE_UPLOAD_MIMES = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ] as const;
 
-export const DEFAULT_DISK_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+export const DEFAULT_DISK_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+export function getDiskUploadMaxBytes(): number {
+  const raw = process.env.UPLOAD_MAX_FILE_BYTES?.trim();
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_DISK_UPLOAD_MAX_BYTES;
+}
+
+export const RESTAURANT_LOGO_UPLOAD_MIMES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+] as const;
 
 export const MENUS_UPLOAD_SUBDIR = 'menus';
 
@@ -154,7 +172,7 @@ export function createDiskFileUploadMulterOptions(
   subdir: string,
   options?: DiskFileUploadMulterOptions,
 ) {
-  const maxFileBytes = options?.maxFileBytes ?? DEFAULT_DISK_UPLOAD_MAX_BYTES;
+  const maxFileBytes = options?.maxFileBytes ?? getDiskUploadMaxBytes();
   const allowedMimeTypes =
     options?.allowedMimeTypes ?? DOCUMENT_IMAGE_UPLOAD_MIMES;
 

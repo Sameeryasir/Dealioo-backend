@@ -1,0 +1,27 @@
+# Nginx returns 413 Request Entity Too Large when uploads exceed client_max_body_size.
+# Default is often 1m — too small for restaurant logo (multipart form).
+#
+# Add inside your server { } block for dealioo.io (http + https if separate):
+#
+#   client_max_body_size 20M;
+#
+# Then reload:
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Example server block snippet:
+#
+# server {
+#     listen 443 ssl;
+#     server_name dealioo.io www.dealioo.io;
+#
+#     client_max_body_size 20M;
+#
+#     location /api/ {
+#         proxy_pass http://127.0.0.1:4001;
+#         proxy_http_version 1.1;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }
