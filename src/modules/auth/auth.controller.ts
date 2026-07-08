@@ -17,6 +17,7 @@ import { LoginUserDto } from './authDto/login.dto';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
 import { RefreshTokenDto } from './authDto/refresh-token.dto';
 import { ResendOtpDto } from './authDto/resend-otp.dto';
+import { ResetPasswordDto } from './authDto/reset-password.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { GoogleProfile } from './decorators/google-profile.decorator';
 import type { GoogleAuthMode, GoogleAuthProfile } from './interfaces/google-auth.interface';
@@ -132,6 +133,27 @@ export class AuthController {
     user: User;
   }> {
     return this.authService.verifyOtp(verifyOtpDto);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('validate-otp')
+  async validateOtpForReset(
+    @Body() verifyOtpDto: VerifyOtpDto,
+  ): Promise<{ message: string }> {
+    return this.authService.validateOtpForReset(verifyOtpDto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('reset-password')
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+  ): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: User;
+  }> {
+    return this.authService.resetPassword(dto);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })

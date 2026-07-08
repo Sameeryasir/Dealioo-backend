@@ -27,6 +27,7 @@ import { RegisterUserDto } from './authDto/register.dto';
 import { LoginUserDto } from './authDto/login.dto';
 import { JwtAccessPayload } from './jwt/jwt-access-payload.interface';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
+import { ResetPasswordDto } from './authDto/reset-password.dto';
 import type {
   GoogleAuthMode,
   GoogleAuthProfile,
@@ -567,13 +568,70 @@ export class AuthService {
     refreshToken: string;
     user: User;
   }> {
-    const { email, otp } = verifyOtpDto;
+    const user = await this.validateAndConsumeOtp(
+      verifyOtpDto.email,
+      verifyOtpDto.otp,
+    );
+
+    if (!user.emailVerified) {
+      user.emailVerified = true;
+      await this.userRepository.save(user);
+    }
+
+    const { token, refreshToken } = await this.issueAuthTokens(user);
+
+    return {
+      message: 'OTP verified successfully.',
+      token,
+      refreshToken,
+      user,
+    };
+  }
+
+  async validateOtpForReset(
+    verifyOtpDto: VerifyOtpDto,
+  ): Promise<{ message: string }> {
+    await this.validateOtpOnly(verifyOtpDto.email, verifyOtpDto.otp);
+
+    return { message: 'OTP validated successfully.' };
+  }
+
+  async resetPassword(
+    dto: ResetPasswordDto,
+  ): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: User;
+  }> {
+    const user = await this.validateAndConsumeOtp(dto.email, dto.otp);
+
+    user.passwordHash = await bcrypt.hash(dto.password, 10);
+    user.emailVerified = true;
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
+
+    const { token, refreshToken } = await this.issueAuthTokens(user);
+
+    return {
+      message: 'Password reset successfully.',
+      token,
+      refreshToken,
+      user,
+    };
+  }
+
+  private async validateOtpOnly(email: string, otp: number): Promise<User> {
     const user = await this.userRepository.findOne({
       where: { email },
       relations: ['role'],
     });
     if (!user) {
       throw new NotFoundException('User not found.');
+    }
+
+    if (!user.isActive) {
+      throw new ForbiddenException('This account is inactive.');
     }
 
     const code = String(otp);
@@ -594,21 +652,25 @@ export class AuthService {
       throw new UnauthorizedException('This OTP has expired.');
     }
 
+    return user;
+  }
+
+  private async validateAndConsumeOtp(
+    email: string,
+    otp: number,
+  ): Promise<User> {
+    const user = await this.validateOtpOnly(email, otp);
+
+    const otpRecord = await this.otpRepository.findOne({
+      where: { user: { id: user.id } },
+    });
+    if (!otpRecord) {
+      throw new UnauthorizedException('Invalid OTP.');
+    }
+
     otpRecord.isUsed = true;
     await this.otpRepository.save(otpRecord);
 
-    if (!user.emailVerified) {
-      user.emailVerified = true;
-      await this.userRepository.save(user);
-    }
-
-    const { token, refreshToken } = await this.issueAuthTokens(user);
-
-    return {
-      message: 'OTP verified successfully.',
-      token,
-      refreshToken,
-      user,
-    };
+    return user;
   }
 }
