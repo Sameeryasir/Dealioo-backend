@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from 'fs';
 import { diskStorage } from 'multer';
-import { extname, join } from 'path';
+import { basename, extname, join } from 'path';
+import { getFrontendBaseUrl } from './frontend-base-url';
 
 export const DOCUMENT_IMAGE_UPLOAD_MIMES = [
   'application/pdf',
@@ -42,11 +43,26 @@ export function publicUploadFileUrl(
   return `/uploads/${subdir}/${storedFileName}`;
 }
 
+export function getUploadPublicBaseUrl(): string {
+  return getFrontendBaseUrl().replace(/\/$/, '');
+}
+
 export function getPublicAssetsBaseUrl(): string {
-  return (
-    process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') ??
-    `http://localhost:${process.env.PORT ?? '4001'}`
-  );
+  return getUploadPublicBaseUrl();
+}
+
+export function sanitizeStoredUploadFileName(originalName: string): string {
+  const ext = extname(originalName).toLowerCase() || '.jpg';
+  const base =
+    basename(originalName, extname(originalName))
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'upload';
+  return `${Date.now()}-${base}${ext}`;
+}
+
+export function buildRestaurantLogoFileName(originalName: string): string {
+  return sanitizeStoredUploadFileName(originalName);
 }
 
 export function absoluteCampaignUploadFileUrl(storedFileName: string): string {
@@ -166,6 +182,7 @@ export type DiskFileUploadMulterOptions = {
   maxFileBytes?: number;
   allowedMimeTypes?: readonly string[];
   fileFilterErrorMessage?: string;
+  buildStoredFileName?: (file: Express.Multer.File) => string;
 };
 
 export function createDiskFileUploadMulterOptions(
@@ -184,10 +201,10 @@ export function createDiskFileUploadMulterOptions(
         cb(null, dir);
       },
       filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${Math.round(
-          Math.random() * 1e9,
-        )}${extname(file.originalname)}`;
-        cb(null, uniqueName);
+        const storedName = options?.buildStoredFileName
+          ? options.buildStoredFileName(file)
+          : `${Date.now()}-${Math.round(Math.random() * 1e9)}${extname(file.originalname)}`;
+        cb(null, storedName);
       },
     }),
     fileFilter: (req, file, cb) => {

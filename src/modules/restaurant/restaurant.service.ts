@@ -12,7 +12,7 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { CreateRestaurantDto } from './restaurantDto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './restaurantDto/update-restaurant.dto';
 import {
-  publicUploadFileUrl,
+  absolutePublicUploadFileUrl,
   RESTAURANTS_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
 
@@ -73,7 +73,7 @@ export class RestaurantService {
     }
 
     const logoUrl = file
-      ? publicUploadFileUrl(RESTAURANTS_UPLOAD_SUBDIR, file.filename)
+      ? absolutePublicUploadFileUrl(RESTAURANTS_UPLOAD_SUBDIR, file.filename)
       : (dtoLogoUrl ?? null);
 
     const restaurant = this.restaurantRepository.create({

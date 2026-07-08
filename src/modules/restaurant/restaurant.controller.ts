@@ -21,6 +21,7 @@ import { CreateRestaurantDto } from './restaurantDto/create-restaurant.dto';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import { UpdateRestaurantDto } from './restaurantDto/update-restaurant.dto';
 import {
+  buildRestaurantLogoFileName,
   createDiskFileUploadMulterOptions,
   RESTAURANT_LOGO_UPLOAD_MIMES,
   RESTAURANTS_UPLOAD_SUBDIR,
@@ -39,6 +40,8 @@ export class RestaurantController {
       'file',
       createDiskFileUploadMulterOptions(RESTAURANTS_UPLOAD_SUBDIR, {
         allowedMimeTypes: RESTAURANT_LOGO_UPLOAD_MIMES,
+        buildStoredFileName: (file) =>
+          buildRestaurantLogoFileName(file.originalname),
         fileFilterErrorMessage:
           'Only image files are allowed for the restaurant logo (PNG, JPEG, WebP, GIF).',
       }),
