@@ -131,7 +131,6 @@ export class AuthService {
       throw new ForbiddenException('This account is inactive.');
     }
 
-    // Google-only accounts have no password — block password login clearly.
     if (!user.passwordHash) {
       throw new UnauthorizedException(
         'This account uses Google sign-in. Continue with Google instead.',

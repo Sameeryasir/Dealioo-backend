@@ -4,7 +4,6 @@ import {
   IsInt,
   IsNotEmpty,
   IsOptional,
-  IsPhoneNumber,
   IsString,
   MaxLength,
   Min,
@@ -37,9 +36,9 @@ export class CreateRestaurantDto {
   @IsEmail()
   email: string;
 
+  /** Any contact number format (no country-specific validation on create). */
   @IsString()
   @IsNotEmpty()
-  @IsPhoneNumber()
   phoneNumber: string;
 
   @IsOptional()
