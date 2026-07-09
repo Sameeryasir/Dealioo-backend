@@ -1,9 +1,8 @@
-import { ClassSerializerInterceptor, RequestMethod, ValidationPipe } from '@nestjs/common';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
 import session from 'express-session';
-import { join } from 'path';
 import { AppModule } from './app.module';
 import { isAllowedCorsOrigin } from './utils/frontend-base-url';
 
@@ -52,10 +51,7 @@ async function bootstrap() {
     },
   });
   app.useBodyParser('urlencoded', { limit: jsonBodyLimit, extended: true });
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
-  app.setGlobalPrefix('api', {
-    exclude: [{ path: 'uploads/(.*)', method: RequestMethod.ALL }],
-  });
+  app.setGlobalPrefix('api');
   app.enableCors({
     origin: (origin, callback) => {
       if (isAllowedCorsOrigin(origin)) {
