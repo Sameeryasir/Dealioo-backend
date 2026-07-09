@@ -31,10 +31,10 @@ export class CreateRestaurantDto {
   @MaxLength(2048)
   websiteUrl?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @IsEmail()
-  email: string;
+  email?: string;
 
   /** Any contact number format (no country-specific validation on create). */
   @IsString()

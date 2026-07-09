@@ -96,6 +96,9 @@ export class RestaurantService {
       postalCode,
       branchCount,
       owner,
+      // Business setup is complete after create — menu upload is optional later.
+      onboardingCompleted: true,
+      onboardingCompletedAt: new Date(),
     });
 
     await this.restaurantRepository.save(restaurant);

@@ -88,31 +88,24 @@ export class OnboardingService {
       targetRestaurant = match;
     }
 
-    let menuCreated = false;
-    if (targetRestaurant != null) {
-      menuCreated = await this.restaurantHasMenu(targetRestaurant.id);
-      if (menuCreated && !targetRestaurant.onboardingCompleted) {
-        await this.markRestaurantOnboardingComplete(targetRestaurant.id);
+    // Menu upload is optional — onboarding completes once a business exists.
+    for (const restaurant of ownedRestaurants) {
+      if (!restaurant.onboardingCompleted) {
+        await this.markRestaurantOnboardingComplete(restaurant.id);
       }
     }
 
-    const restaurantNeedingMenuId =
-      await this.findFirstRestaurantWithoutMenu(ownedRestaurants);
+    let menuCreated = false;
+    if (targetRestaurant != null) {
+      menuCreated = await this.restaurantHasMenu(targetRestaurant.id);
+    }
 
-    const nextStep = this.resolveNextStep({
-      restaurantCreated,
-      menuCreated,
-      restaurantNeedingMenuId,
-    });
+    const nextStep = this.resolveNextStep({ restaurantCreated });
 
-    const onboardingCompleted =
-      restaurantCreated && restaurantNeedingMenuId == null;
+    const onboardingCompleted = restaurantCreated;
 
     const redirectRestaurantId =
-      restaurantNeedingMenuId ??
-      targetRestaurant?.id ??
-      ownedRestaurants[0]?.id ??
-      null;
+      targetRestaurant?.id ?? ownedRestaurants[0]?.id ?? null;
 
     const redirectPath = this.buildRedirectPath(
       nextStep,
@@ -153,36 +146,11 @@ export class OnboardingService {
 
   private resolveNextStep(input: {
     restaurantCreated: boolean;
-    menuCreated: boolean;
-    restaurantNeedingMenuId: number | null;
   }): OnboardingNextStep {
     if (!input.restaurantCreated) {
       return 'restaurant_creation';
     }
 
-    if (input.restaurantNeedingMenuId != null) {
-      return 'menu_setup';
-    }
-
-    if (!input.menuCreated) {
-      return 'menu_setup';
-    }
-
-    return null;
-  }
-
-  private async findFirstRestaurantWithoutMenu(
-    restaurants: Pick<Restaurant, 'id' | 'onboardingCompleted'>[],
-  ): Promise<number | null> {
-    for (const restaurant of restaurants) {
-      const hasMenu = await this.restaurantHasMenu(restaurant.id);
-      if (!hasMenu) {
-        return restaurant.id;
-      }
-      if (!restaurant.onboardingCompleted) {
-        await this.markRestaurantOnboardingComplete(restaurant.id);
-      }
-    }
     return null;
   }
 

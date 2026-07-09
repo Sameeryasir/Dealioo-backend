@@ -12,7 +12,7 @@ import { User } from './user.entity';
 import { Menu } from './menu.entity';
 import { Campaign } from './campaign.entity';
 
-@Entity('restaurants')
+@Entity('businesses')
 export class Restaurant {
   @PrimaryGeneratedColumn()
   id: number;
