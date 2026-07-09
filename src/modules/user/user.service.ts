@@ -10,6 +10,7 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { CreateUserDto } from './userDto/create-user.dto';
+import { UpdateProfileDto } from './userDto/update-profile.dto';
 import { UpdateUserDto } from './userDto/update-user.dto';
 
 @Injectable()
@@ -25,6 +26,56 @@ export class UserService {
       where: { createdBy: { id: createdByUserId } },
       relations: ['role'],
     });
+  }
+
+  async getOwnProfile(userId: number): Promise<User> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    return user;
+  }
+
+  async updateOwnProfile(
+    userId: number,
+    updateProfileDto: UpdateProfileDto,
+  ): Promise<User> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const { email, phone, name } = updateProfileDto;
+
+    if (email !== undefined && email.trim() !== user.email) {
+      const existingByEmail = await this.userRepository.findOne({
+        where: { email: email.trim() },
+      });
+      if (existingByEmail && existingByEmail.id !== userId) {
+        throw new ConflictException('An account with this email already exists.');
+      }
+      user.email = email.trim();
+    }
+
+    if (name !== undefined) {
+      user.name = name.trim();
+    }
+
+    if (phone !== undefined) {
+      const trimmedPhone = phone.trim();
+      user.phone = trimmedPhone.length > 0 ? trimmedPhone : null;
+    }
+
+    return this.userRepository.save(user);
   }
   async createUser(createUserDto: CreateUserDto, user: User): Promise<User> {
     const { email, password, phone, name, role: roleName } = createUserDto;

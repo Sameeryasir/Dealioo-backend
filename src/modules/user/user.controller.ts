@@ -15,10 +15,26 @@ import { User } from '../../db/entities/user.entity';
 import { CreateUserDto } from './userDto/create-user.dto';
 import { UserService } from './user.service';
 import { UpdateUserDto } from './userDto/update-user.dto';
+import { UpdateProfileDto } from './userDto/update-profile.dto';
 
 @Controller('user')
 export class UserController {
   constructor(private readonly userService: UserService) {}
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('me')
+  async getOwnProfile(@Req() req: { user: User }): Promise<User> {
+    return this.userService.getOwnProfile(req.user.id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('me')
+  async updateOwnProfile(
+    @Req() req: { user: User },
+    @Body() updateProfileDto: UpdateProfileDto,
+  ): Promise<User> {
+    return this.userService.updateOwnProfile(req.user.id, updateProfileDto);
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('all')
