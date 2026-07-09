@@ -16,6 +16,11 @@ export class CreateRestaurantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(120)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
   description?: string;
 
   @IsOptional()

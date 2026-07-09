@@ -16,6 +16,10 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
+import {
+  isValidBusinessSlug,
+  slugifyBusinessName,
+} from '../../utils/business-slug';
 
 @Injectable()
 export class RestaurantService {
@@ -56,6 +60,7 @@ export class RestaurantService {
 
     const {
       name,
+      slug: slugInput,
       description,
       cuisineType,
       logoUrl: dtoLogoUrl,
@@ -82,8 +87,13 @@ export class RestaurantService {
         )
       : (dtoLogoUrl ?? null);
 
+    const slug = await this.resolveUniqueBusinessSlug(
+      slugInput?.trim() || name,
+    );
+
     const restaurant = this.restaurantRepository.create({
       name,
+      slug,
       description,
       cuisineType,
       logoUrl,
@@ -96,7 +106,6 @@ export class RestaurantService {
       postalCode,
       branchCount,
       owner,
-      // Business setup is complete after create — menu upload is optional later.
       onboardingCompleted: true,
       onboardingCompletedAt: new Date(),
     });
@@ -105,6 +114,22 @@ export class RestaurantService {
 
     return restaurant;
   }
+
+  private async resolveUniqueBusinessSlug(source: string): Promise<string> {
+    const base = slugifyBusinessName(source) || 'business';
+    const root = isValidBusinessSlug(base) ? base : 'business';
+
+    let candidate = root;
+    let suffix = 2;
+
+    while (await this.restaurantRepository.exists({ where: { slug: candidate } })) {
+      candidate = `${root}-${suffix}`;
+      suffix += 1;
+    }
+
+    return candidate;
+  }
+
   async getAllRestaurants(
     user: User,
     page?: number,

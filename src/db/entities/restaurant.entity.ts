@@ -20,6 +20,9 @@ export class Restaurant {
   @Column({ type: 'varchar' })
   name: string;
 
+  @Column({ type: 'varchar', length: 120, unique: true })
+  slug: string;
+
   @Column({ type: 'text', nullable: true })
   description: string | null;
 

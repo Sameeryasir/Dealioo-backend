@@ -1,9 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-/**
- * Renames the existing restaurants table to businesses (no new table).
- * Foreign keys from other tables continue to work after PostgreSQL table rename.
- */
 export class RenameRestaurantsTableToBusinesses1779420000000
   implements MigrationInterface
 {

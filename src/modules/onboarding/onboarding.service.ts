@@ -88,7 +88,6 @@ export class OnboardingService {
       targetRestaurant = match;
     }
 
-    // Menu upload is optional — onboarding completes once a business exists.
     for (const restaurant of ownedRestaurants) {
       if (!restaurant.onboardingCompleted) {
         await this.markRestaurantOnboardingComplete(restaurant.id);
