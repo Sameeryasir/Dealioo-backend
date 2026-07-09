@@ -44,7 +44,7 @@ export class PaymentController {
     return this.checkoutResumeService.createSession({
       customerId: dto.customerId,
       funnelId: dto.funnelId,
-      restaurantId: dto.restaurantId,
+      businessId: dto.businessId,
       campaignId: dto.campaignId ?? null,
     });
   }

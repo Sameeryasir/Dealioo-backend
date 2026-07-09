@@ -30,7 +30,7 @@ export class CheckoutAccessToken {
   funnelId: number;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
   @Column({ name: 'campaign_id', type: 'int', nullable: true })
   campaignId: number | null;

@@ -6,7 +6,7 @@ const DEFAULT_QR_PASS_MESSAGE =
   'Your offer pass is ready! Tap the button below to view your QR code.\n\n' +
   'How to use your pass:\n' +
   '1. Open your pass and tap Add to Apple Wallet or Google Wallet\n' +
-  '2. Visit the restaurant and show your pass at the scanner when you pay\n\n' +
+  '2. Visit the business and show your pass at the scanner when you pay\n\n' +
   'Prefer to pay online? You can still complete checkout anytime.';
 
 export function QrPassGuideEmail({

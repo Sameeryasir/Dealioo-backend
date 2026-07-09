@@ -12,7 +12,7 @@ export class CreateCheckoutSessionDto {
 
   @Type(() => Number)
   @IsInt()
-  restaurantId: number;
+  businessId: number;
 
   @IsOptional()
   @Type(() => Number)

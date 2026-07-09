@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
@@ -44,13 +44,13 @@ export class MetaCampaignDraftService {
   constructor(
     @InjectRepository(MetaCampaignDraft)
     private readonly draftRepository: Repository<MetaCampaignDraft>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {}
 
   async saveCampaignStep(
     user: User,
-    restaurantId: number,
+    businessId: number,
     dto: SaveCampaignStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     requireAdminRole(
@@ -58,7 +58,7 @@ export class MetaCampaignDraftService {
       'You do not have permission to save Meta campaign drafts.',
     );
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
     this.assertCampaignStepBusinessRules(dto);
 
     const campaignData: CampaignStepDataDto = {
@@ -81,7 +81,7 @@ export class MetaCampaignDraftService {
     if (dto.draftId?.trim()) {
       const existing = await this.findEditableDraft(
         user.id,
-        restaurantId,
+        businessId,
         dto.draftId.trim(),
       );
 
@@ -93,7 +93,7 @@ export class MetaCampaignDraftService {
 
     const created = await this.draftRepository.save({
       userId: user.id,
-      restaurantId,
+      businessId,
       currentStep: 2,
       status: 'draft',
       campaignData,
@@ -107,7 +107,7 @@ export class MetaCampaignDraftService {
 
   async saveAdSetStep(
     user: User,
-    restaurantId: number,
+    businessId: number,
     dto: SaveAdSetStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     requireAdminRole(
@@ -115,11 +115,11 @@ export class MetaCampaignDraftService {
       'You do not have permission to save Meta campaign drafts.',
     );
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.findEditableDraft(
       user.id,
-      restaurantId,
+      businessId,
       dto.draftId.trim(),
     );
 
@@ -212,7 +212,7 @@ export class MetaCampaignDraftService {
 
   async saveAdCreativeStep(
     user: User,
-    restaurantId: number,
+    businessId: number,
     dto: SaveAdCreativeStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     requireAdminRole(
@@ -220,11 +220,11 @@ export class MetaCampaignDraftService {
       'You do not have permission to save Meta campaign drafts.',
     );
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.findEditableDraft(
       user.id,
-      restaurantId,
+      businessId,
       dto.draftId.trim(),
     );
 
@@ -285,15 +285,15 @@ export class MetaCampaignDraftService {
 
   async getDraft(
     user: User,
-    restaurantId: number,
+    businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
     requireAdminRole(user, 'You do not have permission to view campaign drafts.');
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.draftRepository.findOne({
-      where: { id: draftId.trim(), restaurantId, userId: user.id },
+      where: { id: draftId.trim(), businessId, userId: user.id },
     });
 
     if (!draft) {
@@ -305,15 +305,15 @@ export class MetaCampaignDraftService {
 
   async listDrafts(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
     requireAdminRole(user, 'You do not have permission to view campaign drafts.');
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     const drafts = await this.draftRepository.find({
       where: {
-        restaurantId,
+        businessId,
         userId: user.id,
         status: In(['draft', 'failed', 'publishing']),
       },
@@ -444,13 +444,13 @@ export class MetaCampaignDraftService {
 
   private async findEditableDraft(
     userId: number,
-    restaurantId: number,
+    businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraft> {
     const draft = await this.draftRepository.findOne({
       where: {
         id: draftId.trim(),
-        restaurantId,
+        businessId,
         userId,
       },
     });
@@ -483,27 +483,27 @@ export class MetaCampaignDraftService {
     return draft;
   }
 
-  private async loadOwnedRestaurant(
+  private async loadOwnedBusiness(
     user: User,
-    restaurantId: number,
-  ): Promise<Restaurant> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    businessId: number,
+  ): Promise<Business> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return restaurant;
+    return business;
   }
 
   private toResponse(draft: MetaCampaignDraft): MetaCampaignDraftResponseDto {
     return {
       id: draft.id,
-      restaurantId: draft.restaurantId,
+      businessId: draft.businessId,
       currentStep: draft.currentStep,
       status: draft.status,
       campaignData: (draft.campaignData as CampaignStepDataDto | null) ?? null,

@@ -15,7 +15,7 @@ export class MetaCampaignError {
   userId: number;
 
   @Column({ name: 'restaurant_id', type: 'int' })
-  restaurantId: number;
+  businessId: number;
 
   @Column({ name: 'facebook_campaign_id', type: 'uuid', nullable: true })
   facebookCampaignId: string | null;

@@ -8,7 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 import { Funnel } from './funnel.entity';
 
 export enum CampaignPublicationStatus {
@@ -22,13 +22,13 @@ export class Campaign {
   id: number;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, (restaurant) => restaurant.campaigns, {
+  @ManyToOne(() => Business, (business) => business.campaigns, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   /** Each campaign has at most one funnel (`funnels.campaign_id` is unique). */
   @OneToOne(() => Funnel, (funnel) => funnel.campaign, { nullable: true })

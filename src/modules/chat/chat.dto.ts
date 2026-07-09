@@ -30,7 +30,7 @@ export type ConversationMessageKind =
 export type ConversationMessageDirection = 'outbound' | 'inbound' | 'system';
 
 export class ConversationMessageParticipantDto {
-  type: 'restaurant' | 'customer';
+  type: 'business' | 'customer';
   id: number;
   name: string | null;
   email: string | null;
@@ -86,7 +86,7 @@ export class SyncChatCustomersDto {
   data: ChatCustomerSummaryDto[];
 }
 
-/** Full message thread for one guest at a restaurant. */
+/** Full message thread for one guest at a business. */
 export class CustomerConversationDetailDto {
   customerId: number;
   customerName: string | null;

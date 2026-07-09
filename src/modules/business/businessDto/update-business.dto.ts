@@ -9,7 +9,7 @@ import {
   Min,
 } from 'class-validator';
 
-export class UpdateRestaurantDto {
+export class UpdateBusinessDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()

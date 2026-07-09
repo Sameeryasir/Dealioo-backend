@@ -106,7 +106,7 @@ export class InboundMessageRecorderService {
 
     try {
       const savedMessageId = await this.persistInboundMessage({
-        restaurantId: conversation.restaurantId,
+        businessId: conversation.businessId,
         customerId: customer.id,
         body,
         channel,
@@ -126,20 +126,20 @@ export class InboundMessageRecorderService {
         this.webhookLogger.warn(logContext, 'inbound.persist_failed', {
           reason: InboundMessageSkipReason.PERSIST_FAILED,
           customerId: customer.id,
-          restaurantId: conversation.restaurantId,
+          businessId: conversation.businessId,
         });
         return {
           saved: false,
           skipReason: InboundMessageSkipReason.PERSIST_FAILED,
           customerId: customer.id,
-          restaurantId: conversation.restaurantId,
+          businessId: conversation.businessId,
         };
       }
 
       this.webhookLogger.log(logContext, 'inbound.stored', {
         messageId: savedMessageId,
         customerId: customer.id,
-        restaurantId: conversation.restaurantId,
+        businessId: conversation.businessId,
         idempotencyKey,
       });
 
@@ -147,7 +147,7 @@ export class InboundMessageRecorderService {
         saved: true,
         messageId: savedMessageId,
         customerId: customer.id,
-        restaurantId: conversation.restaurantId,
+        businessId: conversation.businessId,
       };
     } catch (error) {
       if (this.isIdempotencyConflict(error)) {
@@ -162,7 +162,7 @@ export class InboundMessageRecorderService {
             duplicate: true,
             messageId: existing.id,
             customerId: customer.id,
-            restaurantId: conversation.restaurantId,
+            businessId: conversation.businessId,
           };
         }
       }
@@ -171,14 +171,14 @@ export class InboundMessageRecorderService {
       this.webhookLogger.error(logContext, 'inbound.database_error', {
         reason: InboundMessageSkipReason.DATABASE_ERROR,
         customerId: customer.id,
-        restaurantId: conversation.restaurantId,
+        businessId: conversation.businessId,
         error: detail,
       });
       return {
         saved: false,
         skipReason: InboundMessageSkipReason.DATABASE_ERROR,
         customerId: customer.id,
-        restaurantId: conversation.restaurantId,
+        businessId: conversation.businessId,
       };
     }
   }
@@ -260,7 +260,7 @@ export class InboundMessageRecorderService {
   }
 
   private async persistInboundMessage(params: {
-    restaurantId: number;
+    businessId: number;
     customerId: number;
     body: string;
     channel: ConversationMessageChannel;
@@ -279,7 +279,7 @@ export class InboundMessageRecorderService {
     await this.dataSource.transaction(async (manager) => {
       let conversation = await manager.findOne(Conversation, {
         where: {
-          restaurantId: params.restaurantId,
+          businessId: params.businessId,
           customerId: params.customerId,
         },
       });
@@ -287,7 +287,7 @@ export class InboundMessageRecorderService {
       if (!conversation) {
         conversation = await manager.save(
           manager.create(Conversation, {
-            restaurantId: params.restaurantId,
+            businessId: params.businessId,
             customerId: params.customerId,
             isPrivate: true,
             messageCount: 0,
@@ -303,9 +303,9 @@ export class InboundMessageRecorderService {
           nodeId: null,
           channel: params.channel,
           direction: ConversationMessageDirection.INBOUND,
-          sentByRestaurantId: null,
+          sentByBusinessId: null,
           sentByCustomerId: params.customerId,
-          sentToRestaurantId: params.restaurantId,
+          sentToBusinessId: params.businessId,
           sentToCustomerId: null,
           body: params.body,
           metadata: params.metadata ?? null,
@@ -344,7 +344,7 @@ export class InboundMessageRecorderService {
     if (savedMessageId && conversationSnapshot) {
       await this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
-        params.restaurantId,
+        params.businessId,
         params.customerId,
         conversationSnapshot,
       );

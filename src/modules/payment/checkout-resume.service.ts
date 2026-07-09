@@ -20,7 +20,7 @@ export type CheckoutResumeContext = {
   customerName: string;
   customerPhone: string | null;
   funnelId: number;
-  restaurantId: number;
+  businessId: number;
   campaignId: number | null;
   funnelPaymentId: number | null;
 };
@@ -47,7 +47,7 @@ export class CheckoutResumeService {
   async createSession(input: {
     customerId: number;
     funnelId: number;
-    restaurantId: number;
+    businessId: number;
     campaignId: number | null;
   }): Promise<IssuedCheckoutLink> {
     const customer = await this.customerRepository.findOne({
@@ -71,7 +71,7 @@ export class CheckoutResumeService {
         tokenHash,
         customerId: input.customerId,
         funnelId: input.funnelId,
-        restaurantId: input.restaurantId,
+        businessId: input.businessId,
         campaignId: input.campaignId,
         funnelPaymentId: pendingPayment?.id ?? null,
         expiresAt,
@@ -80,7 +80,7 @@ export class CheckoutResumeService {
 
     const session = this.toResumeContext(customer, {
       funnelId: input.funnelId,
-      restaurantId: input.restaurantId,
+      businessId: input.businessId,
       campaignId: input.campaignId,
       funnelPaymentId: pendingPayment?.id ?? null,
     });
@@ -89,7 +89,7 @@ export class CheckoutResumeService {
       token,
       checkoutUrl: this.buildCheckoutUrl({
         funnelId: input.funnelId,
-        restaurantId: input.restaurantId,
+        businessId: input.businessId,
         campaignId: input.campaignId,
         token,
       }),
@@ -131,7 +131,7 @@ export class CheckoutResumeService {
 
     return this.toResumeContext(customer, {
       funnelId: row.funnelId,
-      restaurantId: row.restaurantId,
+      businessId: row.businessId,
       campaignId: row.campaignId,
       funnelPaymentId,
     });
@@ -147,7 +147,7 @@ export class CheckoutResumeService {
 
   buildCheckoutUrl(input: {
     funnelId: number;
-    restaurantId: number;
+    businessId: number;
     campaignId: number | null;
     token: string;
   }): string {
@@ -156,7 +156,7 @@ export class CheckoutResumeService {
     if (input.campaignId != null && input.campaignId > 0) {
       params.set('campaignId', String(input.campaignId));
     }
-    params.set('restaurantId', String(input.restaurantId));
+    params.set('businessId', String(input.businessId));
     return `${getFrontendBaseUrl()}/funnel/${input.funnelId}/payment?${params.toString()}`;
   }
 
@@ -192,7 +192,7 @@ export class CheckoutResumeService {
     customer: Customer,
     scope: {
       funnelId: number;
-      restaurantId: number;
+      businessId: number;
       campaignId: number | null;
       funnelPaymentId: number | null;
     },
@@ -203,7 +203,7 @@ export class CheckoutResumeService {
       customerName: customer.name?.trim() || customer.email.trim(),
       customerPhone: customer.phone?.trim() ?? null,
       funnelId: scope.funnelId,
-      restaurantId: scope.restaurantId,
+      businessId: scope.businessId,
       campaignId: scope.campaignId,
       funnelPaymentId: scope.funnelPaymentId,
     };

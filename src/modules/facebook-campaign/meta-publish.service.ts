@@ -9,7 +9,7 @@ import { Repository, In } from 'typeorm';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import {
@@ -74,15 +74,15 @@ export class MetaPublishService {
     private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
     @InjectRepository(MetaCampaignError)
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly auditService: FacebookIntegrationAuditService,
   ) {}
 
   async publishFullCampaign(
     user: User,
-    restaurantId: number,
+    businessId: number,
     draftId: string,
   ): Promise<PublishMetaCampaignResponseDto> {
     requireAdminRole(
@@ -90,8 +90,8 @@ export class MetaPublishService {
       'You do not have permission to publish Facebook campaigns.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
-    const draft = await this.loadDraftForUser(user.id, restaurantId, draftId);
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const draft = await this.loadDraftForUser(user.id, businessId, draftId);
 
     if (!draft.campaignData || !draft.adSetData || !draft.adCreativeData) {
       throw new BadRequestException(
@@ -110,7 +110,7 @@ export class MetaPublishService {
     const lockResult = await this.draftRepository.update(
       {
         id: draft.id,
-        restaurantId,
+        businessId,
         userId: user.id,
         status: In(['draft', 'failed']),
       },
@@ -126,15 +126,15 @@ export class MetaPublishService {
       );
     }
 
-    return this.runPublishPipeline(user, restaurant, draft);
+    return this.runPublishPipeline(user, business, draft);
   }
 
   private async runPublishPipeline(
     user: User,
-    restaurant: Restaurant,
+    business: Business,
     draft: MetaCampaignDraft,
   ): Promise<PublishMetaCampaignResponseDto> {
-    const restaurantId = restaurant.id;
+    const businessId = business.id;
     const campaign = draft.campaignData as CampaignStepDataDto;
     const adSet = draft.adSetData as AdSetStepDataDto;
     const creative = draft.adCreativeData as AdCreativeStepDataDto;
@@ -142,11 +142,11 @@ export class MetaPublishService {
     assertAdCreativeMedia(creative as never);
 
     const { accessToken, adAccountId: storedAdAccountId } =
-      await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     const adAccountId = normalizeAdAccountId(storedAdAccountId ?? '');
     this.logger.log(
-      `Publish started: metaUserId=${restaurant.metaUserId} adAccountId=${adAccountId} draft=${draft.id}`,
+      `Publish started: metaUserId=${business.metaUserId} adAccountId=${adAccountId} draft=${draft.id}`,
     );
 
     await this.ensureAdAccountActive(adAccountId, accessToken);
@@ -166,7 +166,7 @@ export class MetaPublishService {
 
     const tracking = await this.findOrCreateTrackingRow(
       user.id,
-      restaurantId,
+      businessId,
       adAccountId,
       campaign,
       adSet,
@@ -252,7 +252,7 @@ export class MetaPublishService {
         currentStep: 4,
       });
 
-      await this.auditService.log(restaurantId, 'meta_campaign_published', {
+      await this.auditService.log(businessId, 'meta_campaign_published', {
         metadata: {
           draftId: draft.id,
           metaCampaignId,
@@ -263,7 +263,7 @@ export class MetaPublishService {
       });
 
       this.logger.log(
-        `Draft ${draft.id} published for restaurant ${restaurantId}: ad=${metaAdId}`,
+        `Draft ${draft.id} published for business ${businessId}: ad=${metaAdId}`,
       );
 
       return {
@@ -280,7 +280,7 @@ export class MetaPublishService {
     } catch (err) {
       throw await this.handlePublishFailure(
         user.id,
-        restaurantId,
+        businessId,
         draft.id,
         tracking.id,
         err,
@@ -427,7 +427,7 @@ export class MetaPublishService {
 
   private async findOrCreateTrackingRow(
     userId: number,
-    restaurantId: number,
+    businessId: number,
     adAccountId: string,
     campaign: CampaignStepDataDto,
     adSet: AdSetStepDataDto,
@@ -437,7 +437,7 @@ export class MetaPublishService {
     if (draft.metaCampaignId) {
       const [existing] = await this.facebookCampaignRepository.find({
         where: {
-          restaurantId,
+          businessId,
           metaCampaignId: draft.metaCampaignId,
         },
         order: { createdAt: 'DESC' },
@@ -455,7 +455,7 @@ export class MetaPublishService {
 
     return this.facebookCampaignRepository.save({
       userId,
-      restaurantId,
+      businessId,
       adAccountId,
       campaignName: campaign.name,
       objective: campaign.objective,
@@ -507,7 +507,7 @@ export class MetaPublishService {
 
   private async handlePublishFailure(
     userId: number,
-    restaurantId: number,
+    businessId: number,
     draftId: string,
     trackingId: string,
     err: unknown,
@@ -546,7 +546,7 @@ export class MetaPublishService {
 
     await this.metaCampaignErrorRepository.save({
       userId,
-      restaurantId,
+      businessId,
       facebookCampaignId: trackingId,
       step,
       metaErrorCode,
@@ -554,13 +554,13 @@ export class MetaPublishService {
       rawResponse,
     });
 
-    await this.auditService.log(restaurantId, 'meta_campaign_publish_failed', {
+    await this.auditService.log(businessId, 'meta_campaign_publish_failed', {
       errorMessage: userMessage,
       metadata: { draftId, step, metaErrorCode },
     });
 
     this.logger.error(
-      `Draft publish failed at step=${step} for restaurant ${restaurantId}: code=${metaErrorCode} message=${metaErrorMessage} partialIds=${JSON.stringify(partial)}`,
+      `Draft publish failed at step=${step} for business ${businessId}: code=${metaErrorCode} message=${metaErrorMessage} partialIds=${JSON.stringify(partial)}`,
     );
 
     throw new BadRequestException(userMessage);
@@ -591,13 +591,13 @@ export class MetaPublishService {
 
   private async loadDraftForUser(
     userId: number,
-    restaurantId: number,
+    businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraft> {
     const draft = await this.draftRepository.findOne({
       where: {
         id: draftId.trim(),
-        restaurantId,
+        businessId,
         userId,
       },
     });
@@ -609,21 +609,21 @@ export class MetaPublishService {
     return draft;
   }
 
-  private async loadOwnedRestaurant(
+  private async loadOwnedBusiness(
     user: User,
-    restaurantId: number,
-  ): Promise<Restaurant> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    businessId: number,
+  ): Promise<Business> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return restaurant;
+    return business;
   }
 
   private async assertPageAccessible(

@@ -42,9 +42,9 @@ export class ActivityController {
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/events')
-  async getRestaurantEvents(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  @Get('business/:businessId/events')
+  async getBusinessEvents(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('eventType') eventType?: string,
@@ -52,13 +52,13 @@ export class ActivityController {
     @Query('to') to?: string,
     @Req() req?: AuthRequest,
   ) {
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req!.user.id,
       req!.user.role.name,
     );
 
-    return this.activityService.getRestaurantEvents(restaurantId, {
+    return this.activityService.getBusinessEvents(businessId, {
       page,
       limit,
       eventType: parseEventType(eventType),
@@ -68,20 +68,20 @@ export class ActivityController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/summary')
-  async getRestaurantSummary(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  @Get('business/:businessId/summary')
+  async getBusinessSummary(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Req() req?: AuthRequest,
   ) {
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req!.user.id,
       req!.user.role.name,
     );
 
-    return this.activityService.getRestaurantSummary(restaurantId, {
+    return this.activityService.getBusinessSummary(businessId, {
       from: parseDate(from),
       to: parseDate(to),
     });

@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthGuard } from '@nestjs/passport';
-import { RestaurantService } from '../restaurant/restaurant.service';
+import { BusinessService } from '../business/business.service';
 import { StripeController } from './stripe.controller';
 import { StripeService } from './stripe.service';
 
@@ -21,7 +21,7 @@ describe('StripeController', () => {
           },
         },
         {
-          provide: RestaurantService,
+          provide: BusinessService,
           useValue: { findOwnedByUserId: jest.fn() },
         },
       ],

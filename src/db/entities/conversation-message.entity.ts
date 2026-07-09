@@ -11,7 +11,7 @@ import { AutomationExecution } from './automation-execution.entity';
 import { AutomationNode } from './automation-node.entity';
 import { Conversation } from './conversation.entity';
 import { Customer } from './customer.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 export enum ConversationMessageChannel {
   EMAIL = 'email',
@@ -68,11 +68,11 @@ export class ConversationMessage {
   direction: ConversationMessageDirection;
 
   @Column({ name: 'sent_by_restaurant_id', type: 'int', nullable: true })
-  sentByRestaurantId: number | null;
+  sentByBusinessId: number | null;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_by_restaurant_id' })
-  sentByRestaurant: Restaurant | null;
+  sentByBusiness: Business | null;
 
   @Column({ name: 'sent_by_customer_id', type: 'int', nullable: true })
   sentByCustomerId: number | null;
@@ -82,11 +82,11 @@ export class ConversationMessage {
   sentByCustomer: Customer | null;
 
   @Column({ name: 'sent_to_restaurant_id', type: 'int', nullable: true })
-  sentToRestaurantId: number | null;
+  sentToBusinessId: number | null;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_to_restaurant_id' })
-  sentToRestaurant: Restaurant | null;
+  sentToBusiness: Business | null;
 
   @Column({ name: 'sent_to_customer_id', type: 'int', nullable: true })
   sentToCustomerId: number | null;

@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Menu } from '../../db/entities/menu.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import {
   OnboardingNextStep,
@@ -22,8 +22,8 @@ export class OnboardingService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectRepository(Menu)
     private readonly menuRepository: Repository<Menu>,
   ) {}
@@ -31,15 +31,15 @@ export class OnboardingService {
   async getStatusForUser(
     userId: number,
     roleName: string,
-    restaurantIdParam?: number,
+    businessIdParam?: number,
   ): Promise<OnboardingStatusResponse> {
     const normalizedRole = roleName.trim();
 
     if (normalizedRole === SCANNER_ROLE) {
       return {
-        restaurantId: null,
+        businessId: null,
         twoFactorCompleted: true,
-        restaurantCreated: true,
+        businessCreated: true,
         menuCreated: true,
         onboardingCompleted: true,
         nextStep: null,
@@ -64,7 +64,7 @@ export class OnboardingService {
 
     const twoFactorCompleted = true;
 
-    const ownedRestaurants = await this.restaurantRepository.find({
+    const ownedBusinesses = await this.businessRepository.find({
       where: { owner: { id: userId } },
       order: { id: 'ASC' },
       select: {
@@ -74,48 +74,48 @@ export class OnboardingService {
       },
     });
 
-    const restaurantCreated = ownedRestaurants.length > 0;
+    const businessCreated = ownedBusinesses.length > 0;
 
-    let targetRestaurant = ownedRestaurants[0] ?? null;
+    let targetBusiness = ownedBusinesses[0] ?? null;
 
-    if (restaurantIdParam != null) {
-      const match = ownedRestaurants.find((r) => r.id === restaurantIdParam);
+    if (businessIdParam != null) {
+      const match = ownedBusinesses.find((r) => r.id === businessIdParam);
       if (!match) {
         throw new BadRequestException(
-          'Restaurant not found or you do not own this restaurant.',
+          'Business not found or you do not own this business.',
         );
       }
-      targetRestaurant = match;
+      targetBusiness = match;
     }
 
-    for (const restaurant of ownedRestaurants) {
-      if (!restaurant.onboardingCompleted) {
-        await this.markRestaurantOnboardingComplete(restaurant.id);
+    for (const business of ownedBusinesses) {
+      if (!business.onboardingCompleted) {
+        await this.markBusinessOnboardingComplete(business.id);
       }
     }
 
     let menuCreated = false;
-    if (targetRestaurant != null) {
-      menuCreated = await this.restaurantHasMenu(targetRestaurant.id);
+    if (targetBusiness != null) {
+      menuCreated = await this.businessHasMenu(targetBusiness.id);
     }
 
-    const nextStep = this.resolveNextStep({ restaurantCreated });
+    const nextStep = this.resolveNextStep({ businessCreated });
 
-    const onboardingCompleted = restaurantCreated;
+    const onboardingCompleted = businessCreated;
 
-    const redirectRestaurantId =
-      targetRestaurant?.id ?? ownedRestaurants[0]?.id ?? null;
+    const redirectBusinessId =
+      targetBusiness?.id ?? ownedBusinesses[0]?.id ?? null;
 
     const redirectPath = this.buildRedirectPath(
       nextStep,
-      redirectRestaurantId,
+      redirectBusinessId,
       onboardingCompleted,
     );
 
     return {
-      restaurantId: targetRestaurant?.id ?? ownedRestaurants[0]?.id ?? null,
+      businessId: targetBusiness?.id ?? ownedBusinesses[0]?.id ?? null,
       twoFactorCompleted,
-      restaurantCreated,
+      businessCreated,
       menuCreated,
       onboardingCompleted,
       nextStep,
@@ -123,31 +123,31 @@ export class OnboardingService {
     };
   }
 
-  async markMenuSetupComplete(restaurantId: number): Promise<void> {
-    await this.markRestaurantOnboardingComplete(restaurantId);
+  async markMenuSetupComplete(businessId: number): Promise<void> {
+    await this.markBusinessOnboardingComplete(businessId);
   }
 
-  async restaurantHasMenu(restaurantId: number): Promise<boolean> {
+  async businessHasMenu(businessId: number): Promise<boolean> {
     const count = await this.menuRepository.count({
-      where: { restaurant: { id: restaurantId } },
+      where: { business: { id: businessId } },
     });
     return count > 0;
   }
 
-  private async markRestaurantOnboardingComplete(
-    restaurantId: number,
+  private async markBusinessOnboardingComplete(
+    businessId: number,
   ): Promise<void> {
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       onboardingCompleted: true,
       onboardingCompletedAt: new Date(),
     });
   }
 
   private resolveNextStep(input: {
-    restaurantCreated: boolean;
+    businessCreated: boolean;
   }): OnboardingNextStep {
-    if (!input.restaurantCreated) {
-      return 'restaurant_creation';
+    if (!input.businessCreated) {
+      return 'business_creation';
     }
 
     return null;
@@ -155,7 +155,7 @@ export class OnboardingService {
 
   private buildRedirectPath(
     nextStep: OnboardingNextStep,
-    restaurantId: number | null,
+    businessId: number | null,
     onboardingCompleted: boolean,
   ): string {
     if (onboardingCompleted) {
@@ -163,12 +163,12 @@ export class OnboardingService {
     }
 
     switch (nextStep) {
-      case 'restaurant_creation':
-        return '/restaurant/register';
+      case 'business_creation':
+        return '/business/register';
       case 'menu_setup':
-        return restaurantId != null
-          ? `/restaurant/upload-menu?restaurantId=${restaurantId}`
-          : '/restaurant/upload-menu';
+        return businessId != null
+          ? `/business/upload-menu?businessId=${businessId}`
+          : '/business/upload-menu';
       default:
         return '/dashboard';
     }

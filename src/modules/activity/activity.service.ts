@@ -18,7 +18,7 @@ import {
 } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { CreateActivityEventDto } from './activityDto/create-activity-event.dto';
 import { LogMessageSentDto } from './activityDto/log-message-sent.dto';
 import { LogPrepaidForOfferDto } from './activityDto/log-prepaid-for-offer.dto';
@@ -56,8 +56,8 @@ export class ActivityService {
   constructor(
     @InjectRepository(ActivityEvent)
     private readonly activityRepository: Repository<ActivityEvent>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(FunnelPayment)
@@ -79,7 +79,7 @@ export class ActivityService {
     await manager.save(
       ActivityEvent,
       manager.create(ActivityEvent, {
-        restaurantId: params.restaurantId,
+        businessId: params.businessId,
         customerId: params.customerId,
         eventType: params.eventType,
         description: params.description,
@@ -97,7 +97,7 @@ export class ActivityService {
       'Reward';
 
     const payload: CreateActivityEventDto = {
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       customerId: params.customerId,
       eventType: ActivityEventType.REDEEMED_REWARD,
       description: offerName,
@@ -120,10 +120,10 @@ export class ActivityService {
 
   async logVisited(params: LogVisitedDto): Promise<void> {
     const payload: CreateActivityEventDto = {
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       customerId: params.customerId,
       eventType: ActivityEventType.VISITED,
-      description: `Scanned at ${params.restaurantName}`,
+      description: `Scanned at ${params.businessName}`,
       idempotencyKey: `visited:coupon:${params.couponId}`,
       occurredAt: params.occurredAt,
       metadata: {
@@ -142,7 +142,7 @@ export class ActivityService {
   async logPrepaidForOffer(params: LogPrepaidForOfferDto): Promise<void> {
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: params.paymentId },
-      relations: ['restaurant'],
+      relations: ['business'],
     });
     if (!payment) {
       return;
@@ -157,15 +157,15 @@ export class ActivityService {
       customerId = customer?.id ?? null;
     }
 
-    const restaurantName =
-      payment.restaurant?.name?.trim() || 'Unknown location';
+    const businessName =
+      payment.business?.name?.trim() || 'Unknown location';
     const amountLabel = formatMoney(payment.amount, payment.currency);
 
     const payload: CreateActivityEventDto = {
-      restaurantId: payment.restaurantId,
+      businessId: payment.businessId,
       customerId,
       eventType: ActivityEventType.PREPAID_FOR_OFFER,
-      description: `${amountLabel} at ${restaurantName}`,
+      description: `${amountLabel} at ${businessName}`,
       idempotencyKey: `prepaid:payment:${payment.id}`,
       occurredAt: params.occurredAt ?? payment.paidAt ?? new Date(),
       metadata: {
@@ -182,7 +182,7 @@ export class ActivityService {
 
   async logMessageSent(params: LogMessageSentDto): Promise<void> {
     const payload: CreateActivityEventDto = {
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       customerId: params.customerId,
       eventType: ActivityEventType.MESSAGE_SENT,
       description: truncateActivityMessagePreview(params.messagePreview),
@@ -199,8 +199,8 @@ export class ActivityService {
     await this.logInTransaction(this.activityRepository.manager, payload);
   }
 
-  async getRestaurantEvents(
-    restaurantId: number,
+  async getBusinessEvents(
+    businessId: number,
     options: {
       page?: number;
       limit?: number;
@@ -212,7 +212,7 @@ export class ActivityService {
     const pagination = normalizePagination(options.page, options.limit);
 
     const where: FindOptionsWhere<ActivityEvent> = {
-      restaurantId,
+      businessId,
     };
 
     if (options.eventType) {
@@ -251,15 +251,15 @@ export class ActivityService {
     };
   }
 
-  async getRestaurantSummary(
-    restaurantId: number,
+  async getBusinessSummary(
+    businessId: number,
     options: { from?: Date | null; to?: Date | null },
   ): Promise<ActivitySummary> {
     const qb = this.activityRepository
       .createQueryBuilder('activity')
       .select('activity.eventType', 'eventType')
       .addSelect('COUNT(*)', 'count')
-      .where('activity.restaurantId = :restaurantId', { restaurantId })
+      .where('activity.businessId = :businessId', { businessId })
       .groupBy('activity.eventType');
 
     if (options.from) {

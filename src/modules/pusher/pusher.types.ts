@@ -22,7 +22,7 @@ export type ExecutionTerminalPusherPayload = {
 
 /** Payload when an automation message is saved to a guest conversation. */
 export type ChatMessagePusherPayload = {
-  restaurantId: number;
+  businessId: number;
   customerId: number;
   customerName: string | null;
   customerEmail: string | null;

@@ -12,7 +12,7 @@ export class CreatePaymentIntentDto {
 
   @Type(() => Number)
   @IsInt()
-  restaurantId: number;
+  businessId: number;
 
   @IsString()
   currency: string;

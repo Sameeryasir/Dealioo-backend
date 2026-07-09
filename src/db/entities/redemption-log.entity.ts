@@ -12,7 +12,7 @@ import {
 import { Campaign } from './campaign.entity';
 import { Coupon } from './coupon.entity';
 import { Customer } from './customer.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 /** Audit event type for every preview and redemption attempt. */
 export enum RedemptionEventType {
@@ -49,11 +49,11 @@ export class RedemptionLog {
   campaign: Campaign | null;
 
   @Column({ name: 'restaurant_id', type: 'int' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'scanned_by', type: 'int', nullable: true })
   scannedBy: number | null;

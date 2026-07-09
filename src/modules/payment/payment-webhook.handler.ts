@@ -461,7 +461,7 @@ export class PaymentWebhookHandler {
       phase,
       paymentId: payment.id,
       paymentIntentId,
-      restaurantId: payment.restaurantId,
+      businessId: payment.businessId,
       funnelId: payment.funnelId,
       campaignId: payment.campaignId,
       stripeAccountId: payment.stripeConnectedAccountId,

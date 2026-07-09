@@ -19,7 +19,7 @@ import type { Request, Response } from 'express';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
-import { RestaurantFunnelSummary } from './funnelDto/restaurant-funnel-summary.dto';
+import { BusinessFunnelSummary } from './funnelDto/business-funnel-summary.dto';
 import { UpdateFunnelDto } from './funnelDto/update-funnel.dto';
 import { FunnelService } from './funnel.service';
 
@@ -41,18 +41,18 @@ export class FunnelController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId')
-  async getFunnelsByRestaurant(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  @Get('business/:businessId')
+  async getFunnelsByBusiness(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Req() req: AuthRequest,
-  ): Promise<RestaurantFunnelSummary[]> {
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+  ): Promise<BusinessFunnelSummary[]> {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
 
-    return this.funnelService.getFunnelsByRestaurantId(restaurantId);
+    return this.funnelService.getFunnelsByBusinessId(businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))

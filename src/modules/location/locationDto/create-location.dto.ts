@@ -3,7 +3,7 @@ import { IsInt, IsNotEmpty, IsNumber, IsString, Min } from 'class-validator';
 export class CreateLocationDto {
   @IsNumber()
   @IsNotEmpty()
-  restaurantId: number;
+  businessId: number;
 
   @IsString()
   @IsNotEmpty()

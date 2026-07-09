@@ -34,13 +34,13 @@ function buildTwilioSignature(
 async function ensureConversation(
   db: Client,
   customerId: number,
-  restaurantId: number,
+  businessId: number,
 ): Promise<void> {
   const existing = await db.query(
     `SELECT id FROM conversation
      WHERE customer_id = $1 AND restaurant_id = $2 AND is_private = true
      LIMIT 1`,
-    [customerId, restaurantId],
+    [customerId, businessId],
   );
 
   if (existing.rows[0]) {
@@ -51,11 +51,11 @@ async function ensureConversation(
     `INSERT INTO conversation (
        restaurant_id, customer_id, is_private, message_count, created_at, updated_at
      ) VALUES ($1, $2, true, 0, now(), now())`,
-    [restaurantId, customerId],
+    [businessId, customerId],
   );
 
   console.log(
-    `Created empty conversation thread for customer ${customerId} at restaurant ${restaurantId}.`,
+    `Created empty conversation thread for customer ${customerId} at business ${businessId}.`,
   );
 }
 
@@ -69,7 +69,9 @@ async function main(): Promise<void> {
 
   const body = readArg('body') ?? 'Hello — simulated reply from Canadian guest.';
   const fromPhone = normalizePhone(readArg('from') ?? '+16475492528');
-  const restaurantId = Number(readArg('restaurant-id') ?? '14');
+  const businessId = Number(
+    readArg('business-id') ?? readArg('restaurant-id') ?? '14',
+  );
 
   if (!authToken) {
     throw new Error('TWILIO_AUTH_TOKEN is missing in .env');
@@ -77,8 +79,8 @@ async function main(): Promise<void> {
   if (!twilioTo) {
     throw new Error('TWILIO_PHONE_NUMBER is missing in .env');
   }
-  if (!Number.isFinite(restaurantId) || restaurantId < 1) {
-    throw new Error('Provide a valid --restaurant-id (e.g. 14).');
+  if (!Number.isFinite(businessId) || businessId < 1) {
+    throw new Error('Provide a valid --business-id (e.g. 14).');
   }
 
   const db = new Client({
@@ -110,7 +112,7 @@ async function main(): Promise<void> {
     );
   }
 
-  await ensureConversation(db, customer.id, restaurantId);
+  await ensureConversation(db, customer.id, businessId);
   await db.end();
 
   const messageSid = `SMsim${Date.now()}${randomUUID().replace(/-/g, '').slice(0, 8)}`;

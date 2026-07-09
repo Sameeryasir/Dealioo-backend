@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -33,8 +33,8 @@ export class StripeService {
 
   constructor(
     private readonly config: ConfigService,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {
     this.platformSecretKey =
       this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -93,7 +93,7 @@ export class StripeService {
 
     if (!chargesEnabled || !detailsSubmitted) {
       throw new BadRequestException(
-        'Stripe onboarding is incomplete. Finish setup in Restaurant Settings before accepting payments.',
+        'Stripe onboarding is incomplete. Finish setup in Business Settings before accepting payments.',
       );
     }
 
@@ -104,30 +104,30 @@ export class StripeService {
     };
   }
 
-  async connect(user: User, restaurantId: number): Promise<{ url: string }> {
+  async connect(user: User, businessId: number): Promise<{ url: string }> {
     requireAdminRole(
       user,
       'You do not have permission to connect Stripe for this account.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
       relations: ['owner'],
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    let stripeAccountId = restaurant.stripeAccountId;
+    let stripeAccountId = business.stripeAccountId;
 
     if (!stripeAccountId) {
-      const contactEmail = restaurant.email ?? restaurant.owner?.email;
+      const contactEmail = business.email ?? business.owner?.email;
       if (!contactEmail) {
         throw new InternalServerErrorException(
-          'Restaurant must have an email (or owner email) before Stripe onboarding.',
+          'Business must have an email (or owner email) before Stripe onboarding.',
         );
       }
 
@@ -135,7 +135,7 @@ export class StripeService {
         type: 'express',
         email: contactEmail,
         business_profile: {
-          name: restaurant.name,
+          name: business.name,
         },
         capabilities: {
           card_payments: { requested: true },
@@ -145,14 +145,14 @@ export class StripeService {
 
       stripeAccountId = account.id;
 
-      const persist = await this.restaurantRepository.update(
-        { id: restaurantId, owner: { id: user.id } },
+      const persist = await this.businessRepository.update(
+        { id: businessId, owner: { id: user.id } },
         { stripeAccountId },
       );
 
       if (!persist.affected) {
         throw new InternalServerErrorException(
-          'Could not save Stripe account id on this restaurant.',
+          'Could not save Stripe account id on this business.',
         );
       }
     }
@@ -209,8 +209,8 @@ export class StripeService {
       funnelId: opts.metadata.funnelId
         ? Number(opts.metadata.funnelId)
         : null,
-      restaurantId: opts.metadata.restaurantId
-        ? Number(opts.metadata.restaurantId)
+      businessId: opts.metadata.businessId
+        ? Number(opts.metadata.businessId)
         : null,
       campaignId: opts.metadata.campaignId
         ? Number(opts.metadata.campaignId)
@@ -278,14 +278,14 @@ export class StripeService {
   }
 
   async createOAuthConnectUrl(
-    restaurantId: number,
+    businessId: number,
   ): Promise<{ url: string }> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
 
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found.');
+    if (!business) {
+      throw new NotFoundException('Business not found.');
     }
 
     const clientId =
@@ -306,7 +306,7 @@ export class StripeService {
       );
     }
 
-    const state = String(restaurantId);
+    const state = String(businessId);
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -325,18 +325,18 @@ export class StripeService {
     code: string,
     state: string,
   ): Promise<{ connected: boolean; stripeAccountId: string }> {
-    const restaurantId = Number.parseInt(state, 10);
+    const businessId = Number.parseInt(state, 10);
 
-    if (!Number.isFinite(restaurantId) || restaurantId < 1) {
+    if (!Number.isFinite(businessId) || businessId < 1) {
       throw new BadRequestException('Invalid Stripe OAuth state.');
     }
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
 
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found.');
+    if (!business) {
+      throw new NotFoundException('Business not found.');
     }
 
     const tokenResponse = await this.stripe.oauth.token({
@@ -350,7 +350,7 @@ export class StripeService {
       throw new BadRequestException('Stripe account connection failed.');
     }
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       stripeAccountId,
     });
 

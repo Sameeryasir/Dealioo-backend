@@ -7,12 +7,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
-import { RestaurantFunnelSummary } from './funnelDto/restaurant-funnel-summary.dto';
+import { BusinessFunnelSummary } from './funnelDto/business-funnel-summary.dto';
 import { UpdateFunnelDto } from './funnelDto/update-funnel.dto';
 
 @Injectable()
@@ -22,8 +22,8 @@ export class FunnelService {
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly redemptionService: RedemptionService,
   ) {}
 
@@ -83,19 +83,19 @@ export class FunnelService {
     return funnel;
   }
 
-  async getFunnelsByRestaurantId(
-    restaurantId: number,
-  ): Promise<RestaurantFunnelSummary[]> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+  async getFunnelsByBusinessId(
+    businessId: number,
+  ): Promise<BusinessFunnelSummary[]> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
     const funnels = await this.funnelRepository.find({
       where: {
-        campaign: { restaurantId },
+        campaign: { businessId },
       },
       relations: ['campaign'],
       select: {
@@ -127,8 +127,8 @@ export class FunnelService {
 
     if (user.role.name === 'Admin') {
       qb.innerJoin('funnel.campaign', 'campaign')
-        .innerJoin('campaign.restaurant', 'restaurant')
-        .andWhere('restaurant.owner_id = :userId', { userId: user.id });
+        .innerJoin('campaign.business', 'business')
+        .andWhere('business.owner_id = :userId', { userId: user.id });
     }
 
     const funnel = await qb.getOne();
@@ -164,8 +164,8 @@ export class FunnelService {
 
     if (user.role.name === 'Admin') {
       qb.innerJoin('funnel.campaign', 'campaign')
-        .innerJoin('campaign.restaurant', 'restaurant')
-        .andWhere('restaurant.owner_id = :userId', { userId: user.id });
+        .innerJoin('campaign.business', 'business')
+        .andWhere('business.owner_id = :userId', { userId: user.id });
     }
 
     const funnel = await qb.getOne();

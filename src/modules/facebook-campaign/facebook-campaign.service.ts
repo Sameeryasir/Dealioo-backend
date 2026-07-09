@@ -8,7 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import {
@@ -68,16 +68,16 @@ export class FacebookCampaignService {
     private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
     @InjectRepository(MetaCampaignError)
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly spacesService: SpacesService,
   ) {}
 
-  async uploadAdImageForRestaurant(
+  async uploadAdImageForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
     file: Express.Multer.File,
   ): Promise<{ imageUrl: string }> {
     requireAdminRole(
@@ -85,7 +85,7 @@ export class FacebookCampaignService {
       'You do not have permission to upload Facebook ad images.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
 
     if (!file) {
       throw new BadRequestException('Image file is required.');
@@ -107,9 +107,9 @@ export class FacebookCampaignService {
     return { imageUrl };
   }
 
-  async uploadAdVideoForRestaurant(
+  async uploadAdVideoForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
     file: Express.Multer.File,
   ): Promise<{ videoUrl: string }> {
     requireAdminRole(
@@ -117,7 +117,7 @@ export class FacebookCampaignService {
       'You do not have permission to upload Facebook ad videos.',
     );
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     if (!file) {
       throw new BadRequestException('Video file is required.');
@@ -139,9 +139,9 @@ export class FacebookCampaignService {
     return { videoUrl };
   }
 
-  async createForRestaurant(
+  async createForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
     dto: CreateFacebookCampaignDto,
   ): Promise<CreateFacebookCampaignResponseDto> {
     requireAdminRole(
@@ -149,10 +149,10 @@ export class FacebookCampaignService {
       'You do not have permission to create Facebook campaigns.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
 
     const { accessToken, adAccountId: storedAdAccountId } =
-      await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     const adAccountId = normalizeAdAccountId(storedAdAccountId ?? '');
 
@@ -201,7 +201,7 @@ export class FacebookCampaignService {
 
     const tracking = await this.facebookCampaignRepository.save({
       userId: user.id,
-      restaurantId,
+      businessId,
       adAccountId,
       campaignName: dto.name.trim(),
       objective: dto.objective,
@@ -220,7 +220,7 @@ export class FacebookCampaignService {
 
     try {
       this.logger.log(
-        `Creating Meta campaign for restaurant ${restaurantId} (tracking ${tracking.id})`,
+        `Creating Meta campaign for business ${businessId} (tracking ${tracking.id})`,
       );
       const campaign = await graphPostWithToken<{ id: string }>(
         `/${adAccountId}/campaigns`,
@@ -315,7 +315,7 @@ export class FacebookCampaignService {
         errorMessage: null,
       });
 
-      await this.auditService.log(restaurantId, 'meta_campaign_created', {
+      await this.auditService.log(businessId, 'meta_campaign_created', {
         metadata: {
           metaCampaignId: campaign.id,
           metaAdsetId: adSet.id,
@@ -326,7 +326,7 @@ export class FacebookCampaignService {
       });
 
       this.logger.log(
-        `Meta campaign published for restaurant ${restaurantId}: campaign=${campaign.id}, ad=${ad.id}`,
+        `Meta campaign published for business ${businessId}: campaign=${campaign.id}, ad=${ad.id}`,
       );
 
       return {
@@ -342,7 +342,7 @@ export class FacebookCampaignService {
     } catch (err) {
       throw await this.handleCreationFailure(
         user.id,
-        restaurantId,
+        businessId,
         tracking.id,
         err,
         {
@@ -354,9 +354,9 @@ export class FacebookCampaignService {
     }
   }
 
-  async deleteMetaCampaignForRestaurant(
+  async deleteMetaCampaignForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
     metaCampaignId: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
     requireAdminRole(
@@ -369,66 +369,66 @@ export class FacebookCampaignService {
       throw new BadRequestException('Meta campaign id is required.');
     }
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
 
     const { accessToken } =
-      await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     await deleteMetaObject(campaignId, accessToken);
 
     await this.facebookCampaignRepository.delete({
-      restaurantId,
+      businessId,
       metaCampaignId: campaignId,
     });
 
-    await this.auditService.log(restaurantId, 'meta_campaign_deleted', {
+    await this.auditService.log(businessId, 'meta_campaign_deleted', {
       metadata: { metaCampaignId: campaignId },
     });
 
     this.logger.log(
-      `Meta campaign ${campaignId} deleted for restaurant ${restaurantId}`,
+      `Meta campaign ${campaignId} deleted for business ${businessId}`,
     );
 
     return { deleted: true, metaCampaignId: campaignId };
   }
 
-  async listForRestaurant(
+  async listForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<FacebookCampaign[]> {
     requireAdminRole(
       user,
       'You do not have permission to view Facebook campaigns.',
     );
 
-    await this.loadOwnedRestaurant(user, restaurantId);
+    await this.loadOwnedBusiness(user, businessId);
 
     return this.facebookCampaignRepository.find({
-      where: { restaurantId },
+      where: { businessId },
       order: { createdAt: 'DESC' },
     });
   }
 
-  private async loadOwnedRestaurant(
+  private async loadOwnedBusiness(
     user: User,
-    restaurantId: number,
-  ): Promise<Restaurant> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    businessId: number,
+  ): Promise<Business> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return restaurant;
+    return business;
   }
 
   private async handleCreationFailure(
     userId: number,
-    restaurantId: number,
+    businessId: number,
     trackingId: string,
     err: unknown,
     partial: {
@@ -458,7 +458,7 @@ export class FacebookCampaignService {
 
     await this.metaCampaignErrorRepository.save({
       userId,
-      restaurantId,
+      businessId,
       facebookCampaignId: trackingId,
       step,
       metaErrorCode,
@@ -466,13 +466,13 @@ export class FacebookCampaignService {
       rawResponse,
     });
 
-    await this.auditService.log(restaurantId, 'meta_campaign_failed', {
+    await this.auditService.log(businessId, 'meta_campaign_failed', {
       errorMessage: userMessage,
       metadata: { step, metaErrorCode },
     });
 
     this.logger.error(
-      `Meta campaign creation failed at step=${step} for restaurant ${restaurantId}: ${metaErrorMessage}`,
+      `Meta campaign creation failed at step=${step} for business ${businessId}: ${metaErrorMessage}`,
     );
 
     if (err instanceof MetaApiStepError) {

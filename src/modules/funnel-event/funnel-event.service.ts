@@ -23,7 +23,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { AutomationService } from '../automation/automation.service';
 import { ActivityService } from '../activity/activity.service';
 import { CouponService } from '../redemption/coupon.service';
@@ -33,11 +33,11 @@ import {
   buildRecentMonthBuckets,
 } from './overview-monthly.util';
 import {
-  buildRestaurantOrderPaymentSummary,
+  buildBusinessOrderPaymentSummary,
   customerFunnelVisitKey,
-  type RestaurantOrderPaymentStatus,
-  type RestaurantVisitSnapshot,
-} from './restaurant-order-payment.util';
+  type BusinessOrderPaymentStatus,
+  type BusinessVisitSnapshot,
+} from './business-order-payment.util';
 @Injectable()
 export class FunnelEventService {
   constructor(
@@ -55,8 +55,8 @@ export class FunnelEventService {
     private readonly customerVisitRepository: Repository<CustomerVisit>,
     @InjectRepository(CheckoutAccessToken)
     private readonly checkoutAccessTokenRepository: Repository<CheckoutAccessToken>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly automationService: AutomationService,
     private readonly couponService: CouponService,
     private readonly signupQrEmailService: SignupQrEmailService,
@@ -173,7 +173,7 @@ export class FunnelEventService {
 
   /** Scanner walk-in: enroll guest in selected deals and record payment + visit. */
   async purchaseDealsAtScanner(params: {
-    restaurantId: number;
+    businessId: number;
     customerId: number;
     funnelIds: number[];
     orderSubtotal: number;
@@ -181,7 +181,7 @@ export class FunnelEventService {
   }): Promise<
     Array<{ funnelId: number; campaignName: string; couponId: number }>
   > {
-    const { restaurantId, customerId, funnelIds, orderSubtotal, staffUserId } =
+    const { businessId, customerId, funnelIds, orderSubtotal, staffUserId } =
       params;
 
     if (!Number.isFinite(orderSubtotal) || orderSubtotal <= 0) {
@@ -200,11 +200,11 @@ export class FunnelEventService {
       throw new NotFoundException('Customer not found.');
     }
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found.');
+    if (!business) {
+      throw new NotFoundException('Business not found.');
     }
 
     const amountCentsPerDeal = Math.round(
@@ -221,9 +221,9 @@ export class FunnelEventService {
         where: { id: funnelId },
         relations: ['campaign'],
       });
-      if (!funnel?.campaign || funnel.campaign.restaurantId !== restaurantId) {
+      if (!funnel?.campaign || funnel.campaign.businessId !== businessId) {
         throw new NotFoundException(
-          `Deal not found for this restaurant (funnel ${funnelId}).`,
+          `Deal not found for this business (funnel ${funnelId}).`,
         );
       }
 
@@ -236,7 +236,7 @@ export class FunnelEventService {
 
       const payment = this.funnelPaymentRepository.create({
         funnelId,
-        restaurantId,
+        businessId,
         campaignId: funnel.campaign.id,
         amount: amountCentsPerDeal,
         currency: 'usd',
@@ -276,7 +276,7 @@ export class FunnelEventService {
         await this.customerVisitRepository.save({
           customerId,
           campaignId: funnel.campaign.id,
-          restaurantId,
+          businessId,
           couponId: coupon.id,
           staffUserId,
           visitedAt,
@@ -285,10 +285,10 @@ export class FunnelEventService {
         });
 
         await this.activityService.logVisited({
-          restaurantId,
+          businessId,
           customerId,
           couponId: coupon.id,
-          restaurantName: restaurant.name?.trim() || 'Restaurant',
+          businessName: business.name?.trim() || 'Business',
           occurredAt: visitedAt,
         });
       }
@@ -687,8 +687,8 @@ export class FunnelEventService {
     return null;
   }
 
-  async getRestaurantFunnelEvents(
-    restaurantId: number,
+  async getBusinessFunnelEvents(
+    businessId: number,
     page?: number,
     limit?: number,
   ): Promise<{
@@ -710,10 +710,10 @@ export class FunnelEventService {
       currency: string | null;
       paymentStatus: FunnelPaymentStatus | null;
       receiptUrl: string | null;
-      orderStatus: RestaurantOrderPaymentStatus;
+      orderStatus: BusinessOrderPaymentStatus;
       onlineAmountCents: number | null;
-      restaurantAmount: number | null;
-      restaurantVisitedAt: Date | null;
+      businessAmount: number | null;
+      businessVisitedAt: Date | null;
     }>;
     meta: PaginationMeta & {
       campaignCount: number;
@@ -723,20 +723,20 @@ export class FunnelEventService {
     const pagination = normalizePagination(page, limit);
 
     const campaignCount = await this.campaignRepository.count({
-      where: { restaurantId },
+      where: { businessId },
     });
 
     const funnelCount = await this.funnelRepository
       .createQueryBuilder('funnel')
       .innerJoin('funnel.campaign', 'campaign')
-      .where('campaign.restaurant_id = :restaurantId', { restaurantId })
+      .where('campaign.restaurant_id = :businessId', { businessId })
       .getCount();
 
     const [rows, total] = await this.funnelEventRepository.findAndCount({
       where: {
         funnel: {
           campaign: {
-            restaurantId,
+            businessId,
           },
         },
       },
@@ -753,8 +753,8 @@ export class FunnelEventService {
 
     const filteredRows = rows.filter((row) => row.funnel?.campaign != null);
 
-    const visitByCustomerFunnel = await this.loadLatestRestaurantVisits(
-      restaurantId,
+    const visitByCustomerFunnel = await this.loadLatestBusinessVisits(
+      businessId,
       filteredRows
         .filter((row) => row.customerId != null)
         .map((row) => ({
@@ -771,7 +771,7 @@ export class FunnelEventService {
             : null;
         const visit =
           visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
-        const paymentSummary = buildRestaurantOrderPaymentSummary(row, visit);
+        const paymentSummary = buildBusinessOrderPaymentSummary(row, visit);
 
         return {
           id: row.id,
@@ -795,8 +795,8 @@ export class FunnelEventService {
           receiptUrl: row.receiptUrl,
           orderStatus: paymentSummary.orderStatus,
           onlineAmountCents: paymentSummary.onlineAmountCents,
-          restaurantAmount: paymentSummary.restaurantAmount,
-          restaurantVisitedAt: paymentSummary.restaurantVisitedAt,
+          businessAmount: paymentSummary.businessAmount,
+          businessVisitedAt: paymentSummary.businessVisitedAt,
         };
       }),
       meta: {
@@ -808,11 +808,11 @@ export class FunnelEventService {
   }
 
   /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */
-  private async loadLatestRestaurantVisits(
-    restaurantId: number,
+  private async loadLatestBusinessVisits(
+    businessId: number,
     pairs: Array<{ customerId: number; funnelId: number }>,
-  ): Promise<Map<string, RestaurantVisitSnapshot>> {
-    const result = new Map<string, RestaurantVisitSnapshot>();
+  ): Promise<Map<string, BusinessVisitSnapshot>> {
+    const result = new Map<string, BusinessVisitSnapshot>();
     if (pairs.length === 0) {
       return result;
     }
@@ -822,7 +822,7 @@ export class FunnelEventService {
 
     const visits = await this.customerVisitRepository.find({
       where: {
-        restaurantId,
+        businessId,
         coupon: {
           customerId: In(customerIds),
           funnelId: In(funnelIds),

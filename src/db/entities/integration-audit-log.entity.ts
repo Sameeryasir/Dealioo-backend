@@ -11,7 +11,7 @@ export class IntegrationAuditLog {
   id: string;
 
   @Column({ name: 'restaurant_id', type: 'int' })
-  restaurantId: number;
+  businessId: number;
 
   @Column({ type: 'varchar', length: 64, default: 'facebook' })
   provider: string;

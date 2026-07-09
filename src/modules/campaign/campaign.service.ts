@@ -11,7 +11,7 @@ import {
   CampaignPublicationStatus,
 } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -26,8 +26,8 @@ export class CampaignService {
   constructor(
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
     private readonly spacesService: SpacesService,
@@ -38,7 +38,7 @@ export class CampaignService {
     file?: Express.Multer.File,
   ): Promise<Campaign> {
     const {
-      restaurantId,
+      businessId,
       campaignName,
       websiteUrl,
       imageUrl: dtoImageUrl,
@@ -47,11 +47,11 @@ export class CampaignService {
       status,
     } = createCampaignDto;
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
     const imageUrl = file
@@ -63,8 +63,8 @@ export class CampaignService {
         )
       : toAbsoluteAssetUrlIfRelative(dtoImageUrl);
     const campaign = this.campaignRepository.create({
-      restaurant,
-      restaurantId: restaurant.id,
+      business,
+      businessId: business.id,
       campaignName,
       websiteUrl,
       imageUrl,
@@ -90,17 +90,17 @@ export class CampaignService {
     return this.campaignRepository.find();
   }
 
-  async getCampaignsByRestaurantId(
-    restaurantId: number,
+  async getCampaignsByBusinessId(
+    businessId: number,
     page?: number,
     limit?: number,
     search?: string,
   ): Promise<{ data: Campaign[]; meta: PaginationMeta }> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
     const pagination = normalizePagination(page, limit);
@@ -108,7 +108,7 @@ export class CampaignService {
 
     const qb = this.campaignRepository
       .createQueryBuilder('campaign')
-      .where('campaign.restaurant_id = :restaurantId', { restaurantId });
+      .where('campaign.restaurant_id = :businessId', { businessId });
 
     if (trimmedSearch) {
       const escaped = trimmedSearch.replace(/[%_\\]/g, '\\$&');

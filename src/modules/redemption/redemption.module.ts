@@ -8,7 +8,7 @@ import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
@@ -31,7 +31,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Campaign,
       Funnel,
       FunnelPayment,
-      Restaurant,
+      Business,
     ]),
     AuthModule,
     forwardRef(() => ActivityModule),

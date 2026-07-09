@@ -38,86 +38,86 @@ export class FacebookCampaignController {
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/drafts/ad-creative-step')
+  @Post('business/:businessId/drafts/ad-creative-step')
   async saveAdCreativeStep(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: SaveAdCreativeStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     return this.metaCampaignDraftService.saveAdCreativeStep(
       req.user,
-      restaurantId,
+      businessId,
       body,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/drafts/adset-step')
+  @Post('business/:businessId/drafts/adset-step')
   async saveAdSetStep(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: SaveAdSetStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     return this.metaCampaignDraftService.saveAdSetStep(
       req.user,
-      restaurantId,
+      businessId,
       body,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/drafts/campaign-step')
+  @Post('business/:businessId/drafts/campaign-step')
   async saveCampaignStep(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: SaveCampaignStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
     return this.metaCampaignDraftService.saveCampaignStep(
       req.user,
-      restaurantId,
+      businessId,
       body,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/drafts')
+  @Get('business/:businessId/drafts')
   async listDrafts(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
-    return this.metaCampaignDraftService.listDrafts(req.user, restaurantId);
+    return this.metaCampaignDraftService.listDrafts(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/drafts/:draftId')
+  @Get('business/:businessId/drafts/:draftId')
   async getDraft(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Param('draftId') draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
     return this.metaCampaignDraftService.getDraft(
       req.user,
-      restaurantId,
+      businessId,
       draftId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/drafts/:draftId/publish')
+  @Post('business/:businessId/drafts/:draftId/publish')
   async publishDraft(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Param('draftId') draftId: string,
   ): Promise<PublishMetaCampaignResponseDto> {
     return this.metaPublishService.publishFullCampaign(
       req.user,
-      restaurantId,
+      businessId,
       draftId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/ad-image')
+  @Post('business/:businessId/ad-image')
   @UseInterceptors(
     FileInterceptor(
       'file',
@@ -130,18 +130,18 @@ export class FacebookCampaignController {
   )
   async uploadAdImage(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @UploadedFile() file: Express.Multer.File,
   ): Promise<{ imageUrl: string }> {
-    return this.facebookCampaignService.uploadAdImageForRestaurant(
+    return this.facebookCampaignService.uploadAdImageForBusiness(
       req.user,
-      restaurantId,
+      businessId,
       file,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/ad-video')
+  @Post('business/:businessId/ad-video')
   @UseInterceptors(
     FileInterceptor(
       'file',
@@ -155,53 +155,53 @@ export class FacebookCampaignController {
   )
   async uploadAdVideo(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @UploadedFile() file: Express.Multer.File,
   ): Promise<{ videoUrl: string }> {
-    return this.facebookCampaignService.uploadAdVideoForRestaurant(
+    return this.facebookCampaignService.uploadAdVideoForBusiness(
       req.user,
-      restaurantId,
+      businessId,
       file,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId')
+  @Post('business/:businessId')
   async create(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: CreateFacebookCampaignDto,
   ): Promise<CreateFacebookCampaignResponseDto> {
-    return this.facebookCampaignService.createForRestaurant(
+    return this.facebookCampaignService.createForBusiness(
       req.user,
-      restaurantId,
+      businessId,
       body,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Delete('restaurant/:restaurantId/meta/:metaCampaignId')
+  @Delete('business/:businessId/meta/:metaCampaignId')
   async deleteMetaCampaign(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Param('metaCampaignId') metaCampaignId: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
-    return this.facebookCampaignService.deleteMetaCampaignForRestaurant(
+    return this.facebookCampaignService.deleteMetaCampaignForBusiness(
       req.user,
-      restaurantId,
+      businessId,
       metaCampaignId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId')
+  @Get('business/:businessId')
   async list(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookCampaign[]> {
-    return this.facebookCampaignService.listForRestaurant(
+    return this.facebookCampaignService.listForBusiness(
       req.user,
-      restaurantId,
+      businessId,
     );
   }
 }

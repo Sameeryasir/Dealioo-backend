@@ -3,11 +3,11 @@ import { createHmac, timingSafeEqual } from 'crypto';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 export function createGoogleOAuthState(
-  restaurantId: number,
+  businessId: number,
   secret: string,
 ): string {
   const timestamp = Date.now();
-  const payload = `${restaurantId}.${timestamp}`;
+  const payload = `${businessId}.${timestamp}`;
   const signature = signPayload(payload, secret);
   return `${payload}.${signature}`;
 }
@@ -23,19 +23,19 @@ export function parseGoogleOAuthState(state: string, secret: string): number {
     throw new Error('Invalid Google OAuth state.');
   }
 
-  const [restaurantIdRaw, timestampRaw, signature] = parts;
-  const payload = `${restaurantIdRaw}.${timestampRaw}`;
+  const [businessIdRaw, timestampRaw, signature] = parts;
+  const payload = `${businessIdRaw}.${timestampRaw}`;
   const expectedSignature = signPayload(payload, secret);
 
   if (!safeEqual(signature, expectedSignature)) {
     throw new Error('Invalid Google OAuth state signature.');
   }
 
-  const restaurantId = Number.parseInt(restaurantIdRaw, 10);
+  const businessId = Number.parseInt(businessIdRaw, 10);
   const timestamp = Number.parseInt(timestampRaw, 10);
 
-  if (!Number.isFinite(restaurantId) || restaurantId < 1) {
-    throw new Error('Invalid restaurant id in Google OAuth state.');
+  if (!Number.isFinite(businessId) || businessId < 1) {
+    throw new Error('Invalid business id in Google OAuth state.');
   }
 
   if (!Number.isFinite(timestamp)) {
@@ -46,7 +46,7 @@ export function parseGoogleOAuthState(state: string, secret: string): number {
     throw new Error('Google OAuth state expired. Try connecting again.');
   }
 
-  return restaurantId;
+  return businessId;
 }
 
 function signPayload(payload: string, secret: string): string {

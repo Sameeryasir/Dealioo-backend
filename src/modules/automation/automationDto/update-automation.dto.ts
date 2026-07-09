@@ -33,7 +33,7 @@ export class UpdateAutomationDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  restaurantId?: number;
+  businessId?: number;
 
   @IsOptional()
   @Type(() => Number)

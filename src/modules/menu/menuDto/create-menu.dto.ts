@@ -5,7 +5,7 @@ export class CreateMenuDto {
   @Type(() => Number)
   @IsNumber()
   @IsNotEmpty()
-  restaurantId: number;
+  businessId: number;
 
   @IsString()
   @IsNotEmpty()

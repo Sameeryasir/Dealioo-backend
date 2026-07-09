@@ -1,16 +1,16 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
-import { RestaurantModule } from '../restaurant/restaurant.module';
+import { BusinessModule } from '../business/business.module';
 import { StripeController } from './stripe.controller';
 import { StripeService } from './stripe.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Restaurant]),
+    TypeOrmModule.forFeature([Business]),
     AuthModule,
-    RestaurantModule,
+    BusinessModule,
   ],
   controllers: [StripeController],
   providers: [StripeService],

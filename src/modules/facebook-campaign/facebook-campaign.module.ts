@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookModule } from '../facebook/facebook.module';
@@ -18,7 +18,7 @@ import { MetaPublishService } from './meta-publish.service';
       FacebookCampaign,
       MetaCampaignDraft,
       MetaCampaignError,
-      Restaurant,
+      Business,
       IntegrationAuditLog,
     ]),
     FacebookModule,

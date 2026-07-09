@@ -6,7 +6,7 @@ import { AutomationLog } from '../../db/entities/automation-log.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
 import { ConversationMessage } from '../../db/entities/conversation-message.entity';
 import { Customer } from '../../db/entities/customer.entity';
-import { RestaurantUserChatReadState } from '../../db/entities/restaurant-user-chat-read-state.entity';
+import { BusinessUserChatReadState } from '../../db/entities/business-user-chat-read-state.entity';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { ChatController } from './chat.controller';
@@ -24,7 +24,7 @@ import { InboundMessageRecorderService } from './inbound-message-recorder.servic
       Conversation,
       ConversationMessage,
       Customer,
-      RestaurantUserChatReadState,
+      BusinessUserChatReadState,
     ]),
     AuthModule,
     forwardRef(() => RedemptionModule),

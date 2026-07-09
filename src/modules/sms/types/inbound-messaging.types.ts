@@ -18,7 +18,7 @@ export type InboundMessageRecordResult = {
   duplicate?: boolean;
   messageId?: number;
   customerId?: number;
-  restaurantId?: number;
+  businessId?: number;
   skipReason?: InboundMessageSkipReason;
 };
 

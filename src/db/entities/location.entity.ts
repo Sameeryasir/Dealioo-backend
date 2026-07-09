@@ -7,16 +7,16 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 @Entity('locations')
 export class Location {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE', nullable: false })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: false })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ type: 'varchar' })
   name: string;

@@ -1,12 +1,12 @@
 export type OnboardingNextStep =
-  | 'restaurant_creation'
+  | 'business_creation'
   | 'menu_setup'
   | null;
 
 export type OnboardingStatusResponse = {
-  restaurantId: number | null;
+  businessId: number | null;
   twoFactorCompleted: boolean;
-  restaurantCreated: boolean;
+  businessCreated: boolean;
   menuCreated: boolean;
   onboardingCompleted: boolean;
   nextStep: OnboardingNextStep;

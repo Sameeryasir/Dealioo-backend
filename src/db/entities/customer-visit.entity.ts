@@ -9,7 +9,7 @@ import {
 import { Campaign } from './campaign.entity';
 import { Coupon } from './coupon.entity';
 import { Customer } from './customer.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 import { User } from './user.entity';
 
 export enum CustomerVisitSource {
@@ -36,11 +36,11 @@ export class CustomerVisit {
   campaign: Campaign;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'coupon_id' })
   couponId: number;

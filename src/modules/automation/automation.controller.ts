@@ -238,10 +238,10 @@ export class AutomationController {
   @UseGuards(AuthGuard('jwt'))
   @Get()
   getAutomations(
-    @Query('restaurantId', new ParseIntPipe({ optional: true }))
-    restaurantId?: number,
+    @Query('businessId', new ParseIntPipe({ optional: true }))
+    businessId?: number,
   ): Promise<Automation[]> {
-    return this.automationService.getAutomations(restaurantId);
+    return this.automationService.getAutomations(businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))

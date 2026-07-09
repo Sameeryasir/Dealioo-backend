@@ -14,7 +14,7 @@ export class GoogleAdsIntegrationAuditService {
   ) {}
 
   async log(
-    restaurantId: number,
+    businessId: number,
     eventType: string,
     options?: {
       status?: GoogleAdsConnectionStatusValue | null;
@@ -25,7 +25,7 @@ export class GoogleAdsIntegrationAuditService {
     const metadata = this.sanitizeMetadata(options?.metadata);
 
     await this.auditRepository.save({
-      restaurantId,
+      businessId,
       provider: 'google_ads',
       eventType,
       status: options?.status ?? null,
@@ -34,7 +34,7 @@ export class GoogleAdsIntegrationAuditService {
     });
 
     this.logger.log(
-      `google_ads.${eventType} restaurant=${restaurantId} status=${options?.status ?? 'n/a'}`,
+      `google_ads.${eventType} business=${businessId} status=${options?.status ?? 'n/a'}`,
     );
   }
 

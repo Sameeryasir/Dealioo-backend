@@ -4,14 +4,14 @@ import {
   parseFacebookOAuthState,
 } from './facebook-oauth-state';
 import {
-  extractRestaurantFacebookCredentials,
-  requireRestaurantFacebookCredentials,
-} from './restaurant-facebook-credentials';
+  extractBusinessFacebookCredentials,
+  requireBusinessFacebookCredentials,
+} from './business-facebook-credentials';
 
 describe('facebook-oauth-state', () => {
   const secret = 'test-app-secret';
 
-  it('embeds restaurant id in signed state and parses it back', () => {
+  it('embeds business id in signed state and parses it back', () => {
     const state = createFacebookOAuthState(42, secret);
     expect(parseFacebookOAuthState(state, secret)).toBe(42);
   });
@@ -39,28 +39,28 @@ describe('facebook-oauth-state', () => {
   });
 });
 
-describe('restaurant-facebook-credentials', () => {
-  const baseRestaurant = {
+describe('business-facebook-credentials', () => {
+  const baseBusiness = {
     id: 7,
     metaUserId: 'fb-user-a',
     metaAccessToken: 'token-a',
     metaAdAccountId: 'act_111',
-  } as Parameters<typeof extractRestaurantFacebookCredentials>[0];
+  } as Parameters<typeof extractBusinessFacebookCredentials>[0];
 
-  it('extracts credentials only from the given restaurant row', () => {
-    const credentials = extractRestaurantFacebookCredentials(baseRestaurant);
+  it('extracts credentials only from the given business row', () => {
+    const credentials = extractBusinessFacebookCredentials(baseBusiness);
     expect(credentials).toEqual({
-      restaurantId: 7,
+      businessId: 7,
       facebookUserId: 'fb-user-a',
       accessToken: 'token-a',
       adAccountId: 'act_111',
     });
   });
 
-  it('returns null when restaurant has no token', () => {
+  it('returns null when business has no token', () => {
     expect(
-      extractRestaurantFacebookCredentials({
-        ...baseRestaurant,
+      extractBusinessFacebookCredentials({
+        ...baseBusiness,
         metaAccessToken: null,
       }),
     ).toBeNull();
@@ -68,8 +68,8 @@ describe('restaurant-facebook-credentials', () => {
 
   it('throws when credentials are required but missing', () => {
     expect(() =>
-      requireRestaurantFacebookCredentials({
-        ...baseRestaurant,
+      requireBusinessFacebookCredentials({
+        ...baseBusiness,
         metaUserId: null,
       }),
     ).toThrow('Facebook is not connected');

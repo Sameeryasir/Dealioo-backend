@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { StripeService } from './stripe.service';
 
 describe('StripeService', () => {
@@ -32,7 +32,7 @@ describe('StripeService', () => {
           },
         },
         {
-          provide: getRepositoryToken(Restaurant),
+          provide: getRepositoryToken(Business),
           useValue: {
             findOne: jest.fn(),
             save: jest.fn(),

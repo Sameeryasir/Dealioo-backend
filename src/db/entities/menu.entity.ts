@@ -7,7 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 @Entity('menus')
 export class Menu {
@@ -23,9 +23,9 @@ export class Menu {
   @Column({ name: 'menu_type', type: 'varchar', nullable: true })
   menuType: string | null;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE', nullable: false })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: false })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'file_url', type: 'text', nullable: true })
   fileUrl: string | null;

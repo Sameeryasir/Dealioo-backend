@@ -1,4 +1,4 @@
 export class FacebookOAuthCallbackResultDto {
   connected: boolean;
-  restaurantId: number;
+  businessId: number;
 }

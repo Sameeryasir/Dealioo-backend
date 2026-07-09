@@ -1,5 +1,5 @@
 /**
- * Funnel checkout payment row: links funnel + restaurant to Stripe PI and payout account.
+ * Funnel checkout payment row: links funnel + business to Stripe PI and payout account.
  * Status values: pending | paid | failed | cancelled | refunded (see FunnelPaymentStatus).
  */
 import {
@@ -12,7 +12,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Funnel } from './funnel.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 // --- Payment lifecycle (stored as varchar in DB) ---
 export enum FunnelPaymentStatus {
@@ -40,13 +40,13 @@ export class FunnelPayment {
   funnel: Funnel;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, {
+  @ManyToOne(() => Business, {
     onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'campaign_id', type: 'int', nullable: true })
   campaignId: number | null;

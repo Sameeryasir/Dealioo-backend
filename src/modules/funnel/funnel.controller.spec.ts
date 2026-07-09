@@ -16,7 +16,7 @@ describe('FunnelController', () => {
             createFunnel: jest.fn(),
             getFunnelById: jest.fn(),
             getFunnelByCampaignId: jest.fn(),
-            getFunnelsByRestaurantId: jest.fn(),
+            getFunnelsByBusinessId: jest.fn(),
             updateFunnel: jest.fn(),
             deleteFunnel: jest.fn(),
           },
@@ -24,7 +24,7 @@ describe('FunnelController', () => {
         {
           provide: RedemptionService,
           useValue: {
-            verifyRestaurantAccess: jest.fn(),
+            verifyBusinessAccess: jest.fn(),
           },
         },
       ],

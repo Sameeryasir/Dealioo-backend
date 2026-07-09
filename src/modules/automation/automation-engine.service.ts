@@ -1066,7 +1066,7 @@ export class AutomationEngineService {
     );
 
     await this.activityService.logMessageSent({
-      restaurantId: execution.automation.restaurantId,
+      businessId: execution.automation.businessId,
       customerId: execution.customerId,
       messagePreview:
         this.automationEmailService.resolvePreparedEmailPreview(prepared),
@@ -1080,7 +1080,7 @@ export class AutomationEngineService {
     });
 
     await this.chatMessageService.recordOutboundMessage({
-      restaurantId: execution.automation.restaurantId,
+      businessId: execution.automation.businessId,
       customerId: execution.customerId,
       automationId: execution.automationId,
       executionId: execution.id,

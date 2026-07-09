@@ -44,7 +44,7 @@ export class ChatMessageService {
   ) {}
 
   async sendManualMessage(
-    restaurantId: number,
+    businessId: number,
     customerId: number,
     body: string,
     channel: ConversationMessageChannel = ConversationMessageChannel.SMS,
@@ -71,9 +71,9 @@ export class ChatMessageService {
       await this.twilioService.sendSms(customer.phone, trimmed);
     }
 
-    const idempotencyKey = `chat_message:manual:${restaurantId}:${customerId}:${randomUUID()}`;
+    const idempotencyKey = `chat_message:manual:${businessId}:${customerId}:${randomUUID()}`;
     const savedMessageId = await this.persistOutboundMessage({
-      restaurantId,
+      businessId,
       customerId,
       channel,
       bodyPreview: trimmed,
@@ -89,9 +89,9 @@ export class ChatMessageService {
       where: { id: savedMessageId },
       relations: [
         'node',
-        'sentByRestaurant',
+        'sentByBusiness',
         'sentByCustomer',
-        'sentToRestaurant',
+        'sentToBusiness',
         'sentToCustomer',
       ],
     });
@@ -145,7 +145,7 @@ export class ChatMessageService {
     await this.dataSource.transaction(async (manager) => {
       let conversation = await manager.findOne(Conversation, {
         where: {
-          restaurantId: params.restaurantId,
+          businessId: params.businessId,
           customerId: params.customerId,
         },
       });
@@ -153,7 +153,7 @@ export class ChatMessageService {
       if (!conversation) {
         conversation = await manager.save(
           manager.create(Conversation, {
-            restaurantId: params.restaurantId,
+            businessId: params.businessId,
             customerId: params.customerId,
             isPrivate: true,
             messageCount: 0,
@@ -170,9 +170,9 @@ export class ChatMessageService {
           channel: params.channel,
           direction:
             params.direction ?? ConversationMessageDirection.OUTBOUND,
-          sentByRestaurantId: params.restaurantId,
+          sentByBusinessId: params.businessId,
           sentByCustomerId: null,
-          sentToRestaurantId: null,
+          sentToBusinessId: null,
           sentToCustomerId: params.customerId,
           body,
           metadata: params.metadata ?? null,
@@ -213,7 +213,7 @@ export class ChatMessageService {
     if (savedMessageId && conversationSnapshot) {
       await this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
-        params.restaurantId,
+        params.businessId,
         params.customerId,
         conversationSnapshot,
       );

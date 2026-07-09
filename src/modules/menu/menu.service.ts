@@ -10,7 +10,7 @@ import {
 import { persistUploadedFile } from 'src/utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { User } from 'src/db/entities/user.entity';
-import { Restaurant } from 'src/db/entities/restaurant.entity';
+import { Business } from 'src/db/entities/business.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
 
 @Injectable()
@@ -18,8 +18,8 @@ export class MenuService {
   constructor(
     @InjectRepository(Menu)
     private readonly menuRepository: Repository<Menu>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly onboardingService: OnboardingService,
     private readonly spacesService: SpacesService,
   ) {}
@@ -31,25 +31,25 @@ export class MenuService {
   ): Promise<Menu> {
     requireAdminRole(user, 'You do not have permission to create menu.');
     const {
-      restaurantId,
+      businessId,
       name,
       description,
       menuType,
       fileUrl: dtoFileUrl,
     } = createMenuDto;
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
     const existingMenuCount = await this.menuRepository.count({
-      where: { restaurant: { id: restaurantId } },
+      where: { business: { id: businessId } },
     });
     if (existingMenuCount > 0) {
       throw new ConflictException(
-        'This restaurant already has a menu. Onboarding menu setup is complete.',
+        'This business already has a menu. Onboarding menu setup is complete.',
       );
     }
     const fileUrl = file
@@ -62,7 +62,7 @@ export class MenuService {
     const fileName = file?.originalname ?? null;
     const fileSize = file?.size ?? null;
     const menu = this.menuRepository.create({
-      restaurant,
+      business,
       name,
       description,
       menuType,
@@ -71,22 +71,22 @@ export class MenuService {
       fileSize,
     });
     await this.menuRepository.save(menu);
-    await this.onboardingService.markMenuSetupComplete(restaurantId);
+    await this.onboardingService.markMenuSetupComplete(businessId);
     return menu;
   }
   async getAllMenus(user: User): Promise<Menu[]> {
     requireAdminRole(user, 'You do not have permission to get all menus.');
     return this.menuRepository.find({
-      where: { restaurant: { owner: { id: user.id } } },
+      where: { business: { owner: { id: user.id } } },
     });
   }
-  async getMenuByRestaurantId(
-    restaurantId: number,
+  async getMenuByBusinessId(
+    businessId: number,
     user: User,
   ): Promise<Menu[]> {
     requireAdminRole(user, 'You do not have permission to see this menu.');
     return this.menuRepository.find({
-      where: { restaurant: { id: restaurantId } },
+      where: { business: { id: businessId } },
     });
   }
 }

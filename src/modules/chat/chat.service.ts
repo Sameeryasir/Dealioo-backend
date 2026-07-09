@@ -20,7 +20,7 @@ import {
   ConversationMessageChannel,
   ConversationMessageDirection as StoredMessageDirection,
 } from '../../db/entities/conversation-message.entity';
-import { RestaurantUserChatReadState } from '../../db/entities/restaurant-user-chat-read-state.entity';
+import { BusinessUserChatReadState } from '../../db/entities/business-user-chat-read-state.entity';
 import {
   ActiveFlowCustomerDto,
   ChatCustomerSummaryDto,
@@ -49,20 +49,20 @@ export class ChatService {
     private readonly conversationRepository: Repository<Conversation>,
     @InjectRepository(ConversationMessage)
     private readonly messageRepository: Repository<ConversationMessage>,
-    @InjectRepository(RestaurantUserChatReadState)
-    private readonly chatReadStateRepository: Repository<RestaurantUserChatReadState>,
+    @InjectRepository(BusinessUserChatReadState)
+    private readonly chatReadStateRepository: Repository<BusinessUserChatReadState>,
   ) {}
 
   async getChatUnreadSummary(
-    restaurantId: number,
+    businessId: number,
     userId: number,
   ): Promise<ChatUnreadSummaryDto> {
     const readState = await this.chatReadStateRepository.findOne({
-      where: { restaurantId, userId },
+      where: { businessId, userId },
     });
 
     const unreadCount = await this.countUnreadInboundMessages(
-      restaurantId,
+      businessId,
       readState?.chatsLastViewedAt ?? null,
     );
 
@@ -73,13 +73,13 @@ export class ChatService {
     };
   }
 
-  async markRestaurantChatsRead(
-    restaurantId: number,
+  async markBusinessChatsRead(
+    businessId: number,
     userId: number,
   ): Promise<Date> {
     const viewedAt = new Date();
     const existing = await this.chatReadStateRepository.findOne({
-      where: { restaurantId, userId },
+      where: { businessId, userId },
     });
 
     if (existing) {
@@ -90,7 +90,7 @@ export class ChatService {
 
     await this.chatReadStateRepository.save(
       this.chatReadStateRepository.create({
-        restaurantId,
+        businessId,
         userId,
         chatsLastViewedAt: viewedAt,
       }),
@@ -100,13 +100,13 @@ export class ChatService {
   }
 
   private async countUnreadInboundMessages(
-    restaurantId: number,
+    businessId: number,
     lastViewedAt: Date | null,
   ): Promise<number> {
     const qb = this.messageRepository
       .createQueryBuilder('message')
       .innerJoin('message.conversation', 'conversation')
-      .where('conversation.restaurantId = :restaurantId', { restaurantId })
+      .where('conversation.businessId = :businessId', { businessId })
       .andWhere('message.direction = :direction', {
         direction: StoredMessageDirection.INBOUND,
       })
@@ -120,7 +120,7 @@ export class ChatService {
   }
 
   async getActiveFlowCustomers(
-    restaurantId: number,
+    businessId: number,
     page?: number,
     limit?: number,
   ): Promise<PaginatedActiveFlowCustomersDto> {
@@ -129,7 +129,7 @@ export class ChatService {
 
     const [items, total] = await this.executionRepository.findAndCount({
       where: {
-        automation: { restaurantId },
+        automation: { businessId },
         status: In(inProgressStatuses),
       },
       relations: ['automation', 'customer', 'currentNode'],
@@ -145,7 +145,7 @@ export class ChatService {
   }
 
   async getConversation(
-    restaurantId: number,
+    businessId: number,
     executionId: number,
   ): Promise<ConversationDetailDto> {
     const execution = await this.executionRepository
@@ -154,11 +154,11 @@ export class ChatService {
       .leftJoinAndSelect('execution.customer', 'customer')
       .leftJoinAndSelect('execution.currentNode', 'currentNode')
       .where('execution.id = :executionId', { executionId })
-      .andWhere('automation.restaurantId = :restaurantId', { restaurantId })
+      .andWhere('automation.businessId = :businessId', { businessId })
       .getOne();
 
     if (!execution) {
-      throw new NotFoundException('Automation run not found for this restaurant.');
+      throw new NotFoundException('Automation run not found for this business.');
     }
 
     const [logs, activityEvents] = await Promise.all([
@@ -169,7 +169,7 @@ export class ChatService {
       }),
       this.activityRepository
         .createQueryBuilder('event')
-        .where('event.restaurantId = :restaurantId', { restaurantId })
+        .where('event.businessId = :businessId', { businessId })
         .andWhere('event.eventType = :eventType', {
           eventType: ActivityEventType.MESSAGE_SENT,
         })
@@ -199,8 +199,8 @@ export class ChatService {
     };
   }
 
-  async getRestaurantChatCustomers(
-    restaurantId: number,
+  async getBusinessChatCustomers(
+    businessId: number,
     page?: number,
     limit?: number,
   ): Promise<PaginatedChatCustomersDto> {
@@ -209,7 +209,7 @@ export class ChatService {
     const [conversations, total] = await this.conversationRepository.findAndCount(
       {
         where: {
-          restaurantId,
+          businessId,
           isPrivate: true,
           messageCount: MoreThan(0),
         },
@@ -230,8 +230,8 @@ export class ChatService {
     };
   }
 
-  async syncRestaurantChatCustomers(
-    restaurantId: number,
+  async syncBusinessChatCustomers(
+    businessId: number,
     afterCustomerId: number,
     limit?: number,
   ): Promise<SyncChatCustomersDto> {
@@ -239,7 +239,7 @@ export class ChatService {
 
     const cursor = await this.conversationRepository.findOne({
       where: {
-        restaurantId,
+        businessId,
         customerId: afterCustomerId,
         isPrivate: true,
       },
@@ -251,7 +251,7 @@ export class ChatService {
 
     const conversations = await this.conversationRepository.find({
       where: {
-        restaurantId,
+        businessId,
         isPrivate: true,
         messageCount: MoreThan(0),
         createdAt: MoreThan(cursor.createdAt),
@@ -269,17 +269,17 @@ export class ChatService {
   }
 
   async getCustomerConversation(
-    restaurantId: number,
+    businessId: number,
     customerId: number,
   ): Promise<CustomerConversationDetailDto> {
     const conversation = await this.conversationRepository.findOne({
-      where: { restaurantId, customerId, isPrivate: true },
+      where: { businessId, customerId, isPrivate: true },
       relations: ['customer'],
     });
 
     if (!conversation || conversation.messageCount === 0) {
       throw new NotFoundException(
-        'No messages found for this guest at this restaurant.',
+        'No messages found for this guest at this business.',
       );
     }
 
@@ -288,9 +288,9 @@ export class ChatService {
       relations: [
         'automation',
         'node',
-        'sentByRestaurant',
+        'sentByBusiness',
         'sentByCustomer',
-        'sentToRestaurant',
+        'sentToBusiness',
         'sentToCustomer',
       ],
       order: { sentAt: 'ASC' },
@@ -307,18 +307,18 @@ export class ChatService {
   }
 
   async syncCustomerConversationMessages(
-    restaurantId: number,
+    businessId: number,
     customerId: number,
     afterMessageId: number,
   ): Promise<CustomerConversationDetailDto> {
     const conversation = await this.conversationRepository.findOne({
-      where: { restaurantId, customerId, isPrivate: true },
+      where: { businessId, customerId, isPrivate: true },
       relations: ['customer'],
     });
 
     if (!conversation || conversation.messageCount === 0) {
       throw new NotFoundException(
-        'No messages found for this guest at this restaurant.',
+        'No messages found for this guest at this business.',
       );
     }
 
@@ -330,9 +330,9 @@ export class ChatService {
       relations: [
         'automation',
         'node',
-        'sentByRestaurant',
+        'sentByBusiness',
         'sentByCustomer',
-        'sentToRestaurant',
+        'sentToBusiness',
         'sentToCustomer',
       ],
       order: { sentAt: 'ASC' },
@@ -507,11 +507,11 @@ export class ChatService {
     side: 'sentBy' | 'sentTo',
   ): ConversationMessageParticipantDto | null {
     if (side === 'sentBy') {
-      if (message.sentByRestaurantId != null) {
+      if (message.sentByBusinessId != null) {
         return {
-          type: 'restaurant',
-          id: message.sentByRestaurantId,
-          name: message.sentByRestaurant?.name ?? null,
+          type: 'business',
+          id: message.sentByBusinessId,
+          name: message.sentByBusiness?.name ?? null,
           email: null,
         };
       }
@@ -534,11 +534,11 @@ export class ChatService {
         email: message.sentToCustomer?.email ?? null,
       };
     }
-    if (message.sentToRestaurantId != null) {
+    if (message.sentToBusinessId != null) {
       return {
-        type: 'restaurant',
-        id: message.sentToRestaurantId,
-        name: message.sentToRestaurant?.name ?? null,
+        type: 'business',
+        id: message.sentToBusinessId,
+        name: message.sentToBusiness?.name ?? null,
         email: null,
       };
     }

@@ -21,7 +21,7 @@ import {
   RedemptionEventType,
   RedemptionLog,
 } from '../../db/entities/redemption-log.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
 import { CouponService } from './coupon.service';
@@ -147,8 +147,8 @@ export class RedemptionService {
     private readonly couponRepository: Repository<Coupon>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService,
     @Inject(forwardRef(() => AutomationService))
@@ -170,28 +170,28 @@ export class RedemptionService {
     return trimmed;
   }
 
-  async verifyRestaurantAccess(
-    restaurantId: number,
+  async verifyBusinessAccess(
+    businessId: number,
     userId: number,
     userRole: string,
   ): Promise<void> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
       relations: ['owner'],
     });
 
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
-    if (userRole === 'Admin' && restaurant.owner?.id !== userId) {
-      throw new ForbiddenException('You do not have access to this restaurant');
+    if (userRole === 'Admin' && business.owner?.id !== userId) {
+      throw new ForbiddenException('You do not have access to this business');
     }
   }
 
   async getGuestProfile(
     customerId: number,
-    restaurantId: number,
+    businessId: number,
   ): Promise<GuestProfileResult | null> {
     const customer = await this.customerRepository.findOne({
       where: { id: customerId },
@@ -200,11 +200,11 @@ export class RedemptionService {
       return null;
     }
 
-    const profile = await this.getCustomerRestaurantProfile(
+    const profile = await this.getCustomerBusinessProfile(
       customerId,
-      restaurantId,
+      businessId,
     );
-    const activeDeals = await this.getGuestActiveDeals(customerId, restaurantId);
+    const activeDeals = await this.getGuestActiveDeals(customerId, businessId);
 
     return {
       customerId: customer.id,
@@ -222,7 +222,7 @@ export class RedemptionService {
 
   async previewScan(
     rawToken: string,
-    restaurantId: number,
+    businessId: number,
     audit: ScanAuditContext,
   ): Promise<ScanPreviewResult> {
     const qrToken = this.extractToken(rawToken);
@@ -231,7 +231,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon: null,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: 'Invalid QR code',
@@ -245,7 +245,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon: null,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: 'Invalid QR code',
@@ -253,18 +253,18 @@ export class RedemptionService {
       return { success: false, message: 'Invalid QR code' };
     }
 
-    if (coupon.restaurantId !== restaurantId) {
+    if (coupon.businessId !== businessId) {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon,
-        restaurantId,
+        businessId,
         audit,
         success: false,
-        failureReason: 'Restaurant mismatch',
+        failureReason: 'Business mismatch',
       });
       return {
         success: false,
-        message: 'This coupon belongs to another restaurant',
+        message: 'This coupon belongs to another business',
       };
     }
 
@@ -272,7 +272,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: 'Customer not found',
@@ -284,7 +284,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: 'Campaign not found',
@@ -298,14 +298,14 @@ export class RedemptionService {
 
     const visit = await this.recordVisitFromQrScan({
       coupon,
-      restaurantId,
+      businessId,
       audit,
     });
     await this.notifyAutomationAfterVisit(visit);
 
-    const profile = await this.getCustomerRestaurantProfile(
+    const profile = await this.getCustomerBusinessProfile(
       coupon.customerId,
-      restaurantId,
+      businessId,
     );
 
     const customerName = coupon.customer.name?.trim() || 'Guest';
@@ -319,7 +319,7 @@ export class RedemptionService {
         ? RedemptionEventType.PREVIEW_SUCCESS
         : RedemptionEventType.PREVIEW_FAILURE,
       coupon,
-      restaurantId,
+      businessId,
       audit,
       success: previewAllowed,
       failureReason: validation.redeemBlockedReason,
@@ -361,7 +361,7 @@ export class RedemptionService {
       scannedCouponId: coupon.id,
       availableRewards: await this.getAvailableRewards(
         coupon.customerId,
-        restaurantId,
+        businessId,
         coupon.id,
       ),
     };
@@ -370,7 +370,7 @@ export class RedemptionService {
   /** Confirms redemption and creates the customer visit only after staff selects rewards. */
   async scan(
     rawToken: string,
-    restaurantId: number,
+    businessId: number,
     audit: ScanAuditContext,
     couponIds?: number[],
     orderSubtotal?: number,
@@ -378,7 +378,7 @@ export class RedemptionService {
     if (audit.idempotencyKey?.trim()) {
       const cached = await this.findIdempotentRedemption(
         audit.idempotencyKey.trim(),
-        restaurantId,
+        businessId,
       );
       if (cached) {
         return cached;
@@ -388,7 +388,7 @@ export class RedemptionService {
     if (couponIds?.length) {
       return this.redeemSelectedCoupons(
         couponIds,
-        restaurantId,
+        businessId,
         audit,
         orderSubtotal,
       );
@@ -401,7 +401,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.REDEEM_FAILURE,
         coupon: null,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: 'Coupon not found',
@@ -409,18 +409,18 @@ export class RedemptionService {
       return { success: false, message: 'Invalid QR code' };
     }
 
-    if (coupon.restaurantId !== restaurantId) {
+    if (coupon.businessId !== businessId) {
       await this.logAudit({
         eventType: RedemptionEventType.REDEEM_FAILURE,
         coupon,
-        restaurantId,
+        businessId,
         audit,
         success: false,
-        failureReason: 'Restaurant mismatch',
+        failureReason: 'Business mismatch',
       });
       return {
         success: false,
-        message: 'This coupon belongs to another restaurant',
+        message: 'This coupon belongs to another business',
       };
     }
 
@@ -434,7 +434,7 @@ export class RedemptionService {
       await this.logAudit({
         eventType: RedemptionEventType.REDEEM_FAILURE,
         coupon,
-        restaurantId,
+        businessId,
         audit,
         success: false,
         failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
@@ -447,7 +447,7 @@ export class RedemptionService {
 
     return this.redeemSelectedCoupons(
       [coupon.id],
-      restaurantId,
+      businessId,
       audit,
       orderSubtotal,
     );
@@ -455,7 +455,7 @@ export class RedemptionService {
 
   private async redeemSelectedCoupons(
     couponIds: number[],
-    restaurantId: number,
+    businessId: number,
     audit: ScanAuditContext,
     orderSubtotal?: number,
   ): Promise<ScanResult> {
@@ -467,7 +467,7 @@ export class RedemptionService {
     if (audit.idempotencyKey?.trim()) {
       const cached = await this.findIdempotentRedemption(
         audit.idempotencyKey.trim(),
-        restaurantId,
+        businessId,
       );
       if (cached) {
         return cached;
@@ -481,10 +481,10 @@ export class RedemptionService {
 
     const result = await this.dataSource.transaction(async (manager) => {
       const lockedCoupons: Coupon[] = [];
-      const restaurant = await manager.findOne(Restaurant, {
-        where: { id: restaurantId },
+      const business = await manager.findOne(Business, {
+        where: { id: businessId },
       });
-      const restaurantName = restaurant?.name?.trim() || 'Restaurant';
+      const businessName = business?.name?.trim() || 'Business';
 
       for (const couponId of uniqueIds) {
         const locked = await this.lockCouponForRedemption(manager, couponId);
@@ -493,7 +493,7 @@ export class RedemptionService {
           await this.logAuditInTransaction(manager, {
             eventType: RedemptionEventType.REDEEM_FAILURE,
             coupon: null,
-            restaurantId,
+            businessId,
             audit,
             success: false,
             failureReason: 'Coupon not found',
@@ -512,13 +512,13 @@ export class RedemptionService {
         !lockedCoupons.every(
           (coupon) =>
             coupon.customerId === customerId &&
-            coupon.restaurantId === restaurantId,
+            coupon.businessId === businessId,
         )
       ) {
         await this.logAuditInTransaction(manager, {
           eventType: RedemptionEventType.REDEEM_FAILURE,
           coupon: lockedCoupons[0],
-          restaurantId,
+          businessId,
           audit,
           success: false,
           failureReason: 'Invalid reward selection',
@@ -537,7 +537,7 @@ export class RedemptionService {
           await this.logAuditInTransaction(manager, {
             eventType: RedemptionEventType.REDEEM_FAILURE,
             coupon,
-            restaurantId,
+            businessId,
             audit,
             success: false,
             failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
@@ -569,7 +569,7 @@ export class RedemptionService {
           await this.logAuditInTransaction(manager, {
             eventType: RedemptionEventType.REDEEM_FAILURE,
             coupon,
-            restaurantId,
+            businessId,
             audit,
             success: false,
             failureReason: 'Already redeemed',
@@ -583,17 +583,17 @@ export class RedemptionService {
         await this.logAuditInTransaction(manager, {
           eventType: RedemptionEventType.REDEEM_SUCCESS,
           coupon,
-          restaurantId,
+          businessId,
           audit,
           success: true,
           failureReason: null,
         });
 
         await this.activityService.logRedeemedReward({
-          restaurantId,
+          businessId,
           customerId: coupon.customerId,
           coupon,
-          restaurantName,
+          businessName,
           occurredAt: redeemedAt,
           manager,
         });
@@ -603,12 +603,12 @@ export class RedemptionService {
 
       await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
-        restaurantId,
+        businessId,
         audit,
         visitedAt: redeemedAt,
         orderSubtotal: orderSubtotal ?? null,
         manager,
-        restaurantName,
+        businessName,
       });
 
       resumeTarget.value = {
@@ -637,12 +637,12 @@ export class RedemptionService {
 
   private async recordVisitFromQrScan(params: {
     coupon: Coupon;
-    restaurantId: number;
+    businessId: number;
     audit: ScanAuditContext;
     visitedAt?: Date;
     orderSubtotal?: number | null;
     manager?: EntityManager;
-    restaurantName?: string;
+    businessName?: string;
   }): Promise<CustomerVisitRecordResult> {
     const visitedAt = params.visitedAt ?? new Date();
     const manager = params.manager ?? this.dataSource.manager;
@@ -658,18 +658,18 @@ export class RedemptionService {
       };
     }
 
-    let restaurantName = params.restaurantName?.trim();
-    if (!restaurantName) {
-      const restaurant = await manager.findOne(Restaurant, {
-        where: { id: params.restaurantId },
+    let businessName = params.businessName?.trim();
+    if (!businessName) {
+      const business = await manager.findOne(Business, {
+        where: { id: params.businessId },
       });
-      restaurantName = restaurant?.name?.trim() || 'Restaurant';
+      businessName = business?.name?.trim() || 'Business';
     }
 
     await manager.save(CustomerVisit, {
       customerId: params.coupon.customerId,
       campaignId: params.coupon.campaignId,
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       couponId: params.coupon.id,
       staffUserId: params.audit.scannedBy,
       visitedAt,
@@ -678,10 +678,10 @@ export class RedemptionService {
     });
 
     await this.activityService.logVisited({
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       customerId: params.coupon.customerId,
       couponId: params.coupon.id,
-      restaurantName,
+      businessName,
       occurredAt: visitedAt,
       manager: params.manager,
     });
@@ -718,7 +718,7 @@ export class RedemptionService {
     redeemedAt: Date,
   ): Promise<ScanResult> {
     const customerId = primaryCoupon.customerId;
-    const restaurantId = primaryCoupon.restaurantId;
+    const businessId = primaryCoupon.businessId;
 
     const customerName = primaryCoupon.customer?.name?.trim() || 'Guest';
     const campaignName =
@@ -727,13 +727,13 @@ export class RedemptionService {
         : `${redeemedCoupons.length} rewards`;
 
     const totalVisits = await manager.count(CustomerVisit, {
-      where: { customerId, restaurantId },
+      where: { customerId, businessId },
     });
 
     const activeCoupons = await manager.find(Coupon, {
       where: {
         customerId,
-        restaurantId,
+        businessId,
         status: CouponStatus.ACTIVE,
         paymentStatus: CouponPaymentStatus.PAID,
       },
@@ -745,7 +745,7 @@ export class RedemptionService {
     const previouslyRedeemedCount = await manager.count(Coupon, {
       where: {
         customerId,
-        restaurantId,
+        businessId,
         status: CouponStatus.REDEEMED,
       },
     });
@@ -764,12 +764,12 @@ export class RedemptionService {
 
   private async findIdempotentRedemption(
     idempotencyKey: string,
-    restaurantId: number,
+    businessId: number,
   ): Promise<ScanResult | null> {
     const priorLog = await this.redemptionLogRepository.findOne({
       where: {
         idempotencyKey,
-        restaurantId,
+        businessId,
         success: true,
         eventType: RedemptionEventType.REDEEM_SUCCESS,
       },
@@ -791,13 +791,13 @@ export class RedemptionService {
 
     const redeemedAt = coupon.redeemedAt ?? priorLog.scannedAt;
     const totalVisits = await this.customerVisitRepository.count({
-      where: { customerId: coupon.customerId, restaurantId },
+      where: { customerId: coupon.customerId, businessId },
     });
 
     const activeCoupons = await this.couponRepository.find({
       where: {
         customerId: coupon.customerId,
-        restaurantId,
+        businessId,
         status: CouponStatus.ACTIVE,
         paymentStatus: CouponPaymentStatus.PAID,
       },
@@ -809,7 +809,7 @@ export class RedemptionService {
     const previouslyRedeemedCount = await this.couponRepository.count({
       where: {
         customerId: coupon.customerId,
-        restaurantId,
+        businessId,
         status: CouponStatus.REDEEMED,
       },
     });
@@ -826,20 +826,20 @@ export class RedemptionService {
     };
   }
 
-  async getRestaurantStats(restaurantId: number): Promise<{
+  async getBusinessStats(businessId: number): Promise<{
     couponsIssued: number;
     couponsRedeemed: number;
-    restaurantVisits: number;
+    businessVisits: number;
     redemptionRate: number;
   }> {
     const couponsIssued = await this.couponRepository.count({
-      where: { restaurantId },
+      where: { businessId },
     });
     const couponsRedeemed = await this.couponRepository.count({
-      where: { restaurantId, status: CouponStatus.REDEEMED },
+      where: { businessId, status: CouponStatus.REDEEMED },
     });
-    const restaurantVisits = await this.customerVisitRepository.count({
-      where: { restaurantId },
+    const businessVisits = await this.customerVisitRepository.count({
+      where: { businessId },
     });
     const redemptionRate =
       couponsIssued > 0
@@ -849,14 +849,14 @@ export class RedemptionService {
     return {
       couponsIssued,
       couponsRedeemed,
-      restaurantVisits,
+      businessVisits,
       redemptionRate,
     };
   }
 
-  private async getCustomerRestaurantProfile(
+  private async getCustomerBusinessProfile(
     customerId: number,
-    restaurantId: number,
+    businessId: number,
   ): Promise<{
     totalVisits: number;
     rewardsAvailable: number;
@@ -864,13 +864,13 @@ export class RedemptionService {
     previousRedemptions: Array<{ campaignName: string; redeemedAt: string }>;
   }> {
     const totalVisits = await this.customerVisitRepository.count({
-      where: { customerId, restaurantId },
+      where: { customerId, businessId },
     });
 
     const customerCoupons = await this.couponRepository.find({
       where: {
         customerId,
-        restaurantId,
+        businessId,
         paymentStatus: CouponPaymentStatus.PAID,
       },
       relations: ['campaign'],
@@ -902,7 +902,7 @@ export class RedemptionService {
 
   private async getAvailableRewards(
     customerId: number,
-    restaurantId: number,
+    businessId: number,
     scannedCouponId: number,
   ): Promise<
     Array<{
@@ -914,7 +914,7 @@ export class RedemptionService {
     }>
   > {
     const coupons = await this.couponRepository.find({
-      where: { customerId, restaurantId, status: CouponStatus.ACTIVE },
+      where: { customerId, businessId, status: CouponStatus.ACTIVE },
       relations: ['campaign', 'funnelPayment'],
       order: { issuedAt: 'ASC' },
     });
@@ -955,7 +955,7 @@ export class RedemptionService {
 
   private async getGuestActiveDeals(
     customerId: number,
-    restaurantId: number,
+    businessId: number,
   ): Promise<
     Array<{
       couponId: number;
@@ -969,7 +969,7 @@ export class RedemptionService {
     }>
   > {
     const coupons = await this.couponRepository.find({
-      where: { customerId, restaurantId, status: CouponStatus.ACTIVE },
+      where: { customerId, businessId, status: CouponStatus.ACTIVE },
       relations: ['campaign', 'funnelPayment'],
       order: { issuedAt: 'DESC' },
     });
@@ -1019,7 +1019,7 @@ export class RedemptionService {
   private async logAudit(params: {
     eventType: RedemptionEventType;
     coupon: Coupon | null;
-    restaurantId: number;
+    businessId: number;
     audit: ScanAuditContext;
     success: boolean;
     failureReason: string | null;
@@ -1028,7 +1028,7 @@ export class RedemptionService {
       couponId: params.coupon?.id ?? null,
       customerId: params.coupon?.customerId ?? null,
       campaignId: params.coupon?.campaignId ?? null,
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       scannedBy: params.audit.scannedBy,
       scannedAt: new Date(),
       deviceInfo: params.audit.deviceInfo ?? null,
@@ -1065,7 +1065,7 @@ export class RedemptionService {
     params: {
       eventType: RedemptionEventType;
       coupon: Coupon | null;
-      restaurantId: number;
+      businessId: number;
       audit: ScanAuditContext;
       success: boolean;
       failureReason: string | null;
@@ -1075,7 +1075,7 @@ export class RedemptionService {
       couponId: params.coupon?.id ?? null,
       customerId: params.coupon?.customerId ?? null,
       campaignId: params.coupon?.campaignId ?? null,
-      restaurantId: params.restaurantId,
+      businessId: params.businessId,
       scannedBy: params.audit.scannedBy,
       scannedAt: new Date(),
       deviceInfo: params.audit.deviceInfo ?? null,

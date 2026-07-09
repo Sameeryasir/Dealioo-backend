@@ -40,21 +40,21 @@ export class RedemptionController {
   /** Staff previews a customer QR before confirming redemption (read-only). */
   @UseGuards(AuthGuard('jwt'))
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
-  @Post('scan/:restaurantId/preview')
+  @Post('scan/:businessId/preview')
   @HttpCode(200)
-  async previewScanForRestaurant(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  async previewScanForBusiness(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() dto: ScanQrDto,
     @Req() req: AuthRequest,
   ) {
     requireScannerRole(req.user);
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
 
-    return this.redemptionService.previewScan(dto.qrToken, restaurantId, {
+    return this.redemptionService.previewScan(dto.qrToken, businessId, {
       scannedBy: req.user.id,
       deviceInfo: dto.deviceInfo,
       ipAddress: resolveClientIp(req),
@@ -64,23 +64,23 @@ export class RedemptionController {
   /** Staff confirms redemption after preview — all checks repeated server-side. */
   @UseGuards(AuthGuard('jwt'))
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @Post('scan/:restaurantId')
+  @Post('scan/:businessId')
   @HttpCode(200)
-  async scanForRestaurant(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  async scanForBusiness(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() dto: ScanQrDto,
     @Req() req: AuthRequest,
   ) {
     requireScannerRole(req.user);
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
 
     return this.redemptionService.scan(
       dto.qrToken,
-      restaurantId,
+      businessId,
       {
         scannedBy: req.user.id,
         deviceInfo: dto.deviceInfo,
@@ -93,34 +93,34 @@ export class RedemptionController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/guests/:customerId/profile')
+  @Get('business/:businessId/guests/:customerId/profile')
   async getGuestProfile(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Param('customerId', ParseIntPipe) customerId: number,
     @Req() req: AuthRequest,
   ) {
     requireScannerRole(req.user);
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
-    return this.redemptionService.getGuestProfile(customerId, restaurantId);
+    return this.redemptionService.getGuestProfile(customerId, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/stats')
+  @Get('business/:businessId/stats')
   async getStats(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Req() req: AuthRequest,
   ) {
     requireScannerRole(req.user);
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
-    return this.redemptionService.getRestaurantStats(restaurantId);
+    return this.redemptionService.getBusinessStats(businessId);
   }
 
   /** Guest fetches their signup pass before checkout (public). */

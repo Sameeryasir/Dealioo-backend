@@ -14,18 +14,18 @@ export function pusherAutomationChannel(automationId: number): string {
 
 export const PUSHER_PRIVATE_CHANNEL_PREFIX = 'private-';
 
-export function pusherRestaurantChatChannel(restaurantId: number): string {
-  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}restaurant-chat-${restaurantId}`;
+export function pusherBusinessChatChannel(businessId: number): string {
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-chat-${businessId}`;
 }
 
-export function parseRestaurantIdFromChatChannel(
+export function parseBusinessIdFromChatChannel(
   channelName: string,
 ): number | null {
-  const prefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}restaurant-chat-`;
+  const prefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-chat-`;
   if (!channelName.startsWith(prefix)) {
     return null;
   }
 
-  const restaurantId = Number(channelName.slice(prefix.length));
-  return Number.isFinite(restaurantId) && restaurantId > 0 ? restaurantId : null;
+  const businessId = Number(channelName.slice(prefix.length));
+  return Number.isFinite(businessId) && businessId > 0 ? businessId : null;
 }

@@ -13,7 +13,7 @@ import { Coupon } from '../../../db/entities/coupon.entity';
 export class LogRedeemedRewardDto {
   @IsInt()
   @Min(1)
-  restaurantId: number;
+  businessId: number;
 
   @IsInt()
   @Min(1)
@@ -23,7 +23,7 @@ export class LogRedeemedRewardDto {
 
   @IsString()
   @MinLength(1)
-  restaurantName: string;
+  businessName: string;
 
   @Type(() => Date)
   @IsDate()

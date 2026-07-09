@@ -1,13 +1,13 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 
 export const GOOGLE_ADS_REQUIRED_SCOPE =
   'https://www.googleapis.com/auth/adwords';
 
-export type GoogleRestaurantCredentials = {
+export type GoogleBusinessCredentials = {
   accessToken: string;
   googleUserId: string;
   customerId: string | null;
@@ -27,18 +27,18 @@ export class GoogleAdsTokenService {
   private readonly logger = new Logger(GoogleAdsTokenService.name);
 
   constructor(
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {}
 
-  decryptRefreshToken(restaurant: Restaurant): string | null {
-    const stored = restaurant.googleRefreshToken?.trim();
+  decryptRefreshToken(business: Business): string | null {
+    const stored = business.googleRefreshToken?.trim();
     if (!stored) return null;
     try {
       return decryptSecret(stored);
     } catch (err) {
       this.logger.error(
-        `Refresh token decrypt failed for restaurant ${restaurant.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Refresh token decrypt failed for business ${business.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
@@ -57,11 +57,11 @@ export class GoogleAdsTokenService {
     }
   }
 
-  async assertRestaurantGoogleToken(
-    restaurant: Restaurant,
+  async assertBusinessGoogleToken(
+    business: Business,
   ): Promise<{ accessToken: string; googleUserId: string }> {
-    const googleUserId = restaurant.googleUserId?.trim();
-    const refreshToken = this.decryptRefreshToken(restaurant);
+    const googleUserId = business.googleUserId?.trim();
+    const refreshToken = this.decryptRefreshToken(business);
 
     if (!googleUserId || !refreshToken) {
       throw new BadRequestException(
@@ -69,23 +69,23 @@ export class GoogleAdsTokenService {
       );
     }
 
-    const accessToken = await this.getValidAccessToken(restaurant, refreshToken);
+    const accessToken = await this.getValidAccessToken(business, refreshToken);
     return { accessToken, googleUserId };
   }
 
-  async assertRestaurantGoogleCredentials(
-    restaurant: Restaurant,
-  ): Promise<GoogleRestaurantCredentials> {
+  async assertBusinessGoogleCredentials(
+    business: Business,
+  ): Promise<GoogleBusinessCredentials> {
     const { accessToken, googleUserId } =
-      await this.assertRestaurantGoogleToken(restaurant);
+      await this.assertBusinessGoogleToken(business);
 
-    if (!restaurant.googleCustomerId?.trim()) {
+    if (!business.googleCustomerId?.trim()) {
       throw new BadRequestException(
         'No Google Ads account selected. Choose a Google Ads customer after connecting.',
       );
     }
 
-    const scopes = (restaurant.googleOauthScopes ?? '')
+    const scopes = (business.googleOauthScopes ?? '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
@@ -94,15 +94,15 @@ export class GoogleAdsTokenService {
     return {
       accessToken,
       googleUserId,
-      customerId: restaurant.googleCustomerId.trim(),
+      customerId: business.googleCustomerId.trim(),
       loginCustomerId:
-        restaurant.googleLoginCustomerId?.trim() ||
-        restaurant.googleCustomerId.trim(),
+        business.googleLoginCustomerId?.trim() ||
+        business.googleCustomerId.trim(),
     };
   }
 
   async persistTokens(
-    restaurantId: number,
+    businessId: number,
     tokens: {
       accessToken: string;
       refreshToken?: string | null;
@@ -115,7 +115,7 @@ export class GoogleAdsTokenService {
         ? new Date(Date.now() + tokens.expiresIn * 1000)
         : null;
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       googleAccessToken: encryptSecret(tokens.accessToken),
       googleTokenExpiresAt: expiresAt,
       ...(tokens.refreshToken?.trim()
@@ -128,11 +128,11 @@ export class GoogleAdsTokenService {
   }
 
   private async getValidAccessToken(
-    restaurant: Restaurant,
+    business: Business,
     refreshToken: string,
   ): Promise<string> {
-    const cached = restaurant.googleAccessToken?.trim();
-    const expiresAt = restaurant.googleTokenExpiresAt?.getTime?.() ?? 0;
+    const cached = business.googleAccessToken?.trim();
+    const expiresAt = business.googleTokenExpiresAt?.getTime?.() ?? 0;
 
     if (cached && expiresAt > Date.now() + 60_000) {
       try {
@@ -142,7 +142,7 @@ export class GoogleAdsTokenService {
 
     const refreshed = await this.refreshAccessToken(refreshToken);
 
-    await this.persistTokens(restaurant.id, {
+    await this.persistTokens(business.id, {
       accessToken: refreshed.accessToken,
       expiresIn: refreshed.expiresIn,
       scopes: refreshed.scopes,

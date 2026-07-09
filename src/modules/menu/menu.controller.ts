@@ -50,12 +50,12 @@ export class MenuController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:id')
-  async getMenuByRestaurantId(
+  @Get('business/:id')
+  async getMenuByBusinessId(
     @Param('id') id: number,
     @Req() req: Request & { user: User },
   ): Promise<Menu[]> {
     const user = req.user;
-    return this.menuService.getMenuByRestaurantId(id, user);
+    return this.menuService.getMenuByBusinessId(id, user);
   }
 }

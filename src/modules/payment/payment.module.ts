@@ -3,7 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { StripeWebhookEvent } from '../../db/entities/stripe-webhook-event.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { AuthModule } from '../auth/auth.module';
@@ -21,7 +21,7 @@ import { CheckoutResumeService } from './checkout-resume.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      Restaurant,
+      Business,
       Funnel,
       FunnelPayment,
       StripeWebhookEvent,

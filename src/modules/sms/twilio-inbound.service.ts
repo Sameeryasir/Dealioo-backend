@@ -97,13 +97,13 @@ export class TwilioInboundService {
         duplicate: Boolean(result.duplicate),
         messageId: result.messageId ?? null,
         customerId: result.customerId ?? null,
-        restaurantId: result.restaurantId ?? null,
+        businessId: result.businessId ?? null,
       });
     } else {
       this.webhookLogger.warn(logContext, 'webhook.not_stored', {
         reason: result.skipReason ?? 'unknown',
         customerId: result.customerId ?? null,
-        restaurantId: result.restaurantId ?? null,
+        businessId: result.businessId ?? null,
       });
     }
 

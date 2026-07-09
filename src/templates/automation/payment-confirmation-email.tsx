@@ -4,7 +4,7 @@ import type { AutomationEmailTemplateProps } from './types';
 import { splitAutomationEmailBody } from '../../modules/automation/automation-email-merge.util';
 
 const DEFAULT_PAYMENT_CONFIRMATION_MESSAGE =
-  'Thank you for trusting us. Your payment is confirmed. Tap the button below to view your QR code and show it at the restaurant.';
+  'Thank you for trusting us. Your payment is confirmed. Tap the button below to view your QR code and show it at the business.';
 
 export function PaymentConfirmationEmail({
   customerName,

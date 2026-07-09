@@ -7,7 +7,7 @@ export type StripePaymentLogFields = {
   outcome?: string;
   paymentIntentId?: string | null;
   paymentId?: number | null;
-  restaurantId?: number | null;
+  businessId?: number | null;
   funnelId?: number | null;
   campaignId?: number | null;
   stripeAccountId?: string | null;

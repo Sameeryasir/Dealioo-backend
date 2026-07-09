@@ -66,15 +66,15 @@ export class CampaignController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:id')
-  getCampaignsByRestaurant(
-    @Param('id', ParseIntPipe) restaurantId: number,
+  @Get('business/:id')
+  getCampaignsByBusiness(
+    @Param('id', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(6), ParseIntPipe) limit: number,
     @Query('search') search?: string,
   ): Promise<{ data: Campaign[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
-    return this.campaignService.getCampaignsByRestaurantId(
-      restaurantId,
+    return this.campaignService.getCampaignsByBusinessId(
+      businessId,
       page,
       limit,
       search,

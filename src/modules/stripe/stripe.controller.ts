@@ -14,14 +14,14 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
-import { RestaurantService } from '../restaurant/restaurant.service';
+import { BusinessService } from '../business/business.service';
 import { StripeService } from './stripe.service';
 
 @Controller('stripe')
 export class StripeController {
   constructor(
     private readonly stripeService: StripeService,
-    private readonly restaurantService: RestaurantService,
+    private readonly businessService: BusinessService,
   ) {}
 
   @Get('callback/oauth')
@@ -52,57 +52,57 @@ export class StripeController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('connect/:restaurantId')
+  @Post('connect/:businessId')
   async connect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    return this.stripeService.connect(req.user, restaurantId);
+    return this.stripeService.connect(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('dashboard-link/:restaurantId')
+  @Get('dashboard-link/:businessId')
   async getDashboardLink(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    if (!restaurant.stripeAccountId) {
+    if (!business.stripeAccountId) {
       throw new BadRequestException('Stripe account not connected');
     }
 
     return this.stripeService.createDashboardLoginLink(
-      restaurant.stripeAccountId,
+      business.stripeAccountId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get(':restaurantId')
-  async connectRestaurantOAuth(
+  @Get(':businessId')
+  async connectBusinessOAuth(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ) {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return this.stripeService.createOAuthConnectUrl(restaurantId);
+    return this.stripeService.createOAuthConnectUrl(businessId);
   }
 }

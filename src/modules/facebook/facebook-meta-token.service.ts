@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { decryptSecret } from '../../utils/token-encryption.util';
 
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
@@ -11,7 +11,7 @@ export const META_REQUIRED_SCOPES = [
   'business_management',
 ] as const;
 
-export type MetaRestaurantCredentials = {
+export type MetaBusinessCredentials = {
   accessToken: string;
   metaUserId: string;
   adAccountId: string | null;
@@ -56,14 +56,14 @@ export function assertMetaPermissions(scopes: string[]): void {
 export class FacebookMetaTokenService {
   private readonly logger = new Logger(FacebookMetaTokenService.name);
 
-  decryptRestaurantToken(restaurant: Restaurant): string | null {
-    const stored = restaurant.metaAccessToken?.trim();
+  decryptBusinessToken(business: Business): string | null {
+    const stored = business.metaAccessToken?.trim();
     if (!stored) return null;
     try {
       return decryptSecret(stored);
     } catch (err) {
       this.logger.error(
-        `Token decrypt failed for restaurant ${restaurant.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Token decrypt failed for business ${business.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
@@ -105,11 +105,11 @@ export class FacebookMetaTokenService {
   /**
    * Validates stored user token via debug_token before any Meta Marketing API call.
    */
-  async assertRestaurantMetaCredentials(
-    restaurant: Restaurant,
-  ): Promise<MetaRestaurantCredentials> {
-    const accessToken = this.decryptRestaurantToken(restaurant);
-    const metaUserId = restaurant.metaUserId?.trim();
+  async assertBusinessMetaCredentials(
+    business: Business,
+  ): Promise<MetaBusinessCredentials> {
+    const accessToken = this.decryptBusinessToken(business);
+    const metaUserId = business.metaUserId?.trim();
 
     if (!accessToken || !metaUserId) {
       throw new BadRequestException(
@@ -117,7 +117,7 @@ export class FacebookMetaTokenService {
       );
     }
 
-    if (!restaurant.metaAdAccountId?.trim()) {
+    if (!business.metaAdAccountId?.trim()) {
       throw new BadRequestException(
         'No Facebook ad account selected. Choose an ad account after connecting.',
       );
@@ -133,7 +133,7 @@ export class FacebookMetaTokenService {
 
     if (debug.user_id && debug.user_id !== metaUserId) {
       throw new BadRequestException(
-        'Facebook token does not match this restaurant. Reconnect Facebook in Settings → Integrations.',
+        'Facebook token does not match this business. Reconnect Facebook in Settings → Integrations.',
       );
     }
 
@@ -157,16 +157,16 @@ export class FacebookMetaTokenService {
     return {
       accessToken,
       metaUserId,
-      adAccountId: restaurant.metaAdAccountId?.trim() ?? null,
+      adAccountId: business.metaAdAccountId?.trim() ?? null,
     };
   }
 
   /** Validates token + scopes before listing ad accounts (no ad account selected yet). */
-  async assertRestaurantMetaToken(
-    restaurant: Restaurant,
+  async assertBusinessMetaToken(
+    business: Business,
   ): Promise<{ accessToken: string; metaUserId: string }> {
-    const accessToken = this.decryptRestaurantToken(restaurant);
-    const metaUserId = restaurant.metaUserId?.trim();
+    const accessToken = this.decryptBusinessToken(business);
+    const metaUserId = business.metaUserId?.trim();
 
     if (!accessToken || !metaUserId) {
       throw new BadRequestException(
@@ -184,7 +184,7 @@ export class FacebookMetaTokenService {
 
     if (debug.user_id && debug.user_id !== metaUserId) {
       throw new BadRequestException(
-        'Facebook token does not match this restaurant. Reconnect Facebook in Settings → Integrations.',
+        'Facebook token does not match this business. Reconnect Facebook in Settings → Integrations.',
       );
     }
 

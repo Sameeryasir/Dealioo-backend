@@ -37,7 +37,7 @@ export class ChatMessageNotificationService {
 
     await this.notifyMessageSent(
       message.id,
-      conversation.restaurantId,
+      conversation.businessId,
       conversation.customerId,
       {
         messageCount: conversation.messageCount,
@@ -54,7 +54,7 @@ export class ChatMessageNotificationService {
 
   async notifyMessageSent(
     messageId: number,
-    restaurantId: number,
+    businessId: number,
     customerId: number,
     conversationSnapshot: ConversationSnapshot,
   ): Promise<void> {
@@ -62,9 +62,9 @@ export class ChatMessageNotificationService {
       where: { id: messageId },
       relations: [
         'node',
-        'sentByRestaurant',
+        'sentByBusiness',
         'sentByCustomer',
-        'sentToRestaurant',
+        'sentToBusiness',
         'sentToCustomer',
       ],
     });
@@ -76,7 +76,7 @@ export class ChatMessageNotificationService {
     const messageDto = this.chatService.mapStoredMessageToDto(message);
 
     await this.pusherService.notifyChatMessageSent({
-      restaurantId,
+      businessId,
       customerId,
       customerName: conversationSnapshot.customerName,
       customerEmail: conversationSnapshot.customerEmail,

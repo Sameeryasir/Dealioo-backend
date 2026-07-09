@@ -13,7 +13,7 @@ import { ActivityEventType } from '../../../db/entities/activity-event.entity';
 export class CreateActivityEventDto {
   @IsInt()
   @Min(1)
-  restaurantId: number;
+  businessId: number;
 
   @IsOptional()
   @IsInt()

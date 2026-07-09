@@ -14,7 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
-import { RestaurantService } from '../restaurant/restaurant.service';
+import { BusinessService } from '../business/business.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
@@ -26,7 +26,7 @@ import { FacebookService } from './facebook.service';
 export class FacebookController {
   constructor(
     private readonly facebookService: FacebookService,
-    private readonly restaurantService: RestaurantService,
+    private readonly businessService: BusinessService,
   ) {}
 
   @Get('callback/oauth')
@@ -52,104 +52,104 @@ export class FacebookController {
     );
 
     return res.redirect(
-      `${getFrontendBaseUrl()}/facebook/select-ad-account?restaurantId=${result.restaurantId}`,
+      `${getFrontendBaseUrl()}/facebook/select-ad-account?businessId=${result.businessId}`,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('connect/:restaurantId')
+  @Post('connect/:businessId')
   async connect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    return this.facebookService.connect(req.user, restaurantId);
+    return this.facebookService.connect(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('status/:restaurantId')
+  @Get('status/:businessId')
   async status(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookConnectionStatusDto> {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return this.facebookService.getConnectionStatus(restaurant);
+    return this.facebookService.getConnectionStatus(business);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('ads/campaign-stats/:restaurantId')
+  @Get('ads/campaign-stats/:businessId')
   async adCampaignStats(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Query('websiteUrl') websiteUrl?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return this.facebookService.getAdCampaignStats(restaurant, websiteUrl);
+    return this.facebookService.getAdCampaignStats(business, websiteUrl);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('pages/:restaurantId')
+  @Get('pages/:businessId')
   async listPages(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookPageDto[]> {
-    return this.facebookService.listPagesForRestaurant(req.user, restaurantId);
+    return this.facebookService.listPagesForBusiness(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('ad-accounts/:restaurantId')
+  @Get('ad-accounts/:businessId')
   async listAdAccounts(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookAdAccountDto[]> {
-    return this.facebookService.listAdAccountsForRestaurant(
+    return this.facebookService.listAdAccountsForBusiness(
       req.user,
-      restaurantId,
+      businessId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('ad-account/:restaurantId')
+  @Post('ad-account/:businessId')
   async setAdAccount(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: SetFacebookAdAccountDto,
   ): Promise<{ metaAdAccountId: string }> {
-    return this.facebookService.setRestaurantAdAccount(
+    return this.facebookService.setBusinessAdAccount(
       req.user,
-      restaurantId,
+      businessId,
       body.adAccountId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('disconnect/:restaurantId')
+  @Post('disconnect/:businessId')
   async disconnect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ disconnected: true }> {
-    return this.facebookService.disconnectFacebookForRestaurant(
+    return this.facebookService.disconnectFacebookForBusiness(
       req.user,
-      restaurantId,
+      businessId,
     );
   }
 }

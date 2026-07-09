@@ -4,7 +4,7 @@ import {
 } from '../../db/entities/conversation-message.entity';
 
 export type RecordOutboundMessageDto = {
-  restaurantId: number;
+  businessId: number;
   customerId: number;
   automationId?: number | null;
   executionId?: number | null;

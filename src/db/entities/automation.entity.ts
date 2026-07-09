@@ -13,7 +13,7 @@ import { AutomationExecution } from './automation-execution.entity';
 import { AutomationNode } from './automation-node.entity';
 import { Campaign } from './campaign.entity';
 import { Funnel } from './funnel.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 import { User } from './user.entity';
 import { AutomationPurpose } from './automation-purpose.enum';
 
@@ -33,11 +33,11 @@ export class Automation {
   id: number;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ type: 'varchar', length: 255 })
   name: string;

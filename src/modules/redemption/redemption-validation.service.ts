@@ -8,7 +8,7 @@ import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 import { CouponService } from './coupon.service';
 
 export type RedemptionValidationOptions = {
-  /** Order subtotal entered by staff at the restaurant (walk-in payment). */
+  /** Order subtotal entered by staff at the business (walk-in payment). */
   orderSubtotal?: number;
 };
 

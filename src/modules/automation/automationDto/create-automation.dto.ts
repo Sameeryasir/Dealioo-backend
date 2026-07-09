@@ -16,7 +16,7 @@ export class CreateAutomationDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  restaurantId: number;
+  businessId: number;
 
   @Type(() => Number)
   @IsInt()

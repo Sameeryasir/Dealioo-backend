@@ -14,7 +14,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { campaignPriceToStripeAmount } from '../../utils/campaign-price-to-stripe-amount';
 import { CouponService } from '../redemption/coupon.service';
 import { StripeService } from '../stripe/stripe.service';
@@ -35,8 +35,8 @@ export class PaymentService implements OnModuleInit {
   private readonly stripe: InstanceType<typeof Stripe>;
 
   constructor(
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(FunnelPayment)
@@ -225,17 +225,17 @@ export class PaymentService implements OnModuleInit {
   }> {
     const checkoutIdentity = await this.resolveCheckoutIdentity(dto);
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: checkoutIdentity.restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: checkoutIdentity.businessId },
     });
 
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
-    if (!restaurant.stripeAccountId) {
+    if (!business.stripeAccountId) {
       throw new BadRequestException(
-        'Stripe account not connected. Complete onboarding in Restaurant Settings.',
+        'Stripe account not connected. Complete onboarding in Business Settings.',
       );
     }
 
@@ -252,13 +252,13 @@ export class PaymentService implements OnModuleInit {
       throw new NotFoundException('Campaign not found for this funnel');
     }
 
-    if (funnel.campaign.restaurantId !== checkoutIdentity.restaurantId) {
+    if (funnel.campaign.businessId !== checkoutIdentity.businessId) {
       throw new BadRequestException(
-        'This funnel does not belong to the given restaurant.',
+        'This funnel does not belong to the given business.',
       );
     }
 
-    const stripeAccountId = restaurant.stripeAccountId.trim();
+    const stripeAccountId = business.stripeAccountId.trim();
     await this.stripeService.validateConnectedAccount(stripeAccountId);
 
     const currency = checkoutIdentity.currency;
@@ -275,7 +275,7 @@ export class PaymentService implements OnModuleInit {
     const { applicationFeeAmount } = this.feeService.calculatePlatformFee({
       chargeAmountMinor: amount,
       currency,
-      restaurantId: dto.restaurantId,
+      businessId: dto.businessId,
       campaignId: funnel.campaign.id,
     });
 
@@ -287,7 +287,7 @@ export class PaymentService implements OnModuleInit {
 
     const reused = await this.tryReusePendingPayment({
       funnelId: checkoutIdentity.funnelId,
-      restaurantId: checkoutIdentity.restaurantId,
+      businessId: checkoutIdentity.businessId,
       customerEmail: checkoutIdentity.customerEmail,
       stripeAccountId,
       customerId: checkoutIdentity.customerId,
@@ -302,7 +302,7 @@ export class PaymentService implements OnModuleInit {
 
     const payment = this.funnelPaymentRepository.create({
       funnelId: checkoutIdentity.funnelId,
-      restaurantId: checkoutIdentity.restaurantId,
+      businessId: checkoutIdentity.businessId,
       campaignId: funnel.campaign.id,
       stripeConnectedAccountId: stripeAccountId,
       amount,
@@ -375,14 +375,14 @@ export class PaymentService implements OnModuleInit {
     return {
       paymentId: String(payment.id),
       funnelId: String(payment.funnelId),
-      restaurantId: String(payment.restaurantId),
+      businessId: String(payment.businessId),
       campaignId: String(campaignId),
     };
   }
 
   private async tryReusePendingPayment(opts: {
     funnelId: number;
-    restaurantId: number;
+    businessId: number;
     customerEmail: string;
     stripeAccountId: string;
     customerId?: number;
@@ -402,7 +402,7 @@ export class PaymentService implements OnModuleInit {
     const pending = await this.funnelPaymentRepository.findOne({
       where: {
         funnelId: opts.funnelId,
-        restaurantId: opts.restaurantId,
+        businessId: opts.businessId,
         customerEmail: opts.customerEmail.trim(),
         status: FunnelPaymentStatus.PENDING,
         createdAt: MoreThan(cutoff),
@@ -432,7 +432,7 @@ export class PaymentService implements OnModuleInit {
           paymentId: pending.id,
           paymentIntentId: pi.id,
           funnelId: pending.funnelId,
-          restaurantId: pending.restaurantId,
+          businessId: pending.businessId,
         });
         await this.linkSignupPassToPayment(
           opts.customerId,
@@ -470,7 +470,7 @@ export class PaymentService implements OnModuleInit {
         paymentId: pending.id,
         paymentIntentId: pi.id,
         funnelId: pending.funnelId,
-        restaurantId: pending.restaurantId,
+        businessId: pending.businessId,
       });
 
       await this.linkSignupPassToPayment(
@@ -525,7 +525,7 @@ export class PaymentService implements OnModuleInit {
     return {
       id: payment.id,
       funnelId: payment.funnelId,
-      restaurantId: payment.restaurantId,
+      businessId: payment.businessId,
       campaignId: payment.campaignId,
       amount: payment.amount,
       currency: payment.currency,
@@ -549,7 +549,7 @@ export class PaymentService implements OnModuleInit {
 
   private async resolveCheckoutIdentity(dto: CreatePaymentIntentDto): Promise<{
     funnelId: number;
-    restaurantId: number;
+    businessId: number;
     currency: string;
     customerEmail: string;
     customerId?: number;
@@ -563,14 +563,14 @@ export class PaymentService implements OnModuleInit {
           'Checkout token does not match this funnel.',
         );
       }
-      if (session.restaurantId !== dto.restaurantId) {
+      if (session.businessId !== dto.businessId) {
         throw new BadRequestException(
-          'Checkout token does not match this restaurant.',
+          'Checkout token does not match this business.',
         );
       }
       return {
         funnelId: session.funnelId,
-        restaurantId: session.restaurantId,
+        businessId: session.businessId,
         currency: dto.currency.toLowerCase().trim(),
         customerEmail: session.customerEmail,
         customerId: session.customerId,
@@ -580,7 +580,7 @@ export class PaymentService implements OnModuleInit {
 
     return {
       funnelId: dto.funnelId,
-      restaurantId: dto.restaurantId,
+      businessId: dto.businessId,
       currency: dto.currency.toLowerCase().trim(),
       customerEmail: dto.customerEmail.trim(),
       customerId: dto.customerId,

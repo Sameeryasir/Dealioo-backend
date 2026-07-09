@@ -62,7 +62,7 @@ export class CouponService {
     const coupon = this.couponRepository.create({
       campaignId: funnel.campaign.id,
       funnelId,
-      restaurantId: funnel.campaign.restaurantId,
+      businessId: funnel.campaign.businessId,
       customerId,
       funnelPaymentId: null,
       qrToken: randomUUID(),
@@ -196,7 +196,7 @@ export class CouponService {
     const coupon = this.couponRepository.create({
       campaignId: campaign.id,
       funnelId,
-      restaurantId: payment.restaurantId,
+      businessId: payment.businessId,
       customerId,
       funnelPaymentId,
       qrToken: randomUUID(),
@@ -266,7 +266,7 @@ export class CouponService {
     const replacement = this.couponRepository.create({
       campaignId: existing.campaignId,
       funnelId: existing.funnelId,
-      restaurantId: existing.restaurantId,
+      businessId: existing.businessId,
       customerId: existing.customerId,
       funnelPaymentId,
       qrToken: randomUUID(),
@@ -397,7 +397,7 @@ export class CouponService {
       return {
         passAvailable: false,
         passUnavailableReason: 'redeemed',
-        passMessage: 'This QR code has already been redeemed at the restaurant.',
+        passMessage: 'This QR code has already been redeemed at the business.',
       };
     }
 

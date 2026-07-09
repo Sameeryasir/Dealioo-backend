@@ -11,22 +11,22 @@ export class OnboardingController {
   @Get('status')
   getStatus(
     @Req() req: { user: { id: number; role: { name: string } } },
-    @Query('restaurantId') restaurantIdRaw?: string,
+    @Query('businessId') businessIdRaw?: string,
   ): Promise<OnboardingStatusResponse> {
-    let restaurantId: number | undefined;
-    if (restaurantIdRaw != null && restaurantIdRaw.trim() !== '') {
-      const parsed = parseInt(restaurantIdRaw, 10);
+    let businessId: number | undefined;
+    if (businessIdRaw != null && businessIdRaw.trim() !== '') {
+      const parsed = parseInt(businessIdRaw, 10);
       if (!Number.isFinite(parsed) || parsed < 1) {
-        restaurantId = undefined;
+        businessId = undefined;
       } else {
-        restaurantId = parsed;
+        businessId = parsed;
       }
     }
 
     return this.onboardingService.getStatusForUser(
       req.user.id,
       req.user.role.name,
-      restaurantId,
+      businessId,
     );
   }
 }

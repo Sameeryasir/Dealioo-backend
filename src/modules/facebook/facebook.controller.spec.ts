@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthGuard } from '@nestjs/passport';
-import { RestaurantService } from '../restaurant/restaurant.service';
+import { BusinessService } from '../business/business.service';
 import { FacebookController } from './facebook.controller';
 import { FacebookService } from './facebook.service';
 
@@ -22,7 +22,7 @@ describe('FacebookController', () => {
           },
         },
         {
-          provide: RestaurantService,
+          provide: BusinessService,
           useValue: { findOwnedByUserId: jest.fn() },
         },
       ],

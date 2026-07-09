@@ -13,7 +13,7 @@ import { Menu } from './menu.entity';
 import { Campaign } from './campaign.entity';
 
 @Entity('businesses')
-export class Restaurant {
+export class Business {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -141,10 +141,10 @@ export class Restaurant {
   @JoinColumn({ name: 'owner_id' })
   owner: User;
 
-  @OneToMany(() => Menu, (m) => m.restaurant)
+  @OneToMany(() => Menu, (m) => m.business)
   menu: Menu[];
 
-  @OneToMany(() => Campaign, (campaign) => campaign.restaurant)
+  @OneToMany(() => Campaign, (campaign) => campaign.business)
   campaigns: Campaign[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { FunnelService } from './funnel.service';
 
 describe('FunnelService', () => {
@@ -29,7 +29,7 @@ describe('FunnelService', () => {
           },
         },
         {
-          provide: getRepositoryToken(Restaurant),
+          provide: getRepositoryToken(Business),
           useValue: {
             findOne: jest.fn(),
           },

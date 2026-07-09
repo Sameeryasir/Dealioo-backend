@@ -4,21 +4,21 @@ import { createHmac, timingSafeEqual } from 'crypto';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 /**
- * Builds a signed OAuth state that embeds the restaurant ID.
- * One Meta App serves all restaurants; state ties each callback to one tenant.
+ * Builds a signed OAuth state that embeds the business ID.
+ * One Meta App serves all businesses; state ties each callback to one tenant.
  */
 export function createFacebookOAuthState(
-  restaurantId: number,
+  businessId: number,
   secret: string,
 ): string {
   const timestamp = Date.now();
-  const payload = `${restaurantId}.${timestamp}`;
+  const payload = `${businessId}.${timestamp}`;
   const signature = signPayload(payload, secret);
   return `${payload}.${signature}`;
 }
 
 /**
- * Validates signature + TTL, then returns the restaurant ID from state.
+ * Validates signature + TTL, then returns the business ID from state.
  */
 export function parseFacebookOAuthState(
   state: string,
@@ -34,19 +34,19 @@ export function parseFacebookOAuthState(
     throw new Error('Invalid Facebook OAuth state.');
   }
 
-  const [restaurantIdRaw, timestampRaw, signature] = parts;
-  const payload = `${restaurantIdRaw}.${timestampRaw}`;
+  const [businessIdRaw, timestampRaw, signature] = parts;
+  const payload = `${businessIdRaw}.${timestampRaw}`;
   const expectedSignature = signPayload(payload, secret);
 
   if (!safeEqual(signature, expectedSignature)) {
     throw new Error('Invalid Facebook OAuth state signature.');
   }
 
-  const restaurantId = Number.parseInt(restaurantIdRaw, 10);
+  const businessId = Number.parseInt(businessIdRaw, 10);
   const timestamp = Number.parseInt(timestampRaw, 10);
 
-  if (!Number.isFinite(restaurantId) || restaurantId < 1) {
-    throw new Error('Invalid restaurant id in Facebook OAuth state.');
+  if (!Number.isFinite(businessId) || businessId < 1) {
+    throw new Error('Invalid business id in Facebook OAuth state.');
   }
 
   if (!Number.isFinite(timestamp)) {
@@ -57,7 +57,7 @@ export function parseFacebookOAuthState(
     throw new Error('Facebook OAuth state expired. Try connecting again.');
   }
 
-  return restaurantId;
+  return businessId;
 }
 
 function signPayload(payload: string, secret: string): string {

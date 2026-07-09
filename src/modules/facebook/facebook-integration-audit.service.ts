@@ -14,7 +14,7 @@ export class FacebookIntegrationAuditService {
   ) {}
 
   async log(
-    restaurantId: number,
+    businessId: number,
     eventType: string,
     options?: {
       status?: FacebookConnectionStatusValue | null;
@@ -25,7 +25,7 @@ export class FacebookIntegrationAuditService {
     const metadata = this.sanitizeMetadata(options?.metadata);
 
     await this.auditRepository.save({
-      restaurantId,
+      businessId,
       provider: 'facebook',
       eventType,
       status: options?.status ?? null,
@@ -34,7 +34,7 @@ export class FacebookIntegrationAuditService {
     });
 
     this.logger.log(
-      `facebook.${eventType} restaurant=${restaurantId} status=${options?.status ?? 'n/a'}`,
+      `facebook.${eventType} business=${businessId} status=${options?.status ?? 'n/a'}`,
     );
   }
 

@@ -15,7 +15,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
-import { RestaurantService } from '../restaurant/restaurant.service';
+import { BusinessService } from '../business/business.service';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
@@ -48,7 +48,7 @@ function readHttpErrorMessage(err: unknown): string {
 export class GoogleAdsController {
   constructor(
     private readonly googleAdsService: GoogleAdsService,
-    private readonly restaurantService: RestaurantService,
+    private readonly businessService: BusinessService,
   ) {}
 
   @Get('callback/oauth')
@@ -72,16 +72,16 @@ export class GoogleAdsController {
       );
 
       return res.redirect(
-        `${frontendBase}/google/select-customer?restaurantId=${result.restaurantId}`,
+        `${frontendBase}/google/select-customer?businessId=${result.businessId}`,
       );
     } catch (err) {
-      const restaurantId =
-        this.googleAdsService.parseRestaurantIdFromOAuthState(state);
+      const businessId =
+        this.googleAdsService.parseBusinessIdFromOAuthState(state);
       const params = new URLSearchParams({
         error: readHttpErrorMessage(err),
       });
-      if (restaurantId != null) {
-        params.set('restaurantId', String(restaurantId));
+      if (businessId != null) {
+        params.set('businessId', String(businessId));
       }
 
       return res.redirect(
@@ -91,99 +91,99 @@ export class GoogleAdsController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('connect/:restaurantId')
+  @Post('connect/:businessId')
   async connect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    return this.googleAdsService.connect(req.user, restaurantId);
+    return this.googleAdsService.connect(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('connect-abort/:restaurantId')
+  @Post('connect-abort/:businessId')
   async abortConnect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ restored: true }> {
-    return this.googleAdsService.abortOAuthConnect(req.user, restaurantId);
+    return this.googleAdsService.abortOAuthConnect(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('status/:restaurantId')
+  @Get('status/:businessId')
   async status(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsConnectionStatusDto> {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return this.googleAdsService.getConnectionStatus(restaurant);
+    return this.googleAdsService.getConnectionStatus(business);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('ads/campaign-stats/:restaurantId')
+  @Get('ads/campaign-stats/:businessId')
   async adCampaignStats(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsCampaignStatsDto> {
-    const restaurant = await this.restaurantService.findOwnedByUserId(
+    const business = await this.businessService.findOwnedByUserId(
       req.user.id,
-      restaurantId,
+      businessId,
     );
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return this.googleAdsService.getAdCampaignStats(restaurant);
+    return this.googleAdsService.getAdCampaignStats(business);
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('customers/:restaurantId')
+  @Get('customers/:businessId')
   async listCustomers(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsCustomerDto[]> {
-    return this.googleAdsService.listCustomersForRestaurant(
+    return this.googleAdsService.listCustomersForBusiness(
       req.user,
-      restaurantId,
+      businessId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('customer/:restaurantId')
+  @Post('customer/:businessId')
   async setCustomer(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: SetGoogleAdsCustomerDto,
   ): Promise<{ googleCustomerId: string }> {
-    return this.googleAdsService.setRestaurantCustomer(
+    return this.googleAdsService.setBusinessCustomer(
       req.user,
-      restaurantId,
+      businessId,
       body.customerId,
       body.managerCustomerId,
     );
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('disconnect/:restaurantId')
+  @Post('disconnect/:businessId')
   async disconnect(
     @Req() req,
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ disconnected: true }> {
-    return this.googleAdsService.disconnectGoogleAdsForRestaurant(
+    return this.googleAdsService.disconnectGoogleAdsForBusiness(
       req.user,
-      restaurantId,
+      businessId,
     );
   }
 }

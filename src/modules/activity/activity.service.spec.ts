@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ActivityEvent } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { ActivityService } from './activity.service';
 
 describe('ActivityService', () => {
@@ -14,7 +14,7 @@ describe('ActivityService', () => {
       providers: [
         ActivityService,
         { provide: getRepositoryToken(ActivityEvent), useValue: {} },
-        { provide: getRepositoryToken(Restaurant), useValue: {} },
+        { provide: getRepositoryToken(Business), useValue: {} },
         { provide: getRepositoryToken(Customer), useValue: {} },
         { provide: getRepositoryToken(FunnelPayment), useValue: {} },
       ],

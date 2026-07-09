@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { encryptSecret } from '../../utils/token-encryption.util';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -119,80 +119,80 @@ export class GoogleAdsService {
   private readonly logger = new Logger(GoogleAdsService.name);
 
   constructor(
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly auditService: GoogleAdsIntegrationAuditService,
     private readonly tokenService: GoogleAdsTokenService,
   ) {}
 
-  async connect(user: User, restaurantId: number): Promise<{ url: string }> {
+  async connect(user: User, businessId: number): Promise<{ url: string }> {
     requireAdminRole(
       user,
       'You do not have permission to connect Google Ads for this account.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    if (!restaurant.googleRefreshToken?.trim()) {
-      await this.restaurantRepository.update(restaurantId, {
+    if (!business.googleRefreshToken?.trim()) {
+      await this.businessRepository.update(businessId, {
         googleConnectionStatus: GoogleAdsConnectionStatus.INITIATED,
       });
     }
 
-    await this.auditService.log(restaurantId, 'oauth_started', {
+    await this.auditService.log(businessId, 'oauth_started', {
       status: GoogleAdsConnectionStatus.INITIATED,
     });
 
-    return this.createOAuthConnectUrl(restaurantId);
+    return this.createOAuthConnectUrl(businessId);
   }
 
   async abortOAuthConnect(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<{ restored: true }> {
     requireAdminRole(
       user,
       'You do not have permission to update Google Ads for this account.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
 
-    if (restaurant.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED) {
+    if (business.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED) {
       return { restored: true };
     }
 
     const hasGoogleLogin = Boolean(
-      restaurant.googleUserId?.trim() && restaurant.googleRefreshToken?.trim(),
+      business.googleUserId?.trim() && business.googleRefreshToken?.trim(),
     );
 
     let restoredStatus: GoogleAdsConnectionStatusValue | null = null;
 
-    if (hasGoogleLogin && restaurant.googleCustomerId?.trim()) {
+    if (hasGoogleLogin && business.googleCustomerId?.trim()) {
       restoredStatus = GoogleAdsConnectionStatus.CUSTOMER_SELECTED;
     } else if (hasGoogleLogin) {
       restoredStatus = GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
     }
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       googleConnectionStatus: restoredStatus,
     });
 
-    await this.auditService.log(restaurantId, 'oauth_aborted', {
+    await this.auditService.log(businessId, 'oauth_aborted', {
       status: restoredStatus,
     });
 
     return { restored: true };
   }
 
-  createOAuthConnectUrl(restaurantId: number): { url: string } {
+  createOAuthConnectUrl(businessId: number): { url: string } {
     const clientId = this.tokenService.getClientId();
     const clientSecret = this.tokenService.getClientSecret();
     const redirectUri = this.getRedirectUri();
@@ -202,7 +202,7 @@ export class GoogleAdsService {
       redirect_uri: redirectUri,
       response_type: 'code',
       scope: GOOGLE_OAUTH_SCOPES,
-      state: createGoogleOAuthState(restaurantId, clientSecret),
+      state: createGoogleOAuthState(businessId, clientSecret),
       access_type: 'offline',
       prompt: 'consent select_account',
     });
@@ -210,7 +210,7 @@ export class GoogleAdsService {
     return { url: `${GOOGLE_OAUTH_AUTH}?${params.toString()}` };
   }
 
-  parseRestaurantIdFromOAuthState(state: string | undefined): number | null {
+  parseBusinessIdFromOAuthState(state: string | undefined): number | null {
     if (!state?.trim()) {
       return null;
     }
@@ -228,7 +228,7 @@ export class GoogleAdsService {
     oauthErrorDescription: string | undefined,
     grantedScope: string | undefined,
   ): Promise<GoogleOAuthCallbackResultDto> {
-    let restaurantId: number | null = null;
+    let businessId: number | null = null;
 
     try {
       if (oauthError) {
@@ -248,23 +248,23 @@ export class GoogleAdsService {
       }
 
       const clientSecret = this.tokenService.getClientSecret();
-      restaurantId = parseGoogleOAuthState(state, clientSecret);
+      businessId = parseGoogleOAuthState(state, clientSecret);
 
       const callbackScopes = this.parseScopeList(grantedScope);
       if (callbackScopes.length > 0) {
         this.tokenService.assertGoogleScopes(callbackScopes);
       }
 
-      await this.auditService.log(restaurantId, 'oauth_callback_received', {
+      await this.auditService.log(businessId, 'oauth_callback_received', {
         status: GoogleAdsConnectionStatus.AUTHENTICATED,
       });
 
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
 
-      if (!restaurant) {
-        throw new NotFoundException('Restaurant not found.');
+      if (!business) {
+        throw new NotFoundException('Business not found.');
       }
 
       const tokenJson = await this.exchangeCodeForTokens(
@@ -305,7 +305,7 @@ export class GoogleAdsService {
           ? new Date(Date.now() + tokenJson.expires_in * 1000)
           : null;
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         googleUserId,
         googleRefreshToken: encryptSecret(tokenJson.refresh_token.trim()),
         googleAccessToken: encryptSecret(tokenJson.access_token),
@@ -317,19 +317,19 @@ export class GoogleAdsService {
         googleOauthScopes: grantedScopes.join(','),
       });
 
-      await this.auditService.log(restaurantId, 'token_exchanged', {
+      await this.auditService.log(businessId, 'token_exchanged', {
         status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
         metadata: { googleUserId, grantedScopes },
       });
 
       this.logger.log(
-        `Google Ads connected for restaurant ${restaurantId} (user ${googleUserId})`,
+        `Google Ads connected for business ${businessId} (user ${googleUserId})`,
       );
 
-      return { connected: true, restaurantId };
+      return { connected: true, businessId };
     } catch (err) {
-      if (restaurantId != null) {
-        await this.restaurantRepository.update(restaurantId, {
+      if (businessId != null) {
+        await this.businessRepository.update(businessId, {
           googleUserId: null,
           googleRefreshToken: null,
           googleAccessToken: null,
@@ -340,7 +340,7 @@ export class GoogleAdsService {
           googleTokenExpiresAt: null,
           googleOauthScopes: null,
         });
-        await this.auditService.log(restaurantId, 'oauth_failed', {
+        await this.auditService.log(businessId, 'oauth_failed', {
           status: GoogleAdsConnectionStatus.FAILED,
           errorMessage: err instanceof Error ? err.message : String(err),
         });
@@ -349,8 +349,8 @@ export class GoogleAdsService {
     }
   }
 
-  getConnectionStatus(restaurant: Restaurant): GoogleAdsConnectionStatusDto {
-    const normalized = this.normalizeConnectionStatus(restaurant);
+  getConnectionStatus(business: Business): GoogleAdsConnectionStatusDto {
+    const normalized = this.normalizeConnectionStatus(business);
 
     const grantedScopes = (normalized.googleOauthScopes ?? '')
       .split(',')
@@ -389,46 +389,46 @@ export class GoogleAdsService {
     };
   }
 
-  private normalizeConnectionStatus(restaurant: Restaurant): Restaurant {
+  private normalizeConnectionStatus(business: Business): Business {
     const hasGoogleLogin = Boolean(
-      restaurant.googleUserId?.trim() && restaurant.googleRefreshToken?.trim(),
+      business.googleUserId?.trim() && business.googleRefreshToken?.trim(),
     );
 
     if (
       hasGoogleLogin &&
-      restaurant.googleConnectionStatus === GoogleAdsConnectionStatus.FAILED
+      business.googleConnectionStatus === GoogleAdsConnectionStatus.FAILED
     ) {
-      const repairedStatus = restaurant.googleCustomerId?.trim()
+      const repairedStatus = business.googleCustomerId?.trim()
         ? GoogleAdsConnectionStatus.CUSTOMER_SELECTED
         : GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
 
-      void this.restaurantRepository.update(restaurant.id, {
+      void this.businessRepository.update(business.id, {
         googleConnectionStatus: repairedStatus,
       });
 
       return {
-        ...restaurant,
+        ...business,
         googleConnectionStatus: repairedStatus,
       };
     }
 
-    return restaurant;
+    return business;
   }
 
-  async listCustomersForRestaurant(
+  async listCustomersForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<GoogleAdsCustomerDto[]> {
     requireAdminRole(
       user,
       'You do not have permission to list Google Ads accounts.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
     const { accessToken } =
-      await this.tokenService.assertRestaurantGoogleToken(restaurant);
+      await this.tokenService.assertBusinessGoogleToken(business);
 
-    const scopes = (restaurant.googleOauthScopes ?? '')
+    const scopes = (business.googleOauthScopes ?? '')
       .split(',')
       .map((scope) => scope.trim())
       .filter(Boolean);
@@ -436,7 +436,7 @@ export class GoogleAdsService {
 
     const customers = await this.listAccessibleCustomers(accessToken);
 
-    await this.auditService.log(restaurantId, 'customers_fetched', {
+    await this.auditService.log(businessId, 'customers_fetched', {
       status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
       metadata: { count: customers.length },
     });
@@ -444,9 +444,9 @@ export class GoogleAdsService {
     return customers;
   }
 
-  async setRestaurantCustomer(
+  async setBusinessCustomer(
     user: User,
-    restaurantId: number,
+    businessId: number,
     customerId: string,
     managerCustomerId?: string,
   ): Promise<{ googleCustomerId: string }> {
@@ -455,9 +455,9 @@ export class GoogleAdsService {
       'You do not have permission to set the Google Ads account.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
     const { accessToken } =
-      await this.tokenService.assertRestaurantGoogleToken(restaurant);
+      await this.tokenService.assertBusinessGoogleToken(business);
 
     const normalizedId = this.normalizeCustomerId(customerId);
     const customers = await this.listAccessibleCustomers(accessToken);
@@ -473,13 +473,13 @@ export class GoogleAdsService {
       ? this.normalizeCustomerId(match.managerCustomerId)
       : normalizedId;
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       googleCustomerId: normalizedId,
       googleLoginCustomerId: loginCustomerId,
       googleConnectionStatus: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
     });
 
-    await this.auditService.log(restaurantId, 'customer_selected', {
+    await this.auditService.log(businessId, 'customer_selected', {
       status: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
       metadata: {
         customerId: normalizedId,
@@ -489,39 +489,39 @@ export class GoogleAdsService {
     });
 
     this.logger.log(
-      `Restaurant ${restaurantId} linked to Google Ads customer ${normalizedId}`,
+      `Business ${businessId} linked to Google Ads customer ${normalizedId}`,
     );
 
-    this.triggerBackgroundSync(restaurantId);
+    this.triggerBackgroundSync(businessId);
 
     return { googleCustomerId: normalizedId };
   }
 
-  async disconnectGoogleAdsForRestaurant(
+  async disconnectGoogleAdsForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<{ disconnected: true }> {
     requireAdminRole(
       user,
       'You do not have permission to disconnect Google Ads.',
     );
 
-    const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
+    const business = await this.loadOwnedBusiness(user, businessId);
 
     const hadConnection = Boolean(
-      restaurant.googleUserId?.trim() || restaurant.googleRefreshToken?.trim(),
+      business.googleUserId?.trim() || business.googleRefreshToken?.trim(),
     );
 
     if (!hadConnection) {
       throw new BadRequestException(
-        'Google Ads is not connected for this restaurant.',
+        'Google Ads is not connected for this business.',
       );
     }
 
-    const previousCustomerId = restaurant.googleCustomerId?.trim() ?? null;
-    const previousGoogleUserId = restaurant.googleUserId?.trim() ?? null;
+    const previousCustomerId = business.googleCustomerId?.trim() ?? null;
+    const previousGoogleUserId = business.googleUserId?.trim() ?? null;
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       googleUserId: null,
       googleRefreshToken: null,
       googleAccessToken: null,
@@ -533,22 +533,22 @@ export class GoogleAdsService {
       googleOauthScopes: null,
     });
 
-    await this.auditService.log(restaurantId, 'google_ads_disconnected', {
+    await this.auditService.log(businessId, 'google_ads_disconnected', {
       metadata: { previousCustomerId, previousGoogleUserId },
     });
 
     this.logger.log(
-      `Google Ads disconnected for restaurant ${restaurantId} (removed customer ${previousCustomerId ?? 'none'})`,
+      `Google Ads disconnected for business ${businessId} (removed customer ${previousCustomerId ?? 'none'})`,
     );
 
     return { disconnected: true };
   }
 
   async getAdCampaignStats(
-    restaurant: Restaurant,
+    business: Business,
   ): Promise<GoogleAdsCampaignStatsDto> {
     const { accessToken, customerId, loginCustomerId } =
-      await this.tokenService.assertRestaurantGoogleCredentials(restaurant);
+      await this.tokenService.assertBusinessGoogleCredentials(business);
 
     const customerMeta = await this.fetchCustomerMeta(
       accessToken,
@@ -1111,78 +1111,78 @@ export class GoogleAdsService {
     return uri;
   }
 
-  private triggerBackgroundSync(restaurantId: number): void {
-    void this.runBackgroundSync(restaurantId);
+  private triggerBackgroundSync(businessId: number): void {
+    void this.runBackgroundSync(businessId);
   }
 
-  private async runBackgroundSync(restaurantId: number): Promise<void> {
-    await this.restaurantRepository.update(restaurantId, {
+  private async runBackgroundSync(businessId: number): Promise<void> {
+    await this.businessRepository.update(businessId, {
       googleConnectionStatus: GoogleAdsConnectionStatus.SYNCING,
     });
 
-    await this.auditService.log(restaurantId, 'sync_started', {
+    await this.auditService.log(businessId, 'sync_started', {
       status: GoogleAdsConnectionStatus.SYNCING,
     });
 
     try {
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
 
-      if (!restaurant) {
-        throw new NotFoundException('Restaurant not found.');
+      if (!business) {
+        throw new NotFoundException('Business not found.');
       }
 
-      await this.getAdCampaignStats(restaurant);
+      await this.getAdCampaignStats(business);
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         googleConnectionStatus: GoogleAdsConnectionStatus.ACTIVE,
       });
 
-      await this.auditService.log(restaurantId, 'sync_completed', {
+      await this.auditService.log(businessId, 'sync_completed', {
         status: GoogleAdsConnectionStatus.ACTIVE,
-        metadata: { customerId: restaurant.googleCustomerId },
+        metadata: { customerId: business.googleCustomerId },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
 
-      const fallbackStatus = restaurant?.googleCustomerId?.trim()
+      const fallbackStatus = business?.googleCustomerId?.trim()
         ? GoogleAdsConnectionStatus.CUSTOMER_SELECTED
         : GoogleAdsConnectionStatus.TOKEN_EXCHANGED;
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         googleConnectionStatus: fallbackStatus,
       });
 
-      await this.auditService.log(restaurantId, 'sync_failed', {
+      await this.auditService.log(businessId, 'sync_failed', {
         status: fallbackStatus,
         errorMessage: message,
       });
 
       this.logger.warn(
-        `Google Ads sync failed for restaurant ${restaurantId}: ${message}`,
+        `Google Ads sync failed for business ${businessId}: ${message}`,
       );
     }
   }
 
-  private async loadOwnedRestaurant(
+  private async loadOwnedBusiness(
     user: User,
-    restaurantId: number,
-  ): Promise<Restaurant> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    businessId: number,
+  ): Promise<Business> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    return restaurant;
+    return business;
   }
 }

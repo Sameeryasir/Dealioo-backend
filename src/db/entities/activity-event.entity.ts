@@ -1,5 +1,5 @@
 /**
- * Unified restaurant activity feed — visited, redeemed, prepaid funnel payments.
+ * Unified business activity feed — visited, redeemed, prepaid funnel payments.
  */
 import {
   Column,
@@ -11,7 +11,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Customer } from './customer.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 export enum ActivityEventType {
   VISITED = 'visited',
@@ -21,18 +21,18 @@ export enum ActivityEventType {
 }
 
 @Entity('activity_event')
-@Index('IDX_activity_event_restaurant_occurred', ['restaurantId', 'occurredAt'])
+@Index('IDX_activity_event_restaurant_occurred', ['businessId', 'occurredAt'])
 @Index('IDX_activity_event_idempotency', ['idempotencyKey'], { unique: true })
 export class ActivityEvent {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'customer_id', type: 'int', nullable: true })
   customerId: number | null;

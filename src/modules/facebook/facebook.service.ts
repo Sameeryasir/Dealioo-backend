@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -95,49 +95,49 @@ export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
 
   constructor(
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
   ) {}
 
-  async connect(user: User, restaurantId: number): Promise<{ url: string }> {
+  async connect(user: User, businessId: number): Promise<{ url: string }> {
     requireAdminRole(
       user,
       'You do not have permission to connect Facebook for this account.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
       relations: ['owner'],
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       metaConnectionStatus: FacebookConnectionStatus.INITIATED,
     });
 
-    await this.auditService.log(restaurantId, 'oauth_started', {
+    await this.auditService.log(businessId, 'oauth_started', {
       status: FacebookConnectionStatus.INITIATED,
     });
 
-    return this.createOAuthConnectUrl(restaurantId);
+    return this.createOAuthConnectUrl(businessId);
   }
 
   async createOAuthConnectUrl(
-    restaurantId: number,
+    businessId: number,
   ): Promise<{ url: string }> {
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
 
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found.');
+    if (!business) {
+      throw new NotFoundException('Business not found.');
     }
 
     const appId = this.getAppId();
@@ -164,7 +164,7 @@ export class FacebookService {
     const params = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
-      state: createFacebookOAuthState(restaurantId, stateSecret),
+      state: createFacebookOAuthState(businessId, stateSecret),
       scope: FACEBOOK_OAUTH_SCOPES,
       response_type: 'code',
       auth_type: 'rerequest',
@@ -181,7 +181,7 @@ export class FacebookService {
     oauthError: string | undefined,
     oauthErrorDescription: string | undefined,
   ): Promise<FacebookOAuthCallbackResultDto> {
-    let restaurantId: number | null = null;
+    let businessId: number | null = null;
 
     try {
       if (oauthError) {
@@ -207,18 +207,18 @@ export class FacebookService {
         );
       }
 
-      restaurantId = parseFacebookOAuthState(state, stateSecret);
+      businessId = parseFacebookOAuthState(state, stateSecret);
 
-      await this.auditService.log(restaurantId, 'oauth_callback_received', {
+      await this.auditService.log(businessId, 'oauth_callback_received', {
         status: FacebookConnectionStatus.AUTHENTICATED,
       });
 
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
 
-      if (!restaurant) {
-        throw new NotFoundException('Restaurant not found.');
+      if (!business) {
+        throw new NotFoundException('Business not found.');
       }
 
       const appId = this.getAppId();
@@ -271,7 +271,7 @@ export class FacebookService {
           ? new Date(Date.now() + longLived.expiresIn * 1000)
           : null;
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         metaUserId: me.id.trim(),
         metaAccessToken: encryptSecret(accessToken),
         metaConnectedAt: new Date(),
@@ -281,19 +281,19 @@ export class FacebookService {
         metaOauthScopes: grantedScopes.join(','),
       });
 
-      await this.auditService.log(restaurantId, 'token_exchanged', {
+      await this.auditService.log(businessId, 'token_exchanged', {
         status: FacebookConnectionStatus.TOKEN_EXCHANGED,
         metadata: { metaUserId: me.id, grantedScopes },
       });
 
       this.logger.log(
-        `Facebook connected for restaurant ${restaurantId} (user ${me.id})`,
+        `Facebook connected for business ${businessId} (user ${me.id})`,
       );
 
-      return { connected: true, restaurantId };
+      return { connected: true, businessId };
     } catch (err) {
-      if (restaurantId != null) {
-        await this.restaurantRepository.update(restaurantId, {
+      if (businessId != null) {
+        await this.businessRepository.update(businessId, {
           metaUserId: null,
           metaAccessToken: null,
           metaConnectedAt: null,
@@ -302,7 +302,7 @@ export class FacebookService {
           metaTokenExpiresAt: null,
           metaOauthScopes: null,
         });
-        await this.auditService.log(restaurantId, 'oauth_failed', {
+        await this.auditService.log(businessId, 'oauth_failed', {
           status: FacebookConnectionStatus.FAILED,
           errorMessage: err instanceof Error ? err.message : String(err),
         });
@@ -312,13 +312,13 @@ export class FacebookService {
   }
 
   async getAdCampaignStats(
-    restaurant: Restaurant,
+    business: Business,
     filterWebsiteUrl?: string | null,
   ): Promise<FacebookAdCampaignStatsDto> {
     const { accessToken } =
-      await this.metaTokenService.assertRestaurantMetaCredentials(restaurant);
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
 
-    const adAccount = this.requireRestaurantAdAccount(restaurant);
+    const adAccount = this.requireBusinessAdAccount(business);
     const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
     const expectedLanding = resolveExpectedCampaignLandingUrl(filterWebsiteUrl);
 
@@ -382,8 +382,8 @@ export class FacebookService {
     };
   }
 
-  getConnectionStatus(restaurant: Restaurant): FacebookConnectionStatusDto {
-    const grantedScopes = (restaurant.metaOauthScopes ?? '')
+  getConnectionStatus(business: Business): FacebookConnectionStatusDto {
+    const grantedScopes = (business.metaOauthScopes ?? '')
       .split(',')
       .map((scope) => scope.trim())
       .filter(Boolean);
@@ -392,49 +392,49 @@ export class FacebookService {
     );
 
     const connected = Boolean(
-      restaurant.metaUserId?.trim() &&
-        restaurant.metaAccessToken?.trim() &&
-        restaurant.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
+      business.metaUserId?.trim() &&
+        business.metaAccessToken?.trim() &&
+        business.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
         missingRequiredScopes.length === 0,
     );
 
     return {
       connected,
-      status: restaurant.metaConnectionStatus ?? null,
-      metaUserId: restaurant.metaUserId,
-      metaConnectedAt: restaurant.metaConnectedAt,
-      metaAdAccountId: restaurant.metaAdAccountId,
-      metaTokenExpiresAt: restaurant.metaTokenExpiresAt,
+      status: business.metaConnectionStatus ?? null,
+      metaUserId: business.metaUserId,
+      metaConnectedAt: business.metaConnectedAt,
+      metaAdAccountId: business.metaAdAccountId,
+      metaTokenExpiresAt: business.metaTokenExpiresAt,
       metaOauthScopes: grantedScopes,
       missingRequiredScopes: [...missingRequiredScopes],
     };
   }
 
-  async listAdAccountsForRestaurant(
+  async listAdAccountsForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<FacebookAdAccountDto[]> {
     requireAdminRole(
       user,
       'You do not have permission to list Facebook ad accounts.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
     const { accessToken } =
-      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
+      await this.metaTokenService.assertBusinessMetaToken(business);
 
     const accounts = await this.listAccessibleAdAccounts(accessToken);
 
-    await this.auditService.log(restaurantId, 'ad_accounts_fetched', {
+    await this.auditService.log(businessId, 'ad_accounts_fetched', {
       status: FacebookConnectionStatus.TOKEN_EXCHANGED,
       metadata: { count: accounts.length },
     });
@@ -442,27 +442,27 @@ export class FacebookService {
     return accounts;
   }
 
-  async listPagesForRestaurant(
+  async listPagesForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<FacebookPageDto[]> {
     requireAdminRole(
       user,
       'You do not have permission to list Facebook pages.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
     const { accessToken } =
-      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
+      await this.metaTokenService.assertBusinessMetaToken(business);
 
     const response = await this.graphGetWithToken<{
       data?: Array<{ id?: string; name?: string }>;
@@ -476,9 +476,9 @@ export class FacebookService {
       }));
   }
 
-  async setRestaurantAdAccount(
+  async setBusinessAdAccount(
     user: User,
-    restaurantId: number,
+    businessId: number,
     adAccountId: string,
   ): Promise<{ metaAdAccountId: string }> {
     requireAdminRole(
@@ -486,18 +486,18 @@ export class FacebookService {
       'You do not have permission to set the Facebook ad account.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
     const { accessToken } =
-      await this.metaTokenService.assertRestaurantMetaToken(restaurant);
+      await this.metaTokenService.assertBusinessMetaToken(business);
 
     const normalizedId = this.normalizeAdAccountId(adAccountId);
     const accounts = await this.listAccessibleAdAccounts(accessToken);
@@ -509,58 +509,58 @@ export class FacebookService {
       );
     }
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       metaAdAccountId: normalizedId,
       metaConnectionStatus: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
     });
 
-    await this.auditService.log(restaurantId, 'ad_account_selected', {
+    await this.auditService.log(businessId, 'ad_account_selected', {
       status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
       metadata: { adAccountId: normalizedId },
     });
 
     this.logger.log(
-      `Restaurant ${restaurantId} linked to Meta ad account ${normalizedId}`,
+      `Business ${businessId} linked to Meta ad account ${normalizedId}`,
     );
 
-    this.triggerBackgroundSync(restaurantId);
+    this.triggerBackgroundSync(businessId);
 
     return { metaAdAccountId: normalizedId };
   }
 
-  async disconnectFacebookForRestaurant(
+  async disconnectFacebookForBusiness(
     user: User,
-    restaurantId: number,
+    businessId: number,
   ): Promise<{ disconnected: true }> {
     requireAdminRole(
       user,
       'You do not have permission to disconnect Facebook.',
     );
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId, owner: { id: user.id } },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId, owner: { id: user.id } },
     });
 
-    if (!restaurant) {
+    if (!business) {
       throw new NotFoundException(
-        'Restaurant not found or you do not own this restaurant.',
+        'Business not found or you do not own this business.',
       );
     }
 
     const hadConnection = Boolean(
-      restaurant.metaUserId?.trim() || restaurant.metaAccessToken?.trim(),
+      business.metaUserId?.trim() || business.metaAccessToken?.trim(),
     );
 
     if (!hadConnection) {
       throw new BadRequestException(
-        'Facebook is not connected for this restaurant.',
+        'Facebook is not connected for this business.',
       );
     }
 
-    const previousAdAccountId = restaurant.metaAdAccountId?.trim() ?? null;
-    const previousMetaUserId = restaurant.metaUserId?.trim() ?? null;
+    const previousAdAccountId = business.metaAdAccountId?.trim() ?? null;
+    const previousMetaUserId = business.metaUserId?.trim() ?? null;
 
-    await this.restaurantRepository.update(restaurantId, {
+    await this.businessRepository.update(businessId, {
       metaUserId: null,
       metaAccessToken: null,
       metaConnectedAt: null,
@@ -570,12 +570,12 @@ export class FacebookService {
       metaOauthScopes: null,
     });
 
-    await this.auditService.log(restaurantId, 'meta_disconnected', {
+    await this.auditService.log(businessId, 'meta_disconnected', {
       metadata: { previousAdAccountId, previousMetaUserId },
     });
 
     this.logger.log(
-      `Facebook disconnected for restaurant ${restaurantId} (removed ad account ${previousAdAccountId ?? 'none'})`,
+      `Facebook disconnected for business ${businessId} (removed ad account ${previousAdAccountId ?? 'none'})`,
     );
 
     return { disconnected: true };
@@ -610,8 +610,8 @@ export class FacebookService {
     return this.getAppSecret();
   }
 
-  private getRestaurantAccessToken(restaurant: Restaurant): string | null {
-    const stored = restaurant.metaAccessToken?.trim();
+  private getBusinessAccessToken(business: Business): string | null {
+    const stored = business.metaAccessToken?.trim();
     if (!stored) {
       return null;
     }
@@ -620,52 +620,52 @@ export class FacebookService {
       return decryptSecret(stored);
     } catch (err) {
       this.logger.error(
-        `Could not decrypt Meta token for restaurant ${restaurant.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not decrypt Meta token for business ${business.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
   }
 
-  private triggerBackgroundSync(restaurantId: number): void {
-    void this.runBackgroundSync(restaurantId);
+  private triggerBackgroundSync(businessId: number): void {
+    void this.runBackgroundSync(businessId);
   }
 
-  private async runBackgroundSync(restaurantId: number): Promise<void> {
-    await this.restaurantRepository.update(restaurantId, {
+  private async runBackgroundSync(businessId: number): Promise<void> {
+    await this.businessRepository.update(businessId, {
       metaConnectionStatus: FacebookConnectionStatus.SYNCING,
     });
 
-    await this.auditService.log(restaurantId, 'sync_started', {
+    await this.auditService.log(businessId, 'sync_started', {
       status: FacebookConnectionStatus.SYNCING,
     });
 
     try {
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
 
-      if (!restaurant) {
-        throw new NotFoundException('Restaurant not found.');
+      if (!business) {
+        throw new NotFoundException('Business not found.');
       }
 
-      await this.getAdCampaignStats(restaurant);
+      await this.getAdCampaignStats(business);
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         metaConnectionStatus: FacebookConnectionStatus.ACTIVE,
       });
 
-      await this.auditService.log(restaurantId, 'sync_completed', {
+      await this.auditService.log(businessId, 'sync_completed', {
         status: FacebookConnectionStatus.ACTIVE,
-        metadata: { adAccountId: restaurant.metaAdAccountId },
+        metadata: { adAccountId: business.metaAdAccountId },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      await this.restaurantRepository.update(restaurantId, {
+      await this.businessRepository.update(businessId, {
         metaConnectionStatus: FacebookConnectionStatus.FAILED,
       });
 
-      await this.auditService.log(restaurantId, 'sync_failed', {
+      await this.auditService.log(businessId, 'sync_failed', {
         status: FacebookConnectionStatus.FAILED,
         errorMessage: message,
       });
@@ -804,15 +804,15 @@ export class FacebookService {
     }
   }
 
-  private requireRestaurantAdAccount(restaurant: Restaurant): {
+  private requireBusinessAdAccount(business: Business): {
     id: string;
     name: string | null;
     currency: string | null;
   } {
-    const adAccountId = restaurant.metaAdAccountId?.trim();
+    const adAccountId = business.metaAdAccountId?.trim();
     if (!adAccountId) {
       throw new BadRequestException(
-        'No Facebook ad account has been selected for this restaurant.',
+        'No Facebook ad account has been selected for this business.',
       );
     }
 

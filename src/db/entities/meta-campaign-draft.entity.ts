@@ -16,7 +16,7 @@ export class MetaCampaignDraft {
   userId: number;
 
   @Column({ name: 'restaurant_id', type: 'int' })
-  restaurantId: number;
+  businessId: number;
 
   /** Builder UI step: 1 Campaign, 2 Ad Set, 3 Ad/Creative, 4 Review */
   @Column({ name: 'current_step', type: 'int', default: 1 })

@@ -16,7 +16,7 @@ export class FacebookCampaign {
   userId: number | null;
 
   @Column({ name: 'restaurant_id', type: 'int' })
-  restaurantId: number;
+  businessId: number;
 
   @Column({ name: 'ad_account_id', type: 'varchar', length: 64 })
   adAccountId: string;

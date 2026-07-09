@@ -11,8 +11,8 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { RedemptionService } from '../redemption/redemption.service';
 import {
-  parseRestaurantIdFromChatChannel,
-  pusherRestaurantChatChannel,
+  parseBusinessIdFromChatChannel,
+  pusherBusinessChatChannel,
 } from './pusher.constants';
 import { PusherService } from './pusher.service';
 
@@ -44,18 +44,18 @@ export class PusherController {
       throw new ForbiddenException('Invalid Pusher auth request.');
     }
 
-    const restaurantId = parseRestaurantIdFromChatChannel(trimmedChannel);
-    if (restaurantId == null) {
+    const businessId = parseBusinessIdFromChatChannel(trimmedChannel);
+    if (businessId == null) {
       throw new ForbiddenException('Unsupported realtime channel.');
     }
 
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
 
-    if (trimmedChannel !== pusherRestaurantChatChannel(restaurantId)) {
+    if (trimmedChannel !== pusherBusinessChatChannel(businessId)) {
       throw new ForbiddenException('Unsupported realtime channel.');
     }
 

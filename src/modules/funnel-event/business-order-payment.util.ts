@@ -3,22 +3,22 @@ import {
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
 
-export type RestaurantOrderPaymentStatus =
+export type BusinessOrderPaymentStatus =
   | 'not_paid'
   | 'paid_online'
   | 'paid_walk_in'
   | 'paid_both';
 
-export type RestaurantVisitSnapshot = {
+export type BusinessVisitSnapshot = {
   orderSubtotal: number;
   visitedAt: Date;
 };
 
-export type RestaurantOrderPaymentSummary = {
-  orderStatus: RestaurantOrderPaymentStatus;
+export type BusinessOrderPaymentSummary = {
+  orderStatus: BusinessOrderPaymentStatus;
   onlineAmountCents: number | null;
-  restaurantAmount: number | null;
-  restaurantVisitedAt: Date | null;
+  businessAmount: number | null;
+  businessVisitedAt: Date | null;
 };
 
 export function customerFunnelVisitKey(
@@ -28,26 +28,26 @@ export function customerFunnelVisitKey(
   return `${customerId}:${funnelId}`;
 }
 
-export function buildRestaurantOrderPaymentSummary(
+export function buildBusinessOrderPaymentSummary(
   event: Pick<FunnelEvent, 'eventType' | 'amount'>,
-  visit: RestaurantVisitSnapshot | null,
-): RestaurantOrderPaymentSummary {
+  visit: BusinessVisitSnapshot | null,
+): BusinessOrderPaymentSummary {
   const onlineAmountCents =
     event.eventType === FunnelEventType.PAYMENT && event.amount != null
       ? event.amount
       : null;
-  const restaurantAmount =
+  const businessAmount =
     visit?.orderSubtotal != null ? Number(visit.orderSubtotal) : null;
 
   const hasOnline = onlineAmountCents != null && onlineAmountCents > 0;
-  const hasRestaurant = restaurantAmount != null && restaurantAmount > 0;
+  const hasBusiness = businessAmount != null && businessAmount > 0;
 
-  let orderStatus: RestaurantOrderPaymentStatus = 'not_paid';
-  if (hasOnline && hasRestaurant) {
+  let orderStatus: BusinessOrderPaymentStatus = 'not_paid';
+  if (hasOnline && hasBusiness) {
     orderStatus = 'paid_both';
   } else if (hasOnline) {
     orderStatus = 'paid_online';
-  } else if (hasRestaurant) {
+  } else if (hasBusiness) {
     orderStatus = 'paid_walk_in';
   } else if (event.eventType === FunnelEventType.PAYMENT) {
     orderStatus = 'paid_online';
@@ -56,7 +56,7 @@ export function buildRestaurantOrderPaymentSummary(
   return {
     orderStatus,
     onlineAmountCents: hasOnline ? onlineAmountCents : null,
-    restaurantAmount: hasRestaurant ? restaurantAmount : null,
-    restaurantVisitedAt: visit?.visitedAt ?? null,
+    businessAmount: hasBusiness ? businessAmount : null,
+    businessVisitedAt: visit?.visitedAt ?? null,
   };
 }

@@ -14,7 +14,7 @@ describe('CampaignController', () => {
           useValue: {
             createCampaign: jest.fn(),
             getAllCampaigns: jest.fn(),
-            getCampaignsByRestaurantId: jest.fn(),
+            getCampaignsByBusinessId: jest.fn(),
           },
         },
       ],

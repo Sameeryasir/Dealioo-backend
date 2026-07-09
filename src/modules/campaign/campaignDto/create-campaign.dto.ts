@@ -17,7 +17,7 @@ export class CreateCampaignDto {
   @Type(() => Number)
   @IsNumber()
   @IsNotEmpty()
-  restaurantId: number;
+  businessId: number;
 
   @IsString()
   @IsNotEmpty()

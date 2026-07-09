@@ -131,7 +131,7 @@ export class AutomationEmailService {
     return { subject, templateKey, templateProps };
   }
 
-  /** Headline or short message for the restaurant activity feed. */
+  /** Headline or short message for the business activity feed. */
   resolvePreparedEmailPreview(prepared: PreparedAutomationEmail): string {
     const headline = prepared.templateProps.headline?.trim();
     if (headline) {

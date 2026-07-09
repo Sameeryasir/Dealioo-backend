@@ -34,7 +34,7 @@ import {
 } from '../../db/entities/funnel-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
@@ -93,8 +93,8 @@ export class AutomationService {
     private readonly nodeRepository: Repository<AutomationNode>,
     @InjectRepository(AutomationConnection)
     private readonly connectionRepository: Repository<AutomationConnection>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Funnel)
@@ -121,13 +121,13 @@ export class AutomationService {
   ): Promise<Automation> {
     requireAdminRole(user, 'You do not have permission to create automations.');
 
-    const { restaurantId, campaignId, funnelId } =
-      await this.resolveScopeFromCampaign(dto.campaignId, dto.restaurantId);
+    const { businessId, campaignId, funnelId } =
+      await this.resolveScopeFromCampaign(dto.campaignId, dto.businessId);
 
     this.validatePurposeAndTrigger(dto.purpose, dto.trigger);
 
     const automation = this.automationRepository.create({
-      restaurantId,
+      businessId,
       name: dto.name,
       description: dto.description?.trim() ?? null,
       trigger: dto.trigger,
@@ -188,9 +188,9 @@ export class AutomationService {
     if (dto.campaignId !== undefined) {
       const scope = await this.resolveScopeFromCampaign(
         dto.campaignId,
-        dto.restaurantId,
+        dto.businessId,
       );
-      automation.restaurantId = scope.restaurantId;
+      automation.businessId = scope.businessId;
       automation.campaignId = scope.campaignId;
       automation.funnelId = scope.funnelId;
     }
@@ -218,16 +218,16 @@ export class AutomationService {
     return saved;
   }
 
-  async getAutomations(restaurantId?: number): Promise<Automation[]> {
-    if (restaurantId) {
-      const restaurant = await this.restaurantRepository.findOne({
-        where: { id: restaurantId },
+  async getAutomations(businessId?: number): Promise<Automation[]> {
+    if (businessId) {
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
       });
-      if (!restaurant) {
-        throw new NotFoundException('Restaurant not found');
+      if (!business) {
+        throw new NotFoundException('Business not found');
       }
       return this.automationRepository.find({
-        where: { restaurantId },
+        where: { businessId },
         order: { createdAt: 'DESC' },
       });
     }
@@ -994,7 +994,7 @@ export class AutomationService {
     const batch: UnpaidReminderBatchJob = {
       executionId: execution.id,
       automationId: automation.id,
-      restaurantId: automation.restaurantId,
+      businessId: automation.businessId,
       funnelId: automation.funnelId!,
       campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
       emailNodeId: actionNode.id,
@@ -1165,7 +1165,7 @@ export class AutomationService {
           message: `Payment reminder text sent to ${recipient.email} (bulk)`,
         });
         await this.chatMessageService.recordOutboundMessage({
-          restaurantId: batch.restaurantId,
+          businessId: batch.businessId,
           customerId: recipient.customerId,
           automationId: batch.automationId,
           executionId: batch.executionId,
@@ -1257,7 +1257,7 @@ export class AutomationService {
             const issued = await this.checkoutResumeService.createSession({
               customerId: recipient.customerId,
               funnelId: batch.funnelId,
-              restaurantId: batch.restaurantId,
+              businessId: batch.businessId,
               campaignId: batch.campaignId,
             });
             recipientTemplateOverrides.set(recipient.customerId, {
@@ -1321,7 +1321,7 @@ export class AutomationService {
               : `Payment reminder email sent to ${recipient.email} (bulk)`,
         });
         await this.activityService.logMessageSent({
-          restaurantId: batch.restaurantId,
+          businessId: batch.businessId,
           customerId: recipient.customerId,
           messagePreview,
           idempotencyKey: `message_sent:execution:${batch.executionId}:node:${batch.emailNodeId}:customer:${recipient.customerId}`,
@@ -1332,7 +1332,7 @@ export class AutomationService {
           },
         });
         await this.chatMessageService.recordOutboundMessage({
-          restaurantId: batch.restaurantId,
+          businessId: batch.businessId,
           customerId: recipient.customerId,
           automationId: batch.automationId,
           executionId: batch.executionId,
@@ -1984,8 +1984,8 @@ export class AutomationService {
     }
 
     if (
-      automation.restaurantId &&
-      funnel.campaign?.restaurantId !== automation.restaurantId
+      automation.businessId &&
+      funnel.campaign?.businessId !== automation.businessId
     ) {
       return false;
     }
@@ -2107,9 +2107,9 @@ export class AutomationService {
 
   private async resolveScopeFromCampaign(
     campaignId: number,
-    restaurantId?: number,
+    businessId?: number,
   ): Promise<{
-    restaurantId: number;
+    businessId: number;
     campaignId: number;
     funnelId: number;
   }> {
@@ -2120,9 +2120,9 @@ export class AutomationService {
       throw new NotFoundException('Campaign not found');
     }
 
-    if (restaurantId !== undefined && campaign.restaurantId !== restaurantId) {
+    if (businessId !== undefined && campaign.businessId !== businessId) {
       throw new BadRequestException(
-        'Campaign does not belong to this restaurant',
+        'Campaign does not belong to this business',
       );
     }
 
@@ -2136,7 +2136,7 @@ export class AutomationService {
     }
 
     return {
-      restaurantId: campaign.restaurantId,
+      businessId: campaign.businessId,
       campaignId: campaign.id,
       funnelId: funnel.id,
     };

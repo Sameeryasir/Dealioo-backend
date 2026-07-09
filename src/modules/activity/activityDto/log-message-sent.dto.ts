@@ -13,7 +13,7 @@ import type { EntityManager } from 'typeorm';
 export class LogMessageSentDto {
   @IsInt()
   @Min(1)
-  restaurantId: number;
+  businessId: number;
 
   @IsInt()
   @Min(1)

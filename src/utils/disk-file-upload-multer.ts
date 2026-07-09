@@ -23,7 +23,7 @@ export function getDiskUploadMaxBytes(): number {
   return DEFAULT_DISK_UPLOAD_MAX_BYTES;
 }
 
-export const RESTAURANT_LOGO_UPLOAD_MIMES = [
+export const BUSINESS_LOGO_UPLOAD_MIMES = [
   'image/png',
   'image/jpeg',
   'image/webp',
@@ -34,7 +34,7 @@ export const MENUS_UPLOAD_SUBDIR = 'menus';
 
 export const CAMPAIGNS_UPLOAD_SUBDIR = 'campaigns';
 
-export const RESTAURANTS_UPLOAD_SUBDIR = 'restaurants';
+export const BUSINESSES_UPLOAD_SUBDIR = 'businesses';
 
 export function publicUploadFileUrl(
   subdir: string,
@@ -61,7 +61,7 @@ export function sanitizeStoredUploadFileName(originalName: string): string {
   return `${Date.now()}-${base}${ext}`;
 }
 
-export function buildRestaurantLogoFileName(originalName: string): string {
+export function buildBusinessLogoFileName(originalName: string): string {
   return sanitizeStoredUploadFileName(originalName);
 }
 

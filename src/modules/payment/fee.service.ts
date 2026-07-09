@@ -6,7 +6,7 @@ export type PlatformFeeModel = 'fixed' | 'percentage' | 'fixed_plus_percentage';
 export type CalculatePlatformFeeInput = {
   chargeAmountMinor: number;
   currency: string;
-  restaurantId?: number;
+  businessId?: number;
   campaignId?: number;
 };
 

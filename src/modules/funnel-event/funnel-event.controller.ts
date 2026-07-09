@@ -54,23 +54,23 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('restaurant/:restaurantId/guest/:customerId/purchase-deals')
+  @Post('business/:businessId/guest/:customerId/purchase-deals')
   @HttpCode(200)
   async purchaseDealsAtScanner(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Param('customerId', ParseIntPipe) customerId: number,
     @Body() dto: ScannerPurchaseDealsDto,
     @Req() req: AuthRequest,
   ) {
     requireScannerRole(req.user);
-    await this.redemptionService.verifyRestaurantAccess(
-      restaurantId,
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
       req.user.id,
       req.user.role.name,
     );
 
     return this.funnelEventService.purchaseDealsAtScanner({
-      restaurantId,
+      businessId,
       customerId,
       funnelIds: dto.funnelIds,
       orderSubtotal: dto.orderSubtotal,
@@ -79,14 +79,14 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('restaurant/:restaurantId/events')
-  getRestaurantFunnelEvents(
-    @Param('restaurantId', ParseIntPipe) restaurantId: number,
+  @Get('business/:businessId/events')
+  getBusinessFunnelEvents(
+    @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
   ) {
-    return this.funnelEventService.getRestaurantFunnelEvents(
-      restaurantId,
+    return this.funnelEventService.getBusinessFunnelEvents(
+      businessId,
       page,
       limit,
     );

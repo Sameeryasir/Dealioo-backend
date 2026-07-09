@@ -14,7 +14,7 @@ import {
   PUSHER_EVENT,
   pusherAutomationChannel,
   pusherExecutionChannel,
-  pusherRestaurantChatChannel,
+  pusherBusinessChatChannel,
 } from './pusher.constants';
 import type {
   ChatMessagePusherPayload,
@@ -113,7 +113,7 @@ export class PusherService implements OnModuleInit {
       return;
     }
 
-    const channel = pusherRestaurantChatChannel(payload.restaurantId);
+    const channel = pusherBusinessChatChannel(payload.businessId);
 
     try {
       await this.client.trigger(
@@ -128,7 +128,7 @@ export class PusherService implements OnModuleInit {
       const message =
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
-        `Pusher chat notify failed for restaurant ${payload.restaurantId}, customer ${payload.customerId}: ${message}`,
+        `Pusher chat notify failed for business ${payload.businessId}, customer ${payload.customerId}: ${message}`,
       );
     }
   }

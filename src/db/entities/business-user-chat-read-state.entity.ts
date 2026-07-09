@@ -8,15 +8,15 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 import { User } from './user.entity';
 
 @Entity('restaurant_user_chat_read_state')
 @Unique('UQ_restaurant_user_chat_read_state_user_restaurant', [
   'userId',
-  'restaurantId',
+  'businessId',
 ])
-export class RestaurantUserChatReadState {
+export class BusinessUserChatReadState {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -28,11 +28,11 @@ export class RestaurantUserChatReadState {
   user: User;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'chats_last_viewed_at', type: 'timestamptz' })
   chatsLastViewedAt: Date;

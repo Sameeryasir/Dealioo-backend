@@ -35,7 +35,7 @@ import type {
 } from './interfaces/google-auth.interface';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 
-/** Default role for Google self-signup (mirrors restaurant owner register). */
+/** Default role for Google self-signup (mirrors business owner register). */
 const GOOGLE_SIGNUP_ROLE = 'Admin';
 
 @Injectable()

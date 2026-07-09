@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
 import { FacebookService } from './facebook.service';
 
@@ -14,7 +14,7 @@ describe('FacebookService', () => {
         FacebookService,
         FacebookIntegrationAuditService,
         {
-          provide: getRepositoryToken(Restaurant),
+          provide: getRepositoryToken(Business),
           useValue: {
             findOne: jest.fn(),
             update: jest.fn(),

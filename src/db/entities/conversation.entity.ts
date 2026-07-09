@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { Automation } from './automation.entity';
 import { Customer } from './customer.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 @Entity('conversation')
 export class Conversation {
@@ -17,11 +17,11 @@ export class Conversation {
   id: number;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;

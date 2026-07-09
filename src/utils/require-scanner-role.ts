@@ -6,7 +6,7 @@ type UserLike = {
   role?: { name: string } | null;
 } | null;
 
-/** Staff who may preview and redeem QR passes at the restaurant. */
+/** Staff who may preview and redeem QR passes at the business. */
 export function requireScannerRole(
   user: UserLike,
   forbiddenMessage = 'You do not have permission to scan or redeem QR codes.',

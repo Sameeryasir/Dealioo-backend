@@ -16,7 +16,7 @@ import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
@@ -66,7 +66,7 @@ import { AutomationService } from './automation.service';
       AutomationExecutionEvent,
       AutomationDeadLetter,
       AutomationLog,
-      Restaurant,
+      Business,
       Campaign,
       Funnel,
       FunnelEvent,

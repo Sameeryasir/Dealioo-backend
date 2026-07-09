@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Location } from '../../db/entities/location.entity';
-import { Restaurant } from '../../db/entities/restaurant.entity';
+import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { CreateLocationDto } from './locationDto/create-location.dto';
@@ -13,8 +13,8 @@ export class LocationService {
   constructor(
     @InjectRepository(Location)
     private readonly locationRepository: Repository<Location>,
-    @InjectRepository(Restaurant)
-    private readonly restaurantRepository: Repository<Restaurant>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {}
 
   async createLocation(
@@ -26,18 +26,18 @@ export class LocationService {
       'You do not have permission to create a location.',
     );
 
-    const { restaurantId, name, address, city, state, country, postalCode } =
+    const { businessId, name, address, city, state, country, postalCode } =
       createLocationDto;
 
-    const restaurant = await this.restaurantRepository.findOne({
-      where: { id: restaurantId },
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
     });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant not found');
+    if (!business) {
+      throw new NotFoundException('Business not found');
     }
 
     const location = this.locationRepository.create({
-      restaurant,
+      business,
       name,
       address,
       city,

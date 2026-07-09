@@ -12,7 +12,7 @@ import { Campaign } from './campaign.entity';
 import { Customer } from './customer.entity';
 import { Funnel } from './funnel.entity';
 import { FunnelPayment } from './funnel-payment.entity';
-import { Restaurant } from './restaurant.entity';
+import { Business } from './business.entity';
 
 export enum CouponStatus {
   ACTIVE = 'ACTIVE',
@@ -51,11 +51,11 @@ export class Coupon {
   funnel: Funnel;
 
   @Column({ name: 'restaurant_id' })
-  restaurantId: number;
+  businessId: number;
 
-  @ManyToOne(() => Restaurant, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => Business, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'restaurant_id' })
-  restaurant: Restaurant;
+  business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;

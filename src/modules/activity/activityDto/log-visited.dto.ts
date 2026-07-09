@@ -12,7 +12,7 @@ import type { EntityManager } from 'typeorm';
 export class LogVisitedDto {
   @IsInt()
   @Min(1)
-  restaurantId: number;
+  businessId: number;
 
   @IsInt()
   @Min(1)
@@ -24,7 +24,7 @@ export class LogVisitedDto {
 
   @IsString()
   @MinLength(1)
-  restaurantName: string;
+  businessName: string;
 
   @Type(() => Date)
   @IsDate()
