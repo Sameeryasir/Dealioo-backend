@@ -9,8 +9,6 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { BusinessModule } from './modules/business/business.module';
 import { LocationModule } from './modules/location/location.module';
-import { MenuModule } from './modules/menu/menu.module';
-import { MenuItemModule } from './modules/menu-item/menu-item.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
@@ -67,8 +65,6 @@ import { UploadModule } from './modules/upload/upload.module';
     UserModule,
     BusinessModule,
     LocationModule,
-    MenuModule,
-    MenuItemModule,
     CampaignModule,
     FunnelModule,
     CustomerModule,

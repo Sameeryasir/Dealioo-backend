@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Menu } from '../../db/entities/menu.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -24,8 +23,6 @@ export class OnboardingService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    @InjectRepository(Menu)
-    private readonly menuRepository: Repository<Menu>,
   ) {}
 
   async getStatusForUser(
@@ -40,7 +37,6 @@ export class OnboardingService {
         businessId: null,
         twoFactorCompleted: true,
         businessCreated: true,
-        menuCreated: true,
         onboardingCompleted: true,
         nextStep: null,
         redirectPath: '/dashboard',
@@ -94,21 +90,11 @@ export class OnboardingService {
       }
     }
 
-    let menuCreated = false;
-    if (targetBusiness != null) {
-      menuCreated = await this.businessHasMenu(targetBusiness.id);
-    }
-
     const nextStep = this.resolveNextStep({ businessCreated });
-
     const onboardingCompleted = businessCreated;
-
-    const redirectBusinessId =
-      targetBusiness?.id ?? ownedBusinesses[0]?.id ?? null;
 
     const redirectPath = this.buildRedirectPath(
       nextStep,
-      redirectBusinessId,
       onboardingCompleted,
     );
 
@@ -116,22 +102,10 @@ export class OnboardingService {
       businessId: targetBusiness?.id ?? ownedBusinesses[0]?.id ?? null,
       twoFactorCompleted,
       businessCreated,
-      menuCreated,
       onboardingCompleted,
       nextStep,
       redirectPath,
     };
-  }
-
-  async markMenuSetupComplete(businessId: number): Promise<void> {
-    await this.markBusinessOnboardingComplete(businessId);
-  }
-
-  async businessHasMenu(businessId: number): Promise<boolean> {
-    const count = await this.menuRepository.count({
-      where: { business: { id: businessId } },
-    });
-    return count > 0;
   }
 
   private async markBusinessOnboardingComplete(
@@ -155,22 +129,16 @@ export class OnboardingService {
 
   private buildRedirectPath(
     nextStep: OnboardingNextStep,
-    businessId: number | null,
     onboardingCompleted: boolean,
   ): string {
     if (onboardingCompleted) {
       return '/dashboard';
     }
 
-    switch (nextStep) {
-      case 'business_creation':
-        return '/business/register';
-      case 'menu_setup':
-        return businessId != null
-          ? `/business/upload-menu?businessId=${businessId}`
-          : '/business/upload-menu';
-      default:
-        return '/dashboard';
+    if (nextStep === 'business_creation') {
+      return '/business/register';
     }
+
+    return '/dashboard';
   }
 }

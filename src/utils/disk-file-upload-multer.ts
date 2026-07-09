@@ -30,8 +30,6 @@ export const BUSINESS_LOGO_UPLOAD_MIMES = [
   'image/gif',
 ] as const;
 
-export const MENUS_UPLOAD_SUBDIR = 'menus';
-
 export const CAMPAIGNS_UPLOAD_SUBDIR = 'campaigns';
 
 export const BUSINESSES_UPLOAD_SUBDIR = 'businesses';

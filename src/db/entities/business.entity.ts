@@ -9,7 +9,6 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { User } from './user.entity';
-import { Menu } from './menu.entity';
 import { Campaign } from './campaign.entity';
 
 @Entity('businesses')
@@ -140,9 +139,6 @@ export class Business {
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;
-
-  @OneToMany(() => Menu, (m) => m.business)
-  menu: Menu[];
 
   @OneToMany(() => Campaign, (campaign) => campaign.business)
   campaigns: Campaign[];

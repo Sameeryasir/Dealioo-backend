@@ -208,7 +208,6 @@ export class BusinessService {
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
-      relations: ['menu'],
     });
     if (!business) {
       throw new NotFoundException('Business not found');
