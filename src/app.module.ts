@@ -29,10 +29,14 @@ import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 import { SmsModule } from './modules/sms/sms.module';
+import { SpacesModule } from './modules/spaces/spaces.module';
+import { UploadModule } from './modules/upload/upload.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    SpacesModule,
+    UploadModule,
     MailModule,
     SmsModule,
     PusherModule,

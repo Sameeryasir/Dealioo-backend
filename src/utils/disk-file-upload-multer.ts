@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'fs';
-import { diskStorage } from 'multer';
+import { diskStorage, memoryStorage } from 'multer';
 import { basename, extname, join } from 'path';
 import { getFrontendBaseUrl } from './frontend-base-url';
 
@@ -184,6 +184,40 @@ export type DiskFileUploadMulterOptions = {
   fileFilterErrorMessage?: string;
   buildStoredFileName?: (file: Express.Multer.File) => string;
 };
+
+export function createMemoryFileUploadMulterOptions(
+  options?: DiskFileUploadMulterOptions,
+) {
+  const maxFileBytes = options?.maxFileBytes ?? getDiskUploadMaxBytes();
+  const allowedMimeTypes =
+    options?.allowedMimeTypes ?? DOCUMENT_IMAGE_UPLOAD_MIMES;
+
+  return {
+    storage: memoryStorage(),
+    fileFilter: (req, file, cb) => {
+      if (!allowedMimeTypes.includes(file.mimetype)) {
+        return cb(
+          new Error(
+            options?.fileFilterErrorMessage ??
+              'Only PDF, PNG, JPG, and DOCX files are allowed',
+          ),
+          false,
+        );
+      }
+      cb(null, true);
+    },
+    limits: {
+      fileSize: maxFileBytes,
+    },
+  };
+}
+
+export function createUploadMulterOptions(
+  _subdir: string,
+  options?: DiskFileUploadMulterOptions,
+) {
+  return createMemoryFileUploadMulterOptions(options);
+}
 
 export function createDiskFileUploadMulterOptions(
   subdir: string,

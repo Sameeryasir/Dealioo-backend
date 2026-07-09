@@ -12,10 +12,11 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import {
-  absolutePublicUploadFileUrl,
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
 } from '../../utils/disk-file-upload-multer';
+import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import { SpacesService } from '../spaces/spaces.service';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { CreateFacebookCampaignDto } from './dto/create-facebook-campaign.dto';
@@ -71,6 +72,7 @@ export class FacebookCampaignService {
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
+    private readonly spacesService: SpacesService,
   ) {}
 
   async uploadAdImageForRestaurant(
@@ -85,16 +87,18 @@ export class FacebookCampaignService {
 
     const restaurant = await this.loadOwnedRestaurant(user, restaurantId);
 
-    if (!file?.filename?.trim()) {
+    if (!file) {
       throw new BadRequestException('Image file is required.');
     }
 
-    const imageUrl = absolutePublicUploadFileUrl(
+    const imageUrl = await persistUploadedFile(
+      this.spacesService,
+      file,
       CAMPAIGNS_UPLOAD_SUBDIR,
-      file.filename,
+      'absolute',
     );
 
-    if (!imageUrl.startsWith('https://')) {
+    if (!imageUrl?.startsWith('https://')) {
       throw new BadRequestException(
         'PUBLIC_BASE_URL must use HTTPS (set your ngrok URL in .env) so Meta can download the ad image.',
       );
@@ -115,16 +119,18 @@ export class FacebookCampaignService {
 
     await this.loadOwnedRestaurant(user, restaurantId);
 
-    if (!file?.filename?.trim()) {
+    if (!file) {
       throw new BadRequestException('Video file is required.');
     }
 
-    const videoUrl = absolutePublicUploadFileUrl(
+    const videoUrl = await persistUploadedFile(
+      this.spacesService,
+      file,
       CAMPAIGNS_UPLOAD_SUBDIR,
-      file.filename,
+      'absolute',
     );
 
-    if (!videoUrl.startsWith('https://')) {
+    if (!videoUrl?.startsWith('https://')) {
       throw new BadRequestException(
         'PUBLIC_BASE_URL must use HTTPS so Meta can download the ad video.',
       );

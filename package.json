@@ -26,6 +26,7 @@
     "simulate:canadian-reply": "ts-node -r tsconfig-paths/register scripts/simulate-canadian-guest-reply.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1083.0",
     "@getbrevo/brevo": "^5.0.4",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.1",

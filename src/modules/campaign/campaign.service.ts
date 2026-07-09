@@ -13,10 +13,11 @@ import {
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Restaurant } from '../../db/entities/restaurant.entity';
 import {
-  absolutePublicUploadFileUrl,
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
 } from '../../utils/disk-file-upload-multer';
+import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import { SpacesService } from '../spaces/spaces.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -29,6 +30,7 @@ export class CampaignService {
     private readonly restaurantRepository: Repository<Restaurant>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    private readonly spacesService: SpacesService,
   ) {}
 
   async createCampaign(
@@ -53,7 +55,12 @@ export class CampaignService {
     }
 
     const imageUrl = file
-      ? absolutePublicUploadFileUrl(CAMPAIGNS_UPLOAD_SUBDIR, file.filename)
+      ? await persistUploadedFile(
+          this.spacesService,
+          file,
+          CAMPAIGNS_UPLOAD_SUBDIR,
+          'absolute',
+        )
       : toAbsoluteAssetUrlIfRelative(dtoImageUrl);
     const campaign = this.campaignRepository.create({
       restaurant,
@@ -178,9 +185,11 @@ export class CampaignService {
     }
 
     if (file) {
-      campaign.imageUrl = absolutePublicUploadFileUrl(
+      campaign.imageUrl = await persistUploadedFile(
+        this.spacesService,
+        file,
         CAMPAIGNS_UPLOAD_SUBDIR,
-        file.filename,
+        'absolute',
       );
     } else if (updateCampaignDto.imageUrl !== undefined) {
       campaign.imageUrl = toAbsoluteAssetUrlIfRelative(

@@ -6,8 +6,9 @@ import { CreateMenuDto } from './menuDto/create-menu.dto';
 import { requireAdminRole } from 'src/utils/require-admin-role';
 import {
   MENUS_UPLOAD_SUBDIR,
-  publicUploadFileUrl,
 } from 'src/utils/disk-file-upload-multer';
+import { persistUploadedFile } from 'src/utils/persist-uploaded-file';
+import { SpacesService } from '../spaces/spaces.service';
 import { User } from 'src/db/entities/user.entity';
 import { Restaurant } from 'src/db/entities/restaurant.entity';
 import { OnboardingService } from '../onboarding/onboarding.service';
@@ -20,6 +21,7 @@ export class MenuService {
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly onboardingService: OnboardingService,
+    private readonly spacesService: SpacesService,
   ) {}
 
   async createMenu(
@@ -51,7 +53,11 @@ export class MenuService {
       );
     }
     const fileUrl = file
-      ? publicUploadFileUrl(MENUS_UPLOAD_SUBDIR, file.filename)
+      ? await persistUploadedFile(
+          this.spacesService,
+          file,
+          MENUS_UPLOAD_SUBDIR,
+        )
       : (dtoFileUrl ?? null);
     const fileName = file?.originalname ?? null;
     const fileSize = file?.size ?? null;

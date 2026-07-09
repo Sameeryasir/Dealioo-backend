@@ -15,7 +15,7 @@ import {
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import {
-  createDiskFileUploadMulterOptions,
+  createUploadMulterOptions,
   CAMPAIGNS_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
 import { Campaign } from '../../db/entities/campaign.entity';
@@ -35,7 +35,7 @@ export class CampaignController {
         { name: 'file', maxCount: 1 },
         { name: 'image', maxCount: 1 },
       ],
-      createDiskFileUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+      createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
         allowedMimeTypes: [
           'image/png',
           'image/jpeg',
@@ -97,7 +97,7 @@ export class CampaignController {
         { name: 'file', maxCount: 1 },
         { name: 'image', maxCount: 1 },
       ],
-      createDiskFileUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+      createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
         allowedMimeTypes: [
           'image/png',
           'image/jpeg',

@@ -16,7 +16,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
-  createDiskFileUploadMulterOptions,
+  createUploadMulterOptions,
 } from '../../utils/disk-file-upload-multer';
 import { CreateFacebookCampaignDto } from './dto/create-facebook-campaign.dto';
 import { CreateFacebookCampaignResponseDto } from './dto/create-facebook-campaign-response.dto';
@@ -121,7 +121,7 @@ export class FacebookCampaignController {
   @UseInterceptors(
     FileInterceptor(
       'file',
-      createDiskFileUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+      createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
         allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
         fileFilterErrorMessage:
           'Only image files are allowed (PNG, JPEG, WebP, GIF).',
@@ -145,7 +145,7 @@ export class FacebookCampaignController {
   @UseInterceptors(
     FileInterceptor(
       'file',
-      createDiskFileUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+      createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
         allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/webm'],
         maxFileBytes: 50 * 1024 * 1024,
         fileFilterErrorMessage:

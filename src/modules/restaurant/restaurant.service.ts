@@ -12,9 +12,10 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { CreateRestaurantDto } from './restaurantDto/create-restaurant.dto';
 import { UpdateRestaurantDto } from './restaurantDto/update-restaurant.dto';
 import {
-  publicUploadFileUrl,
   RESTAURANTS_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
+import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import { SpacesService } from '../spaces/spaces.service';
 
 @Injectable()
 export class RestaurantService {
@@ -23,6 +24,7 @@ export class RestaurantService {
     private readonly restaurantRepository: Repository<Restaurant>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly spacesService: SpacesService,
   ) {}
 
   async findByUserId(userId: number): Promise<Restaurant | null> {
@@ -73,7 +75,11 @@ export class RestaurantService {
     }
 
     const logoUrl = file
-      ? publicUploadFileUrl(RESTAURANTS_UPLOAD_SUBDIR, file.filename)
+      ? await persistUploadedFile(
+          this.spacesService,
+          file,
+          RESTAURANTS_UPLOAD_SUBDIR,
+        )
       : (dtoLogoUrl ?? null);
 
     const restaurant = this.restaurantRepository.create({

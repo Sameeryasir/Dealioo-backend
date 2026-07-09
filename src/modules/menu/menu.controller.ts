@@ -13,7 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import {
-  createDiskFileUploadMulterOptions,
+  createUploadMulterOptions,
   MENUS_UPLOAD_SUBDIR,
 } from 'src/utils/disk-file-upload-multer';
 import { MenuService } from './menu.service';
@@ -30,7 +30,7 @@ export class MenuController {
   @UseInterceptors(
     FileInterceptor(
       'file',
-      createDiskFileUploadMulterOptions(MENUS_UPLOAD_SUBDIR),
+      createUploadMulterOptions(MENUS_UPLOAD_SUBDIR),
     ),
   )
   async createMenu(

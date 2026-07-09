@@ -22,7 +22,7 @@ import { Restaurant } from '../../db/entities/restaurant.entity';
 import { UpdateRestaurantDto } from './restaurantDto/update-restaurant.dto';
 import {
   buildRestaurantLogoFileName,
-  createDiskFileUploadMulterOptions,
+  createUploadMulterOptions,
   RESTAURANT_LOGO_UPLOAD_MIMES,
   RESTAURANTS_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
@@ -38,7 +38,7 @@ export class RestaurantController {
   @UseInterceptors(
     FileInterceptor(
       'file',
-      createDiskFileUploadMulterOptions(RESTAURANTS_UPLOAD_SUBDIR, {
+      createUploadMulterOptions(RESTAURANTS_UPLOAD_SUBDIR, {
         allowedMimeTypes: RESTAURANT_LOGO_UPLOAD_MIMES,
         buildStoredFileName: (file) =>
           buildRestaurantLogoFileName(file.originalname),
