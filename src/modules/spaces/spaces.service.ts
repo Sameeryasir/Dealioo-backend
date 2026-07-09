@@ -9,6 +9,10 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { sanitizeStoredUploadFileName } from '../../utils/disk-file-upload-multer';
+import {
+  resolveDigitalOceanSpacesPublicBaseUrl,
+  toDigitalOceanSpacesCdnUrl,
+} from '../../utils/spaces-cdn-url';
 
 @Injectable()
 export class SpacesService {
@@ -30,9 +34,11 @@ export class SpacesService {
 
     this.bucket = bucket;
     this.region = region;
-    this.publicBaseUrl = endpointFromEnv
-      ? endpointFromEnv.replace(/\/$/, '')
-      : `https://${bucket}.${region}.digitaloceanspaces.com`;
+    this.publicBaseUrl = resolveDigitalOceanSpacesPublicBaseUrl(
+      bucket,
+      region,
+      endpointFromEnv,
+    );
 
     if (!accessKey || !secretKey || !bucket) {
       this.client = null;
@@ -60,7 +66,7 @@ export class SpacesService {
 
   buildPublicUrl(objectKey: string): string {
     const key = objectKey.replace(/^\/+/, '');
-    return `${this.publicBaseUrl}/${key}`;
+    return toDigitalOceanSpacesCdnUrl(`${this.publicBaseUrl}/${key}`);
   }
 
   async uploadFile(
@@ -91,6 +97,7 @@ export class SpacesService {
           Body: file.buffer,
           ACL: 'public-read',
           ContentType: file.mimetype,
+          CacheControl: 'public, max-age=31536000, immutable',
         }),
       );
 
