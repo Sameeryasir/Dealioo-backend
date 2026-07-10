@@ -66,8 +66,8 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 
@@ -92,8 +92,8 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ) {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 

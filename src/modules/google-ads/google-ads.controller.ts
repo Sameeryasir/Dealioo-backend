@@ -114,8 +114,8 @@ export class GoogleAdsController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsConnectionStatusDto> {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 
@@ -134,8 +134,8 @@ export class GoogleAdsController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsCampaignStatsDto> {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 

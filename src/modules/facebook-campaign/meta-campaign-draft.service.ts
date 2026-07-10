@@ -9,6 +9,7 @@ import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity'
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
@@ -488,7 +489,7 @@ export class MetaCampaignDraftService {
     businessId: number,
   ): Promise<Business> {
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {

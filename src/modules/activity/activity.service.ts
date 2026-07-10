@@ -5,6 +5,7 @@ import {
   EntityManager,
   FindOptionsWhere,
   LessThanOrEqual,
+  MoreThan,
   MoreThanOrEqual,
   Repository,
 } from 'typeorm';
@@ -17,14 +18,27 @@ import {
   ActivityEventType,
 } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
-import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
+import { Conversation } from '../../db/entities/conversation.entity';
 import { Business } from '../../db/entities/business.entity';
+import {
+  Campaign,
+  CampaignPublicationStatus,
+} from '../../db/entities/campaign.entity';
 import { CreateActivityEventDto } from './activityDto/create-activity-event.dto';
 import { LogMessageSentDto } from './activityDto/log-message-sent.dto';
 import { LogPrepaidForOfferDto } from './activityDto/log-prepaid-for-offer.dto';
 import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
+import {
+  buildRecentMonthBuckets,
+  clampOverviewMonths,
+  monthKeyToMap,
+} from '../funnel-event/overview-monthly.util';
 
 export type ActivityEventListItem = {
   id: number;
@@ -42,6 +56,26 @@ export type ActivitySummary = {
   totalPrepaid: number;
   totalMessagesSent: number;
 };
+
+export type ActivityMonthlyPoint = {
+  month: string;
+  totalEvents: number;
+  checkIns: number;
+  visited: number;
+  redeemedReward: number;
+  prepaidForOffer: number;
+  messageSent: number;
+  prepaidRevenueCents: number;
+  orders: number;
+  members: number;
+};
+
+function startOfTodayUtc(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+}
 
 function formatMoney(amountCents: number, currency: string): string {
   const normalized = currency.trim().toLowerCase() || 'usd';
@@ -62,7 +96,60 @@ export class ActivityService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
+    @InjectRepository(Conversation)
+    private readonly conversationRepository: Repository<Conversation>,
   ) {}
+
+  private async getBusinessActivitySnapshot(businessId: number): Promise<{
+    activeCampaigns: number;
+    totalOrders: number;
+    totalMembers: number;
+    todayRevenueCents: number;
+  }> {
+    const todayStart = startOfTodayUtc();
+
+    const [activeCampaigns, totalOrders, totalMembers, todayRevenueRow] =
+      await Promise.all([
+        this.campaignRepository.count({
+          where: {
+            businessId,
+            status: CampaignPublicationStatus.PUBLISHED,
+          },
+        }),
+        this.funnelPaymentRepository.count({
+          where: {
+            businessId,
+            status: FunnelPaymentStatus.PAID,
+          },
+        }),
+        this.conversationRepository.count({
+          where: {
+            businessId,
+            isPrivate: true,
+            messageCount: MoreThan(0),
+          },
+        }),
+        this.funnelPaymentRepository
+          .createQueryBuilder('payment')
+          .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
+          .where('payment.businessId = :businessId', { businessId })
+          .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+          .andWhere(
+            'COALESCE(payment.paidAt, payment.createdAt) >= :todayStart',
+            { todayStart },
+          )
+          .getRawOne<{ revenue: string }>(),
+      ]);
+
+    return {
+      activeCampaigns,
+      totalOrders,
+      totalMembers,
+      todayRevenueCents: Number(todayRevenueRow?.revenue ?? 0),
+    };
+  }
 
   async logInTransaction(
     manager: EntityManager,
@@ -303,6 +390,154 @@ export class ActivityService {
       totalRedeemed,
       totalPrepaid,
       totalMessagesSent,
+    };
+  }
+
+  async getBusinessSummaryMonthly(
+    businessId: number,
+    rawMonthCount?: number,
+  ): Promise<{
+    businessId: number;
+    months: number;
+    activeCampaigns: number;
+    totalOrders: number;
+    totalMembers: number;
+    todayRevenueCents: number;
+    data: ActivityMonthlyPoint[];
+  }> {
+    const monthCount = clampOverviewMonths(rawMonthCount);
+    const buckets = buildRecentMonthBuckets(monthCount);
+    const snapshot = await this.getBusinessActivitySnapshot(businessId);
+
+    if (buckets.length === 0) {
+      return {
+        businessId,
+        months: monthCount,
+        ...snapshot,
+        data: [],
+      };
+    }
+
+    const rangeStart = buckets[0]!.start;
+
+    const [rows, orderRows, memberRows] = await Promise.all([
+      this.activityRepository
+        .createQueryBuilder('activity')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :visited)`,
+          'visited',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
+          'redeemedReward',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :prepaid)`,
+          'prepaidForOffer',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :message)`,
+          'messageSent',
+        )
+        .addSelect(
+          `COALESCE(SUM(
+          CASE
+            WHEN activity.event_type = :prepaid
+            THEN NULLIF(activity.metadata->>'amountCents', '')::int
+            ELSE 0
+          END
+        ), 0)`,
+          'prepaidRevenueCents',
+        )
+        .where('activity.businessId = :businessId', { businessId })
+        .andWhere('activity.occurredAt >= :rangeStart', { rangeStart })
+        .groupBy(`DATE_TRUNC('month', activity.occurred_at AT TIME ZONE 'UTC')`)
+        .setParameters({
+          visited: ActivityEventType.VISITED,
+          redeemed: ActivityEventType.REDEEMED_REWARD,
+          prepaid: ActivityEventType.PREPAID_FOR_OFFER,
+          message: ActivityEventType.MESSAGE_SENT,
+        })
+        .getRawMany<{
+          month: string;
+          visited: string;
+          redeemedReward: string;
+          prepaidForOffer: string;
+          messageSent: string;
+          prepaidRevenueCents: string;
+        }>(),
+      this.funnelPaymentRepository
+        .createQueryBuilder('payment')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect('COUNT(*)', 'orders')
+        .where('payment.businessId = :businessId', { businessId })
+        .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+        .andWhere(
+          'COALESCE(payment.paidAt, payment.createdAt) >= :rangeStart',
+          { rangeStart },
+        )
+        .groupBy(
+          `DATE_TRUNC('month', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC')`,
+        )
+        .getRawMany<{ month: string; orders: string }>(),
+      this.conversationRepository
+        .createQueryBuilder('conversation')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', conversation.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect('COUNT(*)', 'members')
+        .where('conversation.businessId = :businessId', { businessId })
+        .andWhere('conversation.isPrivate = :isPrivate', { isPrivate: true })
+        .andWhere('conversation.messageCount > 0')
+        .andWhere('conversation.createdAt >= :rangeStart', { rangeStart })
+        .groupBy(
+          `DATE_TRUNC('month', conversation.created_at AT TIME ZONE 'UTC')`,
+        )
+        .getRawMany<{ month: string; members: string }>(),
+    ]);
+
+    const byMonth = monthKeyToMap(rows);
+    const ordersByMonth = monthKeyToMap(orderRows);
+    const membersByMonth = monthKeyToMap(memberRows);
+
+    const data = buckets.map((bucket) => {
+      const row = byMonth.get(bucket.month);
+      const orderRow = ordersByMonth.get(bucket.month);
+      const memberRow = membersByMonth.get(bucket.month);
+      const visited = Number(row?.visited ?? 0);
+      const redeemedReward = Number(row?.redeemedReward ?? 0);
+      const prepaidForOffer = Number(row?.prepaidForOffer ?? 0);
+      const messageSent = Number(row?.messageSent ?? 0);
+
+      const checkIns = visited + redeemedReward;
+
+      return {
+        month: bucket.month,
+        totalEvents: checkIns + prepaidForOffer + messageSent,
+        checkIns,
+        visited,
+        redeemedReward,
+        prepaidForOffer,
+        messageSent,
+        prepaidRevenueCents: Number(row?.prepaidRevenueCents ?? 0),
+        orders: Number(orderRow?.orders ?? 0),
+        members: Number(memberRow?.members ?? 0),
+      };
+    });
+
+    return {
+      businessId,
+      months: monthCount,
+      ...snapshot,
+      data,
     };
   }
 }

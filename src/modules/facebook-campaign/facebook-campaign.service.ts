@@ -11,6 +11,7 @@ import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity'
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -414,7 +415,7 @@ export class FacebookCampaignService {
     businessId: number,
   ): Promise<Business> {
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {

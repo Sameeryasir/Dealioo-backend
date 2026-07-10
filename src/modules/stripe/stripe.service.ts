@@ -12,6 +12,7 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
 import {
   errorStripePayment,
   logStripePayment,
@@ -111,7 +112,7 @@ export class StripeService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
       relations: ['owner'],
     });
 
@@ -146,7 +147,7 @@ export class StripeService {
       stripeAccountId = account.id;
 
       const persist = await this.businessRepository.update(
-        { id: businessId, owner: { id: user.id } },
+        businessAccessWhere(user, businessId),
         { stripeAccountId },
       );
 

@@ -11,6 +11,7 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { encryptSecret } from '../../utils/token-encryption.util';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
@@ -132,7 +133,7 @@ export class GoogleAdsService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {
@@ -1174,7 +1175,7 @@ export class GoogleAdsService {
     businessId: number,
   ): Promise<Business> {
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {

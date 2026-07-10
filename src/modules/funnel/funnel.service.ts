@@ -10,6 +10,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { isBusinessOwnerScopedUser } from '../../utils/business-access';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
 import { BusinessFunnelSummary } from './funnelDto/business-funnel-summary.dto';
@@ -125,7 +126,7 @@ export class FunnelService {
       .select(['funnel.id', 'funnel.version'])
       .where('funnel.campaignId = :campaignId', { campaignId });
 
-    if (user.role.name === 'Admin') {
+    if (isBusinessOwnerScopedUser(user)) {
       qb.innerJoin('funnel.campaign', 'campaign')
         .innerJoin('campaign.business', 'business')
         .andWhere('business.owner_id = :userId', { userId: user.id });
@@ -162,7 +163,7 @@ export class FunnelService {
       .select(['funnel.id'])
       .where('funnel.campaignId = :campaignId', { campaignId });
 
-    if (user.role.name === 'Admin') {
+    if (isBusinessOwnerScopedUser(user)) {
       qb.innerJoin('funnel.campaign', 'campaign')
         .innerJoin('campaign.business', 'business')
         .andWhere('business.owner_id = :userId', { userId: user.id });

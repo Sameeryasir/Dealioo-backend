@@ -71,8 +71,8 @@ export class FacebookController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookConnectionStatusDto> {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 
@@ -92,8 +92,8 @@ export class FacebookController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('websiteUrl') websiteUrl?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
-    const business = await this.businessService.findOwnedByUserId(
-      req.user.id,
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
       businessId,
     );
 

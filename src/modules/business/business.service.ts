@@ -9,6 +9,8 @@ import {
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
+import { isSuperAdmin } from '../../utils/user-roles';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
 import {
@@ -43,8 +45,15 @@ export class BusinessService {
     userId: number,
     businessId: number,
   ): Promise<Business | null> {
+    return this.findBusinessForUser({ id: userId, role: null }, businessId);
+  }
+
+  async findBusinessForUser(
+    user: Pick<User, 'id'> & { role?: { name: string } | null },
+    businessId: number,
+  ): Promise<Business | null> {
     return this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: userId } },
+      where: businessAccessWhere(user, businessId),
     });
   }
 
@@ -143,10 +152,13 @@ export class BusinessService {
 
     const pagination = normalizePagination(page, limit);
     const trimmedSearch = search?.trim();
+    const listAllBusinesses = isSuperAdmin(user);
 
-    const qb = this.businessRepository
-      .createQueryBuilder('business')
-      .where('business.owner_id = :ownerId', { ownerId: user.id });
+    const qb = this.businessRepository.createQueryBuilder('business');
+
+    if (!listAllBusinesses) {
+      qb.where('business.owner_id = :ownerId', { ownerId: user.id });
+    }
 
     if (trimmedSearch) {
       const escaped = trimmedSearch.replace(/[%_\\]/g, '\\$&');

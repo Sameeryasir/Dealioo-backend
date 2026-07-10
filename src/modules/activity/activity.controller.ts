@@ -68,6 +68,22 @@ export class ActivityController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/summary/monthly')
+  async getBusinessSummaryMonthly(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('months', new DefaultValuePipe(6), ParseIntPipe) months: number,
+    @Req() req?: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req!.user.id,
+      req!.user.role.name,
+    );
+
+    return this.activityService.getBusinessSummaryMonthly(businessId, months);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/summary')
   async getBusinessSummary(
     @Param('businessId', ParseIntPipe) businessId: number,

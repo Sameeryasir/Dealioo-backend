@@ -11,6 +11,7 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { businessAccessWhere } from '../../utils/business-access';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
@@ -108,7 +109,7 @@ export class FacebookService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
       relations: ['owner'],
     });
 
@@ -420,7 +421,7 @@ export class FacebookService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {
@@ -452,7 +453,7 @@ export class FacebookService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {
@@ -487,7 +488,7 @@ export class FacebookService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {
@@ -538,7 +539,7 @@ export class FacebookService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
+      where: businessAccessWhere(user, businessId),
     });
 
     if (!business) {

@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
+import { isAdminOrSuperAdmin, SUPER_ADMIN_ROLE } from './user-roles';
 
-const SCANNER_ROLES = new Set(['Admin', 'Scanner']);
+const SCANNER_ROLES = new Set(['Admin', SUPER_ADMIN_ROLE, 'Scanner']);
 
 type UserLike = {
   role?: { name: string } | null;

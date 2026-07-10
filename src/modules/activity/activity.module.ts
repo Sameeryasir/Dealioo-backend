@@ -4,6 +4,8 @@ import { ActivityEvent } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Business } from '../../db/entities/business.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
+import { Conversation } from '../../db/entities/conversation.entity';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { ActivityController } from './activity.controller';
@@ -14,6 +16,8 @@ import { ActivityService } from './activity.service';
     TypeOrmModule.forFeature([
       ActivityEvent,
       Business,
+      Campaign,
+      Conversation,
       Customer,
       FunnelPayment,
     ]),

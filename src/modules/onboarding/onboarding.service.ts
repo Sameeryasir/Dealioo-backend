@@ -13,9 +13,7 @@ import {
   OnboardingNextStep,
   OnboardingStatusResponse,
 } from './onboarding.types';
-
-const ADMIN_ROLE = 'Admin';
-const SCANNER_ROLE = 'Scanner';
+import { SCANNER_ROLE, SUPER_ADMIN_ROLE, ADMIN_ROLE } from '../../utils/user-roles';
 
 @Injectable()
 export class OnboardingService {
@@ -34,7 +32,7 @@ export class OnboardingService {
   ): Promise<OnboardingStatusResponse> {
     const normalizedRole = roleName.trim();
 
-    if (normalizedRole === SCANNER_ROLE) {
+    if (normalizedRole === SCANNER_ROLE || normalizedRole === SUPER_ADMIN_ROLE) {
       return {
         businessId: null,
         twoFactorCompleted: true,
