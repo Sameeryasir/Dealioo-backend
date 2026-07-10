@@ -277,6 +277,80 @@ export class StripeService {
     );
   }
 
+  async createPlatformSubscriptionCheckoutSession(opts: {
+    userId: number;
+    userEmail: string;
+    userName: string;
+    stripeCustomerId: string | null;
+    priceId: string;
+    planSlug: string;
+    billingCycle: 'monthly' | 'annual';
+  }): Promise<{ url: string; sessionId: string; stripeCustomerId: string }> {
+    const frontendBase = getFrontendBaseUrl();
+    let stripeCustomerId = opts.stripeCustomerId?.trim() || null;
+
+    if (!stripeCustomerId) {
+      const customer = await this.stripe.customers.create({
+        email: opts.userEmail.trim(),
+        name: opts.userName.trim() || undefined,
+        metadata: {
+          userId: String(opts.userId),
+          purpose: 'platform_subscription',
+        },
+      });
+      stripeCustomerId = customer.id;
+    }
+
+    const session = await this.stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer: stripeCustomerId,
+      line_items: [{ price: opts.priceId, quantity: 1 }],
+      success_url: `${frontendBase}/auth/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${frontendBase}/auth/select-plan?cancelled=1`,
+      client_reference_id: String(opts.userId),
+      metadata: {
+        userId: String(opts.userId),
+        planSlug: opts.planSlug,
+        billingCycle: opts.billingCycle,
+        purpose: 'platform_subscription',
+      },
+      subscription_data: {
+        metadata: {
+          userId: String(opts.userId),
+          planSlug: opts.planSlug,
+          billingCycle: opts.billingCycle,
+          purpose: 'platform_subscription',
+        },
+      },
+    });
+
+    if (!session.url) {
+      throw new InternalServerErrorException(
+        'Stripe did not return a checkout URL.',
+      );
+    }
+
+    return {
+      url: session.url,
+      sessionId: session.id,
+      stripeCustomerId,
+    };
+  }
+
+  async retrievePlatformCheckoutSession(
+    sessionId: string,
+  ): Promise<
+    Awaited<
+      ReturnType<
+        InstanceType<typeof Stripe>['checkout']['sessions']['retrieve']
+      >
+    >
+  > {
+    return this.stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['subscription'],
+    });
+  }
+
   async createOAuthConnectUrl(
     businessId: number,
   ): Promise<{ url: string }> {

@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
+import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
 import {
   OnboardingNextStep,
   OnboardingStatusResponse,
@@ -23,6 +24,7 @@ export class OnboardingService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    private readonly userSubscriptionsService: UserSubscriptionsService,
   ) {}
 
   async getStatusForUser(
@@ -36,6 +38,7 @@ export class OnboardingService {
       return {
         businessId: null,
         twoFactorCompleted: true,
+        subscriptionSelected: true,
         businessCreated: true,
         onboardingCompleted: true,
         nextStep: null,
@@ -59,6 +62,8 @@ export class OnboardingService {
     }
 
     const twoFactorCompleted = true;
+    const subscriptionSelected =
+      await this.userSubscriptionsService.userHasActiveSubscription(userId);
 
     const ownedBusinesses = await this.businessRepository.find({
       where: { owner: { id: userId } },
@@ -90,8 +95,11 @@ export class OnboardingService {
       }
     }
 
-    const nextStep = this.resolveNextStep({ businessCreated });
-    const onboardingCompleted = businessCreated;
+    const nextStep = this.resolveNextStep({
+      subscriptionSelected,
+      businessCreated,
+    });
+    const onboardingCompleted = subscriptionSelected && businessCreated;
 
     const redirectPath = this.buildRedirectPath(
       nextStep,
@@ -101,6 +109,7 @@ export class OnboardingService {
     return {
       businessId: targetBusiness?.id ?? ownedBusinesses[0]?.id ?? null,
       twoFactorCompleted,
+      subscriptionSelected,
       businessCreated,
       onboardingCompleted,
       nextStep,
@@ -118,8 +127,13 @@ export class OnboardingService {
   }
 
   private resolveNextStep(input: {
+    subscriptionSelected: boolean;
     businessCreated: boolean;
   }): OnboardingNextStep {
+    if (!input.subscriptionSelected) {
+      return 'plan_selection';
+    }
+
     if (!input.businessCreated) {
       return 'business_creation';
     }
@@ -133,6 +147,10 @@ export class OnboardingService {
   ): string {
     if (onboardingCompleted) {
       return '/dashboard';
+    }
+
+    if (nextStep === 'plan_selection') {
+      return '/auth/select-plan';
     }
 
     if (nextStep === 'business_creation') {

@@ -28,6 +28,7 @@ import {
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { CheckoutResumeService } from './checkout-resume.service';
+import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
 
 @Injectable()
 export class PaymentService implements OnModuleInit {
@@ -47,6 +48,7 @@ export class PaymentService implements OnModuleInit {
     private readonly paymentWebhookHandler: PaymentWebhookHandler,
     private readonly couponService: CouponService,
     private readonly checkoutResumeService: CheckoutResumeService,
+    private readonly userSubscriptionsService: UserSubscriptionsService,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -113,9 +115,10 @@ export class PaymentService implements OnModuleInit {
       stripeAccountId: event.account ?? null,
     });
 
-    await this.stripeWebhookService.processOnce(event, (ev, acct) =>
-      this.paymentWebhookHandler.routeEvent(ev, acct),
-    );
+    await this.stripeWebhookService.processOnce(event, async (ev, acct) => {
+      await this.paymentWebhookHandler.routeEvent(ev, acct);
+      await this.userSubscriptionsService.handleStripeWebhookEvent(ev);
+    });
 
     return { received: true };
   }

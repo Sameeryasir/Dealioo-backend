@@ -26,6 +26,8 @@ import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
+import { SubscriptionPlansModule } from './modules/subscription-plans/subscription-plans.module';
+import { UserSubscriptionsModule } from './modules/user-subscriptions/user-subscriptions.module';
 import { SmsModule } from './modules/sms/sms.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { UploadModule } from './modules/upload/upload.module';
@@ -80,6 +82,8 @@ import { UploadModule } from './modules/upload/upload.module';
     ChatModule,
     OnboardingModule,
     MeetingRequestModule,
+    SubscriptionPlansModule,
+    UserSubscriptionsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

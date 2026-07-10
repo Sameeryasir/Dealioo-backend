@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { Role } from './role.entity';
 import { Otp } from './otp.entity';
+import { UserSubscription } from './user-subscription.entity';
 
 /** Auth provider for the user account (LOCAL = email/password). */
 export type AuthProvider = 'LOCAL' | 'GOOGLE';
@@ -74,6 +75,9 @@ export class User {
   @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
   lastLoginAt: Date | null;
 
+  @Column({ name: 'stripe_customer_id', type: 'varchar', nullable: true })
+  stripeCustomerId: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
@@ -96,4 +100,7 @@ export class User {
 
   @OneToMany(() => Otp, (otp) => otp.user)
   otps: Otp[];
+
+  @OneToMany(() => UserSubscription, (subscription) => subscription.user)
+  subscriptions: UserSubscription[];
 }

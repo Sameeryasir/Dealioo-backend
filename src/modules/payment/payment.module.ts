@@ -17,6 +17,7 @@ import { PaymentService } from './payment.service';
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { CheckoutResumeService } from './checkout-resume.service';
+import { UserSubscriptionsModule } from '../user-subscriptions/user-subscriptions.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { CheckoutResumeService } from './checkout-resume.service';
     ]),
     StripeModule,
     AuthModule,
+    UserSubscriptionsModule,
     forwardRef(() => RedemptionModule),
     forwardRef(() => FunnelEventModule),
     ActivityModule,
