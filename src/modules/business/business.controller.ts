@@ -64,7 +64,7 @@ export class BusinessController {
   async getAllBusinesses(
     @Req() req,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(6), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(8), ParseIntPipe) limit: number,
     @Query('search') search?: string,
   ): Promise<{ data: Business[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
     const user = req.user;

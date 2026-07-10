@@ -105,7 +105,9 @@ export class UserSubscriptionsService {
     const priceId = this.resolveStripePriceId(plan, dto.billingCycle);
     if (!priceId) {
       throw new BadRequestException(
-        'This plan is not available for online checkout. Please contact sales.',
+        dto.billingCycle === 'annual'
+          ? 'Annual billing is not available for this plan yet. Choose monthly or contact sales.'
+          : 'This plan is not available for online checkout. Please contact sales.',
       );
     }
 
