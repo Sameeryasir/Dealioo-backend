@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -64,7 +64,7 @@ export class UserSubscriptionsService {
   ): Promise<UserSubscriptionResponse | null> {
     return this.subscriptionRepository
       .findOne({
-        where: { userId, status: 'active' },
+        where: { userId, status: In(['active', 'trialing']) },
         relations: { plan: true },
         order: { createdAt: 'DESC' },
       })
@@ -73,7 +73,7 @@ export class UserSubscriptionsService {
 
   userHasActiveSubscription(userId: number): Promise<boolean> {
     return this.subscriptionRepository
-      .count({ where: { userId, status: 'active' } })
+      .count({ where: { userId, status: In(['active', 'trialing']) } })
       .then((count) => count > 0);
   }
 
