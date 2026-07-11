@@ -22,8 +22,7 @@
     "migration:generate": "npm run typeorm -- -d src/data-source.ts migration:generate",
     "migration:run": "npm run typeorm -- -d src/data-source.ts migration:run",
     "migration:revert": "npm run typeorm -- -d src/data-source.ts migration:revert",
-    "migration:show": "npm run typeorm -- -d src/data-source.ts migration:show",
-    "simulate:canadian-reply": "ts-node -r tsconfig-paths/register scripts/simulate-canadian-guest-reply.ts"
+    "migration:show": "npm run typeorm -- -d src/data-source.ts migration:show"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1083.0",

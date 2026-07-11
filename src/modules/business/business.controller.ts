@@ -81,9 +81,22 @@ export class BusinessController {
   }
   @UseGuards(AuthGuard('jwt'))
   @Put(':id')
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createUploadMulterOptions(BUSINESSES_UPLOAD_SUBDIR, {
+        allowedMimeTypes: BUSINESS_LOGO_UPLOAD_MIMES,
+        buildStoredFileName: (file) =>
+          buildBusinessLogoFileName(file.originalname),
+        fileFilterErrorMessage:
+          'Only image files are allowed for the business logo (PNG, JPEG, WebP, GIF).',
+      }),
+    ),
+  )
   async updateBusiness(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateBusinessDto: UpdateBusinessDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req,
   ): Promise<Business> {
     const user = req.user;
@@ -91,6 +104,7 @@ export class BusinessController {
       id,
       updateBusinessDto,
       user,
+      file,
     );
   }
   @UseGuards(AuthGuard('jwt'))

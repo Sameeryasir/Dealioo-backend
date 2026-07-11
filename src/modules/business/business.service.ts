@@ -230,6 +230,7 @@ export class BusinessService {
     businessId: number,
     updateBusinessDto: UpdateBusinessDto,
     user: User,
+    file?: Express.Multer.File,
   ): Promise<Business> {
     requireAdminRole(user, 'You do not have permission to update a business.');
 
@@ -241,18 +242,38 @@ export class BusinessService {
     }
     const {
       name,
+      description,
+      cuisineType,
       logoUrl,
       websiteUrl,
       email,
       phoneNumber,
+      city,
+      state,
+      country,
+      postalCode,
       branchCount,
     } = updateBusinessDto;
 
     if (name !== undefined) business.name = name;
-    if (logoUrl !== undefined) business.logoUrl = logoUrl;
+    if (description !== undefined) business.description = description;
+    if (cuisineType !== undefined) business.cuisineType = cuisineType;
+    if (file) {
+      business.logoUrl = await persistUploadedFile(
+        this.spacesService,
+        file,
+        BUSINESSES_UPLOAD_SUBDIR,
+      );
+    } else if (logoUrl !== undefined) {
+      business.logoUrl = logoUrl;
+    }
     if (websiteUrl !== undefined) business.websiteUrl = websiteUrl;
     if (email !== undefined) business.email = email;
     if (phoneNumber !== undefined) business.phoneNumber = phoneNumber;
+    if (city !== undefined) business.city = city;
+    if (state !== undefined) business.state = state;
+    if (country !== undefined) business.country = country;
+    if (postalCode !== undefined) business.postalCode = postalCode;
     if (branchCount !== undefined) business.branchCount = branchCount;
 
     return this.businessRepository.save(business);

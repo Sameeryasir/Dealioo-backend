@@ -1,9 +1,9 @@
+import { Type } from 'class-transformer';
 import {
   IsEmail,
   IsInt,
   IsNotEmpty,
   IsOptional,
-  IsPhoneNumber,
   IsString,
   MaxLength,
   Min,
@@ -14,6 +14,14 @@ export class UpdateBusinessDto {
   @IsString()
   @IsNotEmpty()
   name?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  cuisineType?: string;
 
   @IsOptional()
   @IsString()
@@ -30,13 +38,30 @@ export class UpdateBusinessDto {
   @IsEmail()
   email?: string;
 
+  /** Any contact number format (matches create-business validation). */
   @IsOptional()
   @IsString()
   @IsNotEmpty()
-  @IsPhoneNumber()
   phoneNumber?: string;
 
   @IsOptional()
+  @IsString()
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  postalCode?: string;
+
+  @IsOptional()
+  @Type(() => Number)
   @IsInt()
   @Min(0)
   branchCount?: number;
