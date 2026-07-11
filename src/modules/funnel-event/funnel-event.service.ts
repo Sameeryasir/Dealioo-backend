@@ -38,6 +38,17 @@ import {
   type BusinessOrderPaymentStatus,
   type BusinessVisitSnapshot,
 } from './business-order-payment.util';
+import {
+  getBusinessFunnelEventDateFrom,
+  matchesBusinessEventStatusFilter,
+  normalizeBusinessFunnelEventSearch,
+  resolveBusinessEventDisplayStatus,
+} from './business-funnel-events-filters.util';
+import {
+  GetBusinessFunnelEventsQueryDto,
+  type BusinessFunnelEventDateFilter,
+  type BusinessFunnelEventStatusFilter,
+} from './funnelEventDto/get-business-funnel-events-query.dto';
 @Injectable()
 export class FunnelEventService {
   constructor(
@@ -691,6 +702,7 @@ export class FunnelEventService {
     businessId: number,
     page?: number,
     limit?: number,
+    filters: GetBusinessFunnelEventsQueryDto = {},
   ): Promise<{
     data: Array<{
       id: number;
@@ -718,9 +730,14 @@ export class FunnelEventService {
     meta: PaginationMeta & {
       campaignCount: number;
       funnelCount: number;
+      allEventsTotal: number;
     };
   }> {
     const pagination = normalizePagination(page, limit);
+    const statusFilter: BusinessFunnelEventStatusFilter = filters.status ?? 'all';
+    const dateFilter: BusinessFunnelEventDateFilter = filters.date ?? 'all';
+    const search = normalizeBusinessFunnelEventSearch(filters.search);
+    const dateFrom = getBusinessFunnelEventDateFrom(dateFilter);
 
     const campaignCount = await this.campaignRepository.count({
       where: { businessId },
@@ -732,25 +749,39 @@ export class FunnelEventService {
       .where('campaign.restaurant_id = :businessId', { businessId })
       .getCount();
 
-    const [rows, total] = await this.funnelEventRepository.findAndCount({
-      where: {
-        funnel: {
-          campaign: {
-            businessId,
-          },
-        },
-      },
-      relations: {
-        customer: true,
-        funnel: {
-          campaign: true,
-        },
-      },
-      order: { createdAt: 'DESC' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    });
+    const allEventsTotal = await this.funnelEventRepository
+      .createQueryBuilder('event')
+      .innerJoin('event.funnel', 'funnel')
+      .innerJoin('funnel.campaign', 'campaign')
+      .where('campaign.restaurant_id = :businessId', { businessId })
+      .getCount();
 
+    const qb = this.funnelEventRepository
+      .createQueryBuilder('event')
+      .innerJoinAndSelect('event.funnel', 'funnel')
+      .innerJoinAndSelect('funnel.campaign', 'campaign')
+      .leftJoinAndSelect('event.customer', 'customer')
+      .where('campaign.restaurant_id = :businessId', { businessId })
+      .orderBy('event.created_at', 'DESC');
+
+    if (dateFrom) {
+      qb.andWhere('event.created_at >= :dateFrom', { dateFrom });
+    }
+
+    if (search) {
+      const searchPattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`;
+      qb.andWhere(
+        `(
+          COALESCE(customer.name, '') ILIKE :searchPattern
+          OR COALESCE(event.customer_email, '') ILIKE :searchPattern
+          OR COALESCE(customer.phone, '') ILIKE :searchPattern
+          OR COALESCE(campaign.campaign_name, '') ILIKE :searchPattern
+        )`,
+        { searchPattern },
+      );
+    }
+
+    const rows = await qb.getMany();
     const filteredRows = rows.filter((row) => row.funnel?.campaign != null);
 
     const visitByCustomerFunnel = await this.loadLatestBusinessVisits(
@@ -763,46 +794,65 @@ export class FunnelEventService {
         })),
     );
 
-    return {
-      data: filteredRows.map((row) => {
-        const visitKey =
-          row.customerId != null
-            ? customerFunnelVisitKey(row.customerId, row.funnelId)
-            : null;
-        const visit =
-          visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
-        const paymentSummary = buildBusinessOrderPaymentSummary(row, visit);
+    const mappedRows = filteredRows.map((row) => {
+      const visitKey =
+        row.customerId != null
+          ? customerFunnelVisitKey(row.customerId, row.funnelId)
+          : null;
+      const visit =
+        visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+      const paymentSummary = buildBusinessOrderPaymentSummary(row, visit);
 
-        return {
-          id: row.id,
-          eventType: row.eventType,
-          createdAt: row.createdAt,
-          funnelId: row.funnelId,
-          campaignId: row.funnel.campaign.id,
-          campaignName: row.funnel.campaign.campaignName,
-          customer: row.customer
-            ? {
-                id: row.customer.id,
-                name: row.customer.name,
-                email: row.customer.email,
-                phone: row.customer.phone,
-              }
-            : null,
-          customerEmail: row.customerEmail,
-          amount: row.amount,
-          currency: row.currency,
-          paymentStatus: row.paymentStatus,
-          receiptUrl: row.receiptUrl,
-          orderStatus: paymentSummary.orderStatus,
-          onlineAmountCents: paymentSummary.onlineAmountCents,
-          businessAmount: paymentSummary.businessAmount,
-          businessVisitedAt: paymentSummary.businessVisitedAt,
-        };
-      }),
+      return {
+        id: row.id,
+        eventType: row.eventType,
+        createdAt: row.createdAt,
+        funnelId: row.funnelId,
+        campaignId: row.funnel.campaign.id,
+        campaignName: row.funnel.campaign.campaignName,
+        customer: row.customer
+          ? {
+              id: row.customer.id,
+              name: row.customer.name,
+              email: row.customer.email,
+              phone: row.customer.phone,
+            }
+          : null,
+        customerEmail: row.customerEmail,
+        amount: row.amount,
+        currency: row.currency,
+        paymentStatus: row.paymentStatus,
+        receiptUrl: row.receiptUrl,
+        orderStatus: paymentSummary.orderStatus,
+        onlineAmountCents: paymentSummary.onlineAmountCents,
+        businessAmount: paymentSummary.businessAmount,
+        businessVisitedAt: paymentSummary.businessVisitedAt,
+      };
+    });
+
+    const statusFilteredRows =
+      statusFilter === 'all'
+        ? mappedRows
+        : mappedRows.filter((row) =>
+            matchesBusinessEventStatusFilter(
+              resolveBusinessEventDisplayStatus(row),
+              statusFilter,
+            ),
+          );
+
+    const total = statusFilteredRows.length;
+    const data = statusFilteredRows.slice(
+      pagination.skip,
+      pagination.skip + pagination.limit,
+    );
+
+    return {
+      data,
       meta: {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         campaignCount,
         funnelCount,
+        allEventsTotal,
       },
     };
   }

@@ -10,28 +10,32 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-import { ActivityEventType } from '../../db/entities/activity-event.entity';
 import { RedemptionService } from '../redemption/redemption.service';
 import { ActivityService } from './activity.service';
+import {
+  GetBusinessActivityEventsQueryDto,
+  GetBusinessActivityQueryDto,
+} from './activityDto/get-business-activity-query.dto';
+import {
+  parseActivityEventTypeFilter,
+  resolveActivityDateRange,
+} from './activity-filters.util';
 
 type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
 };
 
-function parseEventType(raw?: string): ActivityEventType | null {
-  if (!raw?.trim()) return null;
-  const value = raw.trim().toLowerCase();
-  if (value === 'all') return null;
-  if (Object.values(ActivityEventType).includes(value as ActivityEventType)) {
-    return value as ActivityEventType;
-  }
-  return null;
-}
-
 function parseDate(raw?: string): Date | null {
   if (!raw?.trim()) return null;
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseActivityQueryDates(query: GetBusinessActivityQueryDto): {
+  from: Date;
+  to: Date;
+} {
+  return resolveActivityDateRange(parseDate(query.from), parseDate(query.to));
 }
 
 @Controller('activity')
@@ -45,11 +49,7 @@ export class ActivityController {
   @Get('business/:businessId/events')
   async getBusinessEvents(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
-    @Query('eventType') eventType?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    @Query() query: GetBusinessActivityEventsQueryDto,
     @Req() req?: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -58,12 +58,15 @@ export class ActivityController {
       req!.user.role.name,
     );
 
+    const range = parseActivityQueryDates(query);
+
     return this.activityService.getBusinessEvents(businessId, {
-      page,
-      limit,
-      eventType: parseEventType(eventType),
-      from: parseDate(from),
-      to: parseDate(to),
+      page: query.page,
+      limit: query.limit,
+      eventType: parseActivityEventTypeFilter(query.eventType),
+      from: range.from,
+      to: range.to,
+      search: query.search,
     });
   }
 
@@ -87,8 +90,7 @@ export class ActivityController {
   @Get('business/:businessId/summary')
   async getBusinessSummary(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    @Query() query: GetBusinessActivityQueryDto,
     @Req() req?: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -97,9 +99,12 @@ export class ActivityController {
       req!.user.role.name,
     );
 
+    const range = parseActivityQueryDates(query);
+
     return this.activityService.getBusinessSummary(businessId, {
-      from: parseDate(from),
-      to: parseDate(to),
+      eventType: parseActivityEventTypeFilter(query.eventType),
+      from: range.from,
+      to: range.to,
     });
   }
 }

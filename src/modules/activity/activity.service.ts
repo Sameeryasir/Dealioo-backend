@@ -1,12 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
-  And,
   EntityManager,
-  FindOptionsWhere,
-  LessThanOrEqual,
   MoreThan,
-  MoreThanOrEqual,
   Repository,
 } from 'typeorm';
 import {
@@ -35,6 +31,11 @@ import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import {
+  escapeIlikePattern,
+  normalizeActivitySearch,
+  resolveActivityDateRange,
+} from './activity-filters.util';
+import {
   buildRecentMonthBuckets,
   clampOverviewMonths,
   monthKeyToMap,
@@ -55,6 +56,8 @@ export type ActivitySummary = {
   totalRedeemed: number;
   totalPrepaid: number;
   totalMessagesSent: number;
+  from: string;
+  to: string;
 };
 
 export type ActivityMonthlyPoint = {
@@ -294,36 +297,67 @@ export class ActivityService {
       eventType?: ActivityEventType | null;
       from?: Date | null;
       to?: Date | null;
+      search?: string;
     },
-  ): Promise<{ data: ActivityEventListItem[]; meta: ReturnType<typeof buildPaginationMeta> }> {
+  ): Promise<{
+    data: ActivityEventListItem[];
+    meta: ReturnType<typeof buildPaginationMeta> & { allEventsTotal: number };
+  }> {
     const pagination = normalizePagination(options.page, options.limit);
+    const range = resolveActivityDateRange(options.from, options.to);
+    const search = normalizeActivitySearch(options.search);
 
-    const where: FindOptionsWhere<ActivityEvent> = {
-      businessId,
+    const applyBaseFilters = (
+      qb: ReturnType<Repository<ActivityEvent>['createQueryBuilder']>,
+    ) => {
+      qb.where('activity.businessId = :businessId', { businessId })
+        .andWhere('activity.occurredAt >= :from', { from: range.from })
+        .andWhere('activity.occurredAt <= :to', { to: range.to });
+
+      if (options.eventType) {
+        qb.andWhere('activity.eventType = :eventType', {
+          eventType: options.eventType,
+        });
+      }
+
+      if (search) {
+        const searchPattern = `%${escapeIlikePattern(search)}%`;
+        qb.andWhere(
+          `(
+            COALESCE(customer.name, '') ILIKE :searchPattern
+            OR COALESCE(customer.email, '') ILIKE :searchPattern
+            OR COALESCE(activity.description, '') ILIKE :searchPattern
+          )`,
+          { searchPattern },
+        );
+      }
     };
 
-    if (options.eventType) {
-      where.eventType = options.eventType;
-    }
+    const countQb = this.activityRepository
+      .createQueryBuilder('activity')
+      .leftJoin('activity.customer', 'customer');
+    applyBaseFilters(countQb);
 
-    if (options.from && options.to) {
-      where.occurredAt = And(
-        MoreThanOrEqual(options.from),
-        LessThanOrEqual(options.to),
-      );
-    } else if (options.from) {
-      where.occurredAt = MoreThanOrEqual(options.from);
-    } else if (options.to) {
-      where.occurredAt = LessThanOrEqual(options.to);
-    }
+    const rowsQb = this.activityRepository
+      .createQueryBuilder('activity')
+      .leftJoinAndSelect('activity.customer', 'customer');
+    applyBaseFilters(rowsQb);
 
-    const [rows, total] = await this.activityRepository.findAndCount({
-      where,
-      relations: { customer: true },
-      order: { occurredAt: 'DESC' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    });
+    const allEventsTotal = await this.activityRepository
+      .createQueryBuilder('activity')
+      .where('activity.businessId = :businessId', { businessId })
+      .andWhere('activity.occurredAt >= :from', { from: range.from })
+      .andWhere('activity.occurredAt <= :to', { to: range.to })
+      .getCount();
+
+    const [rows, total] = await Promise.all([
+      rowsQb
+        .orderBy('activity.occurredAt', 'DESC')
+        .skip(pagination.skip)
+        .take(pagination.limit)
+        .getMany(),
+      countQb.getCount(),
+    ]);
 
     return {
       data: rows.map((row) => ({
@@ -334,26 +368,36 @@ export class ActivityService {
         customerEmail: row.customer?.email?.trim() || null,
         description: row.description,
       })),
-      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      meta: {
+        ...buildPaginationMeta(total, pagination.page, pagination.limit),
+        allEventsTotal,
+      },
     };
   }
 
   async getBusinessSummary(
     businessId: number,
-    options: { from?: Date | null; to?: Date | null },
+    options: {
+      eventType?: ActivityEventType | null;
+      from?: Date | null;
+      to?: Date | null;
+    },
   ): Promise<ActivitySummary> {
+    const range = resolveActivityDateRange(options.from, options.to);
+
     const qb = this.activityRepository
       .createQueryBuilder('activity')
       .select('activity.eventType', 'eventType')
       .addSelect('COUNT(*)', 'count')
       .where('activity.businessId = :businessId', { businessId })
+      .andWhere('activity.occurredAt >= :from', { from: range.from })
+      .andWhere('activity.occurredAt <= :to', { to: range.to })
       .groupBy('activity.eventType');
 
-    if (options.from) {
-      qb.andWhere('activity.occurredAt >= :from', { from: options.from });
-    }
-    if (options.to) {
-      qb.andWhere('activity.occurredAt <= :to', { to: options.to });
+    if (options.eventType) {
+      qb.andWhere('activity.eventType = :eventType', {
+        eventType: options.eventType,
+      });
     }
 
     const rows = await qb.getRawMany<{ eventType: ActivityEventType; count: string }>();
@@ -390,6 +434,8 @@ export class ActivityService {
       totalRedeemed,
       totalPrepaid,
       totalMessagesSent,
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
     };
   }
 
