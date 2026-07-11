@@ -906,4 +906,80 @@ export class FunnelEventService {
     return result;
   }
 
+  /** Distinct customers who signed up on this funnel (first signup time = joined). */
+  async getFunnelGuests(
+    funnelId: number,
+    page?: number,
+    limit?: number,
+  ): Promise<{
+    data: Array<{
+      id: number;
+      name: string;
+      email: string;
+      phone: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    meta: PaginationMeta;
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const pagination = normalizePagination(page, limit);
+
+    const countRow = await this.funnelEventRepository
+      .createQueryBuilder('event')
+      .select('COUNT(DISTINCT event.customer_id)', 'total')
+      .where('event.funnel_id = :funnelId', { funnelId })
+      .andWhere('event.customer_id IS NOT NULL')
+      .getRawOne<{ total: string }>();
+
+    const total = Number(countRow?.total ?? 0);
+
+    if (total === 0) {
+      return {
+        data: [],
+        meta: buildPaginationMeta(0, pagination.page, pagination.limit),
+      };
+    }
+
+    const rows = await this.funnelEventRepository
+      .createQueryBuilder('event')
+      .innerJoinAndSelect('event.customer', 'customer')
+      .where('event.funnel_id = :funnelId', { funnelId })
+      .andWhere('event.customer_id IS NOT NULL')
+      .andWhere((qb) => {
+        const firstSignupAt = qb
+          .subQuery()
+          .select('MIN(inner_event.created_at)')
+          .from(FunnelEvent, 'inner_event')
+          .where('inner_event.funnel_id = :funnelId')
+          .andWhere('inner_event.customer_id = event.customer_id')
+          .getQuery();
+        return `event.created_at = (${firstSignupAt})`;
+      })
+      .orderBy('event.created_at', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit)
+      .getMany();
+
+    return {
+      data: rows
+        .filter((row) => row.customer != null)
+        .map((row) => ({
+          id: row.customer!.id,
+          name: row.customer!.name,
+          email: row.customer!.email,
+          phone: row.customer!.phone,
+          createdAt: row.createdAt,
+          updatedAt: row.customer!.updatedAt,
+        })),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
 }

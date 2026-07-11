@@ -22,6 +22,7 @@ import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import { ScannerPurchaseDealsDto } from './funnelEventDto/scanner-purchase-deals.dto';
 import { GetBusinessFunnelEventsQueryDto } from './funnelEventDto/get-business-funnel-events-query.dto';
+import { GetFunnelGuestsQueryDto } from './funnelEventDto/get-funnel-guests-query.dto';
 import { clampOverviewMonths } from './overview-monthly.util';
 import { FunnelEventService } from './funnel-event.service';
 
@@ -89,6 +90,19 @@ export class FunnelEventController {
       query.page ?? 1,
       query.limit ?? 10,
       query,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/guests')
+  getFunnelGuests(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query() query: GetFunnelGuestsQueryDto,
+  ) {
+    return this.funnelEventService.getFunnelGuests(
+      funnelId,
+      query.page ?? 1,
+      query.limit ?? 10,
     );
   }
 
