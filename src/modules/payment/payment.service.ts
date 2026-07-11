@@ -28,6 +28,11 @@ import {
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { CheckoutResumeService } from './checkout-resume.service';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+} from '../../common/pagination';
 import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
 
 @Injectable()
@@ -500,6 +505,39 @@ export class PaymentService implements OnModuleInit {
     }
   }
 
+  async getFunnelOrders(
+    funnelId: number,
+    page?: number,
+    limit?: number,
+  ): Promise<{
+    funnelId: number;
+    data: Array<ReturnType<PaymentService['toPublicFunnelPayment']>>;
+    meta: PaginationMeta;
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const pagination = normalizePagination(page, limit);
+
+    const [rows, total] = await this.funnelPaymentRepository.findAndCount({
+      where: { funnelId, status: FunnelPaymentStatus.PAID },
+      order: { paidAt: 'DESC', createdAt: 'DESC' },
+      skip: pagination.skip,
+      take: pagination.limit,
+    });
+
+    return {
+      funnelId,
+      data: rows.map((row) => this.toPublicFunnelPayment(row)),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  /** @deprecated Use getFunnelOrders — kept for older clients. */
   async getPaidFunnelPayments(funnelId: number): Promise<{
     funnelId: number;
     paymentCount: number;

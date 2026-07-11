@@ -49,16 +49,19 @@ export class CreateCampaignDto {
   })
   imageUrl?: string;
 
-  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
-  offer?: string;
+  @IsNotEmpty()
+  @MaxLength(255)
+  offer: string;
 
-  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(99_999_999.99)
-  price?: number;
+  price: number;
 
   @IsOptional()
   @IsEnum(CampaignPublicationStatus)

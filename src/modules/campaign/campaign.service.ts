@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import {
@@ -54,6 +54,10 @@ export class CampaignService {
       throw new NotFoundException('Business not found');
     }
 
+    if (!file && !dtoImageUrl?.trim()) {
+      throw new BadRequestException('Campaign image is required.');
+    }
+
     const imageUrl = file
       ? await persistUploadedFile(
           this.spacesService,
@@ -68,8 +72,8 @@ export class CampaignService {
       campaignName,
       websiteUrl,
       imageUrl,
-      offer: offer ?? null,
-      price: price ?? null,
+      offer: offer.trim(),
+      price,
       status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
     const savedCampaign = await this.campaignRepository.save(campaign);

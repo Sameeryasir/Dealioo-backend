@@ -19,6 +19,7 @@ import { PaymentService } from './payment.service';
 import { CheckoutResumeService } from './checkout-resume.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
 import { CreateCheckoutSessionDto } from './paymentDto/create-checkout-session.dto';
+import { GetFunnelOrdersQueryDto } from './paymentDto/get-funnel-orders-query.dto';
 
 type RawBodyRequest = Request & { rawBody?: Buffer };
 
@@ -61,6 +62,19 @@ export class PaymentController {
     @Headers('stripe-signature') signature: string | undefined,
   ) {
     return this.paymentService.handleStripeWebhook(req.rawBody, signature);
+  }
+
+  @Get('funnel/:funnelId/orders')
+  @UseGuards(AuthGuard('jwt'))
+  getFunnelOrders(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query() query: GetFunnelOrdersQueryDto,
+  ) {
+    return this.paymentService.getFunnelOrders(
+      funnelId,
+      query.page ?? 1,
+      query.limit ?? 10,
+    );
   }
 
   @Get('funnel/:funnelId')

@@ -949,35 +949,41 @@ export class FunnelEventService {
 
     const rows = await this.funnelEventRepository
       .createQueryBuilder('event')
-      .innerJoinAndSelect('event.customer', 'customer')
+      .innerJoin('event.customer', 'customer')
+      .select('customer.id', 'id')
+      .addSelect('customer.name', 'name')
+      .addSelect('customer.email', 'email')
+      .addSelect('customer.phone', 'phone')
+      .addSelect('customer.updated_at', 'updatedAt')
+      .addSelect('MIN(event.created_at)', 'createdAt')
       .where('event.funnel_id = :funnelId', { funnelId })
       .andWhere('event.customer_id IS NOT NULL')
-      .andWhere((qb) => {
-        const firstSignupAt = qb
-          .subQuery()
-          .select('MIN(inner_event.created_at)')
-          .from(FunnelEvent, 'inner_event')
-          .where('inner_event.funnel_id = :funnelId')
-          .andWhere('inner_event.customer_id = event.customer_id')
-          .getQuery();
-        return `event.created_at = (${firstSignupAt})`;
-      })
-      .orderBy('event.created_at', 'DESC')
-      .skip(pagination.skip)
-      .take(pagination.limit)
-      .getMany();
+      .groupBy('customer.id')
+      .addGroupBy('customer.name')
+      .addGroupBy('customer.email')
+      .addGroupBy('customer.phone')
+      .addGroupBy('customer.updated_at')
+      .orderBy('MIN(event.created_at)', 'DESC')
+      .offset(pagination.skip)
+      .limit(pagination.limit)
+      .getRawMany<{
+        id: string;
+        name: string;
+        email: string;
+        phone: string | null;
+        updatedAt: Date;
+        createdAt: Date;
+      }>();
 
     return {
-      data: rows
-        .filter((row) => row.customer != null)
-        .map((row) => ({
-          id: row.customer!.id,
-          name: row.customer!.name,
-          email: row.customer!.email,
-          phone: row.customer!.phone,
-          createdAt: row.createdAt,
-          updatedAt: row.customer!.updatedAt,
-        })),
+      data: rows.map((row) => ({
+        id: Number(row.id),
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        createdAt: new Date(row.createdAt),
+        updatedAt: new Date(row.updatedAt),
+      })),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
