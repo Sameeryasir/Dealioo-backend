@@ -71,7 +71,6 @@ export class BusinessService {
       name,
       slug: slugInput,
       description,
-      cuisineType,
       logoUrl: dtoLogoUrl,
       websiteUrl,
       email,
@@ -104,7 +103,6 @@ export class BusinessService {
       name,
       slug,
       description,
-      cuisineType,
       logoUrl,
       websiteUrl,
       email,
@@ -177,10 +175,6 @@ export class BusinessService {
             .orWhere("COALESCE(business.email, '') ILIKE :containsPattern", {
               containsPattern,
             })
-            .orWhere(
-              "COALESCE(business.cuisine_type, '') ILIKE :containsPattern",
-              { containsPattern },
-            )
             .orWhere("COALESCE(business.city, '') ILIKE :containsPattern", {
               containsPattern,
             })
@@ -243,7 +237,6 @@ export class BusinessService {
     const {
       name,
       description,
-      cuisineType,
       logoUrl,
       websiteUrl,
       email,
@@ -257,7 +250,6 @@ export class BusinessService {
 
     if (name !== undefined) business.name = name;
     if (description !== undefined) business.description = description;
-    if (cuisineType !== undefined) business.cuisineType = cuisineType;
     if (file) {
       business.logoUrl = await persistUploadedFile(
         this.spacesService,

@@ -25,9 +25,6 @@ export class Business {
   @Column({ type: 'text', nullable: true })
   description: string | null;
 
-  @Column({ name: 'cuisine_type', type: 'varchar', nullable: true })
-  cuisineType: string | null;
-
   @Column({ name: 'logo_url', type: 'text', nullable: true })
   logoUrl: string | null;
 

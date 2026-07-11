@@ -25,10 +25,6 @@ export class CreateBusinessDto {
 
   @IsOptional()
   @IsString()
-  cuisineType?: string;
-
-  @IsOptional()
-  @IsString()
   logoUrl?: string;
 
   @IsOptional()

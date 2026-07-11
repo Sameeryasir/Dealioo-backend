@@ -21,10 +21,6 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsString()
-  cuisineType?: string;
-
-  @IsOptional()
-  @IsString()
   logoUrl?: string;
 
   @IsOptional()
