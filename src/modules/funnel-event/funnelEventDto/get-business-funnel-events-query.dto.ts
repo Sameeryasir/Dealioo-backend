@@ -1,4 +1,13 @@
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export const BUSINESS_FUNNEL_EVENT_STATUS_FILTERS = [
   'all',
@@ -20,6 +29,19 @@ export type BusinessFunnelEventDateFilter =
   (typeof BUSINESS_FUNNEL_EVENT_DATE_FILTERS)[number];
 
 export class GetBusinessFunnelEventsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
   @IsOptional()
   @IsIn(BUSINESS_FUNNEL_EVENT_STATUS_FILTERS)
   status?: BusinessFunnelEventStatusFilter;

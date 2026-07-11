@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  DefaultValuePipe,
   Get,
   HttpCode,
   Param,
@@ -83,14 +82,12 @@ export class FunnelEventController {
   @Get('business/:businessId/events')
   getBusinessFunnelEvents(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query() query: GetBusinessFunnelEventsQueryDto,
   ) {
     return this.funnelEventService.getBusinessFunnelEvents(
       businessId,
-      page,
-      limit,
+      query.page ?? 1,
+      query.limit ?? 10,
       query,
     );
   }
