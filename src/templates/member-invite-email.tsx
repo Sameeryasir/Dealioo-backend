@@ -1,0 +1,124 @@
+import {
+  Body,
+  Container,
+  Head,
+  Heading,
+  Html,
+  Link,
+  Preview,
+  Section,
+  Text,
+} from '@react-email/components';
+import * as React from 'react';
+
+export type MemberInviteEmailProps = {
+  businessName: string;
+  inviterName: string;
+  role: string;
+  acceptUrl: string;
+  expiresInDays: number;
+  permissions?: string[];
+};
+
+export function MemberInviteEmail({
+  businessName,
+  inviterName,
+  role,
+  acceptUrl,
+  expiresInDays,
+  permissions = [],
+}: MemberInviteEmailProps) {
+  const dayLabel = expiresInDays === 1 ? 'day' : 'days';
+  const permissionLine =
+    permissions.length > 0
+      ? permissions.map((permission) => permission.replace(/_/g, ' ')).join(', ')
+      : null;
+
+  return (
+    <Html>
+      <Head />
+      <Preview>
+        {inviterName} invited you to join {businessName} on RetentionPlus
+      </Preview>
+      <Body style={bodyStyle}>
+        <Container style={containerStyle}>
+          <Section style={cardStyle}>
+            <Heading style={headingStyle}>You&apos;re invited</Heading>
+            <Text style={textStyle}>
+              <strong>{inviterName}</strong> invited you to join{' '}
+              <strong>{businessName}</strong> as a <strong>{role}</strong>.
+            </Text>
+            {permissionLine ? (
+              <Text style={textStyle}>
+                You will have access to: <strong>{permissionLine}</strong>.
+              </Text>
+            ) : null}
+            <Text style={textStyle}>
+              Click the button below to accept the invitation. This link expires
+              in {expiresInDays} {dayLabel}.
+            </Text>
+            <Link href={acceptUrl} style={buttonStyle}>
+              Accept invitation
+            </Link>
+            <Text style={footerStyle}>
+              If you did not expect this email, you can safely ignore it.
+            </Text>
+          </Section>
+        </Container>
+      </Body>
+    </Html>
+  );
+}
+
+const bodyStyle: React.CSSProperties = {
+  backgroundColor: '#f4f7fb',
+  fontFamily:
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  margin: 0,
+  padding: '32px 16px',
+};
+
+const containerStyle: React.CSSProperties = {
+  margin: '0 auto',
+  maxWidth: '560px',
+};
+
+const cardStyle: React.CSSProperties = {
+  backgroundColor: '#ffffff',
+  border: '1px solid #e8edf5',
+  borderRadius: '16px',
+  padding: '28px 24px',
+};
+
+const headingStyle: React.CSSProperties = {
+  color: '#07111f',
+  fontSize: '24px',
+  fontWeight: 700,
+  lineHeight: '32px',
+  margin: '0 0 16px',
+};
+
+const textStyle: React.CSSProperties = {
+  color: '#475569',
+  fontSize: '15px',
+  lineHeight: '24px',
+  margin: '0 0 16px',
+};
+
+const buttonStyle: React.CSSProperties = {
+  backgroundColor: '#1877f2',
+  borderRadius: '10px',
+  color: '#ffffff',
+  display: 'inline-block',
+  fontSize: '15px',
+  fontWeight: 600,
+  padding: '12px 20px',
+  textDecoration: 'none',
+};
+
+const footerStyle: React.CSSProperties = {
+  color: '#94a3b8',
+  fontSize: '13px',
+  lineHeight: '20px',
+  margin: '24px 0 0',
+};

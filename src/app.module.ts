@@ -25,6 +25,7 @@ import { ActivityModule } from './modules/activity/activity.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
+import { MemberModule } from './modules/member/member.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 import { SubscriptionPlansModule } from './modules/subscription-plans/subscription-plans.module';
 import { UserSubscriptionsModule } from './modules/user-subscriptions/user-subscriptions.module';
@@ -80,6 +81,7 @@ import { UploadModule } from './modules/upload/upload.module';
     RedemptionModule,
     ActivityModule,
     ChatModule,
+    MemberModule,
     OnboardingModule,
     MeetingRequestModule,
     SubscriptionPlansModule,
