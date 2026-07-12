@@ -16,6 +16,7 @@ import { businessAccessWhere } from '../../utils/business-access';
 import {
   errorStripePayment,
   logStripePayment,
+  warnStripePayment,
 } from '../payment/payment-logger';
 
 const STRIPE_TIMEOUT_MS = 30_000;
@@ -168,6 +169,68 @@ export class StripeService {
     });
 
     return { url: accountLink.url };
+  }
+
+  async disconnectStripeForBusiness(
+    user: User,
+    businessId: number,
+  ): Promise<{ disconnected: true }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to disconnect Stripe for this account.',
+    );
+
+    const business = await this.businessRepository.findOne({
+      where: businessAccessWhere(user, businessId),
+    });
+
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
+    }
+
+    const stripeAccountId = business.stripeAccountId?.trim();
+    if (!stripeAccountId) {
+      throw new BadRequestException(
+        'Stripe is not connected for this business.',
+      );
+    }
+
+    const clientId =
+      this.config.get<string>('STRIPE_CONNECT_CLIENT_ID')?.trim() ||
+      this.config.get<string>('STRIPE_CLIENT_ID')?.trim();
+
+    if (clientId) {
+      try {
+        await this.stripe.oauth.deauthorize({
+          client_id: clientId,
+          stripe_user_id: stripeAccountId,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        warnStripePayment({
+          phase: 'stripe_disconnect',
+          businessId,
+          stripeAccountId,
+          outcome: 'deauthorize_skipped',
+          error: message,
+        });
+      }
+    }
+
+    await this.businessRepository.update(businessId, {
+      stripeAccountId: null,
+    });
+
+    logStripePayment({
+      phase: 'stripe_disconnect',
+      businessId,
+      stripeAccountId,
+      outcome: 'disconnected',
+    });
+
+    return { disconnected: true };
   }
 
   async createDashboardLoginLink(

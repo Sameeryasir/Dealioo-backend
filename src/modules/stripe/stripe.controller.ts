@@ -61,6 +61,15 @@ export class StripeController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('disconnect/:businessId')
+  async disconnect(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<{ disconnected: true }> {
+    return this.stripeService.disconnectStripeForBusiness(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('dashboard-link/:businessId')
   async getDashboardLink(
     @Req() req,

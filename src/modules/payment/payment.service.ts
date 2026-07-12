@@ -523,12 +523,18 @@ export class PaymentService implements OnModuleInit {
 
     const pagination = normalizePagination(page, limit);
 
-    const [rows, total] = await this.funnelPaymentRepository.findAndCount({
-      where: { funnelId, status: FunnelPaymentStatus.PAID },
-      order: { paidAt: 'DESC', createdAt: 'DESC' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    });
+    // --- Sort by payment date (newest paid first) ---
+    const [rows, total] = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.funnel_id = :funnelId', { funnelId })
+      .andWhere('payment.status = :status', {
+        status: FunnelPaymentStatus.PAID,
+      })
+      .orderBy('payment.paid_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('payment.created_at', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit)
+      .getManyAndCount();
 
     return {
       funnelId,
@@ -550,10 +556,15 @@ export class PaymentService implements OnModuleInit {
       throw new NotFoundException('Funnel not found');
     }
 
-    const rows = await this.funnelPaymentRepository.find({
-      where: { funnelId, status: FunnelPaymentStatus.PAID },
-      order: { paidAt: 'DESC', createdAt: 'DESC' },
-    });
+    const rows = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.funnel_id = :funnelId', { funnelId })
+      .andWhere('payment.status = :status', {
+        status: FunnelPaymentStatus.PAID,
+      })
+      .orderBy('payment.paid_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('payment.created_at', 'DESC')
+      .getMany();
 
     return {
       funnelId,

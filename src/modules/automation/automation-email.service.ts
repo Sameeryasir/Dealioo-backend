@@ -18,7 +18,7 @@ import {
   interpolateAutomationEmailMessage,
   splitAutomationEmailBody,
 } from './automation-email-merge.util';
-import { stripEmailSignoffForChat } from '../../utils/strip-email-signoff-for-chat';
+import { sanitizeChatMessageBody } from '../../utils/strip-email-signoff-for-chat';
 import type {
   AutomationEmailSendResult,
   EmailRecipient,
@@ -169,14 +169,12 @@ export class AutomationEmailService {
       purpose,
     );
 
-    const normalized = stripEmailSignoffForChat(
-      text.replace(/\r\n/g, '\n').trim(),
-    );
-    if (normalized) {
-      return normalized;
+    const stripped = text.replace(/\r\n/g, '\n').trim();
+    if (!stripped) {
+      return this.resolvePreparedEmailPreview(mergedPrepared);
     }
 
-    return this.resolvePreparedEmailPreview(mergedPrepared);
+    return sanitizeChatMessageBody(stripped);
   }
 
   buildTemplatePropsForRecipient(
