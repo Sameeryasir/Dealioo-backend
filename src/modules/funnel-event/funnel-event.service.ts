@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -51,6 +52,8 @@ import {
 } from './funnelEventDto/get-business-funnel-events-query.dto';
 @Injectable()
 export class FunnelEventService {
+  private readonly logger = new Logger(FunnelEventService.name);
+
   constructor(
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,
@@ -134,7 +137,27 @@ export class FunnelEventService {
     }
 
     if (tracked.shouldRunAutomation) {
+      if (
+        dto.eventType === FunnelEventType.PAYMENT &&
+        this.isPaidFunnelEvent(tracked.event)
+      ) {
+        this.logger.log(
+          `[Prepaid Offer] Triggering automation from payment track — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
+        );
+      }
       await this.automationService.handleEvent(tracked.event);
+    } else if (
+      dto.eventType === FunnelEventType.PAYMENT &&
+      tracked.event.customerId &&
+      this.isPaidFunnelEvent(tracked.event)
+    ) {
+      this.logger.log(
+        `[Prepaid Offer] Retrying automation for existing paid payment — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
+      );
+      // Payment already recorded — retry prepaid start without cancelling in-flight runs.
+      await this.automationService.handleEvent(tracked.event, {
+        skipCancelPendingOnPayment: true,
+      });
     }
 
     if (
@@ -156,17 +179,31 @@ export class FunnelEventService {
   async syncPaidFunnelPaymentAutomation(
     funnelPaymentId: number,
   ): Promise<void> {
+    this.logger.log(
+      `[Prepaid Offer] Syncing automation for paid payment ${funnelPaymentId}`,
+    );
+
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: funnelPaymentId },
     });
     if (!payment || payment.status !== FunnelPaymentStatus.PAID) {
+      this.logger.warn(
+        `[Prepaid Offer] Sync skipped — payment ${funnelPaymentId} is missing or not paid`,
+      );
       return;
     }
 
     const customerId = await this.resolveCustomerIdForPayment(payment);
     if (!customerId) {
+      this.logger.warn(
+        `[Prepaid Offer] Sync skipped — could not resolve customer for payment ${funnelPaymentId}`,
+      );
       return;
     }
+
+    this.logger.log(
+      `[Prepaid Offer] Tracking paid payment ${funnelPaymentId} for customer ${customerId} on funnel ${payment.funnelId}`,
+    );
 
     await this.track({
       eventType: FunnelEventType.PAYMENT,
@@ -667,12 +704,26 @@ export class FunnelEventService {
       return checkoutToken.customerId;
     }
 
+    const email = payment.customerEmail?.trim();
+    if (email) {
+      const tokenForFunnel = await this.checkoutAccessTokenRepository
+        .createQueryBuilder('token')
+        .innerJoin('token.customer', 'customer')
+        .where('token.funnel_id = :funnelId', { funnelId: payment.funnelId })
+        .andWhere('LOWER(customer.email) = LOWER(:email)', { email })
+        .orderBy('token.created_at', 'DESC')
+        .addOrderBy('token.id', 'DESC')
+        .getOne();
+      if (tokenForFunnel?.customerId) {
+        return tokenForFunnel.customerId;
+      }
+    }
+
     const coupon = await this.couponService.findByPaymentId(payment.id);
     if (coupon?.customerId) {
       return coupon.customerId;
     }
 
-    const email = payment.customerEmail?.trim();
     if (email) {
       const customer = await this.customerRepository
         .createQueryBuilder('customer')
@@ -684,14 +735,21 @@ export class FunnelEventService {
       }
     }
 
-    const funnelEvent = await this.funnelEventRepository.findOne({
-      where: { funnelId: payment.funnelId },
-      order: { createdAt: 'DESC', id: 'DESC' },
-    });
-    if (funnelEvent?.customerId) {
-      const resolved = await this.resolveCustomerId(funnelEvent.customerId);
-      if (resolved) {
-        return resolved;
+    if (email) {
+      const funnelEvent = await this.funnelEventRepository
+        .createQueryBuilder('event')
+        .innerJoin('event.customer', 'customer')
+        .where('event.funnel_id = :funnelId', { funnelId: payment.funnelId })
+        .andWhere('LOWER(customer.email) = LOWER(:email)', { email })
+        .andWhere('event.customer_id IS NOT NULL')
+        .orderBy('event.created_at', 'DESC')
+        .addOrderBy('event.id', 'DESC')
+        .getOne();
+      if (funnelEvent?.customerId) {
+        const resolved = await this.resolveCustomerId(funnelEvent.customerId);
+        if (resolved) {
+          return resolved;
+        }
       }
     }
 

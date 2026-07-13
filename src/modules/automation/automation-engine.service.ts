@@ -122,7 +122,11 @@ export class AutomationEngineService {
     );
 
     this.logger.log(
-      `Execution ${executionId}: running node ${node.id} (${node.type})`,
+      `Execution ${executionId}: running node ${node.id} (${node.type})${
+        execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT
+          ? ' [Prepaid Offer]'
+          : ''
+      }`,
     );
 
     await this.recordExecutionEvent(
@@ -798,6 +802,10 @@ export class AutomationEngineService {
     >,
     config: Record<string, unknown>,
   ): Promise<NodeRunResult> {
+    this.logger.log(
+      `[Prepaid Offer] Running prepaid payment actions — execution ${execution.id} customer ${execution.customerId} node ${node.id}`,
+    );
+
     const actions = Array.isArray(config.actions) ? config.actions : [];
     const purpose = execution.automation.purpose;
     const campaignName =

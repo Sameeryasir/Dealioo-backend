@@ -35,6 +35,7 @@ import { PaginatedExecutionsResponseDto } from './automationDto/paginated-execut
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
+import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
 
 @SkipThrottle()
 @Controller('automation')
@@ -242,6 +243,16 @@ export class AutomationController {
     businessId?: number,
   ): Promise<Automation[]> {
     return this.automationService.getAutomations(businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/bootstrap-graph')
+  bootstrapAutomationGraph(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: BootstrapAutomationGraphDto,
+    @Req() req,
+  ): Promise<Automation> {
+    return this.automationService.bootstrapAutomationGraph(id, dto, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))

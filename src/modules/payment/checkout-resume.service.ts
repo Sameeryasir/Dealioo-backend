@@ -109,11 +109,8 @@ export class CheckoutResumeService {
       const payment = await this.funnelPaymentRepository.findOne({
         where: { id: funnelPaymentId },
       });
-      if (
-        !payment ||
-        payment.status === FunnelPaymentStatus.PAID ||
-        payment.status === FunnelPaymentStatus.REFUNDED
-      ) {
+      // Keep paid IDs so confirmation can verify status — only drop missing rows.
+      if (!payment) {
         funnelPaymentId = null;
       }
     }
@@ -123,7 +120,15 @@ export class CheckoutResumeService {
         row.funnelId,
         customer.email.trim(),
       );
-      funnelPaymentId = pendingPayment?.id ?? null;
+      if (pendingPayment) {
+        funnelPaymentId = pendingPayment.id;
+      } else {
+        const paidPayment = await this.findLatestPaidPayment(
+          row.funnelId,
+          customer.email.trim(),
+        );
+        funnelPaymentId = paidPayment?.id ?? null;
+      }
       if (funnelPaymentId !== row.funnelPaymentId) {
         await this.tokenRepository.update(row.id, { funnelPaymentId });
       }
@@ -234,6 +239,20 @@ export class CheckoutResumeService {
           FunnelPaymentStatus.FAILED,
           FunnelPaymentStatus.CANCELLED,
         ]),
+      },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  private async findLatestPaidPayment(
+    funnelId: number,
+    customerEmail: string,
+  ): Promise<FunnelPayment | null> {
+    return this.funnelPaymentRepository.findOne({
+      where: {
+        funnelId,
+        customerEmail: customerEmail.trim(),
+        status: FunnelPaymentStatus.PAID,
       },
       order: { createdAt: 'DESC' },
     });

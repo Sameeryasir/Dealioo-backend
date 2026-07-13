@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
   OnModuleInit,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
@@ -34,6 +36,7 @@ import {
   type PaginationMeta,
 } from '../../common/pagination';
 import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
+import { FunnelEventService } from '../funnel-event/funnel-event.service';
 
 @Injectable()
 export class PaymentService implements OnModuleInit {
@@ -54,6 +57,8 @@ export class PaymentService implements OnModuleInit {
     private readonly couponService: CouponService,
     private readonly checkoutResumeService: CheckoutResumeService,
     private readonly userSubscriptionsService: UserSubscriptionsService,
+    @Inject(forwardRef(() => FunnelEventService))
+    private readonly funnelEventService: FunnelEventService,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -153,6 +158,23 @@ export class PaymentService implements OnModuleInit {
           (await this.funnelPaymentRepository.findOne({
             where: { id: paymentId },
           })) ?? payment;
+
+        // --- Local/dev: start prepaid automation without blocking status poll ---
+        if (payment.status === FunnelPaymentStatus.PAID) {
+          const paidPaymentId = payment.id;
+          this.logger.log(
+            `[Prepaid Offer] Payment ${paidPaymentId} confirmed via status poll — queueing automation sync`,
+          );
+          void this.funnelEventService
+            .syncPaidFunnelPaymentAutomation(paidPaymentId)
+            .catch((err) => {
+              this.logger.warn(
+                `Prepaid automation sync failed for payment ${paidPaymentId}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            });
+        }
       }
     }
 

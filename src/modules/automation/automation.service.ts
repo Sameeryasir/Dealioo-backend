@@ -79,6 +79,7 @@ import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
+import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
 import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
 
@@ -215,7 +216,24 @@ export class AutomationService {
       await this.resumePausedExecutionsForAutomation(saved.id);
     }
 
+    if (
+      !wasActive &&
+      saved.isActive &&
+      saved.purpose === AutomationPurpose.FUNNEL_PAYMENT
+    ) {
+      this.logPrepaidOfferActivated(saved, 'updated');
+    }
+
     return saved;
+  }
+
+  private logPrepaidOfferActivated(
+    automation: Automation,
+    source: 'activated' | 'updated',
+  ): void {
+    this.logger.log(
+      `[Prepaid Offer] Automation ${source}: id=${automation.id} name="${automation.name}" businessId=${automation.businessId} funnelId=${automation.funnelId ?? 'all'} campaignId=${automation.campaignId ?? 'none'}`,
+    );
   }
 
   async getAutomations(businessId?: number): Promise<Automation[]> {
@@ -285,6 +303,10 @@ export class AutomationService {
     }
 
     await this.resumePausedExecutionsForAutomation(saved.id);
+
+    if (saved.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      this.logPrepaidOfferActivated(saved, 'activated');
+    }
 
     return saved;
   }
@@ -624,6 +646,70 @@ export class AutomationService {
     const saved = await this.connectionRepository.save(connection);
     await this.bumpAutomationGraphVersion(saved.automationId);
     return saved;
+  }
+
+  async bootstrapAutomationGraph(
+    automationId: number,
+    dto: BootstrapAutomationGraphDto,
+    user: User,
+  ): Promise<Automation> {
+    requireAdminRole(
+      user,
+      'You do not have permission to update automations.',
+    );
+
+    await this.findAutomationById(automationId);
+    await this.assertAutomationEditable(automationId);
+
+    const existingNodeCount = await this.nodeRepository.count({
+      where: { automationId },
+    });
+    if (existingNodeCount > 0) {
+      throw new BadRequestException(
+        'This automation already has workflow steps.',
+      );
+    }
+
+    await this.nodeRepository.manager.transaction(async (manager) => {
+      const nodeRepo = manager.getRepository(AutomationNode);
+      const connectionRepo = manager.getRepository(AutomationConnection);
+
+      const savedNodes: AutomationNode[] = [];
+      for (const [index, nodeDef] of dto.nodes.entries()) {
+        const node = nodeRepo.create({
+          automationId,
+          type: nodeDef.type,
+          config: nodeDef.config ?? {},
+          positionX: nodeDef.positionX ?? 0,
+          positionY: nodeDef.positionY ?? 200 + index * 120,
+          order: nodeDef.order ?? index,
+        });
+        savedNodes.push(await nodeRepo.save(node));
+      }
+
+      for (const connectionDef of dto.connections) {
+        const source = savedNodes[connectionDef.sourceIndex];
+        const target = savedNodes[connectionDef.targetIndex];
+        if (!source || !target) {
+          throw new BadRequestException(
+            'Template connection references an invalid step index.',
+          );
+        }
+
+        await connectionRepo.save(
+          connectionRepo.create({
+            automationId,
+            sourceNodeId: source.id,
+            targetNodeId: target.id,
+          }),
+        );
+      }
+    });
+
+    await this.bumpAutomationGraphVersion(automationId);
+    await this.cronScheduler.syncAutomationCron(automationId);
+
+    return this.findAutomationById(automationId);
   }
 
   async deleteConnection(id: number): Promise<void> {
@@ -1609,7 +1695,10 @@ export class AutomationService {
     );
   }
 
-  async handleEvent(event: FunnelEvent): Promise<void> {
+  async handleEvent(
+    event: FunnelEvent,
+    options?: { skipCancelPendingOnPayment?: boolean },
+  ): Promise<void> {
     if (!event.customerId) {
       return;
     }
@@ -1632,8 +1721,12 @@ export class AutomationService {
 
     if (
       event.eventType === FunnelEventType.PAYMENT &&
-      this.isPaidFunnelEvent(event)
+      this.isPaidFunnelEvent(event) &&
+      !options?.skipCancelPendingOnPayment
     ) {
+      this.logger.log(
+        `[Prepaid Offer] Paid payment event — customerId=${event.customerId} funnelId=${event.funnelId} paymentId=${event.funnelPaymentId ?? 'none'}`,
+      );
       await this.cancelPendingExecutionsForCustomer(
         event.customerId,
         event.funnelId,
@@ -1641,6 +1734,14 @@ export class AutomationService {
     }
 
     const automations = await this.findAutomationsForFunnelEvent(event);
+    if (
+      event.eventType === FunnelEventType.PAYMENT &&
+      this.isPaidFunnelEvent(event)
+    ) {
+      this.logger.log(
+        `[Prepaid Offer] ${automations.length} active prepaid automation(s) eligible for funnel ${event.funnelId}`,
+      );
+    }
     for (const automation of automations) {
       if (
         automation.purpose === AutomationPurpose.FUNNEL_SIGNUP &&
@@ -1669,6 +1770,13 @@ export class AutomationService {
         continue;
       }
       if (automation.funnelId && automation.funnelId !== funnelId) {
+        continue;
+      }
+      // Prepaid Offer starts on payment — never cancel it when payment completes.
+      if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+        this.logger.log(
+          `[Prepaid Offer] Keeping active execution ${execution.id} for automation ${automation.id} — payment-triggered flow must continue`,
+        );
         continue;
       }
 
@@ -1722,6 +1830,11 @@ export class AutomationService {
     funnel: Funnel,
   ): Promise<void> {
     if (!this.matchesAutomationScope(automation, event, funnel)) {
+      if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+        this.logger.log(
+          `[Prepaid Offer] Skipped automation ${automation.id} "${automation.name}" — not in scope for funnel ${event.funnelId}`,
+        );
+      }
       return;
     }
 
@@ -1746,17 +1859,25 @@ export class AutomationService {
       }
     }
 
-    const hasActive = await this.executionService.hasActiveExecution(
-      automation.id,
-      event.customerId,
-    );
-    if (hasActive) {
-      return;
+    if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      await this.supersedeActivePrepaidExecutionsForCustomer(
+        automation.id,
+        event.customerId!,
+      );
+    } else {
+      const hasActive = await this.executionService.hasActiveExecution(
+        automation.id,
+        event.customerId,
+      );
+      if (hasActive) {
+        return;
+      }
     }
 
     const allowsRepeatRuns =
       automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
-      automation.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER;
+      automation.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
+      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT;
 
     if (!allowsRepeatRuns) {
       const alreadyCompleted =
@@ -1804,6 +1925,42 @@ export class AutomationService {
       nodeId: startNodeId,
       nodeType: startNode.type,
     });
+
+    if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      this.logger.log(
+        `[Prepaid Offer] Started execution ${execution.id} for customer ${event.customerId} — automation ${automation.id} "${automation.name}" on funnel ${event.funnelId}`,
+      );
+    }
+  }
+
+  /** Stop in-progress prepaid runs when the same guest pays again — new payment starts fresh. */
+  private async supersedeActivePrepaidExecutionsForCustomer(
+    automationId: number,
+    customerId: number,
+  ): Promise<void> {
+    const activeExecutions =
+      await this.executionService.findActiveExecutionsForCustomer(customerId);
+
+    for (const execution of activeExecutions) {
+      if (execution.automationId !== automationId) {
+        continue;
+      }
+      if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+        continue;
+      }
+
+      await this.queueService.removeResumeExecutionJob(execution.id);
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: execution.currentNodeId,
+        customerId,
+        message: 'Workflow stopped — superseded by new payment',
+      });
+      await this.executionService.markCompleted(execution.id);
+      this.logger.log(
+        `[Prepaid Offer] Superseded active execution ${execution.id} for customer ${customerId} — starting new payment run`,
+      );
+    }
   }
 
   private isPaidFunnelEvent(event: FunnelEvent): boolean {
