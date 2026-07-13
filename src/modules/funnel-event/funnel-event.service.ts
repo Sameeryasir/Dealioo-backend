@@ -40,10 +40,11 @@ import {
   type BusinessVisitSnapshot,
 } from './business-order-payment.util';
 import {
-  getBusinessFunnelEventDateFrom,
   matchesBusinessEventStatusFilter,
+  matchesBusinessFunnelEventDateFilter,
   normalizeBusinessFunnelEventSearch,
   resolveBusinessEventDisplayStatus,
+  sortBusinessFunnelEventsByPaymentDate,
 } from './business-funnel-events-filters.util';
 import {
   GetBusinessFunnelEventsQueryDto,
@@ -605,12 +606,17 @@ export class FunnelEventService {
     }
 
     const visitorId = dto.visitorId?.trim() ?? null;
-    const existing = await this.findRowByFunnelAndCustomer(
+    const funnelPaymentId = payment?.id ?? dto.funnelPaymentId ?? null;
+    const stripePaymentIntentId =
+      dto.stripePaymentIntentId ?? payment?.stripePaymentIntentId ?? null;
+    const paymentStatus = dto.paymentStatus ?? payment?.status ?? null;
+
+    let existing = await this.findPaymentEventRow(
       dto.funnelId,
       customerId,
+      funnelPaymentId,
+      stripePaymentIntentId,
     );
-
-    const funnelPaymentId = payment?.id ?? dto.funnelPaymentId ?? null;
 
     if (existing) {
       const wasPaidBefore = this.isPaidFunnelEvent(existing);
@@ -650,10 +656,48 @@ export class FunnelEventService {
   }
 
   private isPaidFunnelEvent(event: FunnelEvent): boolean {
-    if (event.paymentStatus === FunnelPaymentStatus.PAID) {
-      return true;
+    return event.paymentStatus === FunnelPaymentStatus.PAID;
+  }
+
+  private async findPaymentEventRow(
+    funnelId: number,
+    customerId: number,
+    funnelPaymentId: number | null,
+    stripePaymentIntentId: string | null,
+  ): Promise<FunnelEvent | null> {
+    if (funnelPaymentId != null) {
+      const byPayment = await this.funnelEventRepository.findOne({
+        where: { funnelPaymentId },
+      });
+      if (byPayment) {
+        return byPayment;
+      }
     }
-    return event.funnelPaymentId !== null && event.funnelPaymentId !== undefined;
+
+    const piId = stripePaymentIntentId?.trim();
+    if (piId) {
+      const byIntent = await this.funnelEventRepository.findOne({
+        where: { funnelId, stripePaymentIntentId: piId },
+      });
+      if (byIntent) {
+        return byIntent;
+      }
+    }
+
+    const journeyRow = await this.findRowByFunnelAndCustomer(funnelId, customerId);
+    if (!journeyRow) {
+      return null;
+    }
+
+    if (
+      journeyRow.funnelPaymentId != null &&
+      funnelPaymentId != null &&
+      journeyRow.funnelPaymentId !== funnelPaymentId
+    ) {
+      return null;
+    }
+
+    return journeyRow;
   }
 
   private applyPaymentFieldsToRow(
@@ -784,6 +828,8 @@ export class FunnelEventService {
       onlineAmountCents: number | null;
       businessAmount: number | null;
       businessVisitedAt: Date | null;
+      paidAt: Date | null;
+      funnelPaymentId: number | null;
     }>;
     meta: PaginationMeta & {
       campaignCount: number;
@@ -795,7 +841,6 @@ export class FunnelEventService {
     const statusFilter: BusinessFunnelEventStatusFilter = filters.status ?? 'all';
     const dateFilter: BusinessFunnelEventDateFilter = filters.date ?? 'all';
     const search = normalizeBusinessFunnelEventSearch(filters.search);
-    const dateFrom = getBusinessFunnelEventDateFrom(dateFilter);
 
     const campaignCount = await this.campaignRepository.count({
       where: { businessId },
@@ -819,12 +864,8 @@ export class FunnelEventService {
       .innerJoinAndSelect('event.funnel', 'funnel')
       .innerJoinAndSelect('funnel.campaign', 'campaign')
       .leftJoinAndSelect('event.customer', 'customer')
-      .where('campaign.restaurant_id = :businessId', { businessId })
-      .orderBy('event.created_at', 'DESC');
-
-    if (dateFrom) {
-      qb.andWhere('event.created_at >= :dateFrom', { dateFrom });
-    }
+      .leftJoinAndSelect('event.funnelPayment', 'funnelPayment')
+      .where('campaign.restaurant_id = :businessId', { businessId });
 
     if (search) {
       const searchPattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`;
@@ -841,65 +882,70 @@ export class FunnelEventService {
 
     const rows = await qb.getMany();
     const filteredRows = rows.filter((row) => row.funnel?.campaign != null);
-
-    const visitByCustomerFunnel = await this.loadLatestBusinessVisits(
-      businessId,
+    const linkedPaymentIds = new Set(
       filteredRows
+        .map((row) => row.funnelPaymentId)
+        .filter((id): id is number => id != null),
+    );
+    const orphanPaidPayments = await this.loadUnlinkedPaidPayments(
+      businessId,
+      linkedPaymentIds,
+      search,
+    );
+
+    const visitPairs = [
+      ...filteredRows
         .filter((row) => row.customerId != null)
         .map((row) => ({
           customerId: row.customerId!,
           funnelId: row.funnelId,
         })),
+      ...orphanPaidPayments
+        .filter((payment) => payment.customerId != null)
+        .map((payment) => ({
+          customerId: payment.customerId!,
+          funnelId: payment.funnelId,
+        })),
+    ];
+
+    const visitByCustomerFunnel = await this.loadLatestBusinessVisits(
+      businessId,
+      visitPairs,
     );
 
-    const mappedRows = filteredRows.map((row) => {
-      const visitKey =
-        row.customerId != null
-          ? customerFunnelVisitKey(row.customerId, row.funnelId)
-          : null;
-      const visit =
-        visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
-      const paymentSummary = buildBusinessOrderPaymentSummary(row, visit);
+    const mappedRows = filteredRows.map((row) =>
+      this.mapFunnelEventToBusinessRow(row, visitByCustomerFunnel),
+    );
+    const orphanRows = await Promise.all(
+      orphanPaidPayments.map((payment) =>
+        this.mapOrphanPaidPaymentToBusinessRow(payment, visitByCustomerFunnel),
+      ),
+    );
 
-      return {
-        id: row.id,
-        eventType: row.eventType,
-        createdAt: row.createdAt,
-        funnelId: row.funnelId,
-        campaignId: row.funnel.campaign.id,
-        campaignName: row.funnel.campaign.campaignName,
-        customer: row.customer
-          ? {
-              id: row.customer.id,
-              name: row.customer.name,
-              email: row.customer.email,
-              phone: row.customer.phone,
-            }
-          : null,
-        customerEmail: row.customerEmail,
-        amount: row.amount,
-        currency: row.currency,
-        paymentStatus: row.paymentStatus,
-        receiptUrl: row.receiptUrl,
-        orderStatus: paymentSummary.orderStatus,
-        onlineAmountCents: paymentSummary.onlineAmountCents,
-        businessAmount: paymentSummary.businessAmount,
-        businessVisitedAt: paymentSummary.businessVisitedAt,
-      };
-    });
+    const combinedRows = [...mappedRows, ...orphanRows].filter((row) =>
+      matchesBusinessFunnelEventDateFilter(
+        {
+          createdAt: row.createdAt,
+          paidAt: row.paidAt,
+          businessVisitedAt: row.businessVisitedAt,
+        },
+        dateFilter,
+      ),
+    );
 
     const statusFilteredRows =
       statusFilter === 'all'
-        ? mappedRows
-        : mappedRows.filter((row) =>
+        ? combinedRows
+        : combinedRows.filter((row) =>
             matchesBusinessEventStatusFilter(
               resolveBusinessEventDisplayStatus(row),
               statusFilter,
             ),
           );
 
-    const total = statusFilteredRows.length;
-    const data = statusFilteredRows.slice(
+    const sortedRows = sortBusinessFunnelEventsByPaymentDate(statusFilteredRows);
+    const total = sortedRows.length;
+    const data = sortedRows.slice(
       pagination.skip,
       pagination.skip + pagination.limit,
     );
@@ -913,6 +959,175 @@ export class FunnelEventService {
         allEventsTotal,
       },
     };
+  }
+
+  /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */
+  private mapFunnelEventToBusinessRow(
+    row: FunnelEvent & {
+      funnel: Funnel & { campaign: Campaign };
+      customer?: Customer | null;
+      funnelPayment?: FunnelPayment | null;
+    },
+    visitByCustomerFunnel: Map<string, BusinessVisitSnapshot>,
+  ) {
+    const visitKey =
+      row.customerId != null
+        ? customerFunnelVisitKey(row.customerId, row.funnelId)
+        : null;
+    const visit =
+      visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+    const paidAt = row.funnelPayment?.paidAt ?? null;
+    const paymentSummary = buildBusinessOrderPaymentSummary(row, visit, {
+      paidAt,
+    });
+
+    return {
+      id: row.id,
+      eventType: row.eventType,
+      createdAt: row.createdAt,
+      funnelId: row.funnelId,
+      campaignId: row.funnel.campaign.id,
+      campaignName: row.funnel.campaign.campaignName,
+      customer: row.customer
+        ? {
+            id: row.customer.id,
+            name: row.customer.name,
+            email: row.customer.email,
+            phone: row.customer.phone,
+          }
+        : null,
+      customerEmail: row.customerEmail,
+      amount: row.amount,
+      currency: row.currency,
+      paymentStatus: row.paymentStatus,
+      receiptUrl: row.receiptUrl,
+      orderStatus: paymentSummary.orderStatus,
+      onlineAmountCents: paymentSummary.onlineAmountCents,
+      businessAmount: paymentSummary.businessAmount,
+      businessVisitedAt: paymentSummary.businessVisitedAt,
+      paidAt,
+      funnelPaymentId: row.funnelPaymentId,
+    };
+  }
+
+  private async mapOrphanPaidPaymentToBusinessRow(
+    payment: FunnelPayment & {
+      funnel: Funnel & { campaign: Campaign };
+      customerId: number | null;
+      customer: Customer | null;
+    },
+    visitByCustomerFunnel: Map<string, BusinessVisitSnapshot>,
+  ) {
+    const visitKey =
+      payment.customerId != null
+        ? customerFunnelVisitKey(payment.customerId, payment.funnelId)
+        : null;
+    const visit =
+      visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+    const paidAt = payment.paidAt ?? payment.updatedAt ?? payment.createdAt;
+    const paymentSummary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.PAYMENT,
+        amount: payment.amount,
+        paymentStatus: payment.status,
+      },
+      visit,
+      { paidAt },
+    );
+
+    return {
+      id: -payment.id,
+      eventType: FunnelEventType.PAYMENT,
+      createdAt: paidAt,
+      funnelId: payment.funnelId,
+      campaignId: payment.funnel.campaign.id,
+      campaignName: payment.funnel.campaign.campaignName,
+      customer: payment.customer
+        ? {
+            id: payment.customer.id,
+            name: payment.customer.name,
+            email: payment.customer.email,
+            phone: payment.customer.phone,
+          }
+        : null,
+      customerEmail: payment.customerEmail,
+      amount: payment.amount,
+      currency: payment.currency,
+      paymentStatus: payment.status,
+      receiptUrl: payment.receiptUrl,
+      orderStatus: paymentSummary.orderStatus,
+      onlineAmountCents: paymentSummary.onlineAmountCents,
+      businessAmount: paymentSummary.businessAmount,
+      businessVisitedAt: paymentSummary.businessVisitedAt,
+      paidAt: payment.paidAt,
+      funnelPaymentId: payment.id,
+    };
+  }
+
+  private async loadUnlinkedPaidPayments(
+    businessId: number,
+    linkedPaymentIds: Set<number>,
+    search?: string,
+  ): Promise<
+    Array<
+      FunnelPayment & {
+        funnel: Funnel & { campaign: Campaign };
+        customerId: number | null;
+        customer: Customer | null;
+      }
+    >
+  > {
+    const qb = this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .innerJoinAndSelect('payment.funnel', 'funnel')
+      .innerJoinAndSelect('funnel.campaign', 'campaign')
+      .where('campaign.restaurant_id = :businessId', { businessId })
+      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID });
+
+    if (linkedPaymentIds.size > 0) {
+      qb.andWhere('payment.id NOT IN (:...linkedPaymentIds)', {
+        linkedPaymentIds: [...linkedPaymentIds],
+      });
+    }
+
+    const payments = await qb.getMany();
+    const searchPattern = search?.toLowerCase();
+
+    const enriched = await Promise.all(
+      payments.map(async (payment) => {
+        const customerId = await this.resolveCustomerIdForPayment(payment);
+        const customer =
+          customerId != null
+            ? await this.customerRepository.findOne({
+                where: { id: customerId },
+              })
+            : null;
+
+        return {
+          ...payment,
+          customerId,
+          customer,
+        };
+      }),
+    );
+
+    if (!searchPattern) {
+      return enriched;
+    }
+
+    return enriched.filter((payment) => {
+      const haystack = [
+        payment.customer?.name,
+        payment.customer?.email,
+        payment.customer?.phone,
+        payment.customerEmail,
+        payment.funnel.campaign.campaignName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(searchPattern);
+    });
   }
 
   /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */

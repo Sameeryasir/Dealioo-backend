@@ -2,6 +2,7 @@ import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
+import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 
 export type BusinessOrderPaymentStatus =
   | 'not_paid'
@@ -28,12 +29,30 @@ export function customerFunnelVisitKey(
   return `${customerId}:${funnelId}`;
 }
 
+export function isConfirmedOnlinePayment(input: {
+  paymentStatus?: string | null;
+  paidAt?: Date | string | null;
+}): boolean {
+  return (
+    input.paymentStatus === FunnelPaymentStatus.PAID ||
+    input.paidAt != null
+  );
+}
+
 export function buildBusinessOrderPaymentSummary(
-  event: Pick<FunnelEvent, 'eventType' | 'amount'>,
+  event: Pick<FunnelEvent, 'eventType' | 'amount' | 'paymentStatus'>,
   visit: BusinessVisitSnapshot | null,
+  options: { paidAt?: Date | null } = {},
 ): BusinessOrderPaymentSummary {
+  const paidOnline = isConfirmedOnlinePayment({
+    paymentStatus: event.paymentStatus,
+    paidAt: options.paidAt,
+  });
+
   const onlineAmountCents =
-    event.eventType === FunnelEventType.PAYMENT && event.amount != null
+    event.eventType === FunnelEventType.PAYMENT &&
+    event.amount != null &&
+    paidOnline
       ? event.amount
       : null;
   const businessAmount =
@@ -49,8 +68,6 @@ export function buildBusinessOrderPaymentSummary(
     orderStatus = 'paid_online';
   } else if (hasBusiness) {
     orderStatus = 'paid_walk_in';
-  } else if (event.eventType === FunnelEventType.PAYMENT) {
-    orderStatus = 'paid_online';
   }
 
   return {
