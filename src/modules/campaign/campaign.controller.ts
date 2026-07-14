@@ -8,11 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import {
   createUploadMulterOptions,
@@ -26,6 +27,34 @@ import { CampaignService } from './campaign.service';
 @Controller('campaign')
 export class CampaignController {
   constructor(private readonly campaignService: CampaignService) {}
+
+  /**
+   * Change: Funnel/CRM editor hero image upload endpoint.
+   * Why: Frontend TemplateEditorSidebar calls POST /campaign/upload-image.
+   * Related: CampaignService.uploadCampaignImage, upload-campaign-image.ts
+   */
+  @UseGuards(AuthGuard('jwt'))
+  @Post('upload-image')
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
+        allowedMimeTypes: [
+          'image/png',
+          'image/jpeg',
+          'image/webp',
+          'image/gif',
+        ],
+        fileFilterErrorMessage:
+          'Only image files are allowed (PNG, JPEG, WebP, GIF).',
+      }),
+    ),
+  )
+  uploadImage(
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<{ imageUrl: string }> {
+    return this.campaignService.uploadCampaignImage(file);
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('create')

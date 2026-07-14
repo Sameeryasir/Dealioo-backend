@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { CustomerService } from './customer.service';
-import { Customer } from 'src/db/entities/customer.entity';
+import { Customer } from '../../db/entities/customer.entity';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
 @Controller('customer')
 export class CustomerController {

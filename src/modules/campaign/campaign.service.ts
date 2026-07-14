@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import {
@@ -32,6 +36,32 @@ export class CampaignService {
     private readonly funnelRepository: Repository<Funnel>,
     private readonly spacesService: SpacesService,
   ) {}
+
+  /**
+   * Change: Standalone hero/funnel image upload for the CRM editor.
+   * Why: Frontend posts to POST /campaign/upload-image; route was missing.
+   * Related: CampaignController.uploadImage, upload-campaign-image.ts
+   */
+  async uploadCampaignImage(
+    file?: Express.Multer.File,
+  ): Promise<{ imageUrl: string }> {
+    if (!file) {
+      throw new BadRequestException('Image file is required.');
+    }
+
+    const imageUrl = await persistUploadedFile(
+      this.spacesService,
+      file,
+      CAMPAIGNS_UPLOAD_SUBDIR,
+      'absolute',
+    );
+
+    if (!imageUrl?.trim()) {
+      throw new BadRequestException('Upload failed.');
+    }
+
+    return { imageUrl };
+  }
 
   async createCampaign(
     createCampaignDto: CreateCampaignDto,

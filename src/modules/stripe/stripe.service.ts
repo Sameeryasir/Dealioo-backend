@@ -123,10 +123,11 @@ export class StripeService {
       );
     }
 
-    let stripeAccountId = business.stripeAccountId;
+    let stripeAccountId = business.stripeAccountId?.trim() || null;
 
     if (!stripeAccountId) {
-      const contactEmail = business.email ?? business.owner?.email;
+      const contactEmail =
+        business.email?.trim() || business.owner?.email?.trim() || null;
       if (!contactEmail) {
         throw new InternalServerErrorException(
           'Business must have an email (or owner email) before Stripe onboarding.',
@@ -148,7 +149,7 @@ export class StripeService {
       stripeAccountId = account.id;
 
       const persist = await this.businessRepository.update(
-        businessAccessWhere(user, businessId),
+        { id: businessId },
         { stripeAccountId },
       );
 
@@ -157,14 +158,22 @@ export class StripeService {
           'Could not save Stripe account id on this business.',
         );
       }
+
+      logStripePayment({
+        phase: 'stripe_express_account_created',
+        businessId,
+        stripeAccountId,
+        outcome: 'created',
+      });
     }
 
-    const frontendBase = getFrontendBaseUrl();
+    const frontendBase = getFrontendBaseUrl().replace(/\/$/, '');
+    const businessQuery = `businessId=${encodeURIComponent(String(businessId))}`;
 
     const accountLink = await this.stripe.accountLinks.create({
       account: stripeAccountId,
-      refresh_url: `${frontendBase}/stripe/refresh`,
-      return_url: `${frontendBase}/stripe/success`,
+      refresh_url: `${frontendBase}/stripe/success?${businessQuery}&error=${encodeURIComponent('refresh')}`,
+      return_url: `${frontendBase}/stripe/success?${businessQuery}`,
       type: 'account_onboarding',
     });
 

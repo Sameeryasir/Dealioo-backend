@@ -29,6 +29,7 @@ export class StripeController {
     @Query('code') code: string,
     @Query('state') state: string,
     @Query('error') error: string,
+    @Query('error_description') errorDescription: string,
     @Res() res: Response,
   ) {
     console.log('[Stripe OAuth] GET /stripe/callback/oauth', {
@@ -38,17 +39,45 @@ export class StripeController {
       error: error ?? null,
     });
 
-    if (error) {
-      throw new BadRequestException(error);
+    const frontend = getFrontendBaseUrl().replace(/\/$/, '');
+    const businessQuery = state?.trim()
+      ? `businessId=${encodeURIComponent(state.trim())}`
+      : '';
+
+    if (error?.trim()) {
+      const reason = encodeURIComponent(
+        errorDescription?.trim() || error.trim() || 'access_denied',
+      );
+      const qs = [businessQuery, `error=${reason}`].filter(Boolean).join('&');
+      return res.redirect(`${frontend}/stripe/success?${qs}`);
     }
 
     if (!code || !state) {
-      throw new BadRequestException('Missing Stripe OAuth code or state.');
+      return res.redirect(
+        `${frontend}/stripe/success?error=${encodeURIComponent(
+          'Missing Stripe OAuth code or state.',
+        )}`,
+      );
     }
 
-    await this.stripeService.handleOAuthCallback(code, state);
-
-    return res.redirect(`${getFrontendBaseUrl()}/stripe/connect/success`);
+    try {
+      await this.stripeService.handleOAuthCallback(code, state);
+      return res.redirect(
+        `${frontend}/stripe/success${businessQuery ? `?${businessQuery}` : ''}`,
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Stripe account connection failed.';
+      const qs = [
+        businessQuery,
+        `error=${encodeURIComponent(message)}`,
+      ]
+        .filter(Boolean)
+        .join('&');
+      return res.redirect(`${frontend}/stripe/success?${qs}`);
+    }
   }
 
   @UseGuards(AuthGuard('jwt'))

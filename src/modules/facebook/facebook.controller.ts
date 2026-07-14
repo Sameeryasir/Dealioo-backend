@@ -44,16 +44,40 @@ export class FacebookController {
       error: error ?? null,
     });
 
-    const result = await this.facebookService.handleOAuthCallback(
-      code,
-      state,
-      error,
-      errorDescription,
-    );
+    const frontend = getFrontendBaseUrl().replace(/\/$/, '');
 
-    return res.redirect(
-      `${getFrontendBaseUrl()}/facebook/select-ad-account?businessId=${result.businessId}`,
-    );
+    // Not now / deny — redirect to Dealioo (never return raw API JSON in the browser).
+    if (error?.trim()) {
+      const reason = encodeURIComponent(
+        errorDescription?.trim() ||
+          error.trim() ||
+          'Facebook connection was cancelled.',
+      );
+      return res.redirect(
+        `${frontend}/facebook/connect/error?cancelled=1&reason=${reason}`,
+      );
+    }
+
+    try {
+      const result = await this.facebookService.handleOAuthCallback(
+        code,
+        state,
+        error,
+        errorDescription,
+      );
+
+      return res.redirect(
+        `${frontend}/facebook/select-ad-account?businessId=${result.businessId}`,
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Facebook connection failed. Please try again.';
+      return res.redirect(
+        `${frontend}/facebook/connect/error?reason=${encodeURIComponent(message)}`,
+      );
+    }
   }
 
   @UseGuards(AuthGuard('jwt'))
