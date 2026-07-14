@@ -132,7 +132,7 @@ export class FacebookCampaignController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
     @UploadedFile() file: Express.Multer.File,
-  ): Promise<{ imageUrl: string }> {
+  ): Promise<{ imageUrl: string; imageHash: string }> {
     return this.facebookCampaignService.uploadAdImageForBusiness(
       req.user,
       businessId,

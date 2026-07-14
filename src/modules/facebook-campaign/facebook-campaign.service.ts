@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import {
   BadRequestException,
   Injectable,
@@ -37,15 +38,21 @@ import {
   deleteMetaObject,
   genderToMetaGenders,
   graphGetWithToken,
-  graphPostWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
   resolveCityTargetingKey,
   stepFailureUserMessage,
   toMetaUnixTime,
-  uploadAdImageHash,
-  uploadAdVideoId,
 } from './facebook-campaign-meta';
+import {
+  sdkCreateAd,
+  sdkCreateAdCreative,
+  sdkCreateAdSet,
+  sdkCreateCampaign,
+  sdkUploadAdImageBytes,
+  sdkUploadAdImageHash,
+  sdkUploadAdVideoId,
+} from './meta-business-sdk';
 import {
   MetaCreationStep,
   MetaDistanceUnit,
@@ -80,7 +87,7 @@ export class FacebookCampaignService {
     user: User,
     businessId: number,
     file: Express.Multer.File,
-  ): Promise<{ imageUrl: string }> {
+  ): Promise<{ imageUrl: string; imageHash: string }> {
     requireAdminRole(
       user,
       'You do not have permission to upload Facebook ad images.',
@@ -105,7 +112,26 @@ export class FacebookCampaignService {
       );
     }
 
-    return { imageUrl };
+    const { accessToken, adAccountId } =
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
+    if (!adAccountId?.trim()) {
+      throw new BadRequestException(
+        'No Facebook ad account selected. Choose an ad account in Settings → Integrations.',
+      );
+    }
+
+    let bytesBase64: string | null = null;
+    if (file.buffer?.length) {
+      bytesBase64 = file.buffer.toString('base64');
+    } else if (file.path?.trim()) {
+      bytesBase64 = readFileSync(file.path).toString('base64');
+    }
+
+    const imageHash = bytesBase64
+      ? await sdkUploadAdImageBytes(accessToken, adAccountId, bytesBase64)
+      : await sdkUploadAdImageHash(accessToken, adAccountId, imageUrl);
+
+    return { imageUrl, imageHash };
   }
 
   async uploadAdVideoForBusiness(
@@ -223,27 +249,25 @@ export class FacebookCampaignService {
       this.logger.log(
         `Creating Meta campaign for business ${businessId} (tracking ${tracking.id})`,
       );
-      const campaign = await graphPostWithToken<{ id: string }>(
-        `/${adAccountId}/campaigns`,
+      metaCampaignId = await sdkCreateCampaign(
         accessToken,
+        adAccountId,
         buildCampaignPayload({
           name: dto.name.trim(),
           objective: dto.objective,
           specialAdCategories,
         }),
-        'campaign',
       );
-      metaCampaignId = campaign.id;
       await this.facebookCampaignRepository.update(tracking.id, {
-        metaCampaignId: campaign.id,
+        metaCampaignId,
       });
 
-      const adSet = await graphPostWithToken<{ id: string }>(
-        `/${adAccountId}/adsets`,
+      metaAdsetId = await sdkCreateAdSet(
         accessToken,
+        adAccountId,
         buildAdSetPayload({
           name: dto.adSetName?.trim() || `${dto.name.trim()} Ad Set`,
-          campaignId: campaign.id,
+          campaignId: metaCampaignId,
           dailyBudgetMinor,
           objective: dto.objective,
           startTime,
@@ -257,29 +281,27 @@ export class FacebookCampaignService {
           genders,
           placements: dto.placements,
         }),
-        'adset',
       );
-      metaAdsetId = adSet.id;
       await this.facebookCampaignRepository.update(tracking.id, {
-        metaAdsetId: adSet.id,
+        metaAdsetId,
       });
 
       let imageHash: string | undefined;
       let videoId: string | undefined;
 
       if (imageUrl) {
-        imageHash = await uploadAdImageHash(
-          adAccountId,
+        imageHash = await sdkUploadAdImageHash(
           accessToken,
+          adAccountId,
           imageUrl,
         );
       } else if (videoUrl) {
-        videoId = await uploadAdVideoId(adAccountId, accessToken, videoUrl);
+        videoId = await sdkUploadAdVideoId(accessToken, adAccountId, videoUrl);
       }
 
-      const creative = await graphPostWithToken<{ id: string }>(
-        `/${adAccountId}/adcreatives`,
+      metaCreativeId = await sdkCreateAdCreative(
         accessToken,
+        adAccountId,
         buildCreativePayload({
           pageId: dto.facebookPageId.trim(),
           instagramActorId: dto.instagramActorId,
@@ -292,50 +314,47 @@ export class FacebookCampaignService {
           callToAction: dto.callToAction,
           name: `${dto.name.trim()} Creative`,
         }),
-        'creative',
       );
-      metaCreativeId = creative.id;
       await this.facebookCampaignRepository.update(tracking.id, {
-        metaCreativeId: creative.id,
+        metaCreativeId,
       });
 
-      const ad = await graphPostWithToken<{ id: string }>(
-        `/${adAccountId}/ads`,
+      const adId = await sdkCreateAd(
         accessToken,
+        adAccountId,
         buildAdPayload({
           name: dto.adName?.trim() || `${dto.name.trim()} Ad`,
-          adsetId: adSet.id,
-          creativeId: creative.id,
+          adsetId: metaAdsetId,
+          creativeId: metaCreativeId,
         }),
-        'ad',
       );
 
       await this.facebookCampaignRepository.update(tracking.id, {
-        metaAdId: ad.id,
+        metaAdId: adId,
         status: 'PAUSED',
         errorMessage: null,
       });
 
       await this.auditService.log(businessId, 'meta_campaign_created', {
         metadata: {
-          metaCampaignId: campaign.id,
-          metaAdsetId: adSet.id,
-          metaCreativeId: creative.id,
-          metaAdId: ad.id,
+          metaCampaignId,
+          metaAdsetId,
+          metaCreativeId,
+          metaAdId: adId,
           adAccountId,
         },
       });
 
       this.logger.log(
-        `Meta campaign published for business ${businessId}: campaign=${campaign.id}, ad=${ad.id}`,
+        `Meta campaign published for business ${businessId}: campaign=${metaCampaignId}, ad=${adId}`,
       );
 
       return {
         id: tracking.id,
-        metaCampaignId: campaign.id,
-        metaAdsetId: adSet.id,
-        metaCreativeId: creative.id,
-        metaAdId: ad.id,
+        metaCampaignId: metaCampaignId!,
+        metaAdsetId: metaAdsetId!,
+        metaCreativeId: metaCreativeId!,
+        metaAdId: adId,
         status: 'PAUSED',
         adsManagerUrl: adsManagerCampaignsUrl(adAccountId),
         message: 'Campaign published successfully',

@@ -19,7 +19,6 @@ import {
   MetaGender,
 } from './meta-campaign.constants';
 
-// Changed: Graph API v24.0 for campaign publish / Marketing API calls.
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 
 type GraphErrorBody = {
@@ -654,7 +653,6 @@ export async function graphGetWithToken<T>(
       url.searchParams.set(key, value);
     }
   }
-
   const res = await fetch(url.toString(), {
     signal: AbortSignal.timeout(25_000),
   });

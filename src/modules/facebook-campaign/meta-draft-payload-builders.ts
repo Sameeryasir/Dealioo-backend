@@ -130,13 +130,67 @@ export function buildPlacementSpecFromDraft(placements: AdSetPlacementsDto): {
   };
 }
 
+type CustomGeoEntry = {
+  latitude: number;
+  longitude: number;
+  radius: number;
+  distance_unit: string;
+};
+
+function radiusInKm(radius: number, unit: string): number {
+  return unit === 'mile' ? radius * 1.60934 : radius;
+}
+
+function haversineKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(a));
+}
+
+function customLocationsConflict(a: CustomGeoEntry, b: CustomGeoEntry): boolean {
+  const distance = haversineKm(a.latitude, a.longitude, b.latitude, b.longitude);
+  return (
+    distance <
+    radiusInKm(a.radius, a.distance_unit) +
+      radiusInKm(b.radius, b.distance_unit)
+  );
+}
+
+/** Keep largest non-overlapping pins — Meta rejects conflicting custom_locations. */
+function dedupeNonOverlappingCustomLocations(
+  entries: CustomGeoEntry[],
+): CustomGeoEntry[] {
+  const sorted = [...entries].sort(
+    (a, b) =>
+      radiusInKm(b.radius, b.distance_unit) -
+      radiusInKm(a.radius, a.distance_unit),
+  );
+  const kept: CustomGeoEntry[] = [];
+  for (const entry of sorted) {
+    if (kept.some((existing) => customLocationsConflict(existing, entry))) {
+      continue;
+    }
+    kept.push(entry);
+  }
+  return kept;
+}
+
 function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   const locations = (audience.locations ?? []) as DraftLocationTarget[];
 
   const includedCountries = new Set<string>();
-  const includedCustom: Array<Record<string, unknown>> = [];
+  const includedCustom: CustomGeoEntry[] = [];
   const excludedCountries = new Set<string>();
-  const excludedCustom: Array<Record<string, unknown>> = [];
+  const excludedCustom: CustomGeoEntry[] = [];
 
   for (const loc of locations) {
     const mode = loc.mode ?? 'include';
@@ -154,19 +208,35 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
       loc.longitude != null &&
       loc.radius
     ) {
-      const entry = {
+      const entry: CustomGeoEntry = {
         latitude: loc.latitude,
         longitude: loc.longitude,
-        radius: loc.radius,
-        distance_unit: loc.distanceUnit ?? 'kilometer',
+        radius: Math.min(80, Math.max(1, Number(loc.radius) || 16)),
+        distance_unit: loc.distanceUnit === 'mile' ? 'mile' : 'kilometer',
       };
       if (mode === 'exclude') excludedCustom.push(entry);
       else includedCustom.push(entry);
-      if (countryCode) includedCountries.add(countryCode);
     }
   }
 
-  if (!includedCountries.size && audience.country) {
+  const uniqueIncludedCustom =
+    dedupeNonOverlappingCustomLocations(includedCustom);
+  const uniqueExcludedCustom =
+    dedupeNonOverlappingCustomLocations(excludedCustom);
+
+  // Never send country + pin targeting together — Meta treats that as a conflict.
+  if (uniqueIncludedCustom.length) {
+    includedCountries.clear();
+  }
+  if (uniqueExcludedCustom.length) {
+    excludedCountries.clear();
+  }
+
+  if (
+    !includedCountries.size &&
+    !uniqueIncludedCustom.length &&
+    audience.country
+  ) {
     includedCountries.add(audience.country.toUpperCase());
   }
 
@@ -174,16 +244,16 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   if (includedCountries.size) {
     geoLocations.countries = [...includedCountries];
   }
-  if (includedCustom.length) {
-    geoLocations.custom_locations = includedCustom;
+  if (uniqueIncludedCustom.length) {
+    geoLocations.custom_locations = uniqueIncludedCustom;
   }
 
   const excludedGeo: Record<string, unknown> = {};
   if (excludedCountries.size) {
     excludedGeo.countries = [...excludedCountries];
   }
-  if (excludedCustom.length) {
-    excludedGeo.custom_locations = excludedCustom;
+  if (uniqueExcludedCustom.length) {
+    excludedGeo.custom_locations = uniqueExcludedCustom;
   }
 
   return { geoLocations, excludedGeo };
@@ -198,12 +268,25 @@ export function buildAdSetPayloadFromDraft(
   const placementSpec = buildPlacementSpecFromDraft(adSet.placements);
   const { geoLocations, excludedGeo } = buildGeoFromAudience(adSet.audience);
 
+  const ageMin = adSet.audience.ageMin;
+  const ageMax = adSet.audience.ageMax;
+  const wantsStrictAgeCeiling = ageMax < 65;
+  const wantsStrictAgeFloorAbove25 = ageMin > 25;
+  const useAdvantageAudience =
+    !wantsStrictAgeCeiling && !wantsStrictAgeFloorAbove25;
+
   const targeting: Record<string, unknown> = {
     geo_locations: geoLocations,
-    age_min: adSet.audience.ageMin,
-    age_max: adSet.audience.ageMax,
-    targeting_automation: { advantage_audience: 1 },
+    age_min: ageMin,
+    age_max: useAdvantageAudience ? 65 : ageMax,
+    targeting_automation: {
+      advantage_audience: useAdvantageAudience ? 1 : 0,
+    },
   };
+
+  if (useAdvantageAudience && (ageMin > 18 || ageMax < 65)) {
+    targeting.age_range = [ageMin, ageMax];
+  }
 
   if (Object.keys(excludedGeo).length) {
     targeting.excluded_geo_locations = excludedGeo;

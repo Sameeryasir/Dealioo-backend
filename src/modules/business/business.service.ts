@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -8,6 +12,7 @@ import {
 } from '../../common/pagination';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
+import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import { isSuperAdmin } from '../../utils/user-roles';
@@ -23,6 +28,13 @@ import {
   slugifyBusinessName,
 } from '../../utils/business-slug';
 
+const STARTER_MAX_BUSINESSES = 1;
+
+function isStarterPlanSlug(planSlug: string | null | undefined): boolean {
+  const slug = planSlug?.trim().toLowerCase() ?? '';
+  return slug === 'starter' || slug.startsWith('starter-');
+}
+
 @Injectable()
 export class BusinessService {
   constructor(
@@ -30,6 +42,8 @@ export class BusinessService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(UserSubscription)
+    private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly spacesService: SpacesService,
   ) {}
 
@@ -85,6 +99,22 @@ export class BusinessService {
     const owner = await this.userRepository.findOne({ where: { id: user.id } });
     if (!owner) {
       throw new NotFoundException('Owner not found');
+    }
+
+    const subscription = await this.userSubscriptionRepository.findOne({
+      where: { userId: user.id, status: In(['active', 'trialing']) },
+      relations: { plan: true },
+      order: { createdAt: 'DESC' },
+    });
+    if (isStarterPlanSlug(subscription?.plan?.slug)) {
+      const ownedCount = await this.businessRepository.count({
+        where: { owner: { id: user.id } },
+      });
+      if (ownedCount >= STARTER_MAX_BUSINESSES) {
+        throw new ForbiddenException(
+          'Your Starter plan includes one business. Please upgrade your subscription to add more businesses.',
+        );
+      }
     }
 
     const logoUrl = file

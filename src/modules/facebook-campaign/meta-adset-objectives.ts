@@ -5,19 +5,32 @@ export const OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   MetaOptimizationGoal[]
 > = {
   [MetaCampaignObjective.OUTCOME_TRAFFIC]: [
-    MetaOptimizationGoal.LINK_CLICKS,
     MetaOptimizationGoal.LANDING_PAGE_VIEWS,
+    MetaOptimizationGoal.LINK_CLICKS,
+    MetaOptimizationGoal.REACH,
+    MetaOptimizationGoal.CONVERSATIONS,
+    MetaOptimizationGoal.IMPRESSIONS,
   ],
-  [MetaCampaignObjective.OUTCOME_LEADS]: [MetaOptimizationGoal.LEAD_GENERATION],
+  [MetaCampaignObjective.OUTCOME_LEADS]: [
+    MetaOptimizationGoal.OFFSITE_CONVERSIONS,
+    MetaOptimizationGoal.LANDING_PAGE_VIEWS,
+    MetaOptimizationGoal.LINK_CLICKS,
+    MetaOptimizationGoal.REACH,
+    MetaOptimizationGoal.IMPRESSIONS,
+  ],
   [MetaCampaignObjective.OUTCOME_SALES]: [
     MetaOptimizationGoal.OFFSITE_CONVERSIONS,
   ],
   [MetaCampaignObjective.OUTCOME_ENGAGEMENT]: [
-    MetaOptimizationGoal.POST_ENGAGEMENT,
+    MetaOptimizationGoal.THRUPLAY,
+    MetaOptimizationGoal.TWO_SECOND_CONTINUOUS_VIDEO_VIEWS,
   ],
   [MetaCampaignObjective.OUTCOME_AWARENESS]: [
     MetaOptimizationGoal.REACH,
     MetaOptimizationGoal.IMPRESSIONS,
+    MetaOptimizationGoal.AD_RECALL_LIFT,
+    MetaOptimizationGoal.THRUPLAY,
+    MetaOptimizationGoal.TWO_SECOND_CONTINUOUS_VIDEO_VIEWS,
   ],
 };
 

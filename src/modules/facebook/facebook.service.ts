@@ -29,9 +29,6 @@ import {
   getConfiguredFacebookRequiredScopes,
   toFacebookOAuthScopeParam,
 } from './facebook-oauth-scopes.util';
-
-// --- Meta Graph / OAuth version ---
-// Changed: use Graph API v24.0 for OAuth dialog + Marketing API calls (MCP context 7).
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
 

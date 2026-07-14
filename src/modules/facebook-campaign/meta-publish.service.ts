@@ -27,17 +27,22 @@ import {
   adsManagerCampaignsUrl,
   assertDirectMetaVideoUrl,
   graphGetWithToken,
-  graphPostWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
   stepFailureUserMessage,
-  uploadAdImageHash,
-  uploadAdVideoId,
 } from './facebook-campaign-meta';
 import {
   assertAdCreativeMedia,
   buildDestinationUrlWithParams,
 } from './meta-ad-creative-draft-validation';
+import {
+  sdkCreateAd,
+  sdkCreateAdCreative,
+  sdkCreateAdSet,
+  sdkCreateCampaign,
+  sdkUploadAdImageHash,
+  sdkUploadAdVideoId,
+} from './meta-business-sdk';
 import { MetaCreativeFormat, MetaCreationStep } from './meta-campaign.constants';
 import {
   buildAdPayloadFromDraft,
@@ -292,13 +297,11 @@ export class MetaPublishService {
 
   async createCampaign(ctx: PublishContext): Promise<string> {
     this.logger.log('Publishing step: campaign');
-    const result = await graphPostWithToken<{ id: string }>(
-      `/${ctx.adAccountId}/campaigns`,
+    return sdkCreateCampaign(
       ctx.accessToken,
+      ctx.adAccountId,
       buildCampaignPayloadFromDraft(ctx.campaign),
-      'campaign',
     );
-    return result.id;
   }
 
   async createAdSet(
@@ -306,13 +309,11 @@ export class MetaPublishService {
     metaCampaignId: string,
   ): Promise<string> {
     this.logger.log('Publishing step: adset');
-    const result = await graphPostWithToken<{ id: string }>(
-      `/${ctx.adAccountId}/adsets`,
+    return sdkCreateAdSet(
       ctx.accessToken,
+      ctx.adAccountId,
       buildAdSetPayloadFromDraft(ctx.campaign, ctx.adSet, metaCampaignId),
-      'adset',
     );
-    return result.id;
   }
 
   async uploadImage(
@@ -322,7 +323,7 @@ export class MetaPublishService {
   ): Promise<string> {
     const forMeta =
       normalizeCampaignImageUrlForMeta(imageUrl) ?? imageUrl.trim();
-    return uploadAdImageHash(adAccountId, accessToken, forMeta);
+    return sdkUploadAdImageHash(accessToken, adAccountId, forMeta);
   }
 
   async uploadVideo(
@@ -333,7 +334,7 @@ export class MetaPublishService {
     const resolved =
       toAbsoluteAssetUrlIfRelative(videoUrl.trim()) ?? videoUrl.trim();
     assertDirectMetaVideoUrl(resolved);
-    return uploadAdVideoId(adAccountId, accessToken, resolved);
+    return sdkUploadAdVideoId(accessToken, adAccountId, resolved);
   }
 
   private async uploadCreativeMedia(ctx: PublishContext): Promise<{
@@ -402,13 +403,11 @@ export class MetaPublishService {
       throw new BadRequestException('Landing page URL is required.');
     }
 
-    const result = await graphPostWithToken<{ id: string }>(
-      `/${ctx.adAccountId}/adcreatives`,
+    return sdkCreateAdCreative(
       ctx.accessToken,
+      ctx.adAccountId,
       buildCreativePayloadFromDraft(ctx.creative, media, destinationUrl),
-      'creative',
     );
-    return result.id;
   }
 
   async createAd(
@@ -417,13 +416,11 @@ export class MetaPublishService {
     metaCreativeId: string,
   ): Promise<string> {
     this.logger.log('Publishing step: ad');
-    const result = await graphPostWithToken<{ id: string }>(
-      `/${ctx.adAccountId}/ads`,
+    return sdkCreateAd(
       ctx.accessToken,
+      ctx.adAccountId,
       buildAdPayloadFromDraft(ctx.creative, metaAdsetId, metaCreativeId),
-      'ad',
     );
-    return result.id;
   }
 
   private async findOrCreateTrackingRow(
