@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   EntityManager,
-  MoreThan,
   Repository,
 } from 'typeorm';
 import {
@@ -18,7 +17,6 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import { Conversation } from '../../db/entities/conversation.entity';
 import { Business } from '../../db/entities/business.entity';
 import {
   Campaign,
@@ -101,9 +99,48 @@ export class ActivityService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
-    @InjectRepository(Conversation)
-    private readonly conversationRepository: Repository<Conversation>,
   ) {}
+
+  /**
+   * Customers linked to a business via payments, visits, chats, or activity.
+   * Customers table has no businessId, so membership is inferred from relations.
+   */
+  private businessCustomersBaseQuery(businessId: number) {
+    return this.customerRepository
+      .createQueryBuilder('customer')
+      .where(
+        `customer.id IN (
+          SELECT activity.customer_id
+          FROM activity_event activity
+          WHERE activity.restaurant_id = :businessId
+            AND activity.customer_id IS NOT NULL
+          UNION
+          SELECT conversation.customer_id
+          FROM conversation conversation
+          WHERE conversation.restaurant_id = :businessId
+            AND conversation.customer_id IS NOT NULL
+          UNION
+          SELECT visit.customer_id
+          FROM customer_visits visit
+          WHERE visit.restaurant_id = :businessId
+          UNION
+          SELECT paid_customer.id
+          FROM customers paid_customer
+          INNER JOIN funnel_payment payment
+            ON LOWER(payment.customer_email) = LOWER(paid_customer.email)
+          WHERE payment.restaurant_id = :businessId
+            AND payment.status = :paid
+        )`,
+        { businessId, paid: FunnelPaymentStatus.PAID },
+      );
+  }
+
+  private async countBusinessCustomers(businessId: number): Promise<number> {
+    const result = await this.businessCustomersBaseQuery(businessId)
+      .select('COUNT(DISTINCT customer.id)', 'count')
+      .getRawOne<{ count: string }>();
+    return Number(result?.count ?? 0);
+  }
 
   private async getBusinessActivitySnapshot(businessId: number): Promise<{
     activeCampaigns: number;
@@ -127,13 +164,7 @@ export class ActivityService {
             status: FunnelPaymentStatus.PAID,
           },
         }),
-        this.conversationRepository.count({
-          where: {
-            businessId,
-            isPrivate: true,
-            messageCount: MoreThan(0),
-          },
-        }),
+        this.countBusinessCustomers(businessId),
         this.funnelPaymentRepository
           .createQueryBuilder('payment')
           .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
@@ -533,19 +564,15 @@ export class ActivityService {
           `DATE_TRUNC('month', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC')`,
         )
         .getRawMany<{ month: string; orders: string }>(),
-      this.conversationRepository
-        .createQueryBuilder('conversation')
+      this.businessCustomersBaseQuery(businessId)
         .select(
-          `TO_CHAR(DATE_TRUNC('month', conversation.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          `TO_CHAR(DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
           'month',
         )
         .addSelect('COUNT(*)', 'members')
-        .where('conversation.businessId = :businessId', { businessId })
-        .andWhere('conversation.isPrivate = :isPrivate', { isPrivate: true })
-        .andWhere('conversation.messageCount > 0')
-        .andWhere('conversation.createdAt >= :rangeStart', { rangeStart })
+        .andWhere('customer.createdAt >= :rangeStart', { rangeStart })
         .groupBy(
-          `DATE_TRUNC('month', conversation.created_at AT TIME ZONE 'UTC')`,
+          `DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC')`,
         )
         .getRawMany<{ month: string; members: string }>(),
     ]);

@@ -18,7 +18,7 @@ export type FunnelAnalyticsOverview = {
   pageViews: number;
   buttonClicks: number;
   uniqueVisitors: number;
-  sessions: number;
+  checkoutOpens: number;
 };
 
 export type FunnelDropoffStep = {
@@ -107,19 +107,17 @@ export class FunnelAnalyticsService {
       .andWhere('e.customer_id IS NOT NULL')
       .getRawOne<{ count: string }>();
 
-    const sessionsRaw = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select('COUNT(DISTINCT e.session_id)', 'count')
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.session_id IS NOT NULL')
-      .getRawOne<{ count: string }>();
+    // Change: checkout opens replace sessions — clearer for campaign owners.
+    const checkoutOpens = await this.analyticsRepository.count({
+      where: { funnelId, eventType: FunnelAnalyticsEventType.CHECKOUT_OPEN },
+    });
 
     return {
       funnelId,
       pageViews,
       buttonClicks,
       uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
-      sessions: Number(sessionsRaw?.count ?? 0),
+      checkoutOpens,
     };
   }
 
@@ -134,7 +132,7 @@ export class FunnelAnalyticsService {
       pageViews: number;
       buttonClicks: number;
       uniqueVisitors: number;
-      sessions: number;
+      checkoutOpens: number;
     }[];
   }> {
     await this.assertFunnelExists(funnelId);
@@ -160,12 +158,16 @@ export class FunnelAnalyticsService {
         'buttonClicks',
       )
       .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
-      .addSelect(`COUNT(DISTINCT e.session_id)`, 'sessions')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
+        'checkoutOpens',
+      )
       .where('e.funnel_id = :funnelId', { funnelId })
       .andWhere('e.created_at >= :rangeStart', { rangeStart })
       .setParameters({
         pageView: FunnelAnalyticsEventType.PAGE_VIEW,
         buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
+        checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
       })
       .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
       .getRawMany<{
@@ -173,7 +175,7 @@ export class FunnelAnalyticsService {
         pageViews: string;
         buttonClicks: string;
         uniqueVisitors: string;
-        sessions: string;
+        checkoutOpens: string;
       }>();
 
     const byMonth = new Map(rows.map((row) => [row.month, row]));
@@ -184,7 +186,7 @@ export class FunnelAnalyticsService {
         pageViews: Number(row?.pageViews ?? 0),
         buttonClicks: Number(row?.buttonClicks ?? 0),
         uniqueVisitors: Number(row?.uniqueVisitors ?? 0),
-        sessions: Number(row?.sessions ?? 0),
+        checkoutOpens: Number(row?.checkoutOpens ?? 0),
       };
     });
 

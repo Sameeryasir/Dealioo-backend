@@ -114,7 +114,6 @@ export class StripeService {
 
     const business = await this.businessRepository.findOne({
       where: businessAccessWhere(user, businessId),
-      relations: ['owner'],
     });
 
     if (!business) {
@@ -123,61 +122,7 @@ export class StripeService {
       );
     }
 
-    let stripeAccountId = business.stripeAccountId?.trim() || null;
-
-    if (!stripeAccountId) {
-      const contactEmail =
-        business.email?.trim() || business.owner?.email?.trim() || null;
-      if (!contactEmail) {
-        throw new InternalServerErrorException(
-          'Business must have an email (or owner email) before Stripe onboarding.',
-        );
-      }
-
-      const account = await this.stripe.accounts.create({
-        type: 'express',
-        email: contactEmail,
-        business_profile: {
-          name: business.name,
-        },
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
-        },
-      });
-
-      stripeAccountId = account.id;
-
-      const persist = await this.businessRepository.update(
-        { id: businessId },
-        { stripeAccountId },
-      );
-
-      if (!persist.affected) {
-        throw new InternalServerErrorException(
-          'Could not save Stripe account id on this business.',
-        );
-      }
-
-      logStripePayment({
-        phase: 'stripe_express_account_created',
-        businessId,
-        stripeAccountId,
-        outcome: 'created',
-      });
-    }
-
-    const frontendBase = getFrontendBaseUrl().replace(/\/$/, '');
-    const businessQuery = `businessId=${encodeURIComponent(String(businessId))}`;
-
-    const accountLink = await this.stripe.accountLinks.create({
-      account: stripeAccountId,
-      refresh_url: `${frontendBase}/stripe/success?${businessQuery}&error=${encodeURIComponent('refresh')}`,
-      return_url: `${frontendBase}/stripe/success?${businessQuery}`,
-      type: 'account_onboarding',
-    });
-
-    return { url: accountLink.url };
+    return this.createOAuthConnectUrl(businessId);
   }
 
   async disconnectStripeForBusiness(
@@ -296,7 +241,9 @@ export class StripeService {
           amount: opts.amount,
           currency: opts.currency.toLowerCase(),
           automatic_payment_methods: { enabled: true },
-          application_fee_amount: opts.applicationFeeAmount,
+          ...(opts.applicationFeeAmount > 0
+            ? { application_fee_amount: opts.applicationFeeAmount }
+            : {}),
           receipt_email: opts.receiptEmail,
           metadata: opts.metadata,
         },

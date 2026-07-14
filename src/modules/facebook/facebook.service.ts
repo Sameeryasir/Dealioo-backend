@@ -19,22 +19,22 @@ import { FacebookPageDto } from './dto/facebook-page.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
 import { FacebookConnectionStatus } from './facebook-connection-status';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
-import { FacebookMetaTokenService, META_REQUIRED_SCOPES } from './facebook-meta-token.service';
+import { FacebookMetaTokenService } from './facebook-meta-token.service';
 import {
   createFacebookOAuthState,
   parseFacebookOAuthState,
 } from './facebook-oauth-state';
 import {
-  destinationUrlMatchesCampaignLanding,
-  extractCreativeDestinationUrl,
-  resolveExpectedCampaignLandingUrl,
-  type MetaCreativeLinkPayload,
-} from './meta-campaign-destination-filter';
+  getConfiguredFacebookOAuthScopes,
+  getConfiguredFacebookRequiredScopes,
+  toFacebookOAuthScopeParam,
+} from './facebook-oauth-scopes.util';
 
-const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
-const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v23.0/dialog/oauth';
-const FACEBOOK_OAUTH_SCOPES =
-  'ads_management,ads_read,business_management,pages_show_list,pages_read_engagement';
+// --- Meta Graph / OAuth version ---
+// Changed: use Graph API v24.0 for OAuth dialog + Marketing API calls (MCP context 7).
+const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
+const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
+
 
 type FacebookTokenResponse = {
   access_token?: string;
@@ -102,7 +102,10 @@ export class FacebookService {
     private readonly metaTokenService: FacebookMetaTokenService,
   ) {}
 
-  async connect(user: User, businessId: number): Promise<{ url: string }> {
+  async connect(
+    user: User,
+    businessId: number,
+  ): Promise<{ url: string; scopes: string[] }> {
     requireAdminRole(
       user,
       'You do not have permission to connect Facebook for this account.',
@@ -132,7 +135,7 @@ export class FacebookService {
 
   async createOAuthConnectUrl(
     businessId: number,
-  ): Promise<{ url: string }> {
+  ): Promise<{ url: string; scopes: string[] }> {
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
     });
@@ -162,17 +165,20 @@ export class FacebookService {
       );
     }
 
+    const scopes = getConfiguredFacebookOAuthScopes();
+
     const params = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
       state: createFacebookOAuthState(businessId, stateSecret),
-      scope: FACEBOOK_OAUTH_SCOPES,
+      scope: toFacebookOAuthScopeParam(scopes),
       response_type: 'code',
       auth_type: 'rerequest',
     });
 
     return {
       url: `${FACEBOOK_OAUTH_DIALOG}?${params.toString()}`,
+      scopes,
     };
   }
 
@@ -314,14 +320,12 @@ export class FacebookService {
 
   async getAdCampaignStats(
     business: Business,
-    filterWebsiteUrl?: string | null,
   ): Promise<FacebookAdCampaignStatsDto> {
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     const adAccount = this.requireBusinessAdAccount(business);
     const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
-    const expectedLanding = resolveExpectedCampaignLandingUrl(filterWebsiteUrl);
 
     const campaignsResponse =
       await this.graphGetWithToken<FacebookCampaignsResponse>(
@@ -333,10 +337,6 @@ export class FacebookService {
         },
       );
 
-    const campaignDestinationLinks = expectedLanding
-      ? await this.fetchCampaignDestinationLinks(adAccount.id, accessToken)
-      : new Map<string, string>();
-
     const rows = (campaignsResponse.data ?? []).filter((row) => {
       if (!row.id?.trim() || !row.name?.trim()) return false;
       const effective = row.effective_status?.toUpperCase() ?? '';
@@ -344,17 +344,7 @@ export class FacebookService {
       if (effective === 'DELETED' || status === 'DELETED') {
         return false;
       }
-
-      if (!expectedLanding) {
-        return true;
-      }
-
-      const destination = campaignDestinationLinks.get(row.id!.trim());
-      if (!destination) {
-        return false;
-      }
-
-      return destinationUrlMatchesCampaignLanding(destination, expectedLanding);
+      return true;
     });
 
     const campaigns = await Promise.all(
@@ -388,7 +378,15 @@ export class FacebookService {
       .split(',')
       .map((scope) => scope.trim())
       .filter(Boolean);
-    const missingRequiredScopes = META_REQUIRED_SCOPES.filter(
+
+    let requiredScopes: string[] = [];
+    try {
+      requiredScopes = getConfiguredFacebookRequiredScopes();
+    } catch {
+      requiredScopes = [];
+    }
+
+    const missingRequiredScopes = requiredScopes.filter(
       (scope) => !grantedScopes.includes(scope),
     );
 
@@ -399,6 +397,13 @@ export class FacebookService {
         missingRequiredScopes.length === 0,
     );
 
+    let requestedScopes: string[] = [];
+    try {
+      requestedScopes = getConfiguredFacebookOAuthScopes();
+    } catch {
+      requestedScopes = [...grantedScopes];
+    }
+
     return {
       connected,
       status: business.metaConnectionStatus ?? null,
@@ -407,7 +412,9 @@ export class FacebookService {
       metaAdAccountId: business.metaAdAccountId,
       metaTokenExpiresAt: business.metaTokenExpiresAt,
       metaOauthScopes: grantedScopes,
-      missingRequiredScopes: [...missingRequiredScopes],
+      missingRequiredScopes,
+      requestedScopes,
+      requiredScopes,
     };
   }
 
@@ -726,44 +733,6 @@ export class FacebookService {
       accessToken: longJson.access_token ?? shortLivedToken,
       expiresIn: longJson.expires_in ?? null,
     };
-  }
-
-  private async fetchCampaignDestinationLinks(
-    adAccountId: string,
-    accessToken: string,
-  ): Promise<Map<string, string>> {
-    const map = new Map<string, string>();
-
-    try {
-      const response = await this.graphGetWithToken<{
-        data?: Array<{
-          campaign_id?: string;
-          creative?: MetaCreativeLinkPayload;
-        }>;
-      }>(`/${adAccountId}/ads`, accessToken, {
-        fields:
-          'campaign_id,creative{link_url,object_story_spec,asset_feed_spec}',
-        limit: '500',
-      });
-
-      for (const row of response.data ?? []) {
-        const campaignId = row.campaign_id?.trim();
-        if (!campaignId || map.has(campaignId)) {
-          continue;
-        }
-
-        const link = extractCreativeDestinationUrl(row.creative);
-        if (link) {
-          map.set(campaignId, link);
-        }
-      }
-    } catch (err) {
-      this.logger.warn(
-        `Could not load ad destination links for ${adAccountId}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    return map;
   }
 
   private async fetchCampaignInsights(

@@ -114,7 +114,6 @@ export class FacebookController {
   async adCampaignStats(
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('websiteUrl') websiteUrl?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -127,7 +126,7 @@ export class FacebookController {
       );
     }
 
-    return this.facebookService.getAdCampaignStats(business, websiteUrl);
+    return this.facebookService.getAdCampaignStats(business);
   }
 
   @UseGuards(AuthGuard('jwt'))

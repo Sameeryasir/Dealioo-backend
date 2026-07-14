@@ -33,7 +33,7 @@ export class FeeService {
 
     const fixedMinor = this.parseNonNegativeInt(
       this.config.get<string>('PLATFORM_FEE_FIXED_MINOR'),
-      200,
+      0,
     );
     const percentBps = this.parseNonNegativeInt(
       this.config.get<string>('PLATFORM_FEE_PERCENT_BPS'),

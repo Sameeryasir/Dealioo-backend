@@ -473,15 +473,20 @@ export class FunnelEventService {
       this.funnelPaymentRepository
         .createQueryBuilder('p')
         .select(
-          `TO_CHAR(DATE_TRUNC('month', p.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          `TO_CHAR(DATE_TRUNC('month', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM')`,
           'month',
         )
         .addSelect('COUNT(*)', 'payments')
         .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
         .where('p.funnel_id = :funnelId', { funnelId })
         .andWhere('p.status = :paid', { paid: FunnelPaymentStatus.PAID })
-        .andWhere('p.created_at >= :rangeStart', { rangeStart })
-        .groupBy(`DATE_TRUNC('month', p.created_at AT TIME ZONE 'UTC')`)
+        .andWhere(
+          'COALESCE(p.paid_at, p.created_at) >= :rangeStart',
+          { rangeStart },
+        )
+        .groupBy(
+          `DATE_TRUNC('month', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC')`,
+        )
         .getRawMany<{
           month: string;
           payments: string;

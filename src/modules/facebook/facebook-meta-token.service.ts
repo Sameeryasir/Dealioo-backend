@@ -1,15 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Business } from '../../db/entities/business.entity';
 import { decryptSecret } from '../../utils/token-encryption.util';
+import { getConfiguredFacebookRequiredScopes } from './facebook-oauth-scopes.util';
 
-const FACEBOOK_GRAPH = 'https://graph.facebook.com/v23.0';
-
-/** Required for any Meta Marketing API use (stats, ad accounts, campaigns). */
-export const META_REQUIRED_SCOPES = [
-  'ads_management',
-  'ads_read',
-  'business_management',
-] as const;
+// Changed: Graph API v24.0 for token/permission checks (same version as OAuth).
+const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 
 export type MetaBusinessCredentials = {
   accessToken: string;
@@ -41,9 +36,9 @@ type MePermissionsResponse = {
   error?: { message?: string; code?: number };
 };
 
-/** Throws if any required advertising scope is missing from debug_token.scopes. */
 export function assertMetaPermissions(scopes: string[]): void {
-  const missing = META_REQUIRED_SCOPES.filter((scope) => !scopes.includes(scope));
+  const required = getConfiguredFacebookRequiredScopes();
+  const missing = required.filter((scope) => !scopes.includes(scope));
 
   if (missing.length > 0) {
     throw new BadRequestException(
@@ -97,9 +92,37 @@ export class FacebookMetaTokenService {
       );
     }
 
-    assertMetaPermissions(debug.scopes ?? []);
+    this.logger.log(
+      `[debug_token] valid=${Boolean(debug.is_valid)} user_id=${debug.user_id ?? 'n/a'} type=${debug.type ?? 'n/a'} scopes=${(debug.scopes ?? []).join(',') || '(none)'}`,
+    );
 
-    return { grantedScopes: debug.scopes ?? [] };
+    let grantedScopes = [...(debug.scopes ?? [])];
+    try {
+      const permissionMap = await this.fetchMePermissions(accessToken);
+      const fromMe = Object.entries(permissionMap)
+        .filter(([, status]) => status === 'granted')
+        .map(([permission]) => permission);
+      this.logger.log(
+        `[me/permissions] me=the Facebook user on this token (${metaUserId}) raw=${JSON.stringify(permissionMap)} granted=${fromMe.join(',') || '(none)'}`,
+      );
+      if (fromMe.length > 0) {
+        grantedScopes = fromMe;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[me/permissions] failed; fallback to debug_token scopes. ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    this.logger.log(
+      `[permissions check] final granted scopes=${grantedScopes.join(',') || '(none)'}`,
+    );
+
+    assertMetaPermissions(grantedScopes);
+
+    return { grantedScopes };
   }
 
   /**
@@ -206,12 +229,17 @@ export class FacebookMetaTokenService {
     url.searchParams.set('input_token', accessToken);
     url.searchParams.set('access_token', `${appId}|${appSecret}`);
 
+    this.logger.log(`[debug_token] calling GET ${FACEBOOK_GRAPH}/debug_token`);
+
     const res = await fetch(url.toString(), {
       signal: AbortSignal.timeout(20_000),
     });
 
     const body = (await res.json()) as DebugTokenResponse;
     if (!res.ok || body.error) {
+      this.logger.warn(
+        `[debug_token] failed status=${res.status} error=${body.error?.message ?? 'unknown'}`,
+      );
       throw new BadRequestException(
         body.error?.message ??
           'Could not validate Meta access token. Reconnect Facebook.',
@@ -221,12 +249,15 @@ export class FacebookMetaTokenService {
     return body.data;
   }
 
-  /** Returns permission → status map from GET /me/permissions (e.g. ads_management → granted). */
   async fetchMePermissions(
     accessToken: string,
   ): Promise<Record<string, string>> {
     const url = new URL(`${FACEBOOK_GRAPH}/me/permissions`);
     url.searchParams.set('access_token', accessToken);
+
+    this.logger.log(
+      `[me/permissions] calling GET ${FACEBOOK_GRAPH}/me/permissions (me = current Facebook user on the token)`,
+    );
 
     const res = await fetch(url.toString(), {
       signal: AbortSignal.timeout(20_000),
@@ -234,6 +265,9 @@ export class FacebookMetaTokenService {
 
     const body = (await res.json()) as MePermissionsResponse;
     if (!res.ok || body.error) {
+      this.logger.warn(
+        `[me/permissions] failed status=${res.status} error=${body.error?.message ?? 'unknown'}`,
+      );
       throw new BadRequestException(
         body.error?.message ??
           'Could not read Meta permissions. Reconnect Facebook.',
@@ -275,7 +309,7 @@ export function mapMetaMarketingApiError(
     );
   }
   if (lower.includes('meta permissions missing')) {
-    return `${message} Open Settings → Integrations → Connect with Facebook and approve ads_management, ads_read, and business_management.`;
+    return `${message} Open Settings → Integrations → Connect with Facebook and approve every required Meta permission.`;
   }
   if (
     lower.includes('cannot call api for app') &&
