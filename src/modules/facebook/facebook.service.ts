@@ -27,7 +27,6 @@ import {
 import {
   getConfiguredFacebookOAuthScopes,
   getConfiguredFacebookRequiredScopes,
-  toFacebookOAuthScopeParam,
 } from './facebook-oauth-scopes.util';
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
@@ -162,13 +161,21 @@ export class FacebookService {
       );
     }
 
+    const configId = process.env.FACEBOOK_CONFIG_ID?.trim();
+    if (!configId) {
+      throw new InternalServerErrorException(
+        'Set FACEBOOK_CONFIG_ID for Facebook Login OAuth (Meta login configuration).',
+      );
+    }
+
     const scopes = getConfiguredFacebookOAuthScopes();
+    const state = createFacebookOAuthState(businessId, stateSecret);
 
     const params = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
-      state: createFacebookOAuthState(businessId, stateSecret),
-      scope: toFacebookOAuthScopeParam(scopes),
+      config_id: configId,
+      state,
       response_type: 'code',
       auth_type: 'rerequest',
     });
