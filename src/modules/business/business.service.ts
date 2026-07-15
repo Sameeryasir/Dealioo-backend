@@ -276,9 +276,13 @@ export class BusinessService {
   async deleteBusiness(businessId: number, user: User): Promise<Business> {
     requireAdminRole(user, 'You do not have permission to delete a business.');
 
-    const business = await this.businessRepository.findOne({ where: { id: businessId } });
+    const business = await this.businessRepository.findOne({
+      where: businessAccessWhere(user, businessId),
+    });
     if (!business) {
-      throw new NotFoundException('Business not found');
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
     }
     await this.businessRepository.delete(businessId);
     return business;

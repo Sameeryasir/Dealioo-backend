@@ -249,59 +249,15 @@ export class FacebookService {
         redirectUri,
       );
 
-      let accessToken = tokenJson.access_token;
-      if (!accessToken) {
+      const shortLivedToken = tokenJson.access_token;
+      if (!shortLivedToken) {
         throw new BadRequestException(
           tokenJson.error?.message ??
             'Facebook did not return an access token. Try connecting again.',
         );
       }
 
-      const longLived = await this.exchangeForLongLivedToken(
-        accessToken,
-        appId,
-        appSecret,
-      );
-      accessToken = longLived.accessToken;
-
-      const me = await this.fetchFacebookUser(accessToken);
-      if (!me.id?.trim()) {
-        throw new BadRequestException(
-          'Facebook did not return a user id. Try connecting again.',
-        );
-      }
-
-      const { grantedScopes } =
-        await this.metaTokenService.validateAccessTokenForStorage(
-          accessToken,
-          me.id.trim(),
-        );
-
-      const tokenExpiresAt =
-        longLived.expiresIn != null
-          ? new Date(Date.now() + longLived.expiresIn * 1000)
-          : null;
-
-      await this.businessRepository.update(businessId, {
-        metaUserId: me.id.trim(),
-        metaAccessToken: encryptSecret(accessToken),
-        metaConnectedAt: new Date(),
-        metaAdAccountId: null,
-        metaConnectionStatus: FacebookConnectionStatus.TOKEN_EXCHANGED,
-        metaTokenExpiresAt: tokenExpiresAt,
-        metaOauthScopes: grantedScopes.join(','),
-      });
-
-      await this.auditService.log(businessId, 'token_exchanged', {
-        status: FacebookConnectionStatus.TOKEN_EXCHANGED,
-        metadata: { metaUserId: me.id, grantedScopes },
-      });
-
-      this.logger.log(
-        `Facebook connected for business ${businessId} (user ${me.id})`,
-      );
-
-      return { connected: true, businessId };
+      return await this.persistExchangedUserToken(businessId, shortLivedToken);
     } catch (err) {
       if (businessId != null) {
         await this.businessRepository.update(businessId, {
@@ -704,6 +660,66 @@ export class FacebookService {
       process.env.FACEBOOK_REDIRECT_URI?.trim() ||
       process.env.META_REDIRECT_URI?.trim()
     );
+  }
+
+  private async persistExchangedUserToken(
+    businessId: number,
+    shortLivedAccessToken: string,
+  ): Promise<FacebookOAuthCallbackResultDto> {
+    const appId = this.getAppId();
+    const appSecret = this.getAppSecret();
+
+    if (!appId || !appSecret) {
+      throw new InternalServerErrorException(
+        'Set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET.',
+      );
+    }
+
+    const longLived = await this.exchangeForLongLivedToken(
+      shortLivedAccessToken,
+      appId,
+      appSecret,
+    );
+    const accessToken = longLived.accessToken;
+
+    const me = await this.fetchFacebookUser(accessToken);
+    if (!me.id?.trim()) {
+      throw new BadRequestException(
+        'Facebook did not return a user id. Try connecting again.',
+      );
+    }
+
+    const { grantedScopes } =
+      await this.metaTokenService.validateAccessTokenForStorage(
+        accessToken,
+        me.id.trim(),
+      );
+
+    const tokenExpiresAt =
+      longLived.expiresIn != null
+        ? new Date(Date.now() + longLived.expiresIn * 1000)
+        : null;
+
+    await this.businessRepository.update(businessId, {
+      metaUserId: me.id.trim(),
+      metaAccessToken: encryptSecret(accessToken),
+      metaConnectedAt: new Date(),
+      metaAdAccountId: null,
+      metaConnectionStatus: FacebookConnectionStatus.TOKEN_EXCHANGED,
+      metaTokenExpiresAt: tokenExpiresAt,
+      metaOauthScopes: grantedScopes.join(','),
+    });
+
+    await this.auditService.log(businessId, 'token_exchanged', {
+      status: FacebookConnectionStatus.TOKEN_EXCHANGED,
+      metadata: { metaUserId: me.id, grantedScopes },
+    });
+
+    this.logger.log(
+      `Facebook connected for business ${businessId} (user ${me.id})`,
+    );
+
+    return { connected: true, businessId };
   }
 
   private async exchangeCodeForAccessToken(
