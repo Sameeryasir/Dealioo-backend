@@ -10,6 +10,16 @@ export interface GoogleAuthProfile {
   avatar: string | null;
 }
 
+export type AuthUserPlanSummary = {
+  id: string;
+  planId: string;
+  planSlug: string;
+  planName: string;
+  billingCycle: 'monthly' | 'annual';
+  status: string;
+  startedAt: string | null;
+} | null;
+
 export interface GoogleAuthResult {
   accessToken: string;
   refreshToken: string;
@@ -28,6 +38,7 @@ export interface GoogleAuthResult {
     createdAt: Date;
     updatedAt: Date;
     role: { id: number; name: string };
+    plan: AuthUserPlanSummary;
   };
   isNewUser: boolean;
 }

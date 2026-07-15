@@ -29,14 +29,34 @@ import { JwtAccessPayload } from './jwt/jwt-access-payload.interface';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
 import { ResetPasswordDto } from './authDto/reset-password.dto';
 import type {
+  AuthUserPlanSummary,
   GoogleAuthMode,
   GoogleAuthProfile,
   GoogleAuthResult,
 } from './interfaces/google-auth.interface';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { UserSubscription } from '../../db/entities/user-subscription.entity';
 
-/** Default role for Google self-signup (mirrors business owner register). */
 const GOOGLE_SIGNUP_ROLE = 'Admin';
+
+type AuthUserPayload = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  avatar: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  provider: string;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  lastLoginAt: Date | null;
+  role: { id: number; name: string };
+  plan: AuthUserPlanSummary;
+};
 
 @Injectable()
 export class AuthService {
@@ -51,6 +71,8 @@ export class AuthService {
     private readonly otpRepository: Repository<Otp>,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
+    @InjectRepository(UserSubscription)
+    private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly jwtService: JwtService,
     private readonly mailDelivery: MailDeliveryService,
     private readonly configService: ConfigService,
@@ -102,7 +124,7 @@ export class AuthService {
     message: string;
     token: string;
     refreshToken: string;
-    user: User;
+    user: AuthUserPayload;
   }> {
     const { email, password } = loginUserDto;
 
@@ -114,12 +136,17 @@ export class AuthService {
         name: true,
         email: true,
         phone: true,
+        avatar: true,
+        firstName: true,
+        lastName: true,
+        provider: true,
         emailVerified: true,
         phoneVerified: true,
         passwordHash: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
+        lastLoginAt: true,
         role: { id: true, name: true },
       },
     });
@@ -147,13 +174,9 @@ export class AuthService {
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
 
-    const { token, refreshToken } = await this.issueAuthTokens(user);
-
     return {
       message: 'Login successful.',
-      token,
-      refreshToken,
-      user,
+      ...(await this.buildAuthSession(user)),
     };
   }
 
@@ -168,7 +191,7 @@ export class AuthService {
 
     try {
       const { user, isNewUser } = await this.resolveGoogleUser(profile, mode);
-      const tokens = await this.issueAuthTokens(user);
+      const session = await this.buildAuthSession(user);
 
       this.logger.log(
         isNewUser
@@ -178,10 +201,10 @@ export class AuthService {
       this.logger.log(`OAuth Success — user id=${user.id}`);
 
       const result: GoogleAuthResult = {
-        accessToken: tokens.token,
-        refreshToken: tokens.refreshToken,
+        accessToken: session.token,
+        refreshToken: session.refreshToken,
         isNewUser,
-        user: this.toGoogleAuthUser(user),
+        user: session.user,
       };
 
       return { redirectUrl: this.buildGoogleFrontendRedirect(result) };
@@ -361,22 +384,81 @@ export class AuthService {
     return { user: withRole, isNewUser: true };
   }
 
-  private toGoogleAuthUser(user: User): GoogleAuthResult['user'] {
+  private async buildAuthSession(user: User): Promise<{
+    token: string;
+    refreshToken: string;
+    user: AuthUserPayload;
+  }> {
+    const [tokens, plan] = await Promise.all([
+      this.issueAuthTokens(user),
+      this.getPlanSummaryForUser(user.id),
+    ]);
+
+    return {
+      token: tokens.token,
+      refreshToken: tokens.refreshToken,
+      user: this.toPublicAuthUser(user, plan),
+    };
+  }
+
+  private async getPlanSummaryForUser(
+    userId: number,
+  ): Promise<AuthUserPlanSummary> {
+    const row = await this.userSubscriptionRepository
+      .createQueryBuilder('sub')
+      .innerJoinAndSelect('sub.plan', 'plan')
+      .select([
+        'sub.id',
+        'sub.planId',
+        'sub.billingCycle',
+        'sub.status',
+        'sub.startedAt',
+        'plan.id',
+        'plan.slug',
+        'plan.name',
+      ])
+      .where('sub.user_id = :userId', { userId })
+      .andWhere('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing'],
+      })
+      .orderBy('sub.created_at', 'DESC')
+      .limit(1)
+      .getOne();
+
+    if (!row?.plan) return null;
+
+    return {
+      id: row.id,
+      planId: row.planId,
+      planSlug: row.plan.slug,
+      planName: row.plan.name,
+      billingCycle: row.billingCycle,
+      status: row.status,
+      startedAt: row.startedAt?.toISOString() ?? null,
+    };
+  }
+
+  private toPublicAuthUser(
+    user: User,
+    plan: AuthUserPlanSummary,
+  ): AuthUserPayload {
     return {
       id: user.id,
-      email: user.email,
       name: user.name,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      avatar: user.avatar,
-      phone: user.phone,
+      email: user.email,
+      phone: user.phone ?? null,
+      avatar: user.avatar ?? null,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      provider: user.provider ?? 'local',
       emailVerified: user.emailVerified,
       phoneVerified: user.phoneVerified,
       isActive: user.isActive,
-      provider: user.provider,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
+      lastLoginAt: user.lastLoginAt ?? null,
       role: { id: user.role.id, name: user.role.name },
+      plan,
     };
   }
 
@@ -566,7 +648,7 @@ export class AuthService {
     message: string;
     token: string;
     refreshToken: string;
-    user: User;
+    user: AuthUserPayload;
   }> {
     const user = await this.validateAndConsumeOtp(
       verifyOtpDto.email,
@@ -578,13 +660,9 @@ export class AuthService {
       await this.userRepository.save(user);
     }
 
-    const { token, refreshToken } = await this.issueAuthTokens(user);
-
     return {
       message: 'OTP verified successfully.',
-      token,
-      refreshToken,
-      user,
+      ...(await this.buildAuthSession(user)),
     };
   }
 
@@ -602,7 +680,7 @@ export class AuthService {
     message: string;
     token: string;
     refreshToken: string;
-    user: User;
+    user: AuthUserPayload;
   }> {
     const user = await this.validateAndConsumeOtp(dto.email, dto.otp);
 
@@ -611,13 +689,9 @@ export class AuthService {
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
 
-    const { token, refreshToken } = await this.issueAuthTokens(user);
-
     return {
       message: 'Password reset successfully.',
-      token,
-      refreshToken,
-      user,
+      ...(await this.buildAuthSession(user)),
     };
   }
 

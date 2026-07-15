@@ -62,13 +62,44 @@ export class UserSubscriptionsService {
   getActiveSubscriptionForUser(
     userId: number,
   ): Promise<UserSubscriptionResponse | null> {
+    return this.getPlanSummaryForUser(userId);
+  }
+
+  getPlanSummaryForUser(
+    userId: number,
+  ): Promise<UserSubscriptionResponse | null> {
     return this.subscriptionRepository
-      .findOne({
-        where: { userId, status: In(['active', 'trialing']) },
-        relations: { plan: true },
-        order: { createdAt: 'DESC' },
+      .createQueryBuilder('sub')
+      .innerJoinAndSelect('sub.plan', 'plan')
+      .select([
+        'sub.id',
+        'sub.planId',
+        'sub.billingCycle',
+        'sub.status',
+        'sub.startedAt',
+        'plan.id',
+        'plan.slug',
+        'plan.name',
+      ])
+      .where('sub.user_id = :userId', { userId })
+      .andWhere('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing'],
       })
-      .then((row) => (row?.plan ? this.toResponse(row) : null));
+      .orderBy('sub.created_at', 'DESC')
+      .limit(1)
+      .getOne()
+      .then((row) => {
+        if (!row?.plan) return null;
+        return {
+          id: row.id,
+          planId: row.planId,
+          planSlug: row.plan.slug,
+          planName: row.plan.name,
+          billingCycle: row.billingCycle,
+          status: row.status,
+          startedAt: row.startedAt?.toISOString() ?? null,
+        };
+      });
   }
 
   userHasActiveSubscription(userId: number): Promise<boolean> {

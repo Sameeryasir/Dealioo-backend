@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
-import { User } from '../../db/entities/user.entity';
 import { RegisterUserDto } from './authDto/register.dto';
 import { AuthService } from './auth.service';
 import { LoginUserDto } from './authDto/login.dto';
@@ -46,12 +45,7 @@ export class AuthController {
   @Post('login')
   async loginUsers(
     @Body() loginUserDto: LoginUserDto,
-  ): Promise<{
-    message: string;
-    token: string;
-    refreshToken: string;
-    user: User;
-  }> {
+  ) {
     return await this.authService.loginUser(loginUserDto);
   }
 
@@ -124,14 +118,7 @@ export class AuthController {
   }
 
   @Post('verify-otp')
-  async verifyOtp(
-    @Body() verifyOtpDto: VerifyOtpDto,
-  ): Promise<{
-    message: string;
-    token: string;
-    refreshToken: string;
-    user: User;
-  }> {
+  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
     return this.authService.verifyOtp(verifyOtpDto);
   }
 
@@ -145,14 +132,7 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
-  async resetPassword(
-    @Body() dto: ResetPasswordDto,
-  ): Promise<{
-    message: string;
-    token: string;
-    refreshToken: string;
-    user: User;
-  }> {
+  async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
   }
 

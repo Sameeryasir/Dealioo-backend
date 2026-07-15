@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import {
 } from '../../common/pagination';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
+import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import { isSuperAdmin } from '../../utils/user-roles';
@@ -30,6 +32,10 @@ import {
   type PublicBusinessListItem,
 } from './sanitize-business-list-item';
 
+/** Matches pricing: Starter includes one location only. */
+const STARTER_PLAN_SLUG = 'starter';
+const STARTER_MAX_BUSINESSES = 1;
+
 @Injectable()
 export class BusinessService {
   constructor(
@@ -37,6 +43,8 @@ export class BusinessService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(UserSubscription)
+    private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly spacesService: SpacesService,
   ) {}
 
@@ -73,6 +81,9 @@ export class BusinessService {
       user,
       'You do not have permission to create a business.',
     );
+
+    // Starter plan: one business only (enforced even if UI is bypassed).
+    await this.assertStarterBusinessLimit(user.id);
 
     const {
       name,
@@ -127,6 +138,39 @@ export class BusinessService {
     await this.businessRepository.save(business);
 
     return business;
+  }
+
+  /**
+   * Blocks create when active/trialing plan is Starter and owner already has ≥1 business.
+   * Business rule: Starter = one location (same as frontend plan-limits).
+   */
+  private async assertStarterBusinessLimit(userId: number): Promise<void> {
+    const subscription = await this.userSubscriptionRepository
+      .createQueryBuilder('sub')
+      .innerJoinAndSelect('sub.plan', 'plan')
+      .select(['sub.id', 'plan.id', 'plan.slug', 'plan.name'])
+      .where('sub.user_id = :userId', { userId })
+      .andWhere('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing'],
+      })
+      .orderBy('sub.created_at', 'DESC')
+      .limit(1)
+      .getOne();
+
+    const slug = subscription?.plan?.slug?.trim().toLowerCase() ?? '';
+    const name = subscription?.plan?.name?.trim().toLowerCase() ?? '';
+    const isStarter = slug === STARTER_PLAN_SLUG || name === STARTER_PLAN_SLUG;
+    if (!isStarter) return;
+
+    const ownedCount = await this.businessRepository.count({
+      where: { owner: { id: userId } },
+    });
+
+    if (ownedCount >= STARTER_MAX_BUSINESSES) {
+      throw new ForbiddenException(
+        'Starter plans allow only one business. Upgrade your plan to add more locations.',
+      );
+    }
   }
 
   private async resolveUniqueBusinessSlug(source: string): Promise<string> {

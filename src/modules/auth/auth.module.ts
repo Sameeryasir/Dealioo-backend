@@ -12,11 +12,12 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
+import { UserSubscription } from '../../db/entities/user-subscription.entity';
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    TypeOrmModule.forFeature([User, Role, Otp, RefreshToken]),
+    TypeOrmModule.forFeature([User, Role, Otp, RefreshToken, UserSubscription]),
     JwtModule.registerAsync({
       useFactory: () => {
         const secret = process.env.JWT_SECRET;
