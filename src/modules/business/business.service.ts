@@ -25,6 +25,10 @@ import {
   isValidBusinessSlug,
   slugifyBusinessName,
 } from '../../utils/business-slug';
+import {
+  sanitizeBusinessListItem,
+  type PublicBusinessListItem,
+} from './sanitize-business-list-item';
 
 @Injectable()
 export class BusinessService {
@@ -145,7 +149,7 @@ export class BusinessService {
     page?: number,
     limit?: number,
     search?: string,
-  ): Promise<{ data: Business[]; meta: PaginationMeta }> {
+  ): Promise<{ data: PublicBusinessListItem[]; meta: PaginationMeta }> {
     requireAdminRole(
       user,
       'You do not have permission to get all businesses.',
@@ -199,10 +203,10 @@ export class BusinessService {
       .skip(pagination.skip)
       .take(pagination.limit);
 
-    const [data, total] = await qb.getManyAndCount();
+    const [rows, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: rows.map(sanitizeBusinessListItem),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
