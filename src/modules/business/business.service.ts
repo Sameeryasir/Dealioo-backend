@@ -32,7 +32,6 @@ import {
   type PublicBusinessListItem,
 } from './sanitize-business-list-item';
 
-/** Matches pricing: Starter includes one location only. */
 const STARTER_PLAN_SLUG = 'starter';
 const STARTER_MAX_BUSINESSES = 1;
 
@@ -82,7 +81,6 @@ export class BusinessService {
       'You do not have permission to create a business.',
     );
 
-    // Starter plan: one business only (enforced even if UI is bypassed).
     await this.assertStarterBusinessLimit(user.id);
 
     const {
@@ -140,10 +138,6 @@ export class BusinessService {
     return business;
   }
 
-  /**
-   * Blocks create when active/trialing plan is Starter and owner already has ≥1 business.
-   * Business rule: Starter = one location (same as frontend plan-limits).
-   */
   private async assertStarterBusinessLimit(userId: number): Promise<void> {
     const subscription = await this.userSubscriptionRepository
       .createQueryBuilder('sub')

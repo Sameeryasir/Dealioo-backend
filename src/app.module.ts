@@ -29,6 +29,7 @@ import { MemberModule } from './modules/member/member.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 import { SubscriptionPlansModule } from './modules/subscription-plans/subscription-plans.module';
 import { UserSubscriptionsModule } from './modules/user-subscriptions/user-subscriptions.module';
+import { BillingModule } from './modules/billing/billing.module';
 import { SmsModule } from './modules/sms/sms.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { UploadModule } from './modules/upload/upload.module';
@@ -86,6 +87,7 @@ import { UploadModule } from './modules/upload/upload.module';
     MeetingRequestModule,
     SubscriptionPlansModule,
     UserSubscriptionsModule,
+    BillingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

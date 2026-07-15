@@ -45,6 +45,16 @@ type StripeSubscription = {
   metadata?: Record<string, string> | null;
 };
 
+type StripeSubscriptionWebhookObject = StripeSubscription & {
+  items?: {
+    data?: Array<{
+      price?: string | { id?: string } | null;
+      quantity?: number | null;
+    }>;
+  };
+  customer?: string | { id?: string } | null;
+};
+
 const PLATFORM_SUBSCRIPTION = 'platform_subscription';
 
 @Injectable()
@@ -193,6 +203,14 @@ export class UserSubscriptionsService {
       return;
     }
 
+    if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data.object as StripeSubscriptionWebhookObject;
+      if (subscription.metadata?.purpose === PLATFORM_SUBSCRIPTION) {
+        await this.syncSubscriptionFromStripe(subscription);
+      }
+      return;
+    }
+
     if (
       event.type === 'customer.subscription.deleted' &&
       (event.data.object as StripeSubscription).metadata?.purpose ===
@@ -311,6 +329,74 @@ export class UserSubscriptionsService {
       status: 'cancelled',
       cancelledAt: new Date(),
     });
+  }
+
+  private async syncSubscriptionFromStripe(
+    subscription: StripeSubscriptionWebhookObject,
+  ): Promise<void> {
+    const record = await this.subscriptionRepository.findOne({
+      where: { stripeSubscriptionId: subscription.id },
+    });
+    if (!record) {
+      return;
+    }
+
+    const priceId = this.extractStripeId(
+      subscription.items?.data?.[0]?.price ?? null,
+    );
+    const plan = priceId
+      ? await this.planRepository
+          .createQueryBuilder('plan')
+          .where(
+            '(plan.stripeMonthlyPriceId = :priceId OR plan.stripeYearlyPriceId = :priceId)',
+            { priceId },
+          )
+          .getOne()
+      : null;
+
+    const billingCycleFromMeta = this.parseBillingCycle(
+      subscription.metadata?.billingCycle,
+    );
+    const billingCycle =
+      billingCycleFromMeta ??
+      (plan && priceId
+        ? plan.stripeYearlyPriceId?.trim() === priceId
+          ? 'annual'
+          : 'monthly'
+        : null);
+
+    const status = this.mapStripeSubscriptionStatus(subscription.status);
+    const stripeCustomerId = this.extractStripeId(subscription.customer);
+
+    await this.subscriptionRepository.update(record.id, {
+      ...(plan ? { planId: plan.id } : {}),
+      ...(billingCycle ? { billingCycle } : {}),
+      ...(status ? { status } : {}),
+      ...(stripeCustomerId ? { stripeCustomerId } : {}),
+      ...(status === 'cancelled' ? { cancelledAt: new Date() } : {}),
+    });
+
+    if (stripeCustomerId && record.userId) {
+      await this.userRepository.update(record.userId, { stripeCustomerId });
+    }
+  }
+
+  private mapStripeSubscriptionStatus(
+    status: string | null | undefined,
+  ): UserSubscription['status'] | null {
+    switch (status) {
+      case 'active':
+        return 'active';
+      case 'trialing':
+        return 'trialing';
+      case 'past_due':
+      case 'unpaid':
+        return 'past_due';
+      case 'canceled':
+        return 'cancelled';
+      default:
+        return null;
+    }
   }
 
   private assertSessionBelongsToUser(

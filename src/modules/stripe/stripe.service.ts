@@ -371,6 +371,172 @@ export class StripeService {
     });
   }
 
+  async retrievePlatformPrice(
+    priceId: string,
+  ): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['prices']['retrieve']>>
+  > {
+    try {
+      return await this.stripe.prices.retrieve(priceId.trim());
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new NotFoundException('Stripe price not found.');
+      }
+      throw err;
+    }
+  }
+
+  async updatePlatformSubscriptionPrice(opts: {
+    stripeSubscriptionId: string;
+    newPriceId: string;
+    metadata?: Record<string, string>;
+  }): Promise<{
+    subscription: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['update']>
+    >;
+    oldPriceId: string;
+    newPriceId: string;
+    paymentIntentClientSecret: string | null;
+  }> {
+    const subscriptionId = opts.stripeSubscriptionId.trim();
+    const newPriceId = opts.newPriceId.trim();
+
+    let subscription: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>
+    >;
+    try {
+      subscription = await this.stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ['items.data.price'],
+      });
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new NotFoundException('Stripe subscription not found.');
+      }
+      throw err;
+    }
+
+    const item = subscription.items.data[0];
+    if (!item?.id) {
+      throw new BadRequestException(
+        'Stripe subscription has no billable items to update.',
+      );
+    }
+
+    const oldPrice =
+      typeof item.price === 'string' ? item.price : item.price?.id;
+    if (!oldPrice) {
+      throw new BadRequestException(
+        'Could not resolve the current Stripe price on this subscription.',
+      );
+    }
+
+    if (oldPrice === newPriceId) {
+      throw new BadRequestException('You are already on the requested plan.');
+    }
+
+    if (
+      subscription.status === 'canceled' ||
+      subscription.status === 'incomplete_expired'
+    ) {
+      throw new BadRequestException(
+        'This subscription is cancelled. Start a new checkout to subscribe again.',
+      );
+    }
+
+    const quantity = item.quantity ?? 1;
+
+    let updated: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['update']>
+    >;
+    try {
+      updated = await this.stripe.subscriptions.update(subscriptionId, {
+        items: [
+          {
+            id: item.id,
+            price: newPriceId,
+            quantity,
+          },
+        ],
+        proration_behavior: 'always_invoice',
+        metadata: {
+          ...(subscription.metadata ?? {}),
+          ...(opts.metadata ?? {}),
+          purpose: 'platform_subscription',
+        },
+        expand: ['latest_invoice.payment_intent'],
+      });
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeCardError'
+      ) {
+        throw new BadRequestException(
+          (err as { message?: string }).message ||
+            'Card was declined while updating the subscription.',
+        );
+      }
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new BadRequestException(
+          (err as { message?: string }).message ||
+            'Unable to update the Stripe subscription.',
+        );
+      }
+      throw err;
+    }
+
+    const paymentIntentClientSecret =
+      this.extractPaymentIntentClientSecret(updated.latest_invoice);
+
+    return {
+      subscription: updated,
+      oldPriceId: oldPrice,
+      newPriceId,
+      paymentIntentClientSecret,
+    };
+  }
+
+  private extractPaymentIntentClientSecret(
+    latestInvoice: unknown,
+  ): string | null {
+    if (!latestInvoice || typeof latestInvoice === 'string') {
+      return null;
+    }
+
+    const invoice = latestInvoice as {
+      payment_intent?: string | { status?: string; client_secret?: string | null } | null;
+    };
+    const paymentIntent = invoice.payment_intent;
+    if (!paymentIntent || typeof paymentIntent === 'string') {
+      return null;
+    }
+
+    if (
+      paymentIntent.status === 'requires_action' ||
+      paymentIntent.status === 'requires_confirmation'
+    ) {
+      return paymentIntent.client_secret ?? null;
+    }
+
+    return null;
+  }
+
   async createOAuthConnectUrl(
     businessId: number,
   ): Promise<{ url: string }> {
