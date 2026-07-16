@@ -2,44 +2,55 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
+  Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { User } from './user.entity';
 import type {
-  BusinessMemberPermission,
+  BusinessMemberPermission as BusinessMemberPermissionKey,
   BusinessMemberRole,
 } from '../../modules/member/member.constants';
+import { Business } from './business.entity';
+import { BusinessMemberPermission } from './business-member-permission.entity';
+import { Role } from './role.entity';
+import { User } from './user.entity';
 
 @Entity('business_members')
-@Index('UQ_business_members_business_user', ['business', 'user'], {
-  unique: true,
-})
+@Unique('UQ_business_members_business_user', ['business', 'user'])
 export class BusinessMember {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @ManyToOne(() => Business, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
-  business: Business;
+  business!: Business;
 
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
-  user: User;
+  user!: User;
 
   @Column({ type: 'varchar', length: 32 })
-  role: BusinessMemberRole;
+  role!: BusinessMemberRole;
+
+  @ManyToOne(() => Role, { nullable: true, onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'role_id' })
+  memberRole!: Role | null;
 
   @Column({ type: 'jsonb', default: () => "'[]'" })
-  permissions: BusinessMemberPermission[];
+  permissions!: BusinessMemberPermissionKey[];
+
+  @OneToMany(
+    () => BusinessMemberPermission,
+    (permissionRow) => permissionRow.businessMember,
+  )
+  permissionRows!: BusinessMemberPermission[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

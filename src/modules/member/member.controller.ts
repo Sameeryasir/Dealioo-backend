@@ -1,11 +1,9 @@
 import {
-  Body,
   Controller,
   Delete,
   Get,
   Param,
   ParseIntPipe,
-  Post,
   Query,
   Req,
   UseGuards,
@@ -13,8 +11,6 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { MemberService } from './member.service';
-import { InviteMemberDto } from './memberDto/invite-member.dto';
-import { AcceptMemberInviteDto } from './memberDto/accept-member-invite.dto';
 import { GetMembersQueryDto } from './memberDto/get-members-query.dto';
 
 type AuthRequest = Request & {
@@ -30,12 +26,12 @@ export class MemberController {
   constructor(private readonly memberService: MemberService) {}
 
   @UseGuards(AuthGuard('jwt'))
-  @Post('invite')
-  async inviteMember(
-    @Body() dto: InviteMemberDto,
+  @Get('me')
+  async getMyAccess(
+    @Query() query: GetMembersQueryDto,
     @Req() req: AuthRequest,
   ) {
-    return this.memberService.inviteMember(dto, req.user);
+    return this.memberService.getMyAccess(query.businessId, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -45,15 +41,6 @@ export class MemberController {
     @Req() req: AuthRequest,
   ) {
     return this.memberService.getMembers(query.businessId, req.user);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('accept')
-  async acceptInvite(
-    @Body() dto: AcceptMemberInviteDto,
-    @Req() req: AuthRequest,
-  ) {
-    return this.memberService.acceptInvite(dto, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))

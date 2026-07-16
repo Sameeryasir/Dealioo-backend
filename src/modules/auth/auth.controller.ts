@@ -8,9 +8,11 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { RegisterUserDto } from './authDto/register.dto';
+import { RegisterWithInvitationDto } from './authDto/register-with-invitation.dto';
 import { AuthService } from './auth.service';
 import { LoginUserDto } from './authDto/login.dto';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
@@ -20,6 +22,7 @@ import { ResetPasswordDto } from './authDto/reset-password.dto';
 import { GoogleAuthGuard } from './guards/google-auth.guard';
 import { GoogleProfile } from './decorators/google-profile.decorator';
 import type { GoogleAuthMode, GoogleAuthProfile } from './interfaces/google-auth.interface';
+import { AcceptInvitationDto } from '../invitation/invitationDto/accept-invitation.dto';
 
 type GoogleCallbackRequest = Request & {
   googleOAuthError?: string;
@@ -39,6 +42,24 @@ export class AuthController {
     @Body() registerUserDto: RegisterUserDto,
   ): Promise<{ message: string }> {
     return await this.authService.createUser(registerUserDto);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('register-with-invitation')
+  async registerWithInvitation(@Body() dto: RegisterWithInvitationDto) {
+    return await this.authService.registerWithInvitation(dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('accept-invitation')
+  async acceptInvitation(
+    @Body() dto: AcceptInvitationDto,
+    @Req() req: Request & {
+      user: { id: number; email: string; role?: { name: string } | null };
+    },
+  ) {
+    return await this.authService.acceptBusinessInvitation(dto.token, req.user);
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })

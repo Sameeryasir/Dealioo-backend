@@ -23,8 +23,15 @@ import {
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
+
+type AuthUser = {
+  id: number;
+  email?: string;
+  role?: { name: string } | null;
+};
 
 @Injectable()
 export class CampaignService {
@@ -37,6 +44,7 @@ export class CampaignService {
     private readonly funnelRepository: Repository<Funnel>,
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   async uploadCampaignImage(
@@ -62,6 +70,7 @@ export class CampaignService {
 
   async createCampaign(
     createCampaignDto: CreateCampaignDto,
+    user: AuthUser,
     file?: Express.Multer.File,
   ): Promise<Campaign> {
     const {
@@ -74,9 +83,17 @@ export class CampaignService {
       status,
     } = createCampaignDto;
 
-    const business = await this.businessRepository.findOne({
-      where: { id: businessId },
-    });
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      'campaigns',
+      'You do not have permission to create campaigns for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
     if (!business) {
       throw new NotFoundException('Business not found');
     }
@@ -128,13 +145,22 @@ export class CampaignService {
 
   async getCampaignsByBusinessId(
     businessId: number,
+    user: AuthUser,
     page?: number,
     limit?: number,
     search?: string,
   ): Promise<{ data: Campaign[]; meta: PaginationMeta }> {
-    const business = await this.businessRepository.findOne({
-      where: { id: businessId },
-    });
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      'campaigns',
+      'You do not have permission to view campaigns for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
     if (!business) {
       throw new NotFoundException('Business not found');
     }
@@ -182,19 +208,31 @@ export class CampaignService {
     };
   }
 
-  async getCampaignById(campaignId: number): Promise<Campaign> {
+  async getCampaignById(
+    campaignId: number,
+    user: AuthUser,
+  ): Promise<Campaign> {
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
     });
     if (!campaign) {
       throw new NotFoundException('Campaign not found');
     }
+
+    await this.businessAccessService.assertPermission(
+      user,
+      campaign.businessId,
+      'campaigns',
+      'You do not have permission to view campaigns for this business.',
+    );
+
     return campaign;
   }
 
   async updateCampaign(
     campaignId: number,
     updateCampaignDto: UpdateCampaignDto,
+    user: AuthUser,
     file?: Express.Multer.File,
   ): Promise<Campaign> {
     const campaign = await this.campaignRepository.findOne({
@@ -203,6 +241,13 @@ export class CampaignService {
     if (!campaign) {
       throw new NotFoundException('Campaign not found');
     }
+
+    await this.businessAccessService.assertPermission(
+      user,
+      campaign.businessId,
+      'campaigns',
+      'You do not have permission to update campaigns for this business.',
+    );
 
     if (updateCampaignDto.campaignName !== undefined) {
       campaign.campaignName = updateCampaignDto.campaignName;

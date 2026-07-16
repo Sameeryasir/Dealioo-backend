@@ -11,8 +11,7 @@ import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity'
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
-import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import {
   normalizeCampaignImageUrlForMeta,
   toAbsoluteAssetUrlIfRelative,
@@ -82,6 +81,7 @@ export class MetaPublishService {
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    private readonly businessAccessService: BusinessAccessService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly auditService: FacebookIntegrationAuditService,
   ) {}
@@ -91,10 +91,6 @@ export class MetaPublishService {
     businessId: number,
     draftId: string,
   ): Promise<PublishMetaCampaignResponseDto> {
-    requireAdminRole(
-      user,
-      'You do not have permission to publish Facebook campaigns.',
-    );
 
     const business = await this.loadOwnedBusiness(user, businessId);
     const draft = await this.loadDraftForUser(user.id, businessId, draftId);
@@ -611,18 +607,26 @@ export class MetaPublishService {
     user: User,
     businessId: number,
   ): Promise<Business> {
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['meta_ads', 'meta_campaigns'],
+      'You do not have permission to access Meta campaigns for this business.',
+    );
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
 
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
 
     return business;
   }
+
 
   private async assertPageAccessible(
     pageId: string,

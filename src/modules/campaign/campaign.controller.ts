@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UploadedFile,
   UploadedFiles,
   UseGuards,
@@ -15,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
+import type { Request } from 'express';
 import {
   createUploadMulterOptions,
   CAMPAIGNS_UPLOAD_SUBDIR,
@@ -23,6 +25,14 @@ import { Campaign } from '../../db/entities/campaign.entity';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 import { CampaignService } from './campaign.service';
+
+type AuthRequest = Request & {
+  user: {
+    id: number;
+    email?: string;
+    role?: { name: string } | null;
+  };
+};
 
 @Controller('campaign')
 export class CampaignController {
@@ -78,6 +88,7 @@ export class CampaignController {
   )
   createCampaign(
     @Body() createCampaignDto: CreateCampaignDto,
+    @Req() req: AuthRequest,
     @UploadedFiles()
     files: {
       file?: Express.Multer.File[];
@@ -85,7 +96,11 @@ export class CampaignController {
     },
   ): Promise<Campaign> {
     const uploaded = files?.file?.[0] ?? files?.image?.[0];
-    return this.campaignService.createCampaign(createCampaignDto, uploaded);
+    return this.campaignService.createCampaign(
+      createCampaignDto,
+      req.user,
+      uploaded,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -98,12 +113,14 @@ export class CampaignController {
   @Get('business/:id')
   getCampaignsByBusiness(
     @Param('id', ParseIntPipe) businessId: number,
+    @Req() req: AuthRequest,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(6), ParseIntPipe) limit: number,
     @Query('search') search?: string,
   ): Promise<{ data: Campaign[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
     return this.campaignService.getCampaignsByBusinessId(
       businessId,
+      req.user,
       page,
       limit,
       search,
@@ -114,8 +131,9 @@ export class CampaignController {
   @Get(':id')
   getCampaignById(
     @Param('id', ParseIntPipe) campaignId: number,
+    @Req() req: AuthRequest,
   ): Promise<Campaign> {
-    return this.campaignService.getCampaignById(campaignId);
+    return this.campaignService.getCampaignById(campaignId, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -141,6 +159,7 @@ export class CampaignController {
   updateCampaign(
     @Param('id', ParseIntPipe) campaignId: number,
     @Body() updateCampaignDto: UpdateCampaignDto,
+    @Req() req: AuthRequest,
     @UploadedFiles()
     files: {
       file?: Express.Multer.File[];
@@ -151,6 +170,7 @@ export class CampaignController {
     return this.campaignService.updateCampaign(
       campaignId,
       updateCampaignDto,
+      req.user,
       uploaded,
     );
   }

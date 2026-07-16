@@ -10,8 +10,7 @@ import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
-import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
@@ -96,27 +95,37 @@ export class FacebookService {
     private readonly businessRepository: Repository<Business>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
+
+  private async requireMetaBusiness(
+    user: User,
+    businessId: number,
+    permission: 'meta_ads' | 'meta_campaigns' = 'meta_ads',
+  ): Promise<Business> {
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      permission,
+      'You do not have permission to access Meta for this business.',
+    );
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+    return business;
+  }
 
   async connect(
     user: User,
     businessId: number,
   ): Promise<{ url: string; scopes: string[] }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to connect Facebook for this account.',
-    );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-      relations: ['owner'],
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
+    const business = await this.requireMetaBusiness(user, businessId);
 
     await this.businessRepository.update(businessId, {
       metaConnectionStatus: FacebookConnectionStatus.INITIATED,
@@ -382,20 +391,7 @@ export class FacebookService {
     user: User,
     businessId: number,
   ): Promise<FacebookAdAccountDto[]> {
-    requireAdminRole(
-      user,
-      'You do not have permission to list Facebook ad accounts.',
-    );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
+    const business = await this.requireMetaBusiness(user, businessId);
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaToken(business);
@@ -414,20 +410,7 @@ export class FacebookService {
     user: User,
     businessId: number,
   ): Promise<FacebookPageDto[]> {
-    requireAdminRole(
-      user,
-      'You do not have permission to list Facebook pages.',
-    );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
+    const business = await this.requireMetaBusiness(user, businessId);
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaToken(business);
@@ -449,20 +432,7 @@ export class FacebookService {
     businessId: number,
     adAccountId: string,
   ): Promise<{ metaAdAccountId: string }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to set the Facebook ad account.',
-    );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
+    const business = await this.requireMetaBusiness(user, businessId);
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaToken(business);
@@ -500,20 +470,7 @@ export class FacebookService {
     user: User,
     businessId: number,
   ): Promise<{ disconnected: true }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to disconnect Facebook.',
-    );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
+    const business = await this.requireMetaBusiness(user, businessId);
 
     const hadConnection = Boolean(
       business.metaUserId?.trim() || business.metaAccessToken?.trim(),

@@ -1,0 +1,1 @@
+export const BUSINESS_INVITATION_EXPIRY_DAYS = 7;

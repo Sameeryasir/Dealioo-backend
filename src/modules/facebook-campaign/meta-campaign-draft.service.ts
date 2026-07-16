@@ -8,8 +8,7 @@ import { Repository, In } from 'typeorm';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
-import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
@@ -47,6 +46,7 @@ export class MetaCampaignDraftService {
     private readonly draftRepository: Repository<MetaCampaignDraft>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   async saveCampaignStep(
@@ -54,10 +54,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveCampaignStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    requireAdminRole(
-      user,
-      'You do not have permission to save Meta campaign drafts.',
-    );
 
     await this.loadOwnedBusiness(user, businessId);
     this.assertCampaignStepBusinessRules(dto);
@@ -111,10 +107,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdSetStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    requireAdminRole(
-      user,
-      'You do not have permission to save Meta campaign drafts.',
-    );
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -216,10 +208,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdCreativeStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    requireAdminRole(
-      user,
-      'You do not have permission to save Meta campaign drafts.',
-    );
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -289,7 +277,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
-    requireAdminRole(user, 'You do not have permission to view campaign drafts.');
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -308,7 +295,6 @@ export class MetaCampaignDraftService {
     user: User,
     businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
-    requireAdminRole(user, 'You do not have permission to view campaign drafts.');
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -488,18 +474,26 @@ export class MetaCampaignDraftService {
     user: User,
     businessId: number,
   ): Promise<Business> {
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['meta_ads', 'meta_campaigns'],
+      'You do not have permission to access Meta campaigns for this business.',
+    );
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
 
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
 
     return business;
   }
+
 
   private toResponse(draft: MetaCampaignDraft): MetaCampaignDraftResponseDto {
     return {

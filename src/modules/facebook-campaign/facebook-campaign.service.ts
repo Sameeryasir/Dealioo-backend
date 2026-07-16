@@ -11,8 +11,7 @@ import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
-import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -78,6 +77,7 @@ export class FacebookCampaignService {
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    private readonly businessAccessService: BusinessAccessService,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly spacesService: SpacesService,
@@ -88,10 +88,6 @@ export class FacebookCampaignService {
     businessId: number,
     file: Express.Multer.File,
   ): Promise<{ imageUrl: string; imageHash: string }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to upload Facebook ad images.',
-    );
 
     const business = await this.loadOwnedBusiness(user, businessId);
 
@@ -139,10 +135,6 @@ export class FacebookCampaignService {
     businessId: number,
     file: Express.Multer.File,
   ): Promise<{ videoUrl: string }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to upload Facebook ad videos.',
-    );
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -171,10 +163,6 @@ export class FacebookCampaignService {
     businessId: number,
     dto: CreateFacebookCampaignDto,
   ): Promise<CreateFacebookCampaignResponseDto> {
-    requireAdminRole(
-      user,
-      'You do not have permission to create Facebook campaigns.',
-    );
 
     const business = await this.loadOwnedBusiness(user, businessId);
 
@@ -379,10 +367,6 @@ export class FacebookCampaignService {
     businessId: number,
     metaCampaignId: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to delete Facebook campaigns.',
-    );
 
     const campaignId = metaCampaignId.trim();
     if (!campaignId) {
@@ -416,10 +400,6 @@ export class FacebookCampaignService {
     user: User,
     businessId: number,
   ): Promise<FacebookCampaign[]> {
-    requireAdminRole(
-      user,
-      'You do not have permission to view Facebook campaigns.',
-    );
 
     await this.loadOwnedBusiness(user, businessId);
 
@@ -433,18 +413,26 @@ export class FacebookCampaignService {
     user: User,
     businessId: number,
   ): Promise<Business> {
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['meta_ads', 'meta_campaigns'],
+      'You do not have permission to access Meta campaigns for this business.',
+    );
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
 
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
 
     return business;
   }
+
 
   private async handleCreationFailure(
     userId: number,

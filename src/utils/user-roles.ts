@@ -1,6 +1,8 @@
 export const ADMIN_ROLE = 'Admin';
 export const SUPER_ADMIN_ROLE = 'Super Admin';
 export const SCANNER_ROLE = 'Scanner';
+export const MANAGER_ROLE = 'Manager';
+export const STAFF_ROLE = 'Staff';
 
 type UserLike = {
   role?: { name: string } | null;

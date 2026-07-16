@@ -14,7 +14,6 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
 import { isSuperAdmin } from '../../utils/user-roles';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
@@ -23,6 +22,7 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import {
   isValidBusinessSlug,
   slugifyBusinessName,
@@ -45,6 +45,7 @@ export class BusinessService {
     @InjectRepository(UserSubscription)
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly spacesService: SpacesService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   async findByUserId(userId: number): Promise<Business | null> {
@@ -66,9 +67,7 @@ export class BusinessService {
     user: Pick<User, 'id'> & { role?: { name: string } | null },
     businessId: number,
   ): Promise<Business | null> {
-    return this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    return this.businessAccessService.findAccessibleBusiness(user, businessId);
   }
 
   async createBusiness(
@@ -187,11 +186,6 @@ export class BusinessService {
     limit?: number,
     search?: string,
   ): Promise<{ data: PublicBusinessListItem[]; meta: PaginationMeta }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to get all businesses.',
-    );
-
     const pagination = normalizePagination(page, limit);
     const trimmedSearch = search?.trim();
     const listAllBusinesses = isSuperAdmin(user);
@@ -199,7 +193,7 @@ export class BusinessService {
     const qb = this.businessRepository.createQueryBuilder('business');
 
     if (!listAllBusinesses) {
-      qb.where('business.owner_id = :ownerId', { ownerId: user.id });
+      this.businessAccessService.applyAccessibleBusinessFilter(qb, user);
     }
 
     if (trimmedSearch) {
@@ -251,17 +245,13 @@ export class BusinessService {
     businessId: number,
     user: User,
   ): Promise<Business> {
-    requireAdminRole(
+    const business = await this.businessAccessService.findAccessibleBusiness(
       user,
-      'You do not have permission to get business by id.',
+      businessId,
     );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
     return business;
@@ -272,11 +262,17 @@ export class BusinessService {
     user: User,
     file?: Express.Multer.File,
   ): Promise<Business> {
-    requireAdminRole(user, 'You do not have permission to update a business.');
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      'settings',
+      'You do not have permission to update a business.',
+    );
 
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
     if (!business) {
       throw new NotFoundException(
         'Business not found or you do not own this business.',
@@ -319,11 +315,16 @@ export class BusinessService {
     return this.businessRepository.save(business);
   }
   async deleteBusiness(businessId: number, user: User): Promise<Business> {
-    requireAdminRole(user, 'You do not have permission to delete a business.');
+    await this.businessAccessService.assertOwner(
+      user,
+      businessId,
+      'Only the business owner can delete a business.',
+    );
 
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
     if (!business) {
       throw new NotFoundException(
         'Business not found or you do not own this business.',

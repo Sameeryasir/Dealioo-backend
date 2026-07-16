@@ -9,11 +9,18 @@ import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import {
   OnboardingNextStep,
   OnboardingStatusResponse,
 } from './onboarding.types';
-import { SCANNER_ROLE, SUPER_ADMIN_ROLE, ADMIN_ROLE } from '../../utils/user-roles';
+import {
+  ADMIN_ROLE,
+  MANAGER_ROLE,
+  SCANNER_ROLE,
+  STAFF_ROLE,
+  SUPER_ADMIN_ROLE,
+} from '../../utils/user-roles';
 
 @Injectable()
 export class OnboardingService {
@@ -23,6 +30,7 @@ export class OnboardingService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly userSubscriptionsService: UserSubscriptionsService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   async getStatusForUser(
@@ -38,6 +46,28 @@ export class OnboardingService {
         twoFactorCompleted: true,
         subscriptionSelected: true,
         businessCreated: true,
+        onboardingCompleted: true,
+        nextStep: null,
+        redirectPath: '/dashboard',
+      };
+    }
+
+    if (
+      normalizedRole === MANAGER_ROLE ||
+      normalizedRole === STAFF_ROLE
+    ) {
+      const accessibleIds =
+        await this.businessAccessService.listAccessibleBusinessIds(userId);
+      const businessId =
+        businessIdParam != null && accessibleIds.includes(businessIdParam)
+          ? businessIdParam
+          : (accessibleIds[0] ?? null);
+
+      return {
+        businessId,
+        twoFactorCompleted: true,
+        subscriptionSelected: true,
+        businessCreated: accessibleIds.length > 0,
         onboardingCompleted: true,
         nextStep: null,
         redirectPath: '/dashboard',
@@ -131,11 +161,9 @@ export class OnboardingService {
     if (!input.subscriptionSelected) {
       return 'plan_selection';
     }
-
     if (!input.businessCreated) {
       return 'business_creation';
     }
-
     return null;
   }
 
@@ -146,15 +174,12 @@ export class OnboardingService {
     if (onboardingCompleted) {
       return '/dashboard';
     }
-
     if (nextStep === 'plan_selection') {
       return '/auth/select-plan';
     }
-
     if (nextStep === 'business_creation') {
       return '/business/register';
     }
-
     return '/dashboard';
   }
 }

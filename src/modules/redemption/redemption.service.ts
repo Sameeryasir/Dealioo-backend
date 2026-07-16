@@ -24,6 +24,7 @@ import {
 import { Business } from '../../db/entities/business.entity';
 import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { CouponService } from './coupon.service';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
@@ -153,6 +154,7 @@ export class RedemptionService {
     private readonly activityService: ActivityService,
     @Inject(forwardRef(() => AutomationService))
     private readonly automationService: AutomationService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   extractToken(raw: string): string {
@@ -175,17 +177,23 @@ export class RedemptionService {
     userId: number,
     userRole: string,
   ): Promise<void> {
-    const business = await this.businessRepository.findOne({
-      where: { id: businessId },
-      relations: ['owner'],
-    });
+    const context = await this.businessAccessService.getAccessContext(
+      { id: userId, role: { name: userRole } },
+      businessId,
+    );
 
-    if (!business) {
-      throw new NotFoundException('Business not found');
+    if (!context) {
+      throw new ForbiddenException('You do not have access to this business');
     }
 
-    if (userRole === 'Admin' && business.owner?.id !== userId) {
-      throw new ForbiddenException('You do not have access to this business');
+    if (
+      context.access !== 'owner' &&
+      context.access !== 'super_admin' &&
+      !context.permissions.includes('scanning')
+    ) {
+      throw new ForbiddenException(
+        'You do not have permission to scan or redeem for this business',
+      );
     }
   }
 

@@ -26,6 +26,8 @@ import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 import { MemberModule } from './modules/member/member.module';
+import { InvitationModule } from './modules/invitation/invitation.module';
+import { BusinessAccessModule } from './modules/business-access/business-access.module';
 import { MeetingRequestModule } from './modules/meeting-request/meeting-request.module';
 import { SubscriptionPlansModule } from './modules/subscription-plans/subscription-plans.module';
 import { UserSubscriptionsModule } from './modules/user-subscriptions/user-subscriptions.module';
@@ -42,6 +44,7 @@ import { UploadModule } from './modules/upload/upload.module';
     MailModule,
     SmsModule,
     PusherModule,
+    BusinessAccessModule,
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 200 }],
       errorMessage:
@@ -83,6 +86,7 @@ import { UploadModule } from './modules/upload/upload.module';
     ActivityModule,
     ChatModule,
     MemberModule,
+    InvitationModule,
     OnboardingModule,
     MeetingRequestModule,
     SubscriptionPlansModule,

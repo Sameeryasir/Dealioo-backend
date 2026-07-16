@@ -12,18 +12,27 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes, randomInt } from 'crypto';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { BrevoSendFailedError } from '../mail/brevo-mail.errors';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { JwtService } from '@nestjs/jwt';
 import { render } from '@react-email/render';
 import * as React from 'react';
 import { OtpEmail } from '../../templates/otp-email';
+import { Business } from '../../db/entities/business.entity';
+import {
+  BusinessInvitation,
+  BusinessInvitationStatus,
+} from '../../db/entities/business-invitation.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
+import { InvitationService } from '../invitation/invitation.service';
 import { RegisterUserDto } from './authDto/register.dto';
+import { RegisterWithInvitationDto } from './authDto/register-with-invitation.dto';
 import { LoginUserDto } from './authDto/login.dto';
 import { JwtAccessPayload } from './jwt/jwt-access-payload.interface';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
@@ -35,9 +44,14 @@ import type {
   GoogleAuthResult,
 } from './interfaces/google-auth.interface';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import {
+  ADMIN_ROLE,
+  MANAGER_ROLE,
+  STAFF_ROLE,
+} from '../../utils/user-roles';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 
-const GOOGLE_SIGNUP_ROLE = 'Admin';
+const GOOGLE_SIGNUP_ROLE = ADMIN_ROLE;
 
 type AuthUserPayload = {
   id: number;
@@ -73,49 +87,358 @@ export class AuthService {
     private readonly refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(UserSubscription)
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
+    @InjectRepository(BusinessMember)
+    private readonly businessMemberRepository: Repository<BusinessMember>,
+    private readonly invitationService: InvitationService,
+    private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly mailDelivery: MailDeliveryService,
     private readonly configService: ConfigService,
   ) {}
 
+  async registerWithInvitation(dto: RegisterWithInvitationDto): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: AuthUserPayload;
+  }> {
+    const preview = await this.invitationService.findPendingInvitationByRawToken(
+      dto.token,
+    );
+    const email = this.invitationService.normalizeEmail(preview.email);
+
+    const existingWithPassword = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('LOWER(user.email) = :email', { email })
+      .getOne();
+
+    if (existingWithPassword?.passwordHash) {
+      throw new ConflictException(
+        'An account with this email already exists. Please sign in instead.',
+      );
+    }
+
+    const name = dto.name.trim();
+    if (!name) {
+      throw new BadRequestException('Name is required.');
+    }
+    const phone = dto.phone?.trim() || null;
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const tokenHash = this.invitationService.hashToken(dto.token);
+
+    const userId = await this.dataSource.transaction(async (manager) => {
+      const invitationRepo = manager.getRepository(BusinessInvitation);
+      const userRepo = manager.getRepository(User);
+      const roleRepo = manager.getRepository(Role);
+      const memberRepo = manager.getRepository(BusinessMember);
+      const permissionRepo = manager.getRepository(BusinessMemberPermission);
+
+      const invitation = await invitationRepo
+        .createQueryBuilder('invite')
+        .where('invite.tokenHash = :tokenHash', { tokenHash })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!invitation) {
+        throw new NotFoundException('Invitation not found.');
+      }
+      if (invitation.status !== BusinessInvitationStatus.PENDING) {
+        throw new ConflictException('This invitation is no longer pending.');
+      }
+      if (invitation.expiresAt.getTime() <= Date.now()) {
+        invitation.status = BusinessInvitationStatus.EXPIRED;
+        await invitationRepo.save(invitation);
+        throw new BadRequestException('This invitation has expired.');
+      }
+
+      const businessIdRaw = await invitationRepo
+        .createQueryBuilder('invite')
+        .select('invite.business_id', 'businessId')
+        .where('invite.id = :id', { id: invitation.id })
+        .getRawOne<{ businessId: number | string }>();
+
+      const businessId = Number(businessIdRaw?.businessId);
+      if (!Number.isFinite(businessId) || businessId < 1) {
+        throw new NotFoundException('Business not found for this invitation.');
+      }
+
+      const business = await manager.getRepository(Business).findOne({
+        where: { id: businessId },
+      });
+      if (!business) {
+        throw new NotFoundException('Business not found for this invitation.');
+      }
+
+      const platformRole = await roleRepo.findOne({
+        where: { name: invitation.role },
+      });
+      if (!platformRole) {
+        throw new InternalServerErrorException(
+          `Role '${invitation.role}' does not exist. Seed Manager and Staff roles first.`,
+        );
+      }
+
+      let user = await userRepo
+        .createQueryBuilder('user')
+        .addSelect('user.passwordHash')
+        .where('LOWER(user.email) = :email', { email })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (user?.passwordHash) {
+        throw new ConflictException(
+          'An account with this email already exists. Please sign in instead.',
+        );
+      }
+
+      if (user) {
+        user.name = name;
+        user.phone = phone;
+        user.passwordHash = passwordHash;
+        user.emailVerified = true;
+        user = await userRepo.save(user);
+        await userRepo
+          .createQueryBuilder()
+          .update(User)
+          .set({ role: { id: platformRole.id } })
+          .where('id = :id', { id: user.id })
+          .execute();
+        user.role = platformRole;
+      } else {
+        user = await userRepo.save(
+          userRepo.create({
+            email,
+            name,
+            phone,
+            passwordHash,
+            role: platformRole,
+            provider: 'LOCAL',
+            emailVerified: true,
+            isActive: true,
+          }),
+        );
+        await userRepo
+          .createQueryBuilder()
+          .update(User)
+          .set({ role: { id: platformRole.id } })
+          .where('id = :id', { id: user.id })
+          .execute();
+        user.role = platformRole;
+      }
+
+      let member = await memberRepo.findOne({
+        where: {
+          business: { id: business.id },
+          user: { id: user.id },
+        },
+      });
+
+      if (!member) {
+        member = await memberRepo.save(
+          memberRepo.create({
+            business,
+            user,
+            role: invitation.role,
+            memberRole: platformRole,
+            permissions: invitation.permissions ?? [],
+          }),
+        );
+      } else {
+        member.role = invitation.role;
+        member.memberRole = platformRole;
+        member.permissions = invitation.permissions ?? [];
+        member = await memberRepo.save(member);
+      }
+
+      await permissionRepo.delete({ businessMember: { id: member.id } });
+      const permissionKeys = invitation.permissions ?? [];
+      if (permissionKeys.length > 0) {
+        await permissionRepo.save(
+          permissionKeys.map((permission) =>
+            permissionRepo.create({
+              businessMember: member!,
+              permission,
+            }),
+          ),
+        );
+      }
+
+      invitation.status = BusinessInvitationStatus.ACCEPTED;
+      invitation.acceptedAt = new Date();
+      await invitationRepo.save(invitation);
+
+      return user.id;
+    });
+
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+    if (!user) {
+      throw new InternalServerErrorException(
+        'Account was created but could not be loaded.',
+      );
+    }
+
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
+
+    const session = await this.buildAuthSession(user);
+    return {
+      message: 'Account created successfully.',
+      ...session,
+    };
+  }
+
+  async acceptBusinessInvitation(
+    token: string,
+    authUser: { id: number; email: string; role?: { name: string } | null },
+  ): Promise<{
+    message: string;
+    businessId: number;
+    token: string;
+    refreshToken: string;
+    user: AuthUserPayload;
+  }> {
+    const result = await this.invitationService.acceptInvitationForUser(
+      token,
+      authUser,
+    );
+
+    const user = await this.userRepository.findOne({
+      where: { id: authUser.id },
+      relations: ['role'],
+    });
+    if (!user) {
+      throw new InternalServerErrorException('User not found after accept.');
+    }
+
+    const session = await this.buildAuthSession(user);
+    return {
+      message: result.message,
+      businessId: result.businessId,
+      ...session,
+    };
+  }
+
   async createUser(
     registerUserDto: RegisterUserDto,
   ): Promise<{ message: string }> {
-    const existingByEmail = await this.userRepository.findOne({
-      where: { email: registerUserDto.email },
-    });
-  
-    if (existingByEmail) {
+    const email = registerUserDto.email.trim().toLowerCase();
+
+    const existingByEmail = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .leftJoinAndSelect('user.role', 'role')
+      .where('LOWER(user.email) = :email', { email })
+      .getOne();
+
+    if (existingByEmail?.passwordHash) {
       throw new ConflictException('An account with this email already exists.');
     }
-  
-    const role = await this.roleRepository.findOne({
-      where: { name: registerUserDto.role },
-    });
-  
-    if (!role) {
-      throw new NotFoundException(
-        `Role '${registerUserDto.role}' does not exist.`,
-      );
-    }
-  
+
     const passwordHash = await bcrypt.hash(registerUserDto.password, 10);
-  
+
+    const signupRole = await this.resolveSignupRole(email, existingByEmail);
+
+    if (existingByEmail && !existingByEmail.passwordHash) {
+      existingByEmail.name = registerUserDto.name;
+      existingByEmail.phone = registerUserDto.phone;
+      existingByEmail.passwordHash = passwordHash;
+      existingByEmail.email = email;
+      existingByEmail.role = signupRole;
+      const savedInvitedUser = await this.userRepository.save(existingByEmail);
+      await this.sendOtpForUser(savedInvitedUser);
+      return {
+        message: 'User successfully registered.',
+      };
+    }
+
     const user = this.userRepository.create({
-      email: registerUserDto.email,
+      email,
       name: registerUserDto.name,
       phone: registerUserDto.phone,
       passwordHash,
-      role,
+      role: signupRole,
     });
-  
+
     const savedUser = await this.userRepository.save(user);
-  
+
     await this.sendOtpForUser(savedUser);
-  
+
     return {
       message: 'User successfully registered.',
     };
+  }
+
+  private async resolveSignupRole(
+    email: string,
+    existingUser: User | null,
+  ): Promise<Role> {
+    const hashedInvite = await this.dataSource
+      .getRepository(BusinessInvitation)
+      .createQueryBuilder('invite')
+      .where('LOWER(invite.email) = :email', { email })
+      .andWhere('invite.status = :status', {
+        status: BusinessInvitationStatus.PENDING,
+      })
+      .andWhere('invite.expiresAt > :now', { now: new Date() })
+      .orderBy('invite.id', 'DESC')
+      .getOne();
+
+    if (
+      hashedInvite?.role === MANAGER_ROLE ||
+      hashedInvite?.role === STAFF_ROLE
+    ) {
+      const inviteRole = await this.roleRepository.findOne({
+        where: { name: hashedInvite.role },
+      });
+      if (inviteRole) {
+        return inviteRole;
+      }
+    }
+
+    if (existingUser?.id) {
+      const membership = await this.businessMemberRepository
+        .createQueryBuilder('member')
+        .leftJoinAndSelect('member.memberRole', 'memberRole')
+        .where('member.user_id = :userId', { userId: existingUser.id })
+        .orderBy('member.id', 'DESC')
+        .getOne();
+
+      if (membership?.memberRole) {
+        return membership.memberRole;
+      }
+
+      if (
+        membership?.role === MANAGER_ROLE ||
+        membership?.role === STAFF_ROLE
+      ) {
+        const memberRole = await this.roleRepository.findOne({
+          where: { name: membership.role },
+        });
+        if (memberRole) {
+          return memberRole;
+        }
+      }
+
+      if (
+        existingUser.role?.name === MANAGER_ROLE ||
+        existingUser.role?.name === STAFF_ROLE
+      ) {
+        return existingUser.role;
+      }
+    }
+
+    const adminRole = await this.roleRepository.findOne({
+      where: { name: ADMIN_ROLE },
+    });
+    if (!adminRole) {
+      throw new NotFoundException(`Role '${ADMIN_ROLE}' does not exist.`);
+    }
+    return adminRole;
   }
 
   async loginUser(
@@ -343,9 +666,8 @@ export class AuthService {
       );
     }
 
-    const role = await this.roleRepository.findOne({
-      where: { name: GOOGLE_SIGNUP_ROLE },
-    });
+    // Invited Google signups must keep Manager/Staff from the invite, not Admin.
+    const role = await this.resolveSignupRole(email, null);
     if (!role) {
       throw new InternalServerErrorException(
         `Role '${GOOGLE_SIGNUP_ROLE}' does not exist. Seed roles before Google signup.`,
