@@ -22,7 +22,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
   BusinessMemberPermission[]
 > = {
   Manager: ['campaigns', 'orders', 'activity', 'chats', 'scanning'],
-  Staff: ['orders', 'chats', 'scanning'],
+  Staff: ['orders', 'activity', 'chats', 'scanning'],
 };
 
 export const ALL_BUSINESS_MEMBER_PERMISSIONS: BusinessMemberPermission[] = [
