@@ -60,7 +60,7 @@ export class StripeService {
     });
   }
 
-  /** Ensures Connect onboarding is complete before accepting payments. */
+
   async validateConnectedAccount(
     stripeAccountId: string,
   ): Promise<ValidatedConnectAccount> {
@@ -295,6 +295,264 @@ export class StripeService {
     return this.clientForConnectedAccount(stripeAccountId).paymentIntents.retrieve(
       paymentIntentId,
     );
+  }
+
+
+  async createCheckoutSessionOnConnectedAccount(opts: {
+    stripeAccountId: string;
+    stripePriceId: string;
+    returnUrl: string;
+    customerEmail: string;
+    applicationFeeAmount: number;
+    currency?: string;
+    description?: string;
+    metadata: Record<string, string>;
+    idempotencyKey: string;
+    paymentId?: number;
+    funnelId?: number;
+    businessId?: number;
+    campaignId?: number;
+  }): Promise<
+    Awaited<
+      ReturnType<InstanceType<typeof Stripe>['checkout']['sessions']['create']>
+    >
+  > {
+    await this.validateConnectedAccount(opts.stripeAccountId);
+
+    const stripeForConnectedAccount = this.clientForConnectedAccount(
+      opts.stripeAccountId,
+    );
+
+
+    const paymentMethodTypes: Array<'card'> = ['card'];
+
+    logStripePayment({
+      phase: 'checkout_session_create',
+      stripeAccountId: opts.stripeAccountId,
+      paymentId: opts.paymentId ?? null,
+      funnelId: opts.funnelId ?? null,
+      businessId: opts.businessId ?? null,
+      campaignId: opts.campaignId ?? null,
+      paymentMethodTypes,
+    });
+
+    try {
+      const session = await stripeForConnectedAccount.checkout.sessions.create(
+        {
+          mode: 'payment',
+          ui_mode: 'elements',
+
+          payment_method_types: paymentMethodTypes,
+
+          allow_promotion_codes: false,
+
+          saved_payment_method_options: {
+            payment_method_save: 'disabled',
+          },
+          line_items: [{ price: opts.stripePriceId.trim(), quantity: 1 }],
+
+          customer_email: opts.customerEmail.trim().toLowerCase(),
+          return_url: opts.returnUrl,
+          metadata: opts.metadata,
+          payment_intent_data: {
+            ...(opts.applicationFeeAmount > 0
+              ? { application_fee_amount: opts.applicationFeeAmount }
+              : {}),
+            ...(opts.description?.trim()
+              ? { description: opts.description.trim().slice(0, 1000) }
+              : {}),
+            metadata: opts.metadata,
+          },
+        },
+        { idempotencyKey: opts.idempotencyKey },
+      );
+
+      if (!session.client_secret) {
+        throw new InternalServerErrorException(
+          'Stripe did not return a client secret for this checkout session.',
+        );
+      }
+
+      logStripePayment({
+        phase: 'checkout_session_created',
+        outcome: 'success',
+        paymentId: opts.paymentId ?? null,
+        stripeAccountId: opts.stripeAccountId,
+        checkoutSessionId: session.id,
+        paymentIntentId:
+          typeof session.payment_intent === 'string'
+            ? session.payment_intent
+            : session.payment_intent?.id ?? null,
+      });
+
+      return session;
+    } catch (err) {
+      errorStripePayment({
+        phase: 'checkout_session_create',
+        outcome: 'stripe_api_error',
+        stripeAccountId: opts.stripeAccountId,
+        paymentId: opts.paymentId ?? null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  async retrieveCheckoutSessionOnConnectedAccount(
+    stripeAccountId: string,
+    checkoutSessionId: string,
+  ): Promise<
+    Awaited<
+      ReturnType<
+        InstanceType<typeof Stripe>['checkout']['sessions']['retrieve']
+      >
+    >
+  > {
+    return this.clientForConnectedAccount(
+      stripeAccountId,
+    ).checkout.sessions.retrieve(checkoutSessionId.trim(), {
+      expand: ['payment_intent'],
+    });
+  }
+
+
+  async expireCheckoutSessionOnConnectedAccount(
+    stripeAccountId: string,
+    checkoutSessionId: string,
+  ): Promise<void> {
+    await this.clientForConnectedAccount(
+      stripeAccountId,
+    ).checkout.sessions.expire(checkoutSessionId.trim());
+  }
+
+
+  async createProductAndPriceOnConnectedAccount(opts: {
+    stripeAccountId: string;
+    name: string;
+    description?: string;
+    imageUrl?: string | null;
+    websiteUrl?: string | null;
+    unitAmount: number;
+    currency: string;
+    metadata?: Record<string, string>;
+  }): Promise<{ stripeProductId: string; stripePriceId: string }> {
+    await this.validateConnectedAccount(opts.stripeAccountId);
+
+    const name = opts.name.trim().slice(0, 250);
+    if (!name) {
+      throw new BadRequestException('Stripe product name is required.');
+    }
+    if (!Number.isFinite(opts.unitAmount) || opts.unitAmount < 1) {
+      throw new BadRequestException('Stripe price amount is invalid.');
+    }
+
+    const currency = opts.currency.trim().toLowerCase() || 'usd';
+    const stripeForConnectedAccount = this.clientForConnectedAccount(
+      opts.stripeAccountId,
+    );
+
+
+    const images = this.stripeProductImages(opts.imageUrl);
+    const productUrl = this.stripeProductUrl(opts.websiteUrl);
+    const description = opts.description?.trim().slice(0, 1000) || undefined;
+    const metadata = this.sanitizeStripeMetadata(opts.metadata);
+
+    logStripePayment({
+      phase: 'connect_product_create',
+      stripeAccountId: opts.stripeAccountId,
+      unitAmount: opts.unitAmount,
+      currency,
+      productName: name,
+    });
+
+    try {
+      const product = await stripeForConnectedAccount.products.create({
+        name,
+        active: true,
+        ...(description ? { description } : {}),
+        ...(images.length > 0 ? { images } : {}),
+        ...(productUrl ? { url: productUrl } : {}),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+
+        default_price_data: {
+          currency,
+          unit_amount: opts.unitAmount,
+        },
+      });
+
+      const defaultPrice =
+        typeof product.default_price === 'string'
+          ? product.default_price
+          : product.default_price?.id;
+
+      if (!defaultPrice?.trim()) {
+        throw new InternalServerErrorException(
+          'Stripe product was created without a default price.',
+        );
+      }
+
+      logStripePayment({
+        phase: 'connect_product_created',
+        outcome: 'success',
+        stripeAccountId: opts.stripeAccountId,
+        stripeProductId: product.id,
+        stripePriceId: defaultPrice,
+      });
+
+      return {
+        stripeProductId: product.id,
+        stripePriceId: defaultPrice.trim(),
+      };
+    } catch (err) {
+      errorStripePayment({
+        phase: 'connect_product_create',
+        outcome: 'stripe_api_error',
+        stripeAccountId: opts.stripeAccountId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  async retrievePriceOnConnectedAccount(
+    stripeAccountId: string,
+    stripePriceId: string,
+  ): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['prices']['retrieve']>>
+  > {
+    return this.clientForConnectedAccount(stripeAccountId).prices.retrieve(
+      stripePriceId.trim(),
+      { expand: ['product'] },
+    );
+  }
+
+
+  private stripeProductImages(imageUrl?: string | null): string[] {
+    const url = imageUrl?.trim();
+    if (!url || !/^https:\/\//i.test(url)) return [];
+    return [url.slice(0, 2048)];
+  }
+
+
+  private stripeProductUrl(websiteUrl?: string | null): string | undefined {
+    const url = websiteUrl?.trim();
+    if (!url || !/^https?:\/\//i.test(url)) return undefined;
+    return url.slice(0, 2048);
+  }
+
+  private sanitizeStripeMetadata(
+    metadata?: Record<string, string>,
+  ): Record<string, string> {
+    if (!metadata) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(metadata)) {
+      const k = key.trim().slice(0, 40);
+      const v = String(value ?? '')
+        .trim()
+        .slice(0, 500);
+      if (k && v) out[k] = v;
+    }
+    return out;
   }
 
   async createPlatformSubscriptionCheckoutSession(opts: {

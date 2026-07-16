@@ -31,7 +31,8 @@ export class BillingService {
     userId: number,
     dto: UpgradeSubscriptionDto,
   ): Promise<UpgradeSubscriptionResponse> {
-    const newPriceId = dto.priceId.trim();
+    const { targetPlan, newPriceId, billingCycle } =
+      await this.resolveUpgradeTarget(dto);
 
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -61,19 +62,7 @@ export class BillingService {
       );
     }
 
-    const targetPlan = await this.findPlanByStripePriceId(newPriceId);
-    if (!targetPlan) {
-      throw new BadRequestException(
-        'This Stripe price is not linked to an active Dealioo plan.',
-      );
-    }
-
     await this.stripeService.retrievePlatformPrice(newPriceId);
-
-    const billingCycle = this.resolveBillingCycleForPrice(
-      targetPlan,
-      newPriceId,
-    );
 
     const updated = await this.stripeService.updatePlatformSubscriptionPrice({
       stripeSubscriptionId: localSub.stripeSubscriptionId,
@@ -84,6 +73,13 @@ export class BillingService {
         billingCycle,
         purpose: 'platform_subscription',
       },
+    });
+
+    const mappedStatus = this.mapStripeStatus(updated.subscription.status);
+    await this.subscriptionRepository.update(localSub.id, {
+      planId: targetPlan.id,
+      billingCycle,
+      ...(mappedStatus ? { status: mappedStatus } : {}),
     });
 
     const customerId =
@@ -111,6 +107,54 @@ export class BillingService {
     };
   }
 
+  private async resolveUpgradeTarget(dto: UpgradeSubscriptionDto): Promise<{
+    targetPlan: SubscriptionPlan;
+    newPriceId: string;
+    billingCycle: UserSubscriptionBillingCycle;
+  }> {
+    const priceId = dto.priceId?.trim() || '';
+    const planSlug = dto.planSlug?.trim().toLowerCase() || '';
+    const billingCycle = dto.billingCycle;
+
+    if (priceId) {
+      const targetPlan = await this.findPlanByStripePriceId(priceId);
+      if (!targetPlan) {
+        throw new BadRequestException(
+          'This Stripe price is not linked to an active Dealioo plan.',
+        );
+      }
+      return {
+        targetPlan,
+        newPriceId: priceId,
+        billingCycle: this.resolveBillingCycleForPrice(targetPlan, priceId),
+      };
+    }
+
+    if (!planSlug || !billingCycle) {
+      throw new BadRequestException(
+        'Provide priceId, or planSlug with billingCycle (monthly|annual).',
+      );
+    }
+
+    const targetPlan = await this.planRepository.findOne({
+      where: { slug: planSlug, isActive: true },
+    });
+    if (!targetPlan) {
+      throw new NotFoundException('Subscription plan not found.');
+    }
+
+    const newPriceId = this.resolveStripePriceId(targetPlan, billingCycle);
+    if (!newPriceId) {
+      throw new BadRequestException(
+        billingCycle === 'annual'
+          ? 'Annual billing is not available for this plan yet. Choose monthly or contact sales.'
+          : 'This plan is not available for online upgrade. Please contact sales.',
+      );
+    }
+
+    return { targetPlan, newPriceId, billingCycle };
+  }
+
   private async findPlanByStripePriceId(
     priceId: string,
   ): Promise<SubscriptionPlan | null> {
@@ -124,6 +168,16 @@ export class BillingService {
       .getOne();
   }
 
+  private resolveStripePriceId(
+    plan: SubscriptionPlan,
+    billingCycle: UserSubscriptionBillingCycle,
+  ): string | null {
+    if (billingCycle === 'annual') {
+      return plan.stripeYearlyPriceId?.trim() || null;
+    }
+    return plan.stripeMonthlyPriceId?.trim() || null;
+  }
+
   private resolveBillingCycleForPrice(
     plan: SubscriptionPlan,
     priceId: string,
@@ -132,5 +186,23 @@ export class BillingService {
       return 'annual';
     }
     return 'monthly';
+  }
+
+  private mapStripeStatus(
+    status: string | null | undefined,
+  ): UserSubscription['status'] | null {
+    switch (status) {
+      case 'active':
+        return 'active';
+      case 'trialing':
+        return 'trialing';
+      case 'past_due':
+      case 'unpaid':
+        return 'past_due';
+      case 'canceled':
+        return 'cancelled';
+      default:
+        return null;
+    }
   }
 }

@@ -33,6 +33,12 @@ export class PaymentController {
     private readonly checkoutResumeService: CheckoutResumeService,
   ) {}
 
+  @Post('session')
+  @HttpCode(200)
+  createPaymentSession(@Body() dto: CreatePaymentIntentDto) {
+    return this.paymentService.createPaymentSession(dto);
+  }
+
   @Post('intent')
   @HttpCode(200)
   createPaymentIntent(@Body() dto: CreatePaymentIntentDto) {

@@ -19,32 +19,31 @@ export enum CampaignPublicationStatus {
 @Entity('campaigns')
 export class Campaign {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ name: 'restaurant_id' })
-  businessId: number;
+  businessId!: number;
 
   @ManyToOne(() => Business, (business) => business.campaigns, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'restaurant_id' })
-  business: Business;
+  business!: Business;
 
-  /** Each campaign has at most one funnel (`funnels.campaign_id` is unique). */
   @OneToOne(() => Funnel, (funnel) => funnel.campaign, { nullable: true })
-  funnel: Funnel | null;
+  funnel!: Funnel | null;
 
   @Column({ name: 'campaign_name', type: 'varchar', length: 255 })
-  campaignName: string;
+  campaignName!: string;
 
   @Column({ name: 'website_url', type: 'varchar', length: 2048 })
-  websiteUrl: string;
+  websiteUrl!: string;
 
   @Column({ name: 'image_url', type: 'text', nullable: true })
-  imageUrl: string | null;
+  imageUrl!: string | null;
 
   @Column({ type: 'text', nullable: true })
-  offer: string | null;
+  offer!: string | null;
 
   @Column({
     type: 'decimal',
@@ -52,18 +51,24 @@ export class Campaign {
     scale: 2,
     nullable: true,
   })
-  price: number | null;
+  price!: number | null;
 
   @Column({
     type: 'enum',
     enum: CampaignPublicationStatus,
     default: CampaignPublicationStatus.UNPUBLISHED,
   })
-  status: CampaignPublicationStatus;
+  status!: CampaignPublicationStatus;
+
+  @Column({ name: 'stripe_product_id', type: 'varchar', length: 255, nullable: true })
+  stripeProductId!: string | null;
+
+  @Column({ name: 'stripe_price_id', type: 'varchar', length: 255, nullable: true })
+  stripePriceId!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

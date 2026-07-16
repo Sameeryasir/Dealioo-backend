@@ -17,8 +17,9 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
-import { campaignPriceToStripeAmount } from '../../utils/campaign-price-to-stripe-amount';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { CouponService } from '../redemption/coupon.service';
+import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { StripeService } from '../stripe/stripe.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
 import { FeeService } from './fee.service';
@@ -51,6 +52,7 @@ export class PaymentService implements OnModuleInit {
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     private readonly stripeService: StripeService,
+    private readonly stripeCatalogService: StripeCatalogService,
     private readonly feeService: FeeService,
     private readonly stripeWebhookService: StripeWebhookService,
     private readonly paymentWebhookHandler: PaymentWebhookHandler,
@@ -159,7 +161,7 @@ export class PaymentService implements OnModuleInit {
             where: { id: paymentId },
           })) ?? payment;
 
-        // --- Local/dev: start prepaid automation without blocking status poll ---
+
         if (payment.status === FunnelPaymentStatus.PAID) {
           const paidPaymentId = payment.id;
           this.logger.log(
@@ -190,20 +192,75 @@ export class PaymentService implements OnModuleInit {
     };
   }
 
-  /** Fallback when webhooks did not run (local dev, missing secret, Connect events). */
+
   private async syncPendingPaymentFromStripe(
     payment: FunnelPayment,
   ): Promise<boolean> {
-    const piId = payment.stripePaymentIntentId?.trim();
     const accountId = payment.stripeConnectedAccountId?.trim();
-    if (!piId || !accountId) {
+    if (!accountId) {
+      return false;
+    }
+
+
+    const sessionId = payment.stripeCheckoutSessionId?.trim();
+    if (sessionId) {
+      try {
+        const session =
+          await this.stripeService.retrieveCheckoutSessionOnConnectedAccount(
+            accountId,
+            sessionId,
+          );
+        const paymentIntentId = this.paymentIntentIdFromSession(session);
+
+        if (
+          session.status === 'complete' ||
+          session.payment_status === 'paid'
+        ) {
+          await this.funnelPaymentRepository.update(payment.id, {
+            status: FunnelPaymentStatus.PAID,
+            paidAt: payment.paidAt ?? new Date(),
+            ...(paymentIntentId
+              ? { stripePaymentIntentId: paymentIntentId }
+              : {}),
+          });
+          logStripePayment({
+            phase: 'payment_status_sync',
+            outcome: 'marked_paid_from_checkout_session',
+            paymentId: payment.id,
+            checkoutSessionId: sessionId,
+            paymentIntentId: paymentIntentId ?? null,
+          });
+          return true;
+        }
+
+        if (session.status === 'expired') {
+          await this.funnelPaymentRepository.update(payment.id, {
+            status: FunnelPaymentStatus.CANCELLED,
+            cancelledAt: payment.cancelledAt ?? new Date(),
+          });
+          return true;
+        }
+      } catch (err) {
+        warnStripePayment({
+          phase: 'payment_status_sync',
+          outcome: 'checkout_session_retrieve_failed',
+          paymentId: payment.id,
+          checkoutSessionId: sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const piId = payment.stripePaymentIntentId?.trim();
+    if (!piId) {
       return false;
     }
     try {
-      const pi = await this.stripeService.retrievePaymentIntentOnConnectedAccount(
-        accountId,
-        piId,
-      );
+      const pi =
+        await this.stripeService.retrievePaymentIntentOnConnectedAccount(
+          accountId,
+          piId,
+        );
       if (pi.status === 'succeeded') {
         await this.funnelPaymentRepository.update(payment.id, {
           status: FunnelPaymentStatus.PAID,
@@ -228,8 +285,7 @@ export class PaymentService implements OnModuleInit {
         await this.funnelPaymentRepository.update(payment.id, {
           status: FunnelPaymentStatus.FAILED,
           failedAt: payment.failedAt ?? new Date(),
-          failureReason:
-            pi.last_payment_error.message ?? 'Payment failed',
+          failureReason: pi.last_payment_error.message ?? 'Payment failed',
         });
         return true;
       }
@@ -245,9 +301,16 @@ export class PaymentService implements OnModuleInit {
     return false;
   }
 
-  async createPaymentIntent(dto: CreatePaymentIntentDto): Promise<{
+
+  async createPaymentIntent(dto: CreatePaymentIntentDto) {
+    return this.createPaymentSession(dto);
+  }
+
+
+  async createPaymentSession(dto: CreatePaymentIntentDto): Promise<{
     clientSecret?: string;
-    paymentIntentId: string;
+    checkoutSessionId: string;
+    paymentIntentId?: string;
     paymentId: number;
     stripeAccountId: string;
     reused: boolean;
@@ -291,34 +354,33 @@ export class PaymentService implements OnModuleInit {
     const stripeAccountId = business.stripeAccountId.trim();
     await this.stripeService.validateConnectedAccount(stripeAccountId);
 
-    const currency = checkoutIdentity.currency;
-    const amount = campaignPriceToStripeAmount(
-      funnel.campaign.price,
-      currency,
-    );
-    if (!Number.isFinite(amount) || amount < 1) {
-      throw new BadRequestException(
-        'Campaign price is missing or invalid for checkout.',
-      );
-    }
+
+    const catalog =
+      await this.stripeCatalogService.ensureCampaignCatalogOnConnectedAccount({
+        campaign: funnel.campaign,
+        stripeAccountId,
+        currency: checkoutIdentity.currency,
+      });
 
     const { applicationFeeAmount } = this.feeService.calculatePlatformFee({
-      chargeAmountMinor: amount,
-      currency,
-      businessId: dto.businessId,
+      chargeAmountMinor: catalog.amount,
+      currency: catalog.currency,
+      businessId: checkoutIdentity.businessId,
       campaignId: funnel.campaign.id,
     });
 
-    if (applicationFeeAmount >= amount) {
+    if (applicationFeeAmount >= catalog.amount) {
       throw new BadRequestException(
         'Platform fee configuration is invalid for this charge amount.',
       );
     }
 
-    const reused = await this.tryReusePendingPayment({
+    const customerEmail = checkoutIdentity.customerEmail.trim().toLowerCase();
+
+    const reused = await this.tryReusePendingCheckoutSession({
       funnelId: checkoutIdentity.funnelId,
       businessId: checkoutIdentity.businessId,
-      customerEmail: checkoutIdentity.customerEmail,
+      customerEmail,
       stripeAccountId,
       customerId: checkoutIdentity.customerId,
     });
@@ -335,32 +397,53 @@ export class PaymentService implements OnModuleInit {
       businessId: checkoutIdentity.businessId,
       campaignId: funnel.campaign.id,
       stripeConnectedAccountId: stripeAccountId,
-      amount,
-      currency,
+      amount: catalog.amount,
+      currency: catalog.currency,
       platformFeeAmount: applicationFeeAmount,
-      customerEmail: checkoutIdentity.customerEmail.trim(),
+      customerEmail,
       status: FunnelPaymentStatus.PENDING,
       stripePaymentIntentId: null,
+      stripeCheckoutSessionId: null,
       refundedAmount: 0,
     });
 
     await this.funnelPaymentRepository.save(payment);
 
-    const metadata = this.buildPaymentMetadata(payment, funnel.campaign.id);
+    const metadata = {
+      ...this.buildPaymentMetadata(payment, funnel.campaign.id),
 
-    const paymentIntent =
-      await this.stripeService.createPaymentIntentOnConnectedAccount({
+      sessionUiVersion: 'card-no-save-v1',
+    };
+    const returnUrl = this.buildFunnelCheckoutReturnUrl({
+      funnelId: checkoutIdentity.funnelId,
+      businessId: checkoutIdentity.businessId,
+      campaignId: funnel.campaign.id,
+      checkoutSessionToken: checkoutIdentity.checkoutSessionToken,
+    });
+
+    const session =
+      await this.stripeService.createCheckoutSessionOnConnectedAccount({
         stripeAccountId,
-        amount,
-        currency,
+        stripePriceId: catalog.stripePriceId,
+        returnUrl,
+        customerEmail,
         applicationFeeAmount,
-        receiptEmail: checkoutIdentity.customerEmail.trim(),
-        idempotencyKey: `payment-intent-${payment.id}`,
+        currency: catalog.currency,
+        description: catalog.productName,
         metadata,
+
+        idempotencyKey: `checkout-session-${payment.id}-pm-v4`,
+        paymentId: payment.id,
+        funnelId: payment.funnelId,
+        businessId: payment.businessId,
+        campaignId: funnel.campaign.id,
       });
 
+    const paymentIntentId = this.paymentIntentIdFromSession(session);
+
     await this.funnelPaymentRepository.update(payment.id, {
-      stripePaymentIntentId: paymentIntent.id,
+      stripeCheckoutSessionId: session.id,
+      ...(paymentIntentId ? { stripePaymentIntentId: paymentIntentId } : {}),
     });
 
     await this.linkSignupPassToPayment(
@@ -375,12 +458,41 @@ export class PaymentService implements OnModuleInit {
     );
 
     return {
-      clientSecret: paymentIntent.client_secret!,
-      paymentIntentId: paymentIntent.id,
+      clientSecret: session.client_secret!,
+      checkoutSessionId: session.id,
+      paymentIntentId,
       paymentId: payment.id,
       stripeAccountId,
       reused: false,
     };
+  }
+
+  private buildFunnelCheckoutReturnUrl(opts: {
+    funnelId: number;
+    businessId: number;
+    campaignId: number;
+    checkoutSessionToken?: string;
+  }): string {
+    const params = new URLSearchParams();
+    params.set('campaignId', String(opts.campaignId));
+    params.set('businessId', String(opts.businessId));
+    if (opts.checkoutSessionToken?.trim()) {
+      params.set('checkoutToken', opts.checkoutSessionToken.trim());
+    }
+    params.set('redirect_status', 'succeeded');
+    params.set('payment_confirmed', '1');
+    return `${getFrontendBaseUrl().replace(/\/$/, '')}/funnel/${opts.funnelId}/confirmation?${params.toString()}`;
+  }
+
+  private paymentIntentIdFromSession(session: {
+    payment_intent?: string | { id?: string } | null;
+  }): string | undefined {
+    const pi = session.payment_intent;
+    if (typeof pi === 'string' && pi.trim()) return pi.trim();
+    if (pi && typeof pi === 'object' && typeof pi.id === 'string') {
+      return pi.id.trim() || undefined;
+    }
+    return undefined;
   }
 
   private async linkSignupPassToPayment(
@@ -410,7 +522,8 @@ export class PaymentService implements OnModuleInit {
     };
   }
 
-  private async tryReusePendingPayment(opts: {
+
+  private async tryReusePendingCheckoutSession(opts: {
     funnelId: number;
     businessId: number;
     customerEmail: string;
@@ -418,7 +531,8 @@ export class PaymentService implements OnModuleInit {
     customerId?: number;
   }): Promise<{
     clientSecret?: string;
-    paymentIntentId: string;
+    checkoutSessionId: string;
+    paymentIntentId?: string;
     paymentId: number;
     stripeAccountId: string;
     reused: boolean;
@@ -440,38 +554,37 @@ export class PaymentService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
 
-    if (!pending?.stripePaymentIntentId) {
+    const sessionId = pending?.stripeCheckoutSessionId?.trim();
+    if (!pending || !sessionId) {
+
       return null;
     }
 
     try {
-      const pi = await this.stripeService.retrievePaymentIntentOnConnectedAccount(
-        opts.stripeAccountId,
-        pending.stripePaymentIntentId,
-      );
+      const session =
+        await this.stripeService.retrieveCheckoutSessionOnConnectedAccount(
+          opts.stripeAccountId,
+          sessionId,
+        );
+      const paymentIntentId = this.paymentIntentIdFromSession(session);
 
-      if (pi.status === 'succeeded') {
+      if (session.status === 'complete' || session.payment_status === 'paid') {
         await this.funnelPaymentRepository.update(pending.id, {
           status: FunnelPaymentStatus.PAID,
           paidAt: pending.paidAt ?? new Date(),
           stripeConnectedAccountId: opts.stripeAccountId,
-        });
-        logStripePayment({
-          phase: 'payment_intent_reuse',
-          outcome: 'already_succeeded_synced',
-          paymentId: pending.id,
-          paymentIntentId: pi.id,
-          funnelId: pending.funnelId,
-          businessId: pending.businessId,
+          ...(paymentIntentId
+            ? { stripePaymentIntentId: paymentIntentId }
+            : {}),
         });
         await this.linkSignupPassToPayment(
           opts.customerId,
           opts.funnelId,
           pending.id,
         );
-
         return {
-          paymentIntentId: pi.id,
+          checkoutSessionId: session.id,
+          paymentIntentId,
           paymentId: pending.id,
           stripeAccountId: opts.stripeAccountId,
           reused: true,
@@ -479,7 +592,7 @@ export class PaymentService implements OnModuleInit {
         };
       }
 
-      if (pi.status === 'canceled') {
+      if (session.status === 'expired') {
         await this.funnelPaymentRepository.update(pending.id, {
           status: FunnelPaymentStatus.CANCELLED,
           cancelledAt: pending.cancelledAt ?? new Date(),
@@ -487,41 +600,70 @@ export class PaymentService implements OnModuleInit {
         return null;
       }
 
-      if (
-        !PaymentWebhookHandler.isReusablePaymentIntentStatus(pi.status) ||
-        !pi.client_secret
-      ) {
-        return null;
+      if (session.status === 'open' && session.client_secret) {
+
+        const methods = session.payment_method_types ?? [];
+        const isCardOnly =
+          methods.length === 1 && methods[0] === 'card';
+        const promoDisabled = session.allow_promotion_codes !== true;
+        const uiVersion = session.metadata?.sessionUiVersion;
+        const isNoSaveUi = uiVersion === 'card-no-save-v1';
+        if (!isCardOnly || !promoDisabled || !isNoSaveUi) {
+          try {
+            await this.stripeService.expireCheckoutSessionOnConnectedAccount(
+              opts.stripeAccountId,
+              session.id,
+            );
+          } catch {
+
+          }
+          await this.funnelPaymentRepository.update(pending.id, {
+            status: FunnelPaymentStatus.CANCELLED,
+            cancelledAt: pending.cancelledAt ?? new Date(),
+          });
+          return null;
+        }
+
+        if (
+          paymentIntentId &&
+          paymentIntentId !== pending.stripePaymentIntentId
+        ) {
+          await this.funnelPaymentRepository.update(pending.id, {
+            stripePaymentIntentId: paymentIntentId,
+          });
+        }
+
+        await this.linkSignupPassToPayment(
+          opts.customerId,
+          opts.funnelId,
+          pending.id,
+        );
+
+        logStripePayment({
+          phase: 'checkout_session_reuse',
+          outcome: 'open_session',
+          paymentId: pending.id,
+          checkoutSessionId: session.id,
+          paymentIntentId: paymentIntentId ?? null,
+        });
+
+        return {
+          clientSecret: session.client_secret,
+          checkoutSessionId: session.id,
+          paymentIntentId,
+          paymentId: pending.id,
+          stripeAccountId: opts.stripeAccountId,
+          reused: true,
+        };
       }
 
-      logStripePayment({
-        phase: 'payment_intent_reuse',
-        outcome: 'success',
-        paymentId: pending.id,
-        paymentIntentId: pi.id,
-        funnelId: pending.funnelId,
-        businessId: pending.businessId,
-      });
-
-      await this.linkSignupPassToPayment(
-        opts.customerId,
-        opts.funnelId,
-        pending.id,
-      );
-
-      return {
-        clientSecret: pi.client_secret,
-        paymentIntentId: pi.id,
-        paymentId: pending.id,
-        stripeAccountId: opts.stripeAccountId,
-        reused: true,
-      };
+      return null;
     } catch {
       warnStripePayment({
-        phase: 'payment_intent_reuse',
+        phase: 'checkout_session_reuse',
         outcome: 'retrieve_failed',
         paymentId: pending.id,
-        paymentIntentId: pending.stripePaymentIntentId,
+        checkoutSessionId: sessionId,
       });
       return null;
     }
@@ -545,7 +687,7 @@ export class PaymentService implements OnModuleInit {
 
     const pagination = normalizePagination(page, limit);
 
-    // --- Sort by payment date (newest paid first) ---
+
     const [rows, total] = await this.funnelPaymentRepository
       .createQueryBuilder('payment')
       .where('payment.funnel_id = :funnelId', { funnelId })
@@ -565,7 +707,7 @@ export class PaymentService implements OnModuleInit {
     };
   }
 
-  /** @deprecated Use getFunnelOrders — kept for older clients. */
+
   async getPaidFunnelPayments(funnelId: number): Promise<{
     funnelId: number;
     paymentCount: number;

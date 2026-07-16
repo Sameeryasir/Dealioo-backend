@@ -4,6 +4,7 @@ import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
+import { StripeModule } from '../stripe/stripe.module';
 import { CampaignController } from './campaign.controller';
 import { CampaignService } from './campaign.service';
 
@@ -11,6 +12,7 @@ import { CampaignService } from './campaign.service';
   imports: [
     TypeOrmModule.forFeature([Campaign, Business, Funnel]),
     AuthModule,
+    StripeModule,
   ],
   controllers: [CampaignController],
   providers: [CampaignService],

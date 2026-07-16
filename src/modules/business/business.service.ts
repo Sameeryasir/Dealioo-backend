@@ -142,7 +142,7 @@ export class BusinessService {
     const subscription = await this.userSubscriptionRepository
       .createQueryBuilder('sub')
       .innerJoinAndSelect('sub.plan', 'plan')
-      .select(['sub.id', 'plan.id', 'plan.slug', 'plan.name'])
+      .select(['sub.id', 'plan.id', 'plan.slug'])
       .where('sub.user_id = :userId', { userId })
       .andWhere('sub.status IN (:...statuses)', {
         statuses: ['active', 'trialing'],
@@ -152,8 +152,7 @@ export class BusinessService {
       .getOne();
 
     const slug = subscription?.plan?.slug?.trim().toLowerCase() ?? '';
-    const name = subscription?.plan?.name?.trim().toLowerCase() ?? '';
-    const isStarter = slug === STARTER_PLAN_SLUG || name === STARTER_PLAN_SLUG;
+    const isStarter = slug === STARTER_PLAN_SLUG;
     if (!isStarter) return;
 
     const ownedCount = await this.businessRepository.count({

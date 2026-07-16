@@ -1,7 +1,3 @@
-/**
- * Funnel checkout payment row: links funnel + business to Stripe PI and payout account.
- * Status values: pending | paid | failed | cancelled | refunded (see FunnelPaymentStatus).
- */
 import {
   Column,
   CreateDateColumn,
@@ -14,7 +10,6 @@ import {
 import { Funnel } from './funnel.entity';
 import { Business } from './business.entity';
 
-// --- Payment lifecycle (stored as varchar in DB) ---
 export enum FunnelPaymentStatus {
   PENDING = 'pending',
   PAID = 'paid',
@@ -59,6 +54,14 @@ export class FunnelPayment {
     nullable: true,
   })
   stripePaymentIntentId: string | null;
+
+  @Column({
+    name: 'stripe_checkout_session_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  stripeCheckoutSessionId: string | null;
 
   @Column({ name: 'platform_fee_amount', type: 'int', default: 0 })
   platformFeeAmount: number;

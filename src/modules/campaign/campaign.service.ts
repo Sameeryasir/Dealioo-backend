@@ -22,6 +22,7 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
+import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -35,13 +36,9 @@ export class CampaignService {
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
     private readonly spacesService: SpacesService,
+    private readonly stripeCatalogService: StripeCatalogService,
   ) {}
 
-  /**
-   * Change: Standalone hero/funnel image upload for the CRM editor.
-   * Why: Frontend posts to POST /campaign/upload-image; route was missing.
-   * Related: CampaignController.uploadImage, upload-campaign-image.ts
-   */
   async uploadCampaignImage(
     file?: Express.Multer.File,
   ): Promise<{ imageUrl: string }> {
@@ -116,6 +113,11 @@ export class CampaignService {
       version: 1,
     });
     await this.funnelRepository.save(funnel);
+
+    await this.stripeCatalogService.createCatalogForNewCampaign({
+      campaign: savedCampaign,
+      stripeAccountId: business.stripeAccountId,
+    });
 
     return savedCampaign;
   }

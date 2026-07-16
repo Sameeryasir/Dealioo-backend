@@ -20,6 +20,14 @@ type PaymentIntentPayload = {
   latest_charge?: string | { id?: string; receipt_url?: string | null } | null;
 };
 
+type CheckoutSessionPayload = {
+  id: string;
+  payment_status?: string | null;
+  status?: string | null;
+  metadata?: Record<string, string> | null;
+  payment_intent?: string | { id?: string } | null;
+};
+
 type ChargePayload = {
   id: string;
   metadata?: Record<string, string> | null;
@@ -73,6 +81,12 @@ export class PaymentWebhookHandler {
     connectedAccountId?: string,
   ): Promise<void> {
     switch (event.type) {
+      case 'checkout.session.completed':
+        await this.handleCheckoutSessionCompleted(
+          event.data.object as CheckoutSessionPayload,
+          connectedAccountId,
+        );
+        break;
       case 'payment_intent.succeeded':
         await this.handlePaymentIntentSucceeded(
           event.data.object as PaymentIntentPayload,
@@ -123,9 +137,10 @@ export class PaymentWebhookHandler {
     }
   }
 
-  resolvePaymentFromMetadata(
+  async resolvePaymentFromMetadata(
     metadata: Record<string, string> | null | undefined,
     paymentIntentId?: string,
+    checkoutSessionId?: string,
   ): Promise<FunnelPayment | null> {
     const paymentIdRaw = metadata?.paymentId;
     if (paymentIdRaw) {
@@ -137,11 +152,81 @@ export class PaymentWebhookHandler {
       }
     }
     if (paymentIntentId) {
-      return this.funnelPaymentRepository.findOne({
+      const byPi = await this.funnelPaymentRepository.findOne({
         where: { stripePaymentIntentId: paymentIntentId },
       });
+      if (byPi) return byPi;
     }
-    return Promise.resolve(null);
+    if (checkoutSessionId?.trim()) {
+      return this.funnelPaymentRepository.findOne({
+        where: { stripeCheckoutSessionId: checkoutSessionId.trim() },
+      });
+    }
+    return null;
+  }
+
+  private async handleCheckoutSessionCompleted(
+    session: CheckoutSessionPayload,
+    connectedAccountId?: string,
+  ) {
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id;
+
+    const payment = await this.resolvePaymentFromMetadata(
+      session.metadata,
+      paymentIntentId,
+      session.id,
+    );
+
+    if (!payment) {
+      warnStripePayment({
+        phase: 'checkout_session_completed',
+        outcome: 'payment_not_found',
+        checkoutSessionId: session.id,
+      });
+      return;
+    }
+
+    const wasAlreadyPaid = payment.status === FunnelPaymentStatus.PAID;
+    const shouldMarkPaid =
+      session.payment_status === 'paid' &&
+      payment.status !== FunnelPaymentStatus.REFUNDED &&
+      !wasAlreadyPaid;
+
+    await this.funnelPaymentRepository.update(payment.id, {
+      stripeCheckoutSessionId: session.id,
+      ...(connectedAccountId?.trim()
+        ? { stripeConnectedAccountId: connectedAccountId.trim() }
+        : {}),
+      ...(paymentIntentId?.trim()
+        ? { stripePaymentIntentId: paymentIntentId.trim() }
+        : {}),
+      ...(shouldMarkPaid
+        ? {
+            status: FunnelPaymentStatus.PAID,
+            paidAt: payment.paidAt ?? new Date(),
+          }
+        : {}),
+    });
+
+    logStripePayment({
+      phase: 'checkout_session_completed',
+      outcome: session.payment_status === 'paid' ? 'marked_paid' : 'ids_stored',
+      paymentId: payment.id,
+      checkoutSessionId: session.id,
+      paymentIntentId: paymentIntentId ?? null,
+    });
+
+
+    if (session.payment_status === 'paid' && !wasAlreadyPaid) {
+      await this.activityService.logPrepaidForOffer({
+        paymentId: payment.id,
+        occurredAt: new Date(),
+      });
+      await this.funnelEventService.syncPaidFunnelPaymentAutomation(payment.id);
+    }
   }
 
   private async handlePaymentIntentSucceeded(
@@ -470,7 +555,7 @@ export class PaymentWebhookHandler {
     });
   }
 
-  /** Reusable pending checkout window (hours). */
+
   static readonly PENDING_REUSE_HOURS = 24;
 
   static isReusablePaymentIntentStatus(status: string): boolean {
