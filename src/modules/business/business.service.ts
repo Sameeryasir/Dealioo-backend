@@ -257,10 +257,12 @@ export class BusinessService {
     );
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId },
+      where: businessAccessWhere(user, businessId),
     });
     if (!business) {
-      throw new NotFoundException('Business not found');
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
     }
     return business;
   }
@@ -273,10 +275,12 @@ export class BusinessService {
     requireAdminRole(user, 'You do not have permission to update a business.');
 
     const business = await this.businessRepository.findOne({
-      where: { id: businessId },
+      where: businessAccessWhere(user, businessId),
     });
     if (!business) {
-      throw new NotFoundException('Business not found');
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
     }
     const {
       name,
