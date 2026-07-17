@@ -98,8 +98,8 @@ export class ChatController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('business/:businessId/customers')
-  async getBusinessChatCustomers(
+  @Get('business/:businessId/conversation')
+  async listBusinessConversations(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
@@ -119,11 +119,10 @@ export class ChatController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('business/:businessId/customers/sync')
-  async syncBusinessChatCustomers(
+  @Get('business/:businessId/conversation/sync')
+  async syncBusinessConversations(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('afterCustomerId', ParseIntPipe) afterCustomerId: number,
-    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('afterConversationId', ParseIntPipe) afterConversationId: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -134,9 +133,83 @@ export class ChatController {
 
     return this.chatService.syncBusinessChatCustomers(
       businessId,
-      afterCustomerId,
-      limit,
+      afterConversationId,
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/messages/sync')
+  async syncBusinessMessages(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.syncBusinessChatMessages(
+      businessId,
+      afterMessageId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/conversation/:conversationId/messages/sync')
+  async syncConversationMessages(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.syncConversationMessagesByConversationId(
+      businessId,
+      conversationId,
+      afterMessageId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/conversation/:conversationId/messages')
+  async getConversationMessages(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.getConversationMessagesByConversationId(
+      businessId,
+      conversationId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/conversation/:conversationId')
+  async getGuestConversation(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.getGuestConversation(businessId, conversationId);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -162,7 +235,7 @@ export class ChatController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/customers/:customerId/messages')
-  async getCustomerConversation(
+  async getCustomerConversationMessages(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('customerId', ParseIntPipe) customerId: number,
     @Req() req: AuthRequest,
@@ -173,7 +246,10 @@ export class ChatController {
       req.user.role.name,
     );
 
-    return this.chatService.getCustomerConversation(businessId, customerId);
+    return this.chatService.getCustomerConversationMessages(
+      businessId,
+      customerId,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

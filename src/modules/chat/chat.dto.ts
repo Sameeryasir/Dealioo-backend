@@ -63,8 +63,8 @@ export class ConversationDetailDto {
   messages: ConversationMessageDto[];
 }
 
-/** Guest row for Chats sidebar — one private conversation thread per guest. */
 export class ChatCustomerSummaryDto {
+  conversationId: number;
   customerId: number;
   customerName: string | null;
   customerEmail: string | null;
@@ -81,17 +81,37 @@ export class PaginatedChatCustomersDto {
   meta: PaginationMeta;
 }
 
-/** New guest rows created after a cached sidebar cursor. */
 export class SyncChatCustomersDto {
   data: ChatCustomerSummaryDto[];
 }
 
-/** Full message thread for one guest at a business. */
-export class CustomerConversationDetailDto {
+export class GuestConversationDto {
+  conversationId: number;
   customerId: number;
   customerName: string | null;
   customerEmail: string | null;
+  messageCount: number;
+  lastMessagePreview: string;
+  lastMessageChannel: ConversationMessageKind | null;
+  lastMessageAt: Date | null;
+  lastAutomationName: string | null;
+  createdAt: Date;
+}
+
+export class CustomerConversationMessagesDto {
+  conversationId: number;
+  customerId: number;
   messages: ConversationMessageDto[];
+}
+
+export class SyncChatMessagesThreadDto {
+  conversationId: number;
+  customerId: number;
+  messages: ConversationMessageDto[];
+}
+
+export class SyncChatMessagesDto {
+  data: SyncChatMessagesThreadDto[];
 }
 
 export class ChatUnreadSummaryDto {

@@ -12,6 +12,16 @@ import {
 } from '../../db/entities/funnel-payment.entity';
 import type { EmailRecipient } from './automation-email.types';
 
+export const UNPAID_RECIPIENT_PAGE_SIZE = 200;
+
+export const UNPAID_SEND_CHUNK_SIZE = 50;
+
+const UNPAID_PAYMENT_STATUSES = [
+  FunnelPaymentStatus.PENDING,
+  FunnelPaymentStatus.FAILED,
+  FunnelPaymentStatus.CANCELLED,
+] as const;
+
 @Injectable()
 export class AutomationRecipientsService {
   constructor(
@@ -34,13 +44,24 @@ export class AutomationRecipientsService {
       return false;
     }
 
+    const email = customer.email.trim();
+    const hasOpenCheckout = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.funnelId = :funnelId', { funnelId })
+      .andWhere('payment.status IN (:...unpaidStatuses)', {
+        unpaidStatuses: [...UNPAID_PAYMENT_STATUSES],
+      })
+      .andWhere('LOWER(payment.customerEmail) = LOWER(:email)', { email })
+      .getExists();
+    if (hasOpenCheckout) {
+      return true;
+    }
+
     const paid = await this.funnelPaymentRepository
       .createQueryBuilder('payment')
       .where('payment.funnelId = :funnelId', { funnelId })
       .andWhere('payment.status = :status', { status: FunnelPaymentStatus.PAID })
-      .andWhere('LOWER(payment.customerEmail) = LOWER(:email)', {
-        email: customer.email.trim(),
-      })
+      .andWhere('LOWER(payment.customerEmail) = LOWER(:email)', { email })
       .getExists();
 
     return !paid;
@@ -77,23 +98,27 @@ export class AutomationRecipientsService {
   async findSignedUpUnpaidCustomersForFunnel(
     funnelId: number,
   ): Promise<EmailRecipient[]> {
+    return this.getUnpaidCustomersForFunnel(funnelId);
+  }
+
+  async getUnpaidCustomersForFunnelPage(
+    funnelId: number,
+    options: { afterCustomerId?: number; limit: number },
+  ): Promise<EmailRecipient[]> {
+    const afterCustomerId = Math.max(0, options.afterCustomerId ?? 0);
+    const limit = Math.max(1, Math.min(options.limit, 500));
+
     const customers = await this.customerRepository
       .createQueryBuilder('customer')
-      .innerJoin(
-        FunnelEvent,
-        'event',
-        'event.customerId = customer.id AND event.funnelId = :funnelId AND event.eventType = :signup',
-        { funnelId, signup: FunnelEventType.SIGNUP },
-      )
-      .where(
-        `NOT EXISTS (
-          SELECT 1 FROM funnel_payment payment
-          WHERE payment.funnel_id = :funnelId
-            AND LOWER(payment.customer_email) = LOWER(customer.email)
-            AND payment.status = :paidStatus
-        )`,
-        { funnelId, paidStatus: FunnelPaymentStatus.PAID },
-      )
+      .where('customer.id > :afterCustomerId', { afterCustomerId })
+      .andWhere(this.unpaidRecipientWhereSql(), {
+        funnelId,
+        signup: FunnelEventType.SIGNUP,
+        unpaidStatuses: [...UNPAID_PAYMENT_STATUSES],
+        paidStatus: FunnelPaymentStatus.PAID,
+      })
+      .orderBy('customer.id', 'ASC')
+      .take(limit)
       .getMany();
 
     return customers.map((customer) => ({
@@ -103,95 +128,141 @@ export class AutomationRecipientsService {
     }));
   }
 
-  async findUnpaidPaymentRowCustomersForFunnel(
-    funnelId: number,
-  ): Promise<EmailRecipient[]> {
-    const unpaidPayments = await this.funnelPaymentRepository.find({
-      where: {
+  async countUnpaidCustomersForFunnel(funnelId: number): Promise<number> {
+    const raw = await this.customerRepository
+      .createQueryBuilder('customer')
+      .select('COUNT(customer.id)', 'count')
+      .where(this.unpaidRecipientWhereSql(), {
         funnelId,
-        status: In([
-          FunnelPaymentStatus.PENDING,
-          FunnelPaymentStatus.FAILED,
-          FunnelPaymentStatus.CANCELLED,
-        ]),
-      },
-      select: ['customerEmail'],
-    });
+        signup: FunnelEventType.SIGNUP,
+        unpaidStatuses: [...UNPAID_PAYMENT_STATUSES],
+        paidStatus: FunnelPaymentStatus.PAID,
+      })
+      .getRawOne<{ count: string }>();
 
-    const normalizedEmails = [
-      ...new Set(
-        unpaidPayments
-          .map((payment) => payment.customerEmail?.trim().toLowerCase())
-          .filter((email): email is string => Boolean(email)),
-      ),
+    return Number(raw?.count ?? 0);
+  }
+
+  async getCustomersByIds(customerIds: number[]): Promise<EmailRecipient[]> {
+    const uniqueIds = [
+      ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
     ];
-
-    if (normalizedEmails.length === 0) {
+    if (uniqueIds.length === 0) {
       return [];
     }
 
-    const customers = await this.customerRepository
-      .createQueryBuilder('customer')
-      .where('LOWER(customer.email) IN (:...emails)', {
-        emails: normalizedEmails,
-      })
-      .getMany();
+    const customers = await this.customerRepository.find({
+      where: { id: In(uniqueIds) },
+    });
 
-    const recipients: EmailRecipient[] = [];
-    const seenCustomerIds = new Set<number>();
-
-    for (const customer of customers) {
-      if (seenCustomerIds.has(customer.id)) {
-        continue;
-      }
-      if (!(await this.isCustomerUnpaidOnFunnel(funnelId, customer.id))) {
-        continue;
-      }
-      seenCustomerIds.add(customer.id);
-      recipients.push({
+    const byId = new Map(customers.map((customer) => [customer.id, customer]));
+    return uniqueIds
+      .map((id) => byId.get(id))
+      .filter((customer): customer is Customer => Boolean(customer))
+      .map((customer) => ({
         customerId: customer.id,
         email: customer.email,
         name: customer.name,
-      });
-    }
+      }));
+  }
 
-    return recipients;
+  async findUnpaidPaymentRowCustomersForFunnel(
+    funnelId: number,
+  ): Promise<EmailRecipient[]> {
+    return this.getUnpaidCustomersForFunnel(funnelId);
   }
 
   async getUnpaidCustomersForFunnel(
     funnelId: number,
   ): Promise<EmailRecipient[]> {
-    const [fromSignup, fromPaymentRows] = await Promise.all([
-      this.findSignedUpUnpaidCustomersForFunnel(funnelId),
-      this.findUnpaidPaymentRowCustomersForFunnel(funnelId),
-    ]);
+    const merged: EmailRecipient[] = [];
+    let afterCustomerId = 0;
 
-    const merged = new Map<number, EmailRecipient>();
-    for (const recipient of [...fromSignup, ...fromPaymentRows]) {
-      if (recipient.customerId == null) {
-        continue;
+    while (true) {
+      const page = await this.getUnpaidCustomersForFunnelPage(funnelId, {
+        afterCustomerId,
+        limit: UNPAID_RECIPIENT_PAGE_SIZE,
+      });
+      if (page.length === 0) {
+        break;
       }
-      merged.set(recipient.customerId, recipient);
+      merged.push(...page);
+      afterCustomerId = page[page.length - 1]!.customerId!;
+      if (page.length < UNPAID_RECIPIENT_PAGE_SIZE) {
+        break;
+      }
     }
 
-    return [...merged.values()];
+    return merged;
   }
 
   async filterStillUnpaidRecipients(
     funnelId: number,
     recipients: EmailRecipient[],
   ): Promise<EmailRecipient[]> {
-    const stillUnpaid: EmailRecipient[] = [];
+    const ids = recipients
+      .map((recipient) => recipient.customerId)
+      .filter((id): id is number => id != null && id > 0);
 
-    for (const recipient of recipients) {
-      if (recipient.customerId == null) {
-        continue;
-      }
-      if (await this.isCustomerUnpaidOnFunnel(funnelId, recipient.customerId)) {
-        stillUnpaid.push(recipient);
-      }
+    if (ids.length === 0) {
+      return [];
     }
 
-    return stillUnpaid;
+    const unpaidIds = await this.findStillUnpaidCustomerIdsAmong(funnelId, ids);
+    return recipients.filter(
+      (recipient) =>
+        recipient.customerId != null && unpaidIds.has(recipient.customerId),
+    );
+  }
+
+  async findStillUnpaidCustomerIdsAmong(
+    funnelId: number,
+    customerIds: number[],
+  ): Promise<Set<number>> {
+    const uniqueIds = [
+      ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
+    ];
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.customerRepository
+      .createQueryBuilder('customer')
+      .select('customer.id', 'id')
+      .where('customer.id IN (:...uniqueIds)', { uniqueIds })
+      .andWhere(this.unpaidRecipientWhereSql(), {
+        funnelId,
+        signup: FunnelEventType.SIGNUP,
+        unpaidStatuses: [...UNPAID_PAYMENT_STATUSES],
+        paidStatus: FunnelPaymentStatus.PAID,
+      })
+      .getRawMany<{ id: string | number }>();
+
+    return new Set(rows.map((row) => Number(row.id)));
+  }
+
+  private unpaidRecipientWhereSql(): string {
+    return `(
+      EXISTS (
+        SELECT 1 FROM funnel_payment unpaid
+        WHERE unpaid.funnel_id = :funnelId
+          AND LOWER(unpaid.customer_email) = LOWER(customer.email)
+          AND unpaid.status IN (:...unpaidStatuses)
+      )
+      OR (
+        EXISTS (
+          SELECT 1 FROM funnel_event event
+          WHERE event.customer_id = customer.id
+            AND event.funnel_id = :funnelId
+            AND event.event_type = :signup
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM funnel_payment payment
+          WHERE payment.funnel_id = :funnelId
+            AND LOWER(payment.customer_email) = LOWER(customer.email)
+            AND payment.status = :paidStatus
+        )
+      )
+    )`;
   }
 }

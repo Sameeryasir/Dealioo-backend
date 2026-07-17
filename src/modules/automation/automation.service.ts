@@ -46,7 +46,11 @@ import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
-import { AutomationRecipientsService } from './automation-recipients.service';
+import {
+  AutomationRecipientsService,
+  UNPAID_RECIPIENT_PAGE_SIZE,
+  UNPAID_SEND_CHUNK_SIZE,
+} from './automation-recipients.service';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import {
@@ -979,7 +983,7 @@ export class AutomationService {
         );
       } else {
         this.logger.log(
-          `Cron tick started new payment-reminder run for automation ${automationId} (execution=${result.status.executionId})`,
+          `Cron tick started new payment-reminder run for automation ${automationId} (execution=${result.status.executionId}, unpaid≈${result.status.totalRecipients ?? '?'})`,
         );
       }
     } catch (error) {
@@ -1000,6 +1004,12 @@ export class AutomationService {
     if (!actionNode) {
       throw new BadRequestException(
         'Flow must include an email or SMS node (check node_order and type).',
+      );
+    }
+
+    if (!plan.sendToUnpaidOnly) {
+      throw new BadRequestException(
+        'Flow condition must target customers who have not completed payment.',
       );
     }
 
@@ -1040,22 +1050,31 @@ export class AutomationService {
       }
     }
 
-    let recipients: EmailRecipient[] = [];
-    if (plan.sendToUnpaidOnly) {
-      recipients = await this.recipientsService.getUnpaidCustomersForFunnel(
+    const unpaidCount =
+      await this.recipientsService.countUnpaidCustomersForFunnel(
         automation.funnelId!,
       );
-      if (recipients.length === 0) {
-        if (options.skipIfNoRecipients) {
-          return null;
-        }
-        throw new BadRequestException(
-          'No unpaid customers found for this funnel',
-        );
+    if (unpaidCount === 0) {
+      if (options.skipIfNoRecipients) {
+        return null;
       }
-    } else {
       throw new BadRequestException(
-        'Flow condition must target customers who have not completed payment.',
+        'No unpaid customers found for this funnel',
+      );
+    }
+
+    const firstPage =
+      await this.recipientsService.getUnpaidCustomersForFunnelPage(
+        automation.funnelId!,
+        { afterCustomerId: 0, limit: UNPAID_RECIPIENT_PAGE_SIZE },
+      );
+    const firstCustomerId = firstPage[0]?.customerId;
+    if (firstCustomerId == null) {
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        'No unpaid customers found for this funnel',
       );
     }
 
@@ -1070,14 +1089,32 @@ export class AutomationService {
         currentNodeId: initialNodeId,
         purpose: automation.purpose,
       },
-      recipients[0].customerId,
+      firstCustomerId,
       {
         status: AutomationExecutionStatus.QUEUED,
-        totalRecipients: recipients.length,
+        totalRecipients: unpaidCount,
       },
     );
 
-    const batch: UnpaidReminderBatchJob = {
+    const predictedTotalChunks = Math.max(
+      1,
+      Math.ceil(unpaidCount / UNPAID_SEND_CHUNK_SIZE),
+    );
+
+    this.logger.log(
+      `Payment reminder enqueue start automation=${automation.id} execution=${execution.id} funnel=${automation.funnelId} unpaid=${unpaidCount} pageSize=${UNPAID_RECIPIENT_PAGE_SIZE} chunkSize=${UNPAID_SEND_CHUNK_SIZE} predictedChunks=${predictedTotalChunks} cron=${options.triggeredByCron}`,
+    );
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: initialNodeId,
+      customerId: firstCustomerId,
+      message: `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${UNPAID_RECIPIENT_PAGE_SIZE} and send chunks of ${UNPAID_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
+    });
+
+    const baseBatch: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
+    > = {
       executionId: execution.id,
       automationId: automation.id,
       businessId: automation.businessId,
@@ -1088,7 +1125,6 @@ export class AutomationService {
       purpose: automation.purpose,
       prepared,
       plan,
-      recipients,
       anchorStepOnTrigger,
       batchPhase: 'payment',
       passPrepared,
@@ -1097,25 +1133,205 @@ export class AutomationService {
       waitDelayMs,
     };
 
-    const queueJobId =
-      await this.queueService.addUnpaidReminderBatch(batch);
-    await this.executionService.setQueueJobId(execution.id, queueJobId);
+    const { totalChunks, firstQueueJobId } =
+      await this.enqueueUnpaidReminderChunksFromPages({
+        funnelId: automation.funnelId!,
+        baseBatch,
+        delayMs: 0,
+        seedPage: firstPage,
+        predictedTotalChunks,
+      });
+
+    this.logger.log(
+      `Payment reminder enqueue done execution=${execution.id} queuedChunks=${totalChunks}`,
+    );
+    if (totalChunks > 0) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: actionNode.id,
+        customerId: firstCustomerId,
+        message: `Queued ${totalChunks} send chunk job(s) for ${unpaidCount} unpaid guest(s)`,
+      });
+    }
+
+    if (totalChunks === 0) {
+      await this.executionService.markFailed(
+        execution.id,
+        'No unpaid customers found for this funnel',
+      );
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        'No unpaid customers found for this funnel',
+      );
+    }
+
+    if (firstQueueJobId) {
+      await this.executionService.setQueueJobId(execution.id, firstQueueJobId);
+    }
 
     return {
       status: await this.getExecutionStatus(execution.id),
     };
   }
 
+  private async enqueueUnpaidReminderChunksFromPages(options: {
+    funnelId: number;
+    baseBatch: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
+    >;
+    delayMs: number;
+    seedPage?: EmailRecipient[];
+    predictedTotalChunks?: number;
+  }): Promise<{ totalChunks: number; firstQueueJobId: string | null }> {
+    const phase = options.baseBatch.batchPhase ?? 'payment';
+
+    if (
+      options.predictedTotalChunks != null &&
+      options.predictedTotalChunks > 0
+    ) {
+      await this.queueService.setUnpaidReminderChunkTotal(
+        options.baseBatch.executionId,
+        phase,
+        options.predictedTotalChunks,
+      );
+    }
+
+    let afterCustomerId = 0;
+    let chunkIndex = 0;
+    let firstQueueJobId: string | null = null;
+    let page = options.seedPage;
+    let pageNumber = 0;
+
+    while (true) {
+      if (!page) {
+        page = await this.recipientsService.getUnpaidCustomersForFunnelPage(
+          options.funnelId,
+          {
+            afterCustomerId,
+            limit: UNPAID_RECIPIENT_PAGE_SIZE,
+          },
+        );
+      }
+
+      if (page.length === 0) {
+        break;
+      }
+
+      pageNumber += 1;
+      const pageStartChunk = chunkIndex;
+
+      for (let i = 0; i < page.length; i += UNPAID_SEND_CHUNK_SIZE) {
+        const slice = page.slice(i, i + UNPAID_SEND_CHUNK_SIZE);
+        const customerIds = slice
+          .map((recipient) => recipient.customerId)
+          .filter((id): id is number => id != null && id > 0);
+
+        if (customerIds.length === 0) {
+          continue;
+        }
+
+        const queueJobId = await this.queueService.addUnpaidReminderBatch(
+          {
+            ...options.baseBatch,
+            customerIds,
+            recipients: [],
+            chunkIndex,
+            totalChunks:
+              options.predictedTotalChunks ?? Math.max(chunkIndex + 1, 1),
+          },
+          options.delayMs,
+        );
+
+        this.logger.log(
+          `Payment reminder queued ${phase} chunk ${chunkIndex + 1} execution=${options.baseBatch.executionId} guests=${customerIds.length} jobId=${queueJobId}`,
+        );
+
+        if (firstQueueJobId == null) {
+          firstQueueJobId = queueJobId;
+        }
+        chunkIndex += 1;
+      }
+
+      const chunksFromPage = chunkIndex - pageStartChunk;
+      this.logger.log(
+        `Payment reminder page ${pageNumber} execution=${options.baseBatch.executionId} phase=${phase} guests=${page.length} chunksQueued=${chunksFromPage}`,
+      );
+
+      afterCustomerId = page[page.length - 1]!.customerId!;
+      const pageWasFull = page.length >= UNPAID_RECIPIENT_PAGE_SIZE;
+      page = undefined;
+      if (!pageWasFull) {
+        break;
+      }
+    }
+
+    if (chunkIndex > 0) {
+      await this.queueService.setUnpaidReminderChunkTotal(
+        options.baseBatch.executionId,
+        phase,
+        chunkIndex,
+      );
+
+      const progress = await this.queueService.getUnpaidReminderChunkProgress(
+        options.baseBatch.executionId,
+        phase,
+      );
+      if (
+        progress.done >= chunkIndex &&
+        (await this.queueService.tryClaimUnpaidPhaseFinalize(
+          options.baseBatch.executionId,
+          phase,
+        ))
+      ) {
+        this.logger.log(
+          `Unpaid ${phase} phase already fully processed during enqueue (execution=${options.baseBatch.executionId}); finalizing`,
+        );
+        await this.finalizeUnpaidReminderPhaseAfterChunks(
+          {
+            ...options.baseBatch,
+            customerIds: [],
+            recipients: [],
+            chunkIndex: chunkIndex - 1,
+            totalChunks: chunkIndex,
+          },
+          phase,
+          [],
+        );
+      }
+    }
+
+    return { totalChunks: chunkIndex, firstQueueJobId };
+  }
+
   async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
     const batchPhase = batch.batchPhase ?? 'payment';
+    const chunkIndex = batch.chunkIndex ?? 0;
+    const totalChunks = Math.max(1, batch.totalChunks ?? 1);
     const execution = await this.executionService.findById(batch.executionId);
 
     if (this.executionService.isTerminalExecutionStatus(execution.status)) {
       this.logger.log(
-        `Skipping stale ${batchPhase} batch for terminal execution ${batch.executionId} (status=${execution.status}) — cron may proceed on next tick`,
+        `Skipping stale ${batchPhase} chunk ${chunkIndex}/${totalChunks} for terminal execution ${batch.executionId} (status=${execution.status})`,
       );
       return;
     }
+
+    const customerIds =
+      batch.customerIds?.length && batch.customerIds.length > 0
+        ? batch.customerIds
+        : batch.recipients
+            .map((recipient) => recipient.customerId)
+            .filter((id): id is number => id != null && id > 0);
+
+    batch.recipients =
+      await this.recipientsService.getCustomersByIds(customerIds);
+
+    this.logger.log(
+      `Payment reminder ${batchPhase} chunk ${chunkIndex + 1}/${totalChunks} start execution=${batch.executionId} queuedIds=${customerIds.length} hydrated=${batch.recipients.length}`,
+    );
 
     const actionNode = batch.plan.emailNode ?? batch.plan.smsNode;
     const isSmsBatch = Boolean(batch.plan.smsNode && !batch.plan.emailNode);
@@ -1125,26 +1341,22 @@ export class AutomationService {
         batch.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
         Boolean(batch.plan.emailNode));
 
-    const firstCustomerId = batch.recipients[0]?.customerId;
+    const firstCustomerId =
+      batch.recipients[0]?.customerId ?? customerIds[0] ?? execution.customerId;
     if (firstCustomerId == null) {
-      await this.executionService.markFailed(
-        batch.executionId,
-        'No recipients in batch',
-      );
+      await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+        sent: [],
+        allowEmptySent: true,
+      });
       return;
     }
 
-    const phaseAlreadySent = await this.logService.hasBatchPhaseEmailSent(
-      batch.executionId,
-      batch.emailNodeId,
-      batchPhase,
-    );
-
     if (batchPhase === 'pass') {
-      batch.recipients = await this.recipientsService.filterStillUnpaidRecipients(
-        batch.funnelId,
-        batch.recipients,
-      );
+      batch.recipients =
+        await this.recipientsService.filterStillUnpaidRecipients(
+          batch.funnelId,
+          batch.recipients,
+        );
 
       if (batch.recipients.length === 0) {
         await this.logService.createLog({
@@ -1154,33 +1366,48 @@ export class AutomationService {
           message:
             'QR pass email skipped — all recipients completed payment during wait',
         });
-        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+        await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+          sent: [],
           allowEmptySent: true,
         });
         return;
       }
-
-      if (phaseAlreadySent) {
-        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
-          allowEmptySent: true,
-        });
-        return;
-      }
-    } else if (phaseAlreadySent) {
-      if (this.executionService.isTerminalExecutionStatus(execution.status)) {
-        this.logger.log(
-          `Skipping duplicate payment batch for terminal execution ${batch.executionId}`,
+    } else {
+      batch.recipients =
+        await this.recipientsService.filterStillUnpaidRecipients(
+          batch.funnelId,
+          batch.recipients,
         );
-        return;
-      }
+    }
 
-      await this.schedulePassFollowUpIfNeeded(batch, firstCustomerId);
+    const lockedRecipients: EmailRecipient[] = [];
+    for (const recipient of batch.recipients) {
+      if (recipient.customerId == null) {
+        continue;
+      }
+      const acquired = await this.queueService.tryAcquireUnpaidReminderSendLock(
+        batch.funnelId,
+        recipient.customerId,
+        batch.executionId,
+        batchPhase,
+      );
+      if (acquired) {
+        lockedRecipients.push(recipient);
+      }
+    }
+    batch.recipients = lockedRecipients;
+
+    if (batch.recipients.length === 0) {
+      await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+        sent: [],
+        allowEmptySent: true,
+      });
       return;
     }
 
     await this.executionService.markProcessing(batch.executionId);
 
-    if (!batch.anchorStepOnTrigger && batchPhase === 'payment') {
+    if (!batch.anchorStepOnTrigger && batchPhase === 'payment' && chunkIndex === 0) {
       if (batch.plan.conditionNode) {
         await this.executionService.updateCurrentNode(
           batch.executionId,
@@ -1194,7 +1421,7 @@ export class AutomationService {
       );
     }
 
-    if (batchPhase === 'pass' && batch.waitBeforePassNodeId) {
+    if (batchPhase === 'pass' && batch.waitBeforePassNodeId && chunkIndex === 0) {
       await this.executionService.updateCurrentNode(
         batch.executionId,
         batch.waitBeforePassNodeId,
@@ -1210,28 +1437,37 @@ export class AutomationService {
       .map((node) => `order ${node.order}:${node.type}`)
       .join(' → ');
 
+    if (chunkIndex === 0) {
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.emailNodeId,
+        customerId: firstCustomerId,
+        message: isSmsBatch
+          ? `Step 0 SMS node loaded. Flow: ${pathSummary}`
+          : `Step 0 email node: subject "${batch.prepared?.subject ?? ''}" loaded. Flow: ${pathSummary}`,
+      });
+
+      if (batch.plan.conditionNode) {
+        const conditionLabel = String(
+          batch.plan.conditionNode.config?.conditionType ??
+            batch.plan.conditionNode.config?.type ??
+            'condition',
+        );
+        await this.logService.createLog({
+          executionId: batch.executionId,
+          nodeId: batch.conditionNodeId,
+          customerId: firstCustomerId,
+          message: `Step 1 condition: "${conditionLabel}" — sending unpaid reminders in chunks of ${UNPAID_SEND_CHUNK_SIZE}`,
+        });
+      }
+    }
+
     await this.logService.createLog({
       executionId: batch.executionId,
       nodeId: batch.emailNodeId,
       customerId: firstCustomerId,
-      message: isSmsBatch
-        ? `Step 0 SMS node loaded. Flow: ${pathSummary}`
-        : `Step 0 email node: subject "${batch.prepared?.subject ?? ''}" loaded. Flow: ${pathSummary}`,
+      message: `${batchPhase === 'pass' ? 'Pass' : 'Payment'} reminder chunk ${chunkIndex + 1}/${totalChunks}: sending to ${batch.recipients.length} guest(s)`,
     });
-
-    if (batch.plan.conditionNode) {
-      const conditionLabel = String(
-        batch.plan.conditionNode.config?.conditionType ??
-          batch.plan.conditionNode.config?.type ??
-          'condition',
-      );
-      await this.logService.createLog({
-        executionId: batch.executionId,
-        nodeId: batch.conditionNodeId,
-        customerId: firstCustomerId,
-        message: `Step 1 condition: "${conditionLabel}" — sending to ${batch.recipients.length} unpaid customer(s)`,
-      });
-    }
 
     if (isSmsBatch && !sendAsEmail) {
       const smsMessage = String(actionNode?.config?.message ?? '').trim();
@@ -1240,10 +1476,6 @@ export class AutomationService {
         if (!recipient.customerId) {
           continue;
         }
-        await this.executionService.updateCustomerId(
-          batch.executionId,
-          recipient.customerId,
-        );
         await this.logService.createLog({
           executionId: batch.executionId,
           nodeId: batch.emailNodeId,
@@ -1271,57 +1503,17 @@ export class AutomationService {
         });
       }
 
-      if (sent.length === 0 && batch.recipients[0]) {
-        await this.logService.createLog({
-          executionId: batch.executionId,
-          nodeId: batch.emailNodeId,
-          customerId: batch.recipients[0].customerId,
-          message: 'Workflow completed. No texts were sent.',
-          error: 'All send attempts failed',
-        });
-        if (batch.anchorStepOnTrigger) {
-          await this.executionService.updateCurrentNode(
-            batch.executionId,
-            batch.plan.startNodeId,
-          );
-        }
-        await this.executionService.markFailed(
+      if (sent.length > 0 && smsMessage) {
+        await this.executionService.incrementEmailsSentBy(
           batch.executionId,
-          'All send attempts failed',
+          sent.length,
         );
-        return;
       }
 
-      if (sent.length > 0) {
-        const summary = sent
-          .map((recipient) => `${recipient.email} (#${recipient.customerId})`)
-          .join(', ');
-        await this.logService.createLog({
-          executionId: batch.executionId,
-          nodeId: batch.plan.nodes[batch.plan.nodes.length - 1].id,
-          customerId: sent[sent.length - 1].customerId,
-          message: `Flow completed (node_order end). Texts sent to ${sent.length} customer(s): ${summary}`,
-        });
-        if (smsMessage) {
-          await this.executionService.incrementEmailsSentBy(
-            batch.executionId,
-            sent.length,
-          );
-        }
-      }
-
-      if (batch.anchorStepOnTrigger) {
-        await this.executionService.updateCurrentNode(
-          batch.executionId,
-          batch.plan.startNodeId,
-        );
-      } else {
-        await this.executionService.updateCurrentNode(
-          batch.executionId,
-          batch.plan.endNodeId,
-        );
-      }
-      await this.executionService.markCompleted(batch.executionId);
+      await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+        sent,
+        allowEmptySent: true,
+      });
       return;
     }
 
@@ -1393,10 +1585,6 @@ export class AutomationService {
         if (!recipient.customerId) {
           continue;
         }
-        await this.executionService.updateCustomerId(
-          batch.executionId,
-          recipient.customerId,
-        );
         await this.logService.createLog({
           executionId: batch.executionId,
           nodeId: batch.emailNodeId,
@@ -1451,15 +1639,6 @@ export class AutomationService {
         batch.executionId,
         sendResult.recipientCount,
       );
-
-      if (
-        batchPhase === 'payment' &&
-        batch.passPrepared &&
-        batch.passEmailNodeId
-      ) {
-        await this.schedulePassFollowUpIfNeeded(batch, firstCustomerId);
-        return;
-      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Bulk email send failed';
@@ -1470,17 +1649,95 @@ export class AutomationService {
         message: 'Bulk payment reminder send failed',
         error: message,
       });
-      if (batch.anchorStepOnTrigger) {
-        await this.executionService.updateCurrentNode(
-          batch.executionId,
-          batch.plan.startNodeId,
-        );
-      }
-      await this.executionService.markFailed(batch.executionId, message);
+      await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+        sent,
+        allowEmptySent: true,
+      });
       return;
     }
 
-    await this.finishUnpaidReminderBatchExecution(batch, batchPhase, sent);
+    await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+      sent,
+      allowEmptySent: true,
+    });
+  }
+
+  private async completeUnpaidReminderChunk(
+    batch: UnpaidReminderBatchJob,
+    batchPhase: UnpaidReminderBatchPhase,
+    totalChunks: number,
+    options: {
+      sent: { customerId: number; email: string }[];
+      allowEmptySent?: boolean;
+    },
+  ): Promise<void> {
+    const chunkIndex = batch.chunkIndex ?? 0;
+    const { done, total, isLast } =
+      await this.queueService.recordUnpaidChunkCompleted(
+        batch.executionId,
+        batchPhase,
+        totalChunks,
+      );
+
+    this.logger.log(
+      `Payment reminder ${batchPhase} chunk ${chunkIndex + 1}/${total} done execution=${batch.executionId} sent=${options.sent.length} progress=${done}/${total}${isLast ? ' (last chunk)' : ''}`,
+    );
+
+    const logCustomerId =
+      options.sent[0]?.customerId ??
+      batch.recipients[0]?.customerId ??
+      batch.customerIds?.[0];
+    if (logCustomerId != null) {
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.emailNodeId,
+        customerId: logCustomerId,
+        message: `${batchPhase === 'pass' ? 'Pass' : 'Payment'} reminder chunk ${chunkIndex + 1}/${total} finished (sent ${options.sent.length}, progress ${done}/${total})`,
+      });
+    }
+
+    if (!isLast) {
+      return;
+    }
+
+    await this.finalizeUnpaidReminderPhaseAfterChunks(
+      batch,
+      batchPhase,
+      options.sent,
+      options,
+    );
+  }
+
+  private async finalizeUnpaidReminderPhaseAfterChunks(
+    batch: UnpaidReminderBatchJob,
+    batchPhase: UnpaidReminderBatchPhase,
+    sent: { customerId: number; email: string }[],
+    options?: {
+      allowEmptySent?: boolean;
+    },
+  ): Promise<void> {
+    if (
+      batchPhase === 'payment' &&
+      batch.passPrepared &&
+      batch.passEmailNodeId
+    ) {
+      const logCustomerId =
+        sent[0]?.customerId ??
+        batch.recipients[0]?.customerId ??
+        batch.customerIds?.[0];
+      if (logCustomerId != null) {
+        await this.schedulePassFollowUpIfNeeded(batch, logCustomerId);
+      } else {
+        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+          allowEmptySent: true,
+        });
+      }
+      return;
+    }
+
+    await this.finishUnpaidReminderBatchExecution(batch, batchPhase, sent, {
+      allowEmptySent: options?.allowEmptySent,
+    });
   }
 
   private async schedulePassFollowUpIfNeeded(
@@ -1524,16 +1781,53 @@ export class AutomationService {
           : 'Scheduling QR pass email',
     });
 
-    await this.queueService.addUnpaidReminderBatch(
-      {
-        ...batch,
-        batchPhase: 'pass',
-        emailNodeId: batch.passEmailNodeId,
-        prepared: batch.passPrepared,
-        anchorStepOnTrigger: batch.anchorStepOnTrigger,
-      },
-      batch.waitDelayMs ?? 0,
-    );
+    const unpaidCount =
+      await this.recipientsService.countUnpaidCustomersForFunnel(batch.funnelId);
+    if (unpaidCount === 0) {
+      await this.finishUnpaidReminderBatchExecution(batch, 'pass', [], {
+        allowEmptySent: true,
+      });
+      return;
+    }
+
+    const passBase: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
+    > = {
+      executionId: batch.executionId,
+      automationId: batch.automationId,
+      businessId: batch.businessId,
+      funnelId: batch.funnelId,
+      campaignId: batch.campaignId,
+      emailNodeId: batch.passEmailNodeId,
+      conditionNodeId: batch.conditionNodeId,
+      purpose: batch.purpose,
+      prepared: batch.passPrepared,
+      plan: batch.plan,
+      anchorStepOnTrigger: batch.anchorStepOnTrigger,
+      batchPhase: 'pass',
+      passPrepared: batch.passPrepared,
+      passEmailNodeId: batch.passEmailNodeId,
+      waitBeforePassNodeId: batch.waitBeforePassNodeId,
+      waitDelayMs: batch.waitDelayMs,
+    };
+
+    const { totalChunks } = await this.enqueueUnpaidReminderChunksFromPages({
+      funnelId: batch.funnelId,
+      baseBatch: passBase,
+      delayMs: batch.waitDelayMs ?? 0,
+      predictedTotalChunks: Math.max(
+        1,
+        Math.ceil(unpaidCount / UNPAID_SEND_CHUNK_SIZE),
+      ),
+    });
+
+    if (totalChunks === 0) {
+      await this.finishUnpaidReminderBatchExecution(batch, 'pass', [], {
+        allowEmptySent: true,
+      });
+      return;
+    }
 
     const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
     await this.executionService.updateCurrentNode(
@@ -2109,21 +2403,39 @@ export class AutomationService {
       return;
     }
 
-    const customerIds =
-      await this.recipientsService.findSignedUpUnpaidCustomerIdsForFunnel(
-        automation.funnelId,
-      );
+    let afterCustomerId = 0;
+    while (true) {
+      const page =
+        await this.recipientsService.getUnpaidCustomersForFunnelPage(
+          automation.funnelId,
+          {
+            afterCustomerId,
+            limit: UNPAID_RECIPIENT_PAGE_SIZE,
+          },
+        );
+      if (page.length === 0) {
+        break;
+      }
 
-    for (const customerId of customerIds) {
-      await this.tryStartAutomationForEvent(
-        automation,
-        {
-          funnelId: automation.funnelId,
-          customerId,
-          eventType: FunnelEventType.SIGNUP,
-        } as FunnelEvent,
-        funnel,
-      );
+      for (const recipient of page) {
+        if (recipient.customerId == null) {
+          continue;
+        }
+        await this.tryStartAutomationForEvent(
+          automation,
+          {
+            funnelId: automation.funnelId,
+            customerId: recipient.customerId,
+            eventType: FunnelEventType.SIGNUP,
+          } as FunnelEvent,
+          funnel,
+        );
+      }
+
+      afterCustomerId = page[page.length - 1]!.customerId!;
+      if (page.length < UNPAID_RECIPIENT_PAGE_SIZE) {
+        break;
+      }
     }
   }
 

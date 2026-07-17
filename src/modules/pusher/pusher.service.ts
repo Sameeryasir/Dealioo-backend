@@ -13,8 +13,9 @@ import {
 import {
   PUSHER_EVENT,
   pusherAutomationChannel,
+  pusherBusinessConversationsChannel,
+  pusherConversationMessagesChannel,
   pusherExecutionChannel,
-  pusherBusinessChatChannel,
 } from './pusher.constants';
 import type {
   ChatMessagePusherPayload,
@@ -113,22 +114,64 @@ export class PusherService implements OnModuleInit {
       return;
     }
 
-    const channel = pusherBusinessChatChannel(payload.businessId);
+    if (
+      !Number.isFinite(payload.businessId) ||
+      payload.businessId < 1 ||
+      !Number.isFinite(payload.conversationId) ||
+      payload.conversationId < 1
+    ) {
+      this.logger.warn(
+        `Pusher chat notify skipped — invalid business/conversation id (business=${payload.businessId}, conversation=${payload.conversationId})`,
+      );
+      return;
+    }
+
+    const conversationsChannel = pusherBusinessConversationsChannel(
+      payload.businessId,
+    );
+    const messagesChannel = pusherConversationMessagesChannel(
+      payload.businessId,
+      payload.conversationId,
+    );
 
     try {
-      await this.client.trigger(
-        channel,
-        PUSHER_EVENT.CHAT_MESSAGE_SENT,
-        payload,
-      );
-      this.logger.log(
-        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.CHAT_MESSAGE_SENT} | customer: ${payload.customerId} | message: ${payload.message.id}`,
-      );
+      const results = await Promise.allSettled([
+        this.client.trigger(
+          conversationsChannel,
+          PUSHER_EVENT.CHAT_CONVERSATION_UPDATED,
+          payload,
+        ),
+        this.client.trigger(
+          messagesChannel,
+          PUSHER_EVENT.CHAT_MESSAGE_SENT,
+          payload,
+        ),
+      ]);
+
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          const target =
+            index === 0 ? conversationsChannel : messagesChannel;
+          const reason =
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason);
+          this.logger.error(
+            `Pusher chat notify failed for ${target}: ${reason}`,
+          );
+        }
+      });
+
+      if (results.every((result) => result.status === 'fulfilled')) {
+        this.logger.log(
+          `Pusher send → channels: ${conversationsChannel}, ${messagesChannel} | events: ${PUSHER_EVENT.CHAT_CONVERSATION_UPDATED}, ${PUSHER_EVENT.CHAT_MESSAGE_SENT} | conversation: ${payload.conversationId} | message: ${payload.message.id}`,
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
-        `Pusher chat notify failed for business ${payload.businessId}, customer ${payload.customerId}: ${message}`,
+        `Pusher chat notify failed for business ${payload.businessId}, conversation ${payload.conversationId}: ${message}`,
       );
     }
   }

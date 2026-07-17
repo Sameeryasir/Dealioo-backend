@@ -30,10 +30,12 @@ import {
   ConversationMessageDto,
   ConversationMessageKind,
   ConversationMessageParticipantDto,
-  CustomerConversationDetailDto,
+  CustomerConversationMessagesDto,
+  GuestConversationDto,
   PaginatedActiveFlowCustomersDto,
   PaginatedChatCustomersDto,
   SyncChatCustomersDto,
+  SyncChatMessagesDto,
 } from './chat.dto';
 
 @Injectable()
@@ -232,15 +234,12 @@ export class ChatService {
 
   async syncBusinessChatCustomers(
     businessId: number,
-    afterCustomerId: number,
-    limit?: number,
+    afterConversationId: number,
   ): Promise<SyncChatCustomersDto> {
-    const pagination = normalizePagination(1, limit);
-
     const cursor = await this.conversationRepository.findOne({
       where: {
+        id: afterConversationId,
         businessId,
-        customerId: afterCustomerId,
         isPrivate: true,
       },
     });
@@ -258,7 +257,6 @@ export class ChatService {
       },
       relations: ['customer', 'lastAutomation'],
       order: { createdAt: 'ASC' },
-      take: pagination.limit,
     });
 
     return {
@@ -268,13 +266,30 @@ export class ChatService {
     };
   }
 
-  async getCustomerConversation(
+  async getGuestConversation(
+    businessId: number,
+    conversationId: number,
+  ): Promise<GuestConversationDto> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId, businessId, isPrivate: true },
+      relations: ['customer', 'lastAutomation'],
+    });
+
+    if (!conversation || conversation.messageCount === 0) {
+      throw new NotFoundException(
+        'No conversation found for this business.',
+      );
+    }
+
+    return this.toGuestConversation(conversation);
+  }
+
+  async getCustomerConversationMessages(
     businessId: number,
     customerId: number,
-  ): Promise<CustomerConversationDetailDto> {
+  ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { businessId, customerId, isPrivate: true },
-      relations: ['customer'],
     });
 
     if (!conversation || conversation.messageCount === 0) {
@@ -297,9 +312,8 @@ export class ChatService {
     });
 
     return {
+      conversationId: conversation.id,
       customerId,
-      customerName: conversation.customer?.name ?? null,
-      customerEmail: conversation.customer?.email ?? null,
       messages: messages.map((message) =>
         this.toConversationMessageFromStoredMessage(message),
       ),
@@ -310,10 +324,9 @@ export class ChatService {
     businessId: number,
     customerId: number,
     afterMessageId: number,
-  ): Promise<CustomerConversationDetailDto> {
+  ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { businessId, customerId, isPrivate: true },
-      relations: ['customer'],
     });
 
     if (!conversation || conversation.messageCount === 0) {
@@ -339,12 +352,115 @@ export class ChatService {
     });
 
     return {
+      conversationId: conversation.id,
       customerId,
-      customerName: conversation.customer?.name ?? null,
-      customerEmail: conversation.customer?.email ?? null,
       messages: messages.map((message) =>
         this.toConversationMessageFromStoredMessage(message),
       ),
+    };
+  }
+
+  async getConversationMessagesByConversationId(
+    businessId: number,
+    conversationId: number,
+  ): Promise<CustomerConversationMessagesDto> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId, businessId, isPrivate: true },
+    });
+
+    if (!conversation || conversation.messageCount === 0) {
+      throw new NotFoundException(
+        'No messages found for this conversation.',
+      );
+    }
+
+    return this.getCustomerConversationMessages(
+      businessId,
+      conversation.customerId,
+    );
+  }
+
+  async syncConversationMessagesByConversationId(
+    businessId: number,
+    conversationId: number,
+    afterMessageId: number,
+  ): Promise<CustomerConversationMessagesDto> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId, businessId, isPrivate: true },
+    });
+
+    if (!conversation || conversation.messageCount === 0) {
+      throw new NotFoundException(
+        'No messages found for this conversation.',
+      );
+    }
+
+    return this.syncCustomerConversationMessages(
+      businessId,
+      conversation.customerId,
+      afterMessageId,
+    );
+  }
+
+  /**
+   * Business-wide message catch-up (parallel to conversation/sync).
+   * Returns messages with id > afterMessageId for this business, grouped by conversation.
+   */
+  async syncBusinessChatMessages(
+    businessId: number,
+    afterMessageId: number,
+  ): Promise<SyncChatMessagesDto> {
+    const cursorId = Math.max(0, afterMessageId);
+
+    const messages = await this.messageRepository
+      .createQueryBuilder('message')
+      .innerJoinAndSelect('message.conversation', 'conversation')
+      .leftJoinAndSelect('message.automation', 'automation')
+      .leftJoinAndSelect('message.node', 'node')
+      .leftJoinAndSelect('message.sentByBusiness', 'sentByBusiness')
+      .leftJoinAndSelect('message.sentByCustomer', 'sentByCustomer')
+      .leftJoinAndSelect('message.sentToBusiness', 'sentToBusiness')
+      .leftJoinAndSelect('message.sentToCustomer', 'sentToCustomer')
+      .where('conversation.businessId = :businessId', { businessId })
+      .andWhere('conversation.isPrivate = true')
+      .andWhere('message.id > :cursorId', { cursorId })
+      .orderBy('message.id', 'ASC')
+      .take(1000)
+      .getMany();
+
+    const byConversation = new Map<
+      number,
+      {
+        conversationId: number;
+        customerId: number;
+        messages: ConversationMessageDto[];
+      }
+    >();
+
+    for (const message of messages) {
+      const conversationId = message.conversationId;
+      const customerId = message.conversation?.customerId;
+      if (!customerId) {
+        continue;
+      }
+
+      let thread = byConversation.get(conversationId);
+      if (!thread) {
+        thread = {
+          conversationId,
+          customerId,
+          messages: [],
+        };
+        byConversation.set(conversationId, thread);
+      }
+
+      thread.messages.push(
+        this.toConversationMessageFromStoredMessage(message),
+      );
+    }
+
+    return {
+      data: [...byConversation.values()],
     };
   }
 
@@ -376,8 +492,25 @@ export class ChatService {
     };
   }
 
+  private toGuestConversation(conversation: Conversation): GuestConversationDto {
+    const summary = this.toChatCustomerSummary(conversation);
+    return {
+      conversationId: conversation.id,
+      customerId: summary.customerId,
+      customerName: summary.customerName,
+      customerEmail: summary.customerEmail,
+      messageCount: summary.messageCount,
+      lastMessagePreview: summary.lastMessagePreview,
+      lastMessageChannel: summary.lastMessageChannel,
+      lastMessageAt: summary.lastMessageAt,
+      lastAutomationName: summary.lastAutomationName,
+      createdAt: summary.createdAt,
+    };
+  }
+
   private toChatCustomerSummary(conversation: Conversation): ChatCustomerSummaryDto {
     return {
+      conversationId: conversation.id,
       customerId: conversation.customerId,
       customerName: conversation.customer?.name ?? null,
       customerEmail: conversation.customer?.email ?? null,
@@ -545,7 +678,6 @@ export class ChatService {
     return null;
   }
 
-  /** Maps a stored conversation row for API and realtime chat payloads. */
   mapStoredMessageToDto(message: ConversationMessage): ConversationMessageDto {
     return this.toConversationMessageFromStoredMessage(message);
   }

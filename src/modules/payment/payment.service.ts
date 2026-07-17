@@ -432,7 +432,7 @@ export class PaymentService implements OnModuleInit {
         description: catalog.productName,
         metadata,
 
-        idempotencyKey: `checkout-session-${payment.id}-pm-v4`,
+        idempotencyKey: `checkout-session-${payment.id}-pm-v5`,
         paymentId: payment.id,
         funnelId: payment.funnelId,
         businessId: payment.businessId,

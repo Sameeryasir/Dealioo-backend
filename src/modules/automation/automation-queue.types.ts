@@ -10,8 +10,19 @@ export type UnpaidReminderBatchPhase = 'payment' | 'pass';
 export function unpaidReminderBatchJobId(
   executionId: number,
   phase: UnpaidReminderBatchPhase = 'payment',
+  chunkIndex = 0,
 ): string {
-  return `unpaid-reminder-batch-${executionId}-${phase}`;
+  return `unpaid-reminder-batch-${executionId}-${phase}-chunk-${chunkIndex}`;
+}
+
+export function unpaidReminderBatchJobIdPrefix(
+  executionId: number,
+  phase?: UnpaidReminderBatchPhase,
+): string {
+  if (phase) {
+    return `unpaid-reminder-batch-${executionId}-${phase}`;
+  }
+  return `unpaid-reminder-batch-${executionId}-`;
 }
 
 export type UnpaidReminderBatchJob = {
@@ -25,12 +36,12 @@ export type UnpaidReminderBatchJob = {
   purpose: AutomationPurpose;
   prepared: PreparedAutomationEmail | null;
   plan: AutomationExecutionPlan;
+  customerIds?: number[];
   recipients: EmailRecipient[];
-  /** Cron-scheduled runs stay on the trigger node for step display / Pusher stepType. */
+  chunkIndex?: number;
+  totalChunks?: number;
   anchorStepOnTrigger: boolean;
-  /** Which email step this batch job sends. */
   batchPhase?: UnpaidReminderBatchPhase;
-  /** Follow-up pass email prepared content (payment phase only). */
   passPrepared?: PreparedAutomationEmail | null;
   passEmailNodeId?: number | null;
   waitBeforePassNodeId?: number | null;

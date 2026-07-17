@@ -38,6 +38,7 @@ export class ChatMessageNotificationService {
     await this.notifyMessageSent(
       message.id,
       conversation.businessId,
+      conversation.id,
       conversation.customerId,
       {
         messageCount: conversation.messageCount,
@@ -55,6 +56,7 @@ export class ChatMessageNotificationService {
   async notifyMessageSent(
     messageId: number,
     businessId: number,
+    conversationId: number,
     customerId: number,
     conversationSnapshot: ConversationSnapshot,
   ): Promise<void> {
@@ -73,10 +75,23 @@ export class ChatMessageNotificationService {
       return;
     }
 
+    const resolvedConversationId =
+      Number.isFinite(conversationId) && conversationId > 0
+        ? conversationId
+        : message.conversationId;
+
+    if (
+      !Number.isFinite(resolvedConversationId) ||
+      resolvedConversationId < 1
+    ) {
+      return;
+    }
+
     const messageDto = this.chatService.mapStoredMessageToDto(message);
 
     await this.pusherService.notifyChatMessageSent({
       businessId,
+      conversationId: resolvedConversationId,
       customerId,
       customerName: conversationSnapshot.customerName,
       customerEmail: conversationSnapshot.customerEmail,

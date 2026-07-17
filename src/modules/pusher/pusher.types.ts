@@ -20,9 +20,9 @@ export type ExecutionTerminalPusherPayload = {
   stepType: string | null;
 };
 
-/** Payload when an automation message is saved to a guest conversation. */
 export type ChatMessagePusherPayload = {
   businessId: number;
+  conversationId: number;
   customerId: number;
   customerName: string | null;
   customerEmail: string | null;

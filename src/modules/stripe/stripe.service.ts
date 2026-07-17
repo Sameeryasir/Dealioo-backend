@@ -346,9 +346,6 @@ export class StripeService {
 
           allow_promotion_codes: false,
 
-          saved_payment_method_options: {
-            payment_method_save: 'disabled',
-          },
           line_items: [{ price: opts.stripePriceId.trim(), quantity: 1 }],
 
           customer_email: opts.customerEmail.trim().toLowerCase(),

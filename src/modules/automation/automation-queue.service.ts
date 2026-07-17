@@ -20,7 +20,10 @@ import type {
   UnpaidReminderBatchJob,
   UnpaidReminderBatchPhase,
 } from './automation-queue.types';
-import { unpaidReminderBatchJobId } from './automation-queue.types';
+import {
+  unpaidReminderBatchJobId,
+  unpaidReminderBatchJobIdPrefix,
+} from './automation-queue.types';
 
 const QUEUE_JOB_SCAN_STATES = [
   'waiting',
@@ -30,6 +33,9 @@ const QUEUE_JOB_SCAN_STATES = [
   'prioritized',
   'waiting-children',
 ] as const;
+
+const UNPAID_CHUNK_COORD_TTL_SEC = 7 * 24 * 60 * 60;
+const UNPAID_SEND_LOCK_TTL_SEC = 7 * 24 * 60 * 60;
 
 @Injectable()
 export class AutomationQueueService {
@@ -43,7 +49,8 @@ export class AutomationQueueService {
     delayMs = 0,
   ): Promise<string> {
     const phase = data.batchPhase ?? 'payment';
-    const jobId = unpaidReminderBatchJobId(data.executionId, phase);
+    const chunkIndex = data.chunkIndex ?? 0;
+    const jobId = unpaidReminderBatchJobId(data.executionId, phase, chunkIndex);
     const existing = await this.queue.getJob(jobId);
     if (existing) {
       const state = await existing.getState();
@@ -71,15 +78,120 @@ export class AutomationQueueService {
     return job.id ?? jobId;
   }
 
+  async setUnpaidReminderChunkTotal(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+    totalChunks: number,
+  ): Promise<void> {
+    const client = await this.queue.client;
+    const key = this.unpaidChunkTotalKey(executionId, phase);
+    await client.set(key, String(Math.max(0, totalChunks)), 'EX', UNPAID_CHUNK_COORD_TTL_SEC);
+  }
+
+  async getUnpaidReminderChunkProgress(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+  ): Promise<{ done: number; total: number }> {
+    const client = await this.queue.client;
+    const [doneRaw, totalRaw] = await Promise.all([
+      client.get(this.unpaidChunkDoneKey(executionId, phase)),
+      client.get(this.unpaidChunkTotalKey(executionId, phase)),
+    ]);
+    return {
+      done: Number(doneRaw ?? 0) || 0,
+      total: Number(totalRaw ?? 0) || 0,
+    };
+  }
+
+  async tryClaimUnpaidPhaseFinalize(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+  ): Promise<boolean> {
+    const client = await this.queue.client;
+    const key = `unpaid-reminder-phase-final:${executionId}:${phase}`;
+    const result = await client.set(
+      key,
+      '1',
+      'EX',
+      UNPAID_CHUNK_COORD_TTL_SEC,
+      'NX',
+    );
+    return result === 'OK';
+  }
+
+  async recordUnpaidChunkCompleted(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+    fallbackTotalChunks: number,
+  ): Promise<{ done: number; total: number; isLast: boolean }> {
+    const client = await this.queue.client;
+    const doneKey = this.unpaidChunkDoneKey(executionId, phase);
+    const done = await client.incr(doneKey);
+    await client.expire(doneKey, UNPAID_CHUNK_COORD_TTL_SEC);
+
+    const totalRaw = await client.get(this.unpaidChunkTotalKey(executionId, phase));
+    const total = Math.max(
+      1,
+      Number(totalRaw ?? fallbackTotalChunks) || fallbackTotalChunks || 1,
+    );
+
+    if (done < total) {
+      return { done, total, isLast: false };
+    }
+
+    const claimed = await this.tryClaimUnpaidPhaseFinalize(executionId, phase);
+    return { done, total, isLast: claimed };
+  }
+
+  async tryAcquireUnpaidReminderSendLock(
+    funnelId: number,
+    customerId: number,
+    executionId: number,
+    phase: UnpaidReminderBatchPhase = 'payment',
+  ): Promise<boolean> {
+    const client = await this.queue.client;
+    const key = `unpaid-reminder-send:${funnelId}:${customerId}:${executionId}:${phase}`;
+    const result = await client.set(
+      key,
+      '1',
+      'EX',
+      UNPAID_SEND_LOCK_TTL_SEC,
+      'NX',
+    );
+    return result === 'OK';
+  }
+
   async removeUnpaidReminderBatchJob(
     executionId: number,
     phase: UnpaidReminderBatchPhase = 'pass',
   ): Promise<void> {
-    const job = await this.queue.getJob(
-      unpaidReminderBatchJobId(executionId, phase),
-    );
-    if (job) {
-      await job.remove();
+    const prefix = unpaidReminderBatchJobIdPrefix(executionId, phase);
+    const legacyId = `unpaid-reminder-batch-${executionId}-${phase}`;
+
+    const legacy = await this.queue.getJob(legacyId);
+    if (legacy) {
+      await this.safeRemoveJob(legacy);
+    }
+
+    for (const state of QUEUE_JOB_SCAN_STATES) {
+      let start = 0;
+      const batchSize = 100;
+      while (true) {
+        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
+        if (jobs.length === 0) {
+          break;
+        }
+        for (const job of jobs) {
+          const jobId = String(job.id ?? '');
+          if (jobId.startsWith(prefix)) {
+            await this.safeRemoveJob(job);
+          }
+        }
+        if (jobs.length < batchSize) {
+          break;
+        }
+        start += batchSize;
+      }
     }
   }
 
@@ -246,6 +358,20 @@ export class AutomationQueueService {
         start += batchSize;
       }
     }
+  }
+
+  private unpaidChunkTotalKey(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+  ): string {
+    return `unpaid-reminder-chunks-total:${executionId}:${phase}`;
+  }
+
+  private unpaidChunkDoneKey(
+    executionId: number,
+    phase: UnpaidReminderBatchPhase,
+  ): string {
+    return `unpaid-reminder-chunks-done:${executionId}:${phase}`;
   }
 
   private jobBelongsToExecution(

@@ -274,6 +274,7 @@ export class InboundMessageRecorderService {
 
     const sentAt = new Date();
     let savedMessageId: number | null = null;
+    let conversationId: number | null = null;
     let conversationSnapshot: ConversationSnapshot | null = null;
 
     await this.dataSource.transaction(async (manager) => {
@@ -285,13 +286,28 @@ export class InboundMessageRecorderService {
       });
 
       if (!conversation) {
-        conversation = await manager.save(
-          manager.create(Conversation, {
-            businessId: params.businessId,
-            customerId: params.customerId,
-            isPrivate: true,
-            messageCount: 0,
-          }),
+        try {
+          conversation = await manager.save(
+            manager.create(Conversation, {
+              businessId: params.businessId,
+              customerId: params.customerId,
+              isPrivate: true,
+              messageCount: 0,
+            }),
+          );
+        } catch {
+          conversation = await manager.findOne(Conversation, {
+            where: {
+              businessId: params.businessId,
+              customerId: params.customerId,
+            },
+          });
+        }
+      }
+
+      if (!conversation) {
+        throw new Error(
+          `Could not open conversation for business ${params.businessId} customer ${params.customerId}`,
         );
       }
 
@@ -314,6 +330,7 @@ export class InboundMessageRecorderService {
         }),
       );
       savedMessageId = savedMessage.id;
+      conversationId = conversation.id;
 
       await manager.update(Conversation, conversation.id, {
         messageCount: conversation.messageCount + 1,
@@ -341,10 +358,11 @@ export class InboundMessageRecorderService {
       }
     });
 
-    if (savedMessageId && conversationSnapshot) {
+    if (savedMessageId && conversationId && conversationSnapshot) {
       await this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
         params.businessId,
+        conversationId,
         params.customerId,
         conversationSnapshot,
       );

@@ -137,27 +137,60 @@ export class ChatMessageService {
       return null;
     }
 
+    const businessId = Number(params.businessId);
+    const customerId = Number(params.customerId);
+    if (
+      !Number.isFinite(businessId) ||
+      businessId < 1 ||
+      !Number.isFinite(customerId) ||
+      customerId < 1
+    ) {
+      this.logger.warn(
+        `recordOutboundMessage skipped — invalid ids (business=${params.businessId}, customer=${params.customerId})`,
+      );
+      return null;
+    }
+
     const body = sanitizeChatMessageBody(params.bodyPreview);
     const sentAt = params.sentAt ?? new Date();
     let savedMessageId: number | null = null;
+    let conversationId: number | null = null;
     let conversationSnapshot: ConversationSnapshot | null = null;
 
     await this.dataSource.transaction(async (manager) => {
       let conversation = await manager.findOne(Conversation, {
         where: {
-          businessId: params.businessId,
-          customerId: params.customerId,
+          businessId,
+          customerId,
         },
       });
 
       if (!conversation) {
-        conversation = await manager.save(
-          manager.create(Conversation, {
-            businessId: params.businessId,
-            customerId: params.customerId,
-            isPrivate: true,
-            messageCount: 0,
-          }),
+        try {
+          conversation = await manager.save(
+            manager.create(Conversation, {
+              businessId,
+              customerId,
+              isPrivate: true,
+              messageCount: 0,
+            }),
+          );
+        } catch {
+          conversation = await manager.findOne(Conversation, {
+            where: { businessId, customerId },
+          });
+        }
+      }
+
+      if (!conversation) {
+        throw new Error(
+          `Could not open conversation for business ${businessId} customer ${customerId}`,
+        );
+      }
+
+      if (conversation.customerId !== customerId) {
+        throw new Error(
+          `Refusing to attach message to wrong conversation (expected customer ${customerId}, got ${conversation.customerId})`,
         );
       }
 
@@ -170,10 +203,10 @@ export class ChatMessageService {
           channel: params.channel,
           direction:
             params.direction ?? ConversationMessageDirection.OUTBOUND,
-          sentByBusinessId: params.businessId,
+          sentByBusinessId: businessId,
           sentByCustomerId: null,
           sentToBusinessId: null,
-          sentToCustomerId: params.customerId,
+          sentToCustomerId: customerId,
           body,
           metadata: params.metadata ?? null,
           sentAt,
@@ -181,6 +214,7 @@ export class ChatMessageService {
         }),
       );
       savedMessageId = savedMessage.id;
+      conversationId = conversation.id;
 
       await manager.update(Conversation, conversation.id, {
         messageCount: conversation.messageCount + 1,
@@ -210,11 +244,12 @@ export class ChatMessageService {
       }
     });
 
-    if (savedMessageId && conversationSnapshot) {
+    if (savedMessageId && conversationId && conversationSnapshot) {
       await this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
-        params.businessId,
-        params.customerId,
+        businessId,
+        conversationId,
+        customerId,
         conversationSnapshot,
       );
     }

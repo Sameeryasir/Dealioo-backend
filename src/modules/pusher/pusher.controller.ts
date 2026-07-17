@@ -11,8 +11,8 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { RedemptionService } from '../redemption/redemption.service';
 import {
+  isAuthorizedBusinessChatChannel,
   parseBusinessIdFromChatChannel,
-  pusherBusinessChatChannel,
 } from './pusher.constants';
 import { PusherService } from './pusher.service';
 
@@ -55,7 +55,7 @@ export class PusherController {
       req.user.role.name,
     );
 
-    if (trimmedChannel !== pusherBusinessChatChannel(businessId)) {
+    if (!isAuthorizedBusinessChatChannel(trimmedChannel, businessId)) {
       throw new ForbiddenException('Unsupported realtime channel.');
     }
 
