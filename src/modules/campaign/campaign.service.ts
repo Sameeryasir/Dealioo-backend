@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, DataSource, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -42,6 +42,7 @@ export class CampaignService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    private readonly dataSource: DataSource,
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
     private readonly businessAccessService: BusinessAccessService,
@@ -279,5 +280,189 @@ export class CampaignService {
     }
 
     return this.campaignRepository.save(campaign);
+  }
+
+  async deleteCampaign(
+    campaignId: number,
+    user: AuthUser,
+  ): Promise<{ deleted: true; campaignId: number }> {
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+    });
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    await this.businessAccessService.assertPermission(
+      user,
+      campaign.businessId,
+      'campaigns',
+      'You do not have permission to delete campaigns for this business.',
+    );
+
+    await this.dataSource.transaction(async (manager) => {
+      const funnel = await manager.findOne(Funnel, {
+        where: { campaignId },
+        select: ['id'],
+      });
+      const funnelId = funnel?.id ?? null;
+
+      const guestIdSet = new Set<number>();
+
+      if (funnelId != null) {
+        const funnelGuestRows: Array<{ id: string | number }> =
+          await manager.query(
+            `
+              SELECT DISTINCT customer_id AS id
+              FROM funnel_event
+              WHERE funnel_id = $1 AND customer_id IS NOT NULL
+            `,
+            [funnelId],
+          );
+        for (const row of funnelGuestRows) {
+          const id = Number(row.id);
+          if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
+        }
+
+        const checkoutGuestRows: Array<{ id: string | number }> =
+          await manager.query(
+            `
+              SELECT DISTINCT customer_id AS id
+              FROM checkout_access_token
+              WHERE funnel_id = $1
+            `,
+            [funnelId],
+          );
+        for (const row of checkoutGuestRows) {
+          const id = Number(row.id);
+          if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
+        }
+      }
+
+      const campaignGuestRows: Array<{ id: string | number }> =
+        await manager.query(
+          `
+            SELECT DISTINCT customer_id AS id FROM (
+              SELECT customer_id FROM coupons WHERE campaign_id = $1
+              UNION
+              SELECT customer_id FROM customer_visits WHERE campaign_id = $1
+              UNION
+              SELECT customer_id FROM checkout_access_token WHERE campaign_id = $1
+            ) campaign_guests
+            WHERE customer_id IS NOT NULL
+          `,
+          [campaignId],
+        );
+      for (const row of campaignGuestRows) {
+        const id = Number(row.id);
+        if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
+      }
+      const guestIds = [...guestIdSet];
+
+      await manager.query(
+        `DELETE FROM customer_visits WHERE campaign_id = $1`,
+        [campaignId],
+      );
+
+      await manager.query(
+        `DELETE FROM redemption_logs WHERE campaign_id = $1`,
+        [campaignId],
+      );
+
+      await manager.query(
+        `
+          DELETE FROM checkout_access_token
+          WHERE campaign_id = $1
+             OR ($2::int IS NOT NULL AND funnel_id = $2)
+        `,
+        [campaignId, funnelId],
+      );
+
+      await manager.query(
+        `UPDATE coupons SET funnel_payment_id = NULL WHERE campaign_id = $1 OR ($2::int IS NOT NULL AND funnel_id = $2)`,
+        [campaignId, funnelId],
+      );
+
+      await manager.query(
+        `
+          DELETE FROM coupons
+          WHERE campaign_id = $1
+             OR ($2::int IS NOT NULL AND funnel_id = $2)
+        `,
+        [campaignId, funnelId],
+      );
+
+      await manager.query(
+        `
+          DELETE FROM funnel_payment
+          WHERE campaign_id = $1
+             OR ($2::int IS NOT NULL AND funnel_id = $2)
+        `,
+        [campaignId, funnelId],
+      );
+
+      if (funnelId != null) {
+        await manager.query(`DELETE FROM funnel_order WHERE funnel_id = $1`, [
+          funnelId,
+        ]);
+        await manager.query(
+          `DELETE FROM funnel_analytics_event WHERE funnel_id = $1`,
+          [funnelId],
+        );
+        await manager.query(`DELETE FROM funnel_event WHERE funnel_id = $1`, [
+          funnelId,
+        ]);
+      } else {
+        await manager.query(`DELETE FROM funnel_order WHERE campaign_id = $1`, [
+          campaignId,
+        ]);
+      }
+
+      await manager.query(
+        `
+          UPDATE automation
+          SET campaign_id = NULL,
+              funnel_id = CASE
+                WHEN funnel_id = $2 THEN NULL
+                ELSE funnel_id
+              END
+          WHERE campaign_id = $1
+             OR ($2::int IS NOT NULL AND funnel_id = $2)
+        `,
+        [campaignId, funnelId],
+      );
+
+      if (funnelId != null) {
+        await manager.query(`DELETE FROM funnels WHERE id = $1`, [funnelId]);
+      }
+
+      await manager.query(`DELETE FROM campaigns WHERE id = $1`, [campaignId]);
+
+      if (guestIds.length > 0) {
+        await manager.query(
+          `
+            DELETE FROM customers c
+            WHERE c.id = ANY($1::int[])
+              AND NOT EXISTS (
+                SELECT 1 FROM funnel_event fe WHERE fe.customer_id = c.id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM coupons cp WHERE cp.customer_id = c.id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM customer_visits cv WHERE cv.customer_id = c.id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM checkout_access_token cat
+                WHERE cat.customer_id = c.id
+              )
+          `,
+          [guestIds],
+        );
+      }
+    });
+
+    return { deleted: true, campaignId };
   }
 }

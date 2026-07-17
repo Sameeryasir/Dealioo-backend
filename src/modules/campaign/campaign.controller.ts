@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   DefaultValuePipe,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -173,5 +174,14 @@ export class CampaignController {
       req.user,
       uploaded,
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Delete(':id')
+  deleteCampaign(
+    @Param('id', ParseIntPipe) campaignId: number,
+    @Req() req: AuthRequest,
+  ): Promise<{ deleted: true; campaignId: number }> {
+    return this.campaignService.deleteCampaign(campaignId, req.user);
   }
 }
