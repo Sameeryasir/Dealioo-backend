@@ -1087,6 +1087,15 @@ export class AutomationEngineService {
       },
     });
 
+    const automationName =
+      execution.automation?.name?.trim() ||
+      `Automation #${execution.automationId}`;
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || null;
+    const funnelId = execution.automation?.funnelId ?? null;
+    const funnelName =
+      campaignName || (funnelId != null ? `Funnel #${funnelId}` : null);
+
     await this.chatMessageService.recordOutboundMessage({
       businessId: execution.automation.businessId,
       customerId: execution.customerId,
@@ -1109,6 +1118,10 @@ export class AutomationEngineService {
         automationExecutionId: execution.id,
         nodeId,
         purpose,
+        automationName,
+        campaignName,
+        funnelId,
+        funnelName,
       },
     });
   }

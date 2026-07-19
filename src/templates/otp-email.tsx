@@ -4,11 +4,22 @@ import {
   Head,
   Heading,
   Html,
+  Img,
   Preview,
   Section,
   Text,
 } from '@react-email/components';
 import * as React from 'react';
+import {
+  DEALIOO_EMAIL_BLUE,
+  DEALIOO_EMAIL_BLUE_DARK,
+  DEALIOO_EMAIL_BLUE_SOFT,
+  DEALIOO_EMAIL_INK,
+  DEALIOO_EMAIL_LOGO_HEIGHT,
+  DEALIOO_EMAIL_LOGO_URL,
+  DEALIOO_EMAIL_LOGO_WIDTH,
+  DEALIOO_EMAIL_MUTED,
+} from './dealioo-email-brand';
 
 export type OtpEmailProps = {
   name: string;
@@ -81,8 +92,13 @@ export function OtpEmail({
       <Body className="email-body" style={main}>
         <Container className="email-container" style={container}>
           <Section style={brandRow}>
-            <Text style={brandIcon}>◇</Text>
-            <Text style={brandName}>Dealioo</Text>
+            <Img
+              src={DEALIOO_EMAIL_LOGO_URL}
+              alt="Dealioo"
+              width={DEALIOO_EMAIL_LOGO_WIDTH}
+              height={DEALIOO_EMAIL_LOGO_HEIGHT}
+              style={brandLogo}
+            />
           </Section>
 
           <Heading as="h1" className="email-title" style={title}>
@@ -125,7 +141,7 @@ export function OtpEmail({
 }
 
 const main = {
-  backgroundColor: '#ffffff',
+  backgroundColor: DEALIOO_EMAIL_BLUE_SOFT,
   margin: 0,
   padding: '48px 24px 64px',
   width: '100%',
@@ -140,33 +156,28 @@ const container = {
   width: '100%',
   maxWidth: '560px',
   boxSizing: 'border-box' as const,
+  backgroundColor: '#ffffff',
+  border: '1px solid #e8edf5',
+  borderRadius: '16px',
+  padding: '32px 28px 36px',
 };
 
 const brandRow = {
-  marginBottom: '40px',
+  backgroundColor: DEALIOO_EMAIL_BLUE_DARK,
+  borderRadius: '12px',
+  marginBottom: '32px',
+  padding: '16px 20px',
 };
 
-const brandIcon = {
-  display: 'inline-block',
-  color: '#000000',
-  fontSize: '18px',
-  lineHeight: '1',
-  margin: '0 8px 0 0',
-  verticalAlign: 'middle' as const,
-};
-
-const brandName = {
-  display: 'inline-block',
-  color: '#000000',
-  fontSize: '15px',
-  fontWeight: 700,
-  letterSpacing: '-0.01em',
-  margin: 0,
-  verticalAlign: 'middle' as const,
+const brandLogo = {
+  display: 'block' as const,
+  border: '0',
+  outline: 'none',
+  textDecoration: 'none',
 };
 
 const title = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '28px',
   fontWeight: 700,
   lineHeight: '36px',
@@ -177,7 +188,7 @@ const title = {
 };
 
 const greeting = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '16px',
   lineHeight: '24px',
   fontWeight: 400,
@@ -186,7 +197,7 @@ const greeting = {
 };
 
 const body = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_MUTED,
   fontSize: '16px',
   lineHeight: '26px',
   fontWeight: 400,
@@ -201,7 +212,7 @@ const codeButtonWrap = {
 
 const codeButton = {
   display: 'inline-block',
-  backgroundColor: '#000000',
+  backgroundColor: DEALIOO_EMAIL_BLUE,
   color: '#ffffff',
   fontSize: '18px',
   fontWeight: 700,
@@ -219,7 +230,7 @@ const codeButton = {
 };
 
 const meta = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_MUTED,
   fontSize: '15px',
   lineHeight: '24px',
   margin: '0 0 32px',
@@ -227,7 +238,7 @@ const meta = {
 };
 
 const disclaimer = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_MUTED,
   fontSize: '15px',
   lineHeight: '24px',
   margin: '0 0 40px',
@@ -235,7 +246,7 @@ const disclaimer = {
 };
 
 const signoffBold = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '15px',
   fontWeight: 700,
   lineHeight: '24px',
@@ -244,7 +255,7 @@ const signoffBold = {
 };
 
 const signoffTeam = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_BLUE,
   fontSize: '15px',
   fontWeight: 400,
   lineHeight: '24px',

@@ -46,6 +46,10 @@ export class ConversationMessageDto {
   stepType: string | null;
   sentAt: Date;
   error: string | null;
+  automationName: string | null;
+  campaignName: string | null;
+  funnelName: string | null;
+  funnelId: number | null;
 }
 
 export class ConversationDetailDto {

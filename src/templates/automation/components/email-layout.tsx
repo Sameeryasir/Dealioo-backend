@@ -5,14 +5,20 @@ import {
   Head,
   Heading,
   Html,
+  Img,
   Preview,
   Section,
   Text,
 } from '@react-email/components';
 import * as React from 'react';
 import {
+  DEALIOO_EMAIL_LOGO_HEIGHT,
+  DEALIOO_EMAIL_LOGO_URL,
+  DEALIOO_EMAIL_LOGO_WIDTH,
+} from '../../dealioo-email-brand';
+import {
   automationBody,
-  automationBrandName,
+  automationBrandLogo,
   automationBrandRow,
   automationEmailContainer,
   automationCtaButton,
@@ -56,7 +62,13 @@ export function AutomationEmailLayout({
       <Body style={automationEmailMain}>
         <Container style={automationEmailContainer}>
           <Section style={automationBrandRow}>
-            <Text style={automationBrandName}>Dealioo</Text>
+            <Img
+              src={DEALIOO_EMAIL_LOGO_URL}
+              alt="Dealioo"
+              width={DEALIOO_EMAIL_LOGO_WIDTH}
+              height={DEALIOO_EMAIL_LOGO_HEIGHT}
+              style={automationBrandLogo}
+            />
           </Section>
 
           {!skipTitle ? (

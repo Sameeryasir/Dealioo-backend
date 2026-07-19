@@ -11,10 +11,14 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import type { EmailRecipient } from './automation-email.types';
+import { AUTOMATION_RECIPIENT_PAGE_SIZE } from './automation-recipient-batch.util';
 
-export const UNPAID_RECIPIENT_PAGE_SIZE = 200;
-
-export const UNPAID_SEND_CHUNK_SIZE = 50;
+export {
+  AUTOMATION_RECIPIENT_PAGE_SIZE,
+  AUTOMATION_SEND_CHUNK_SIZE,
+  UNPAID_RECIPIENT_PAGE_SIZE,
+  UNPAID_SEND_CHUNK_SIZE,
+} from './automation-recipient-batch.util';
 
 const UNPAID_PAYMENT_STATUSES = [
   FunnelPaymentStatus.PENDING,
@@ -143,6 +147,44 @@ export class AutomationRecipientsService {
     return Number(raw?.count ?? 0);
   }
 
+  async getPaidCustomersForFunnelPage(
+    funnelId: number,
+    options: { afterCustomerId?: number; limit: number },
+  ): Promise<EmailRecipient[]> {
+    const afterCustomerId = Math.max(0, options.afterCustomerId ?? 0);
+    const limit = Math.max(1, Math.min(options.limit, 500));
+
+    const customers = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('customer.id > :afterCustomerId', { afterCustomerId })
+      .andWhere(this.paidRecipientWhereSql(), {
+        funnelId,
+        paidStatus: FunnelPaymentStatus.PAID,
+      })
+      .orderBy('customer.id', 'ASC')
+      .take(limit)
+      .getMany();
+
+    return customers.map((customer) => ({
+      customerId: customer.id,
+      email: customer.email,
+      name: customer.name,
+    }));
+  }
+
+  async countPaidCustomersForFunnel(funnelId: number): Promise<number> {
+    const raw = await this.customerRepository
+      .createQueryBuilder('customer')
+      .select('COUNT(customer.id)', 'count')
+      .where(this.paidRecipientWhereSql(), {
+        funnelId,
+        paidStatus: FunnelPaymentStatus.PAID,
+      })
+      .getRawOne<{ count: string }>();
+
+    return Number(raw?.count ?? 0);
+  }
+
   async getCustomersByIds(customerIds: number[]): Promise<EmailRecipient[]> {
     const uniqueIds = [
       ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
@@ -181,14 +223,14 @@ export class AutomationRecipientsService {
     while (true) {
       const page = await this.getUnpaidCustomersForFunnelPage(funnelId, {
         afterCustomerId,
-        limit: UNPAID_RECIPIENT_PAGE_SIZE,
+        limit: AUTOMATION_RECIPIENT_PAGE_SIZE,
       });
       if (page.length === 0) {
         break;
       }
       merged.push(...page);
       afterCustomerId = page[page.length - 1]!.customerId!;
-      if (page.length < UNPAID_RECIPIENT_PAGE_SIZE) {
+      if (page.length < AUTOMATION_RECIPIENT_PAGE_SIZE) {
         break;
       }
     }
@@ -263,6 +305,15 @@ export class AutomationRecipientsService {
             AND payment.status = :paidStatus
         )
       )
+    )`;
+  }
+
+  private paidRecipientWhereSql(): string {
+    return `EXISTS (
+      SELECT 1 FROM funnel_payment payment
+      WHERE payment.funnel_id = :funnelId
+        AND LOWER(payment.customer_email) = LOWER(customer.email)
+        AND payment.status = :paidStatus
     )`;
   }
 }

@@ -4,12 +4,23 @@ import {
   Head,
   Heading,
   Html,
+  Img,
   Link,
   Preview,
   Section,
   Text,
 } from '@react-email/components';
 import * as React from 'react';
+import {
+  DEALIOO_EMAIL_BLUE,
+  DEALIOO_EMAIL_BLUE_DARK,
+  DEALIOO_EMAIL_BLUE_SOFT,
+  DEALIOO_EMAIL_INK,
+  DEALIOO_EMAIL_LOGO_HEIGHT,
+  DEALIOO_EMAIL_LOGO_URL,
+  DEALIOO_EMAIL_LOGO_WIDTH,
+  DEALIOO_EMAIL_MUTED,
+} from './dealioo-email-brand';
 
 export type MemberInviteEmailProps = {
   businessName: string;
@@ -42,6 +53,15 @@ export function MemberInviteEmail({
       </Preview>
       <Body style={bodyStyle}>
         <Container style={containerStyle}>
+          <Section style={brandRowStyle}>
+            <Img
+              src={DEALIOO_EMAIL_LOGO_URL}
+              alt="Dealioo"
+              width={DEALIOO_EMAIL_LOGO_WIDTH}
+              height={DEALIOO_EMAIL_LOGO_HEIGHT}
+              style={brandLogoStyle}
+            />
+          </Section>
           <Section style={cardStyle}>
             <Heading style={headingStyle}>You&apos;re invited</Heading>
             <Text style={textStyle}>
@@ -71,7 +91,7 @@ export function MemberInviteEmail({
 }
 
 const bodyStyle: React.CSSProperties = {
-  backgroundColor: '#f4f7fb',
+  backgroundColor: DEALIOO_EMAIL_BLUE_SOFT,
   fontFamily:
     '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   margin: 0,
@@ -83,6 +103,20 @@ const containerStyle: React.CSSProperties = {
   maxWidth: '560px',
 };
 
+const brandRowStyle: React.CSSProperties = {
+  backgroundColor: DEALIOO_EMAIL_BLUE_DARK,
+  borderRadius: '12px',
+  marginBottom: '16px',
+  padding: '16px 20px',
+};
+
+const brandLogoStyle: React.CSSProperties = {
+  display: 'block',
+  border: '0',
+  outline: 'none',
+  textDecoration: 'none',
+};
+
 const cardStyle: React.CSSProperties = {
   backgroundColor: '#ffffff',
   border: '1px solid #e8edf5',
@@ -91,7 +125,7 @@ const cardStyle: React.CSSProperties = {
 };
 
 const headingStyle: React.CSSProperties = {
-  color: '#07111f',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '24px',
   fontWeight: 700,
   lineHeight: '32px',
@@ -99,15 +133,15 @@ const headingStyle: React.CSSProperties = {
 };
 
 const textStyle: React.CSSProperties = {
-  color: '#475569',
+  color: DEALIOO_EMAIL_MUTED,
   fontSize: '15px',
   lineHeight: '24px',
   margin: '0 0 16px',
 };
 
 const buttonStyle: React.CSSProperties = {
-  backgroundColor: '#1877f2',
-  borderRadius: '10px',
+  backgroundColor: DEALIOO_EMAIL_BLUE,
+  borderRadius: '999px',
   color: '#ffffff',
   display: 'inline-block',
   fontSize: '15px',

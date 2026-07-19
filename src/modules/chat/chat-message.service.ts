@@ -88,6 +88,8 @@ export class ChatMessageService {
     const message = await this.messageRepository.findOne({
       where: { id: savedMessageId },
       relations: [
+        'automation',
+        'automation.campaign',
         'node',
         'sentByBusiness',
         'sentByCustomer',

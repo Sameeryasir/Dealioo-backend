@@ -153,11 +153,11 @@ export class FunnelEventService {
       this.isPaidFunnelEvent(tracked.event)
     ) {
       this.logger.log(
-        `[Prepaid Offer] Retrying automation for existing paid payment — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
+        `[Prepaid Offer] Ensuring prepaid start for existing paid payment — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
       );
-      // Payment already recorded — retry prepaid start without cancelling in-flight runs.
       await this.automationService.handleEvent(tracked.event, {
         skipCancelPendingOnPayment: true,
+        onlyIfNoExecutionForPayment: true,
       });
     }
 

@@ -42,6 +42,7 @@ export class AutomationExecutionService {
     options?: {
       status?: AutomationExecutionStatus;
       totalRecipients?: number;
+      executionContext?: Record<string, unknown>;
     },
   ): Promise<AutomationExecution> {
     const node = await this.nodeRepository.findOne({
@@ -68,11 +69,38 @@ export class AutomationExecutionService {
       queueJobId: null,
       lastError: null,
       automationVersion: automation?.version ?? 1,
-      executionContext: {},
+      executionContext: options?.executionContext ?? {},
       lastEventId: null,
     });
 
     return this.executionRepository.save(execution);
+  }
+
+  async hasExecutionForFunnelPayment(
+    automationId: number,
+    customerId: number,
+    funnelPaymentId: number,
+  ): Promise<boolean> {
+    if (!Number.isFinite(funnelPaymentId) || funnelPaymentId < 1) {
+      return false;
+    }
+
+    const row = await this.executionRepository
+      .createQueryBuilder('execution')
+      .select('execution.id', 'id')
+      .where('execution.automation_id = :automationId', { automationId })
+      .andWhere('execution.customer_id = :customerId', { customerId })
+      .andWhere('execution.status != :failed', {
+        failed: AutomationExecutionStatus.FAILED,
+      })
+      .andWhere(
+        `(execution.execution_context->>'funnelPaymentId')::int = :funnelPaymentId`,
+        { funnelPaymentId },
+      )
+      .limit(1)
+      .getRawOne<{ id: string | number }>();
+
+    return row != null;
   }
 
   async setQueueJobId(
@@ -410,6 +438,14 @@ export class AutomationExecutionService {
     ];
   }
 
+  private liveExecutionStatuses(): AutomationExecutionStatus[] {
+    return [
+      AutomationExecutionStatus.QUEUED,
+      AutomationExecutionStatus.RUNNING,
+      AutomationExecutionStatus.WAITING,
+    ];
+  }
+
   isTerminalExecutionStatus(status: AutomationExecutionStatus): boolean {
     return (
       status === AutomationExecutionStatus.COMPLETED ||
@@ -425,7 +461,7 @@ export class AutomationExecutionService {
       where: {
         automationId,
         customerId,
-        status: In(this.inProgressExecutionStatuses()),
+        status: In(this.liveExecutionStatuses()),
       },
     });
   }
@@ -434,7 +470,7 @@ export class AutomationExecutionService {
     return this.executionRepository.exist({
       where: {
         automationId,
-        status: In(this.inProgressExecutionStatuses()),
+        status: In(this.liveExecutionStatuses()),
       },
     });
   }
@@ -445,7 +481,7 @@ export class AutomationExecutionService {
     return this.executionRepository.exist({
       where: {
         automationId,
-        status: In(this.inProgressExecutionStatuses()),
+        status: In(this.liveExecutionStatuses()),
       },
     });
   }
@@ -527,6 +563,25 @@ export class AutomationExecutionService {
       relations: ['automation', 'currentNode', 'customer'],
       order: { id: 'ASC' },
     });
+  }
+
+  async findOpenExecutionIdsForAutomation(
+    automationId: number,
+  ): Promise<number[]> {
+    const rows = await this.executionRepository.find({
+      where: {
+        automationId,
+        status: In([
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+          AutomationExecutionStatus.PAUSED,
+        ]),
+      },
+      select: ['id'],
+      order: { id: 'ASC' },
+    });
+    return rows.map((row) => row.id);
   }
 
   async clearPauseState(

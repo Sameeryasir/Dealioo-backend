@@ -255,6 +255,8 @@ export class PaymentWebhookHandler {
       return;
     }
 
+    const wasAlreadyPaid = payment.status === FunnelPaymentStatus.PAID;
+
     const paymentMethodId = this.paymentMethodIdFromIntent(paymentIntent);
     const receiptUrl = await this.resolveReceiptUrl(
       paymentIntent,
@@ -266,13 +268,17 @@ export class PaymentWebhookHandler {
 
     await this.funnelPaymentRepository.update(payment.id, {
       status: FunnelPaymentStatus.PAID,
-      paidAt: new Date(),
+      paidAt: payment.paidAt ?? new Date(),
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
       ...(chargeId ? { stripeChargeId: chargeId } : {}),
       ...(paymentMethodId ? { paymentMethod: paymentMethodId } : {}),
       ...(receiptUrl ? { receiptUrl } : {}),
     });
+
+    if (wasAlreadyPaid) {
+      return;
+    }
 
     await this.activityService.logPrepaidForOffer({
       paymentId: payment.id,

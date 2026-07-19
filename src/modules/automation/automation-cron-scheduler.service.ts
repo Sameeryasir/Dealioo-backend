@@ -73,10 +73,10 @@ export class AutomationCronSchedulerService implements OnModuleInit {
   ): Promise<VerifiedCronSchedule | null> {
     const automation = await this.automationRepository.findOne({
       where: { id: automationId },
-      select: ['id', 'published'],
+      select: ['id', 'published', 'isActive'],
     });
 
-    if (!automation?.published) {
+    if (!automation?.published || !automation.isActive) {
       return null;
     }
 

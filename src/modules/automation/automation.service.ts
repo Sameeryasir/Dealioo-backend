@@ -46,11 +46,13 @@ import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
+import { AutomationRecipientsService } from './automation-recipients.service';
 import {
-  AutomationRecipientsService,
-  UNPAID_RECIPIENT_PAGE_SIZE,
-  UNPAID_SEND_CHUNK_SIZE,
-} from './automation-recipients.service';
+  AUTOMATION_RECIPIENT_PAGE_SIZE,
+  AUTOMATION_SEND_CHUNK_SIZE,
+  forEachRecipientPageChunks,
+  predictSendChunkCount,
+} from './automation-recipient-batch.util';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import {
@@ -201,22 +203,31 @@ export class AutomationService {
     }
 
     const saved = await this.automationRepository.save(automation);
-    await this.cronScheduler.syncAutomationCron(saved.id);
 
     if (wasActive && !saved.isActive) {
       await this.pauseAutomationExecutions(saved.id);
     }
 
-    if (
-      !wasActive &&
-      saved.isActive &&
+    const becomingActive = !wasActive && saved.isActive;
+    const cronPaymentReminder =
+      becomingActive &&
       saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
-      !(await this.isCronDrivenAutomation(saved.id))
-    ) {
-      await this.startSignupPaymentReminderForEligibleCustomers(saved);
+      (await this.isCronDrivenAutomation(saved.id));
+
+    if (cronPaymentReminder) {
+      await this.closeOpenPaymentReminderRuns(saved.id);
     }
 
-    if (!wasActive && saved.isActive) {
+    await this.cronScheduler.syncAutomationCron(saved.id);
+
+    if (cronPaymentReminder) {
+      await this.runCronTick(saved.id);
+    } else if (becomingActive) {
+      if (
+        saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
+      ) {
+        await this.startSignupPaymentReminderForEligibleCustomers(saved);
+      }
       await this.resumePausedExecutionsForAutomation(saved.id);
     }
 
@@ -279,6 +290,38 @@ export class AutomationService {
     await this.automationRepository.remove(automation);
   }
 
+  async deleteAutomationsForCampaign(
+    campaignId: number,
+    funnelId?: number | null,
+  ): Promise<number> {
+    const where =
+      funnelId != null && funnelId > 0
+        ? [{ campaignId }, { funnelId }]
+        : [{ campaignId }];
+
+    const automations = await this.automationRepository.find({ where });
+    if (automations.length === 0) {
+      return 0;
+    }
+
+    for (const automation of automations) {
+      const executionIds =
+        await this.executionService.findExecutionIdsByAutomationId(
+          automation.id,
+        );
+      await this.queueService.purgeAutomationJobs(
+        automation.id,
+        executionIds,
+      );
+      await this.automationRepository.remove(automation);
+      this.logger.log(
+        `Deleted automation ${automation.id} "${automation.name}" with campaign ${campaignId} (purged ${executionIds.length} execution job(s))`,
+      );
+    }
+
+    return automations.length;
+  }
+
   async publishAutomation(id: number, user: User): Promise<Automation> {
     requireAdminRole(user, 'You do not have permission to publish automations.');
     const automation = await this.findAutomationById(id);
@@ -295,18 +338,32 @@ export class AutomationService {
     await this.assertPaymentReminderScheduleForAutomation(automation);
     const wasActive = automation.isActive;
     automation.isActive = true;
+    if (!automation.published) {
+      automation.published = true;
+    }
     const saved = await this.automationRepository.save(automation);
-    await this.cronScheduler.syncAutomationCron(saved.id);
 
-    if (
-      !wasActive &&
+    const becomingActive = !wasActive && saved.isActive;
+    const cronPaymentReminder =
       saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
-      !(await this.isCronDrivenAutomation(saved.id))
-    ) {
-      await this.startSignupPaymentReminderForEligibleCustomers(saved);
+      (await this.isCronDrivenAutomation(saved.id));
+
+    if (cronPaymentReminder) {
+      await this.closeOpenPaymentReminderRuns(saved.id);
     }
 
-    await this.resumePausedExecutionsForAutomation(saved.id);
+    await this.cronScheduler.syncAutomationCron(saved.id);
+
+    if (cronPaymentReminder) {
+      await this.runCronTick(saved.id);
+    } else if (becomingActive) {
+      if (
+        saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
+      ) {
+        await this.startSignupPaymentReminderForEligibleCustomers(saved);
+      }
+      await this.resumePausedExecutionsForAutomation(saved.id);
+    }
 
     if (saved.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       this.logPrepaidOfferActivated(saved, 'activated');
@@ -354,6 +411,37 @@ export class AutomationService {
     for (const execution of executions) {
       await this.resumePausedExecution(execution);
     }
+  }
+
+  private async closeOpenPaymentReminderRuns(
+    automationId: number,
+  ): Promise<void> {
+    const openExecutionIds =
+      await this.executionService.findOpenExecutionIdsForAutomation(
+        automationId,
+      );
+
+    if (openExecutionIds.length === 0) {
+      return;
+    }
+
+    await this.queueService.purgeExecutionJobs(openExecutionIds);
+
+    for (const executionId of openExecutionIds) {
+      const execution = await this.executionService.findById(executionId);
+      await this.logService.createLog({
+        executionId,
+        nodeId: execution.currentNodeId,
+        customerId: execution.customerId,
+        message:
+          'Previous run closed after resume — rechecking unpaid guests',
+      });
+      await this.executionService.markCompleted(executionId);
+    }
+
+    this.logger.log(
+      `Closed ${openExecutionIds.length} open payment-reminder run(s) for automation ${automationId} before instant cron`,
+    );
   }
 
   private async resumePausedExecution(
@@ -917,6 +1005,18 @@ export class AutomationService {
       throw new BadRequestException('Automation has no funnel linked');
     }
 
+    if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      const result = await this.enqueuePrepaidOfferBatch(automation, {
+        skipIfNoRecipients: false,
+      });
+      if (!result) {
+        throw new BadRequestException(
+          'No paid customers found for this funnel',
+        );
+      }
+      return result;
+    }
+
     const alreadyRunning =
       await this.executionService.hasActiveExecutionForAutomation(
         dto.automationId,
@@ -960,6 +1060,30 @@ export class AutomationService {
       this.logger.warn(
         `Cron tick skipped for automation ${automationId}: no funnel linked`,
       );
+      return;
+    }
+
+    if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      try {
+        const result = await this.enqueuePrepaidOfferBatch(automation, {
+          skipIfNoRecipients: true,
+        });
+        if (!result) {
+          this.logger.log(
+            `Cron tick for prepaid automation ${automationId}: no eligible paid recipients`,
+          );
+        } else {
+          this.logger.log(
+            `Cron tick started prepaid-offer batch for automation ${automationId} (execution=${result.status.executionId}, paid≈${result.status.totalRecipients ?? '?'})`,
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Prepaid batch enqueue failed';
+        this.logger.warn(
+          `Cron tick failed for prepaid automation ${automationId}: ${message}`,
+        );
+      }
       return;
     }
 
@@ -1066,7 +1190,7 @@ export class AutomationService {
     const firstPage =
       await this.recipientsService.getUnpaidCustomersForFunnelPage(
         automation.funnelId!,
-        { afterCustomerId: 0, limit: UNPAID_RECIPIENT_PAGE_SIZE },
+        { afterCustomerId: 0, limit: AUTOMATION_RECIPIENT_PAGE_SIZE },
       );
     const firstCustomerId = firstPage[0]?.customerId;
     if (firstCustomerId == null) {
@@ -1096,19 +1220,19 @@ export class AutomationService {
       },
     );
 
-    const predictedTotalChunks = Math.max(
-      1,
-      Math.ceil(unpaidCount / UNPAID_SEND_CHUNK_SIZE),
+    const predictedTotalChunks = predictSendChunkCount(
+      unpaidCount,
+      AUTOMATION_SEND_CHUNK_SIZE,
     );
 
     this.logger.log(
-      `Payment reminder enqueue start automation=${automation.id} execution=${execution.id} funnel=${automation.funnelId} unpaid=${unpaidCount} pageSize=${UNPAID_RECIPIENT_PAGE_SIZE} chunkSize=${UNPAID_SEND_CHUNK_SIZE} predictedChunks=${predictedTotalChunks} cron=${options.triggeredByCron}`,
+      `Payment reminder enqueue start automation=${automation.id} execution=${execution.id} funnel=${automation.funnelId} unpaid=${unpaidCount} pageSize=${AUTOMATION_RECIPIENT_PAGE_SIZE} chunkSize=${AUTOMATION_SEND_CHUNK_SIZE} predictedChunks=${predictedTotalChunks} cron=${options.triggeredByCron}`,
     );
     await this.logService.createLog({
       executionId: execution.id,
       nodeId: initialNodeId,
       customerId: firstCustomerId,
-      message: `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${UNPAID_RECIPIENT_PAGE_SIZE} and send chunks of ${UNPAID_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
+      message: `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${AUTOMATION_RECIPIENT_PAGE_SIZE} and send chunks of ${AUTOMATION_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
     });
 
     const baseBatch: Omit<
@@ -1199,80 +1323,60 @@ export class AutomationService {
       );
     }
 
-    let afterCustomerId = 0;
-    let chunkIndex = 0;
     let firstQueueJobId: string | null = null;
-    let page = options.seedPage;
-    let pageNumber = 0;
+    const pageChunkCounts = new Map<number, number>();
 
-    while (true) {
-      if (!page) {
-        page = await this.recipientsService.getUnpaidCustomersForFunnelPage(
-          options.funnelId,
-          {
-            afterCustomerId,
-            limit: UNPAID_RECIPIENT_PAGE_SIZE,
-          },
-        );
-      }
-
-      if (page.length === 0) {
-        break;
-      }
-
-      pageNumber += 1;
-      const pageStartChunk = chunkIndex;
-
-      for (let i = 0; i < page.length; i += UNPAID_SEND_CHUNK_SIZE) {
-        const slice = page.slice(i, i + UNPAID_SEND_CHUNK_SIZE);
-        const customerIds = slice
+    const { totalChunks } = await forEachRecipientPageChunks({
+      seedPage: options.seedPage,
+      pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
+      chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
+      fetchPage: (afterCustomerId, limit) =>
+        this.recipientsService.getUnpaidCustomersForFunnelPage(options.funnelId, {
+          afterCustomerId,
+          limit,
+        }),
+      onChunk: async (chunk, meta) => {
+        const customerIds = chunk
           .map((recipient) => recipient.customerId)
           .filter((id): id is number => id != null && id > 0);
-
-        if (customerIds.length === 0) {
-          continue;
-        }
 
         const queueJobId = await this.queueService.addUnpaidReminderBatch(
           {
             ...options.baseBatch,
             customerIds,
             recipients: [],
-            chunkIndex,
+            chunkIndex: meta.chunkIndex,
             totalChunks:
-              options.predictedTotalChunks ?? Math.max(chunkIndex + 1, 1),
+              options.predictedTotalChunks ?? Math.max(meta.chunkIndex + 1, 1),
           },
           options.delayMs,
         );
 
         this.logger.log(
-          `Payment reminder queued ${phase} chunk ${chunkIndex + 1} execution=${options.baseBatch.executionId} guests=${customerIds.length} jobId=${queueJobId}`,
+          `Payment reminder queued ${phase} chunk ${meta.chunkIndex + 1} execution=${options.baseBatch.executionId} guests=${customerIds.length} jobId=${queueJobId}`,
         );
 
         if (firstQueueJobId == null) {
           firstQueueJobId = queueJobId;
         }
-        chunkIndex += 1;
-      }
+        pageChunkCounts.set(
+          meta.pageNumber,
+          (pageChunkCounts.get(meta.pageNumber) ?? 0) + 1,
+        );
+      },
+    });
 
-      const chunksFromPage = chunkIndex - pageStartChunk;
+    for (const [pageNumber, chunksQueued] of pageChunkCounts) {
       this.logger.log(
-        `Payment reminder page ${pageNumber} execution=${options.baseBatch.executionId} phase=${phase} guests=${page.length} chunksQueued=${chunksFromPage}`,
+        `Payment reminder page ${pageNumber} execution=${options.baseBatch.executionId} phase=${phase} chunksQueued=${chunksQueued}`,
       );
-
-      afterCustomerId = page[page.length - 1]!.customerId!;
-      const pageWasFull = page.length >= UNPAID_RECIPIENT_PAGE_SIZE;
-      page = undefined;
-      if (!pageWasFull) {
-        break;
-      }
     }
 
-    if (chunkIndex > 0) {
+    if (totalChunks > 0) {
       await this.queueService.setUnpaidReminderChunkTotal(
         options.baseBatch.executionId,
         phase,
-        chunkIndex,
+        totalChunks,
       );
 
       const progress = await this.queueService.getUnpaidReminderChunkProgress(
@@ -1280,7 +1384,7 @@ export class AutomationService {
         phase,
       );
       if (
-        progress.done >= chunkIndex &&
+        progress.done >= totalChunks &&
         (await this.queueService.tryClaimUnpaidPhaseFinalize(
           options.baseBatch.executionId,
           phase,
@@ -1294,8 +1398,8 @@ export class AutomationService {
             ...options.baseBatch,
             customerIds: [],
             recipients: [],
-            chunkIndex: chunkIndex - 1,
-            totalChunks: chunkIndex,
+            chunkIndex: totalChunks - 1,
+            totalChunks,
           },
           phase,
           [],
@@ -1303,7 +1407,146 @@ export class AutomationService {
       }
     }
 
-    return { totalChunks: chunkIndex, firstQueueJobId };
+    return { totalChunks, firstQueueJobId };
+  }
+
+  private async enqueuePrepaidOfferBatch(
+    automation: Automation,
+    options: { skipIfNoRecipients: boolean },
+  ): Promise<StartAutomationExecutionResponseDto | null> {
+    if (automation.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+      throw new BadRequestException(
+        'Only Prepaid Offer automations can use the paid recipient batch',
+      );
+    }
+    if (!automation.funnelId) {
+      throw new BadRequestException('Automation has no funnel linked');
+    }
+
+    const paidCount = await this.recipientsService.countPaidCustomersForFunnel(
+      automation.funnelId,
+    );
+    if (paidCount === 0) {
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        'No paid customers found for this funnel',
+      );
+    }
+
+    const startNodeId = await this.executionService.resolveStartNodeId(
+      automation.id,
+    );
+    if (!startNodeId) {
+      throw new BadRequestException(
+        'Prepaid Offer flow has no start node configured',
+      );
+    }
+
+    const startNode = await this.executionService.findNodeForAutomation(
+      automation.id,
+      startNodeId,
+    );
+
+    const predictedTotalChunks = predictSendChunkCount(
+      paidCount,
+      AUTOMATION_SEND_CHUNK_SIZE,
+    );
+
+    this.logger.log(
+      `[Prepaid Offer] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} paid=${paidCount} pageSize=${AUTOMATION_RECIPIENT_PAGE_SIZE} chunkSize=${AUTOMATION_SEND_CHUNK_SIZE} predictedChunks=${predictedTotalChunks}`,
+    );
+
+    let started = 0;
+    let firstExecutionId: number | null = null;
+    let skipped = 0;
+
+    const { totalChunks } = await forEachRecipientPageChunks({
+      pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
+      chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
+      fetchPage: (afterCustomerId, limit) =>
+        this.recipientsService.getPaidCustomersForFunnelPage(
+          automation.funnelId!,
+          { afterCustomerId, limit },
+        ),
+      onChunk: async (chunk, meta) => {
+        this.logger.log(
+          `[Prepaid Offer] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,
+        );
+
+        for (const recipient of chunk) {
+          const customerId = recipient.customerId;
+          if (customerId == null || customerId <= 0) {
+            continue;
+          }
+
+          const hasActive = await this.executionService.hasActiveExecution(
+            automation.id,
+            customerId,
+          );
+          if (hasActive) {
+            skipped += 1;
+            continue;
+          }
+          const hasCompleted =
+            await this.executionService.hasCompletedExecutionForCustomer(
+              automation.id,
+              customerId,
+            );
+          if (hasCompleted) {
+            skipped += 1;
+            continue;
+          }
+
+          const execution = await this.executionService.createExecution(
+            {
+              automationId: automation.id,
+              currentNodeId: startNodeId,
+              purpose: automation.purpose,
+            },
+            customerId,
+          );
+
+          await this.queueService.addProcessExecution({
+            executionId: execution.id,
+            nodeId: startNodeId,
+            nodeType: startNode.type,
+          });
+
+          if (firstExecutionId == null) {
+            firstExecutionId = execution.id;
+          }
+          started += 1;
+        }
+      },
+    });
+
+    this.logger.log(
+      `[Prepaid Offer] Batch enqueue done automation=${automation.id} chunks=${totalChunks} started=${started} skipped=${skipped}`,
+    );
+
+    if (started === 0 || firstExecutionId == null) {
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        'No eligible paid customers to start (all already have a prepaid journey)',
+      );
+    }
+
+    await this.logService.createLog({
+      executionId: firstExecutionId,
+      nodeId: startNodeId,
+      customerId: (
+        await this.executionService.findById(firstExecutionId)
+      ).customerId,
+      message: `Prepaid Offer batch: started ${started} journey(s) from ${paidCount} paid guest(s) using pages of ${AUTOMATION_RECIPIENT_PAGE_SIZE} and chunks of ${AUTOMATION_SEND_CHUNK_SIZE} (${totalChunks} chunk(s), skipped ${skipped})`,
+    });
+
+    return {
+      status: await this.getExecutionStatus(firstExecutionId),
+    };
   }
 
   async runUnpaidReminderBatch(batch: UnpaidReminderBatchJob): Promise<void> {
@@ -1350,6 +1593,16 @@ export class AutomationService {
       });
       return;
     }
+
+    const automationName =
+      execution.automation?.name?.trim() ||
+      `Automation #${batch.automationId}`;
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || null;
+    const funnelId =
+      execution.automation?.funnelId ?? batch.funnelId ?? null;
+    const funnelName =
+      campaignName || (funnelId != null ? `Funnel #${funnelId}` : null);
 
     if (batchPhase === 'pass') {
       batch.recipients =
@@ -1457,7 +1710,7 @@ export class AutomationService {
           executionId: batch.executionId,
           nodeId: batch.conditionNodeId,
           customerId: firstCustomerId,
-          message: `Step 1 condition: "${conditionLabel}" — sending unpaid reminders in chunks of ${UNPAID_SEND_CHUNK_SIZE}`,
+          message: `Step 1 condition: "${conditionLabel}" — sending unpaid reminders in chunks of ${AUTOMATION_SEND_CHUNK_SIZE}`,
         });
       }
     }
@@ -1495,6 +1748,10 @@ export class AutomationService {
             batchPhase,
             purpose: batch.purpose,
             channel: 'sms',
+            automationName,
+            campaignName,
+            funnelId,
+            funnelName,
           },
         });
         sent.push({
@@ -1627,6 +1884,10 @@ export class AutomationService {
             purpose: batch.purpose,
             automationExecutionId: batch.executionId,
             nodeId: batch.emailNodeId,
+            automationName,
+            campaignName,
+            funnelId,
+            funnelName,
           },
         });
         sent.push({
@@ -1816,9 +2077,9 @@ export class AutomationService {
       funnelId: batch.funnelId,
       baseBatch: passBase,
       delayMs: batch.waitDelayMs ?? 0,
-      predictedTotalChunks: Math.max(
-        1,
-        Math.ceil(unpaidCount / UNPAID_SEND_CHUNK_SIZE),
+      predictedTotalChunks: predictSendChunkCount(
+        unpaidCount,
+        AUTOMATION_SEND_CHUNK_SIZE,
       ),
     });
 
@@ -1991,7 +2252,10 @@ export class AutomationService {
 
   async handleEvent(
     event: FunnelEvent,
-    options?: { skipCancelPendingOnPayment?: boolean },
+    options?: {
+      skipCancelPendingOnPayment?: boolean;
+      onlyIfNoExecutionForPayment?: boolean;
+    },
   ): Promise<void> {
     if (!event.customerId) {
       return;
@@ -2047,7 +2311,7 @@ export class AutomationService {
         continue;
       }
 
-      await this.tryStartAutomationForEvent(automation, event, funnel);
+      await this.tryStartAutomationForEvent(automation, event, funnel, options);
     }
   }
 
@@ -2122,6 +2386,7 @@ export class AutomationService {
     automation: Automation,
     event: FunnelEvent,
     funnel: Funnel,
+    options?: { onlyIfNoExecutionForPayment?: boolean },
   ): Promise<void> {
     if (!this.matchesAutomationScope(automation, event, funnel)) {
       if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
@@ -2153,10 +2418,42 @@ export class AutomationService {
       }
     }
 
+    const funnelPaymentId =
+      event.funnelPaymentId != null && event.funnelPaymentId > 0
+        ? event.funnelPaymentId
+        : null;
+
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      if (funnelPaymentId != null) {
+        const alreadyStartedForPayment =
+          await this.executionService.hasExecutionForFunnelPayment(
+            automation.id,
+            event.customerId,
+            funnelPaymentId,
+          );
+        if (alreadyStartedForPayment) {
+          this.logger.log(
+            `[Prepaid Offer] Skipped automation ${automation.id} — payment ${funnelPaymentId} already has a journey for customer ${event.customerId}`,
+          );
+          return;
+        }
+      } else if (options?.onlyIfNoExecutionForPayment) {
+        const hasActive = await this.executionService.hasActiveExecution(
+          automation.id,
+          event.customerId,
+        );
+        if (hasActive) {
+          this.logger.log(
+            `[Prepaid Offer] Skipped automation ${automation.id} — active journey already exists for customer ${event.customerId}`,
+          );
+          return;
+        }
+      }
+
       await this.supersedeActivePrepaidExecutionsForCustomer(
         automation.id,
-        event.customerId!,
+        event.customerId,
+        funnelPaymentId,
       );
     } else {
       const hasActive = await this.executionService.hasActiveExecution(
@@ -2207,6 +2504,9 @@ export class AutomationService {
         purpose: automation.purpose,
       },
       event.customerId,
+      funnelPaymentId != null
+        ? { executionContext: { funnelPaymentId } }
+        : undefined,
     );
 
     const startNode = await this.executionService.findNodeForAutomation(
@@ -2222,7 +2522,7 @@ export class AutomationService {
 
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       this.logger.log(
-        `[Prepaid Offer] Started execution ${execution.id} for customer ${event.customerId} — automation ${automation.id} "${automation.name}" on funnel ${event.funnelId}`,
+        `[Prepaid Offer] Started execution ${execution.id} for customer ${event.customerId} — automation ${automation.id} "${automation.name}" on funnel ${event.funnelId} payment=${funnelPaymentId ?? 'none'}`,
       );
     }
   }
@@ -2231,6 +2531,7 @@ export class AutomationService {
   private async supersedeActivePrepaidExecutionsForCustomer(
     automationId: number,
     customerId: number,
+    incomingFunnelPaymentId: number | null,
   ): Promise<void> {
     const activeExecutions =
       await this.executionService.findActiveExecutionsForCustomer(customerId);
@@ -2240,6 +2541,17 @@ export class AutomationService {
         continue;
       }
       if (execution.automation?.purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+        continue;
+      }
+
+      const existingPaymentId = this.readFunnelPaymentIdFromContext(
+        execution.executionContext,
+      );
+      if (
+        incomingFunnelPaymentId != null &&
+        existingPaymentId != null &&
+        existingPaymentId === incomingFunnelPaymentId
+      ) {
         continue;
       }
 
@@ -2255,6 +2567,14 @@ export class AutomationService {
         `[Prepaid Offer] Superseded active execution ${execution.id} for customer ${customerId} — starting new payment run`,
       );
     }
+  }
+
+  private readFunnelPaymentIdFromContext(
+    context: Record<string, unknown> | null | undefined,
+  ): number | null {
+    const raw = context?.funnelPaymentId;
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   private isPaidFunnelEvent(event: FunnelEvent): boolean {
@@ -2403,40 +2723,31 @@ export class AutomationService {
       return;
     }
 
-    let afterCustomerId = 0;
-    while (true) {
-      const page =
-        await this.recipientsService.getUnpaidCustomersForFunnelPage(
-          automation.funnelId,
-          {
-            afterCustomerId,
-            limit: UNPAID_RECIPIENT_PAGE_SIZE,
-          },
-        );
-      if (page.length === 0) {
-        break;
-      }
-
-      for (const recipient of page) {
-        if (recipient.customerId == null) {
-          continue;
+    await forEachRecipientPageChunks({
+      pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
+      chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
+      fetchPage: (afterCustomerId, limit) =>
+        this.recipientsService.getUnpaidCustomersForFunnelPage(
+          automation.funnelId!,
+          { afterCustomerId, limit },
+        ),
+      onChunk: async (chunk) => {
+        for (const recipient of chunk) {
+          if (recipient.customerId == null) {
+            continue;
+          }
+          await this.tryStartAutomationForEvent(
+            automation,
+            {
+              funnelId: automation.funnelId,
+              customerId: recipient.customerId,
+              eventType: FunnelEventType.SIGNUP,
+            } as FunnelEvent,
+            funnel,
+          );
         }
-        await this.tryStartAutomationForEvent(
-          automation,
-          {
-            funnelId: automation.funnelId,
-            customerId: recipient.customerId,
-            eventType: FunnelEventType.SIGNUP,
-          } as FunnelEvent,
-          funnel,
-        );
-      }
-
-      afterCustomerId = page[page.length - 1]!.customerId!;
-      if (page.length < UNPAID_RECIPIENT_PAGE_SIZE) {
-        break;
-      }
-    }
+      },
+    });
   }
 
   private matchesAutomationScope(

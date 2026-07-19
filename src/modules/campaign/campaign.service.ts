@@ -24,6 +24,7 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { AutomationService } from '../automation/automation.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -46,6 +47,7 @@ export class CampaignService {
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly automationService: AutomationService,
   ) {}
 
   async uploadCampaignImage(
@@ -300,6 +302,17 @@ export class CampaignService {
       'You do not have permission to delete campaigns for this business.',
     );
 
+    const linkedFunnel = await this.funnelRepository.findOne({
+      where: { campaignId },
+      select: ['id'],
+    });
+    const linkedFunnelId = linkedFunnel?.id ?? null;
+
+    await this.automationService.deleteAutomationsForCampaign(
+      campaignId,
+      linkedFunnelId,
+    );
+
     await this.dataSource.transaction(async (manager) => {
       const funnel = await manager.findOne(Funnel, {
         where: { campaignId },
@@ -417,20 +430,6 @@ export class CampaignService {
           campaignId,
         ]);
       }
-
-      await manager.query(
-        `
-          UPDATE automation
-          SET campaign_id = NULL,
-              funnel_id = CASE
-                WHEN funnel_id = $2 THEN NULL
-                ELSE funnel_id
-              END
-          WHERE campaign_id = $1
-             OR ($2::int IS NOT NULL AND funnel_id = $2)
-        `,
-        [campaignId, funnelId],
-      );
 
       if (funnelId != null) {
         await manager.query(`DELETE FROM funnels WHERE id = $1`, [funnelId]);

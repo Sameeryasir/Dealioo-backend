@@ -302,6 +302,7 @@ export class ChatService {
       where: { conversationId: conversation.id },
       relations: [
         'automation',
+        'automation.campaign',
         'node',
         'sentByBusiness',
         'sentByCustomer',
@@ -342,6 +343,7 @@ export class ChatService {
       },
       relations: [
         'automation',
+        'automation.campaign',
         'node',
         'sentByBusiness',
         'sentByCustomer',
@@ -416,6 +418,7 @@ export class ChatService {
       .createQueryBuilder('message')
       .innerJoinAndSelect('message.conversation', 'conversation')
       .leftJoinAndSelect('message.automation', 'automation')
+      .leftJoinAndSelect('automation.campaign', 'campaign')
       .leftJoinAndSelect('message.node', 'node')
       .leftJoinAndSelect('message.sentByBusiness', 'sentByBusiness')
       .leftJoinAndSelect('message.sentByCustomer', 'sentByCustomer')
@@ -552,6 +555,10 @@ export class ChatService {
       stepType,
       sentAt: log.createdAt,
       error: log.error ?? null,
+      automationName: null,
+      campaignName: null,
+      funnelName: null,
+      funnelId: null,
     };
   }
 
@@ -618,6 +625,7 @@ export class ChatService {
       typeof metadataError === 'string' && metadataError.trim()
         ? metadataError.trim()
         : null;
+    const source = this.resolveAutomationSourceLabels(message);
 
     return {
       id: message.id,
@@ -632,6 +640,67 @@ export class ChatService {
       stepType: message.node?.type ?? null,
       sentAt: message.sentAt,
       error,
+      automationName: source.automationName,
+      campaignName: source.campaignName,
+      funnelName: source.funnelName,
+      funnelId: source.funnelId,
+    };
+  }
+
+  private resolveAutomationSourceLabels(message: ConversationMessage): {
+    automationName: string | null;
+    campaignName: string | null;
+    funnelName: string | null;
+    funnelId: number | null;
+  } {
+    const metadata = message.metadata ?? {};
+    const metaAutomationName =
+      typeof metadata.automationName === 'string'
+        ? metadata.automationName.trim()
+        : '';
+    const metaCampaignName =
+      typeof metadata.campaignName === 'string'
+        ? metadata.campaignName.trim()
+        : '';
+    const metaFunnelName =
+      typeof metadata.funnelName === 'string'
+        ? metadata.funnelName.trim()
+        : '';
+    const metaFunnelIdRaw = metadata.funnelId;
+    const metaFunnelId =
+      typeof metaFunnelIdRaw === 'number'
+        ? metaFunnelIdRaw
+        : Number(metaFunnelIdRaw);
+
+    const automationName =
+      metaAutomationName ||
+      message.automation?.name?.trim() ||
+      (message.automationId != null
+        ? `Automation #${message.automationId}`
+        : null);
+
+    const campaignName =
+      metaCampaignName ||
+      message.automation?.campaign?.campaignName?.trim() ||
+      null;
+
+    const funnelId =
+      (Number.isFinite(metaFunnelId) && metaFunnelId > 0
+        ? metaFunnelId
+        : null) ??
+      message.automation?.funnelId ??
+      null;
+
+    const funnelName =
+      metaFunnelName ||
+      campaignName ||
+      (funnelId != null ? `Funnel #${funnelId}` : null);
+
+    return {
+      automationName: automationName || null,
+      campaignName: campaignName || null,
+      funnelName: funnelName || null,
+      funnelId,
     };
   }
 

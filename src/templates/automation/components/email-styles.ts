@@ -1,5 +1,13 @@
+import {
+  DEALIOO_EMAIL_BLUE,
+  DEALIOO_EMAIL_BLUE_DARK,
+  DEALIOO_EMAIL_BLUE_SOFT,
+  DEALIOO_EMAIL_INK,
+  DEALIOO_EMAIL_MUTED,
+} from '../../dealioo-email-brand';
+
 export const automationEmailMain = {
-  backgroundColor: '#ffffff',
+  backgroundColor: DEALIOO_EMAIL_BLUE_SOFT,
   margin: 0,
   padding: '48px 24px 64px',
   width: '100%',
@@ -12,22 +20,28 @@ export const automationEmailContainer = {
   width: '100%',
   maxWidth: '560px',
   boxSizing: 'border-box' as const,
+  backgroundColor: '#ffffff',
+  border: '1px solid #e8edf5',
+  borderRadius: '16px',
+  padding: '32px 28px 36px',
 };
 
 export const automationBrandRow = {
-  marginBottom: '32px',
+  backgroundColor: DEALIOO_EMAIL_BLUE_DARK,
+  borderRadius: '12px',
+  marginBottom: '28px',
+  padding: '16px 20px',
 };
 
-export const automationBrandName = {
-  color: '#000000',
-  fontSize: '15px',
-  fontWeight: 700,
-  letterSpacing: '-0.01em',
-  margin: 0,
+export const automationBrandLogo = {
+  display: 'block',
+  border: '0',
+  outline: 'none',
+  textDecoration: 'none',
 };
 
 export const automationTitle = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '26px',
   fontWeight: 700,
   lineHeight: '34px',
@@ -36,14 +50,14 @@ export const automationTitle = {
 };
 
 export const automationGreeting = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '16px',
   lineHeight: '24px',
   margin: '0 0 16px',
 };
 
 export const automationBody = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_MUTED,
   fontSize: '16px',
   lineHeight: '26px',
   margin: '0 0 20px',
@@ -55,7 +69,7 @@ export const automationCtaWrap = {
 
 export const automationCtaButton = {
   display: 'inline-block',
-  backgroundColor: '#000000',
+  backgroundColor: DEALIOO_EMAIL_BLUE,
   color: '#ffffff',
   fontSize: '15px',
   fontWeight: 600,
@@ -65,7 +79,7 @@ export const automationCtaButton = {
 };
 
 export const automationSignoffBold = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_INK,
   fontSize: '15px',
   fontWeight: 700,
   lineHeight: '24px',
@@ -73,7 +87,7 @@ export const automationSignoffBold = {
 };
 
 export const automationSignoffTeam = {
-  color: '#000000',
+  color: DEALIOO_EMAIL_BLUE,
   fontSize: '15px',
   lineHeight: '24px',
   margin: 0,
