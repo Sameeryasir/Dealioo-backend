@@ -13,7 +13,6 @@ import {
 import * as React from 'react';
 import {
   DEALIOO_EMAIL_BLUE,
-  DEALIOO_EMAIL_BLUE_DARK,
   DEALIOO_EMAIL_BLUE_SOFT,
   DEALIOO_EMAIL_INK,
   DEALIOO_EMAIL_LOGO_HEIGHT,
@@ -104,10 +103,8 @@ const containerStyle: React.CSSProperties = {
 };
 
 const brandRowStyle: React.CSSProperties = {
-  backgroundColor: DEALIOO_EMAIL_BLUE_DARK,
-  borderRadius: '12px',
   marginBottom: '16px',
-  padding: '16px 20px',
+  padding: '0',
 };
 
 const brandLogoStyle: React.CSSProperties = {

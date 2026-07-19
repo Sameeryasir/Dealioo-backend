@@ -1,6 +1,5 @@
 import {
   DEALIOO_EMAIL_BLUE,
-  DEALIOO_EMAIL_BLUE_DARK,
   DEALIOO_EMAIL_BLUE_SOFT,
   DEALIOO_EMAIL_INK,
   DEALIOO_EMAIL_MUTED,
@@ -27,10 +26,8 @@ export const automationEmailContainer = {
 };
 
 export const automationBrandRow = {
-  backgroundColor: DEALIOO_EMAIL_BLUE_DARK,
-  borderRadius: '12px',
   marginBottom: '28px',
-  padding: '16px 20px',
+  padding: '0',
 };
 
 export const automationBrandLogo = {
