@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Business } from './business.entity';
 import { Funnel } from './funnel.entity';
+import { User } from './user.entity';
 
 export enum CampaignPublicationStatus {
   PUBLISHED = 'published',
@@ -29,6 +30,13 @@ export class Campaign {
   })
   @JoinColumn({ name: 'restaurant_id' })
   business!: Business;
+
+  @Column({ name: 'created_by', type: 'int', nullable: true })
+  createdByUserId!: number | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'created_by' })
+  createdByUser!: User | null;
 
   @OneToOne(() => Funnel, (funnel) => funnel.campaign, { nullable: true })
   funnel!: Funnel | null;

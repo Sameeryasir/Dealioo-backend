@@ -16,6 +16,7 @@ import {
 } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
+import { User } from '../../db/entities/user.entity';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -25,6 +26,7 @@ import { SpacesService } from '../spaces/spaces.service';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { AutomationService } from '../automation/automation.service';
+import { ActivityService } from '../activity/activity.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -43,12 +45,31 @@ export class CampaignService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly automationService: AutomationService,
+    private readonly activityService: ActivityService,
   ) {}
+
+  private async resolveActor(user: AuthUser): Promise<{
+    actorUserId: number;
+    actorName: string;
+  }> {
+    const row = await this.userRepository.findOne({
+      where: { id: user.id },
+      select: ['id', 'name', 'email'],
+    });
+    const actorName =
+      row?.name?.trim() ||
+      row?.email?.trim() ||
+      user.email?.trim() ||
+      `User #${user.id}`;
+    return { actorUserId: user.id, actorName };
+  }
 
   async uploadCampaignImage(
     file?: Express.Multer.File,
@@ -116,6 +137,7 @@ export class CampaignService {
     const campaign = this.campaignRepository.create({
       business,
       businessId: business.id,
+      createdByUserId: user.id,
       campaignName,
       websiteUrl,
       imageUrl,
@@ -137,6 +159,16 @@ export class CampaignService {
     await this.stripeCatalogService.createCatalogForNewCampaign({
       campaign: savedCampaign,
       stripeAccountId: business.stripeAccountId,
+    });
+
+    const actor = await this.resolveActor(user);
+    await this.activityService.logCampaignCreated({
+      businessId: savedCampaign.businessId,
+      campaignId: savedCampaign.id,
+      campaignName: savedCampaign.campaignName,
+      offer: savedCampaign.offer,
+      actorUserId: actor.actorUserId,
+      actorName: actor.actorName,
     });
 
     return savedCampaign;
@@ -281,7 +313,19 @@ export class CampaignService {
       );
     }
 
-    return this.campaignRepository.save(campaign);
+    const saved = await this.campaignRepository.save(campaign);
+
+    const actor = await this.resolveActor(user);
+    await this.activityService.logCampaignUpdated({
+      businessId: saved.businessId,
+      campaignId: saved.id,
+      campaignName: saved.campaignName,
+      offer: saved.offer,
+      actorUserId: actor.actorUserId,
+      actorName: actor.actorName,
+    });
+
+    return saved;
   }
 
   async deleteCampaign(
@@ -301,6 +345,11 @@ export class CampaignService {
       'campaigns',
       'You do not have permission to delete campaigns for this business.',
     );
+
+    const businessId = campaign.businessId;
+    const campaignName = campaign.campaignName;
+    const offer = campaign.offer;
+    const actor = await this.resolveActor(user);
 
     const linkedFunnel = await this.funnelRepository.findOne({
       where: { campaignId },
@@ -460,6 +509,15 @@ export class CampaignService {
           [guestIds],
         );
       }
+    });
+
+    await this.activityService.logCampaignDeleted({
+      businessId,
+      campaignId,
+      campaignName,
+      offer,
+      actorUserId: actor.actorUserId,
+      actorName: actor.actorName,
     });
 
     return { deleted: true, campaignId };

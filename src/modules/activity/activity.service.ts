@@ -320,6 +320,98 @@ export class ActivityService {
     await this.logInTransaction(this.activityRepository.manager, payload);
   }
 
+  async logCampaignCreated(params: {
+    businessId: number;
+    campaignId: number;
+    campaignName: string;
+    offer?: string | null;
+    actorUserId?: number | null;
+    actorName?: string | null;
+    occurredAt?: Date;
+  }): Promise<void> {
+    const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
+    const actorName = params.actorName?.trim() || null;
+    await this.logInTransaction(this.activityRepository.manager, {
+      businessId: params.businessId,
+      customerId: null,
+      eventType: ActivityEventType.CAMPAIGN_CREATED,
+      description: actorName
+        ? `${actorName} created campaign "${name}"`
+        : `Created campaign "${name}"`,
+      idempotencyKey: `campaign_created:${params.campaignId}`,
+      occurredAt: params.occurredAt ?? new Date(),
+      metadata: {
+        campaignId: params.campaignId,
+        campaignName: name,
+        offer: params.offer?.trim() || null,
+        actorUserId: params.actorUserId ?? null,
+        actorName,
+      },
+    });
+  }
+
+  async logCampaignUpdated(params: {
+    businessId: number;
+    campaignId: number;
+    campaignName: string;
+    offer?: string | null;
+    actorUserId?: number | null;
+    actorName?: string | null;
+    occurredAt?: Date;
+  }): Promise<void> {
+    const occurredAt = params.occurredAt ?? new Date();
+    const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
+    const actorName = params.actorName?.trim() || null;
+    await this.logInTransaction(this.activityRepository.manager, {
+      businessId: params.businessId,
+      customerId: null,
+      eventType: ActivityEventType.CAMPAIGN_UPDATED,
+      description: actorName
+        ? `${actorName} updated campaign "${name}"`
+        : `Updated campaign "${name}"`,
+      idempotencyKey: `campaign_updated:${params.campaignId}:${occurredAt.toISOString()}`,
+      occurredAt,
+      metadata: {
+        campaignId: params.campaignId,
+        campaignName: name,
+        offer: params.offer?.trim() || null,
+        actorUserId: params.actorUserId ?? null,
+        actorName,
+      },
+    });
+  }
+
+  async logCampaignDeleted(params: {
+    businessId: number;
+    campaignId: number;
+    campaignName: string;
+    offer?: string | null;
+    actorUserId?: number | null;
+    actorName?: string | null;
+    occurredAt?: Date;
+  }): Promise<void> {
+    const occurredAt = params.occurredAt ?? new Date();
+    const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
+    const actorName = params.actorName?.trim() || null;
+    await this.logInTransaction(this.activityRepository.manager, {
+      businessId: params.businessId,
+      customerId: null,
+      eventType: ActivityEventType.CAMPAIGN_DELETED,
+      description: actorName
+        ? `${actorName} deleted campaign "${name}"`
+        : `Deleted campaign "${name}"`,
+      idempotencyKey: `campaign_deleted:${params.campaignId}:${occurredAt.toISOString()}`,
+      occurredAt,
+      metadata: {
+        campaignId: params.campaignId,
+        campaignName: name,
+        offer: params.offer?.trim() || null,
+        actorUserId: params.actorUserId ?? null,
+        actorName,
+      },
+    });
+  }
+
   async getBusinessEvents(
     businessId: number,
     options: {
@@ -391,14 +483,31 @@ export class ActivityService {
     ]);
 
     return {
-      data: rows.map((row) => ({
-        id: row.id,
-        eventType: row.eventType,
-        occurredAt: row.occurredAt.toISOString(),
-        customerName: row.customer?.name?.trim() || null,
-        customerEmail: row.customer?.email?.trim() || null,
-        description: row.description,
-      })),
+      data: rows.map((row) => {
+        const metadata =
+          row.metadata && typeof row.metadata === 'object'
+            ? (row.metadata as Record<string, unknown>)
+            : null;
+        const actorName =
+          typeof metadata?.actorName === 'string'
+            ? metadata.actorName.trim()
+            : '';
+        const isCampaignEvent =
+          row.eventType === ActivityEventType.CAMPAIGN_CREATED ||
+          row.eventType === ActivityEventType.CAMPAIGN_UPDATED ||
+          row.eventType === ActivityEventType.CAMPAIGN_DELETED;
+
+        return {
+          id: row.id,
+          eventType: row.eventType,
+          occurredAt: row.occurredAt.toISOString(),
+          customerName:
+            row.customer?.name?.trim() ||
+            (isCampaignEvent && actorName ? actorName : null),
+          customerEmail: row.customer?.email?.trim() || null,
+          description: row.description,
+        };
+      }),
       meta: {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         allEventsTotal,
