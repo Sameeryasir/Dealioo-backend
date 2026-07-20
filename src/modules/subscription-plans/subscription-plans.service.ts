@@ -62,12 +62,14 @@ export class SubscriptionPlansService {
         monthly: {
           price: 'Custom',
           period: '',
+          originalPrice: null,
           promo: null,
           subline: null,
         },
         annual: {
           price: 'Custom',
           period: '',
+          originalPrice: null,
           promo: null,
           subline: null,
         },

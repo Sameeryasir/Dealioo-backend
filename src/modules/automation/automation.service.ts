@@ -131,6 +131,7 @@ export class AutomationService {
     const { businessId, campaignId, funnelId } =
       await this.resolveScopeFromCampaign(dto.campaignId, dto.businessId);
 
+    this.assertCreatablePurpose(dto.purpose);
     this.validatePurposeAndTrigger(dto.purpose, dto.trigger);
 
     const automation = this.automationRepository.create({
@@ -172,6 +173,9 @@ export class AutomationService {
     }
     if (dto.purpose !== undefined) {
       automation.purpose = dto.purpose;
+    }
+    if (dto.purpose !== undefined) {
+      this.assertCreatablePurpose(dto.purpose);
     }
     if (dto.trigger !== undefined || dto.purpose !== undefined) {
       this.validatePurposeAndTrigger(automation.purpose, automation.trigger);
@@ -2650,6 +2654,19 @@ export class AutomationService {
       return AutomationTrigger.PAYMENT;
     }
     return null;
+  }
+
+  private assertCreatablePurpose(purpose: AutomationPurpose): void {
+    const blocked = new Set<AutomationPurpose>([
+      AutomationPurpose.MANUAL,
+      AutomationPurpose.FUNNEL_SIGNUP,
+      AutomationPurpose.FUNNEL_PAYMENT,
+    ]);
+    if (blocked.has(purpose)) {
+      throw new BadRequestException(
+        'This automation purpose is no longer available.',
+      );
+    }
   }
 
   private validatePurposeAndTrigger(

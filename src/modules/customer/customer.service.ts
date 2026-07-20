@@ -8,6 +8,7 @@ import {
 } from '../../common/pagination';
 import { AutomationExecution } from '../../db/entities/automation-execution.entity';
 import { AutomationLog } from '../../db/entities/automation-log.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
@@ -18,16 +19,165 @@ import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { AutomationQueueService } from '../automation/automation-queue.service';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
 
+export type BusinessCustomerListItem = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  joiningDate: string;
+  visitCount: number;
+};
+
 @Injectable()
 export class CustomerService {
   constructor(
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
+    @InjectRepository(BusinessCustomer)
+    private readonly businessCustomerRepository: Repository<BusinessCustomer>,
     @InjectRepository(AutomationExecution)
     private readonly automationExecutionRepository: Repository<AutomationExecution>,
     private readonly dataSource: DataSource,
     private readonly automationQueueService: AutomationQueueService,
   ) {}
+
+
+  async listForBusiness(
+    businessId: number,
+    page?: number,
+    limit?: number,
+  ): Promise<{ data: BusinessCustomerListItem[]; meta: PaginationMeta }> {
+    const pagination = normalizePagination(page, limit);
+
+    const total = await this.businessCustomerRepository.count({
+      where: { businessId },
+    });
+
+    if (total === 0) {
+      return {
+        data: [],
+        meta: buildPaginationMeta(0, pagination.page, pagination.limit),
+      };
+    }
+
+    const rows = await this.businessCustomerRepository
+      .createQueryBuilder('link')
+      .innerJoin('link.customer', 'customer')
+      .where('link.businessId = :businessId', { businessId })
+      .select('customer.id', 'id')
+      .addSelect('customer.name', 'name')
+      .addSelect('customer.email', 'email')
+      .addSelect('customer.phone', 'phone')
+      .addSelect('link.joinedAt', 'joiningDate')
+      .addSelect(
+        (subQuery) =>
+          subQuery
+            .select('COUNT(visit.id)')
+            .from(CustomerVisit, 'visit')
+            .where('visit.customerId = link.customerId')
+            .andWhere('visit.businessId = link.businessId'),
+        'visitCount',
+      )
+      .orderBy('link.joinedAt', 'DESC')
+      .offset(pagination.skip)
+      .limit(pagination.limit)
+      .getRawMany<{
+        id: string | number;
+        name: string;
+        email: string;
+        phone: string | null;
+        joiningDate: Date | string;
+        visitCount: string | number;
+      }>();
+
+    return {
+      data: rows.map((row) => ({
+        id: Number(row.id),
+        name: row.name?.trim() || 'Guest',
+        email: row.email,
+        phone: row.phone,
+        joiningDate:
+          row.joiningDate instanceof Date
+            ? row.joiningDate.toISOString()
+            : new Date(row.joiningDate).toISOString(),
+        visitCount: Number(row.visitCount) || 0,
+      })),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  async getJoiningTrendForBusiness(
+    businessId: number,
+    months = 6,
+  ): Promise<{ label: string; monthKey: string; joined: number }[]> {
+    const monthCount = Math.min(Math.max(months, 1), 24);
+    const start = new Date();
+    start.setUTCDate(1);
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCMonth(start.getUTCMonth() - (monthCount - 1));
+
+    const rows = await this.businessCustomerRepository
+      .createQueryBuilder('link')
+      .select(`TO_CHAR(DATE_TRUNC('month', link.joinedAt), 'YYYY-MM')`, 'monthKey')
+      .addSelect('COUNT(link.id)', 'joined')
+      .where('link.businessId = :businessId', { businessId })
+      .andWhere('link.joinedAt >= :start', { start })
+      .groupBy(`DATE_TRUNC('month', link.joinedAt)`)
+      .orderBy(`DATE_TRUNC('month', link.joinedAt)`, 'ASC')
+      .getRawMany<{ monthKey: string; joined: string }>();
+
+    const countByMonth = new Map(
+      rows.map((row) => [row.monthKey, Number(row.joined) || 0]),
+    );
+
+    const points: { label: string; monthKey: string; joined: number }[] = [];
+    for (let i = 0; i < monthCount; i += 1) {
+      const cursor = new Date(
+        Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1),
+      );
+      const monthKey = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`;
+      const label = cursor.toLocaleString('en-US', {
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC',
+      });
+      points.push({
+        label,
+        monthKey,
+        joined: countByMonth.get(monthKey) ?? 0,
+      });
+    }
+
+    return points;
+  }
+
+  async ensureBusinessCustomerLink(
+    businessId: number,
+    customerId: number,
+    joinedAt: Date = new Date(),
+  ): Promise<BusinessCustomer> {
+    const existing = await this.businessCustomerRepository.findOne({
+      where: { businessId, customerId },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      const link = this.businessCustomerRepository.create({
+        businessId,
+        customerId,
+        joinedAt,
+      });
+      return await this.businessCustomerRepository.save(link);
+    } catch {
+      const raced = await this.businessCustomerRepository.findOne({
+        where: { businessId, customerId },
+      });
+      if (raced) return raced;
+      throw new NotFoundException('Could not link guest to business.');
+    }
+  }
 
   async findAllPaginated(
     page?: number,
@@ -122,7 +272,7 @@ export class CustomerService {
               { phoneDigits: `%${digitsOnly}%` },
             );
           } else {
-            sub.orWhere('COALESCE(customer.phone, \'\') ILIKE :containsPattern', {
+            sub.orWhere("COALESCE(customer.phone, '') ILIKE :containsPattern", {
               containsPattern,
             });
           }
@@ -166,6 +316,7 @@ export class CustomerService {
       });
       const couponIds = coupons.map((coupon) => coupon.id);
 
+      await manager.delete(BusinessCustomer, { customerId: id });
       await manager.delete(CustomerVisit, { customerId: id });
 
       if (couponIds.length > 0) {

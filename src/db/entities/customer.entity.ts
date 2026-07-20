@@ -2,9 +2,11 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { BusinessCustomer } from './business-customer.entity';
 
 @Entity('customers')
 export class Customer {
@@ -19,6 +21,12 @@ export class Customer {
 
   @Column({ type: 'varchar', nullable: true })
   phone: string | null;
+
+  @OneToMany(
+    () => BusinessCustomer,
+    (businessCustomer) => businessCustomer.customer,
+  )
+  businessCustomers: BusinessCustomer[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

@@ -16,6 +16,8 @@ export type SubscriptionPlanFeatureGroup = {
 export type SubscriptionPlanPricingTier = {
   price: string;
   period: string;
+  /** Struck-through list price shown next to the discounted `price`. */
+  originalPrice?: string | null;
   promo: string | null;
   subline: string | null;
 };

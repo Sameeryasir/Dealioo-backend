@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Campaign } from './campaign.entity';
+import { BusinessCustomer } from './business-customer.entity';
 
 @Entity('businesses')
 export class Business {
@@ -139,6 +140,12 @@ export class Business {
 
   @OneToMany(() => Campaign, (campaign) => campaign.business)
   campaigns: Campaign[];
+
+  @OneToMany(
+    () => BusinessCustomer,
+    (businessCustomer) => businessCustomer.business,
+  )
+  businessCustomers: BusinessCustomer[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

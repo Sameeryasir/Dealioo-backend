@@ -1,8 +1,8 @@
 export const DEALIOO_EMAIL_LOGO_URL =
-  'https://dealioo-assests.nyc3.cdn.digitaloceanspaces.com/brand/Dealioo-transparent.png';
+  'https://dealioo-assests.nyc3.cdn.digitaloceanspaces.com/brand/Dealioo-black-logo.png';
 
 export const DEALIOO_EMAIL_LOGO_WIDTH = 160;
-export const DEALIOO_EMAIL_LOGO_HEIGHT = 39;
+export const DEALIOO_EMAIL_LOGO_HEIGHT = 41;
 
 export const DEALIOO_EMAIL_BLUE = '#1877f2';
 export const DEALIOO_EMAIL_BLUE_DARK = '#0f5ed7';

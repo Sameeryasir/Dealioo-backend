@@ -156,17 +156,8 @@ function haversineKm(
   return 2 * 6371 * Math.asin(Math.sqrt(a));
 }
 
-function customLocationsConflict(a: CustomGeoEntry, b: CustomGeoEntry): boolean {
-  const distance = haversineKm(a.latitude, a.longitude, b.latitude, b.longitude);
-  return (
-    distance <
-    radiusInKm(a.radius, a.distance_unit) +
-      radiusInKm(b.radius, b.distance_unit)
-  );
-}
-
-/** Keep largest non-overlapping pins — Meta rejects conflicting custom_locations. */
-function dedupeNonOverlappingCustomLocations(
+/** Drop near-identical pins only (same center). Overlapping radii are allowed by Meta. */
+function dedupeNearIdenticalCustomLocations(
   entries: CustomGeoEntry[],
 ): CustomGeoEntry[] {
   const sorted = [...entries].sort(
@@ -176,12 +167,28 @@ function dedupeNonOverlappingCustomLocations(
   );
   const kept: CustomGeoEntry[] = [];
   for (const entry of sorted) {
-    if (kept.some((existing) => customLocationsConflict(existing, entry))) {
-      continue;
-    }
+    const duplicate = kept.some(
+      (existing) =>
+        haversineKm(
+          existing.latitude,
+          existing.longitude,
+          entry.latitude,
+          entry.longitude,
+        ) < 0.2,
+    );
+    if (duplicate) continue;
     kept.push(entry);
   }
   return kept;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
@@ -193,8 +200,8 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   const excludedCustom: CustomGeoEntry[] = [];
 
   for (const loc of locations) {
-    const mode = loc.mode ?? 'include';
-    const countryCode = loc.countryCode?.toUpperCase();
+    const mode = loc.mode === 'exclude' ? 'exclude' : 'include';
+    const countryCode = loc.countryCode?.toString().trim().toUpperCase();
 
     if (loc.type === 'country' && countryCode) {
       if (mode === 'exclude') excludedCountries.add(countryCode);
@@ -202,35 +209,28 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
       continue;
     }
 
-    if (
-      loc.type === 'address' &&
-      loc.latitude != null &&
-      loc.longitude != null &&
-      loc.radius
-    ) {
-      const entry: CustomGeoEntry = {
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        radius: Math.min(80, Math.max(1, Number(loc.radius) || 16)),
-        distance_unit: loc.distanceUnit === 'mile' ? 'mile' : 'kilometer',
-      };
-      if (mode === 'exclude') excludedCustom.push(entry);
-      else includedCustom.push(entry);
-    }
+    if (loc.type !== 'address') continue;
+
+    const latitude = toFiniteNumber(loc.latitude);
+    const longitude = toFiniteNumber(loc.longitude);
+    if (latitude == null || longitude == null) continue;
+
+    const radiusRaw = toFiniteNumber(loc.radius);
+    const radius = Math.min(80, Math.max(1, radiusRaw ?? 16));
+    const entry: CustomGeoEntry = {
+      latitude,
+      longitude,
+      radius,
+      distance_unit: loc.distanceUnit === 'mile' ? 'mile' : 'kilometer',
+    };
+    if (mode === 'exclude') excludedCustom.push(entry);
+    else includedCustom.push(entry);
   }
 
   const uniqueIncludedCustom =
-    dedupeNonOverlappingCustomLocations(includedCustom);
+    dedupeNearIdenticalCustomLocations(includedCustom);
   const uniqueExcludedCustom =
-    dedupeNonOverlappingCustomLocations(excludedCustom);
-
-  // Never send country + pin targeting together — Meta treats that as a conflict.
-  if (uniqueIncludedCustom.length) {
-    includedCountries.clear();
-  }
-  if (uniqueExcludedCustom.length) {
-    excludedCountries.clear();
-  }
+    dedupeNearIdenticalCustomLocations(excludedCustom);
 
   if (
     !includedCountries.size &&
@@ -240,7 +240,27 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
     includedCountries.add(audience.country.toUpperCase());
   }
 
-  const geoLocations: Record<string, unknown> = {};
+  // When only legacy lat/lng/radius exist (no locations[]), still send the pin.
+  if (
+    !uniqueIncludedCustom.length &&
+    toFiniteNumber(audience.latitude) != null &&
+    toFiniteNumber(audience.longitude) != null
+  ) {
+    const legacyRadius = toFiniteNumber(audience.radius) ?? 16;
+    uniqueIncludedCustom.push({
+      latitude: toFiniteNumber(audience.latitude)!,
+      longitude: toFiniteNumber(audience.longitude)!,
+      radius: Math.min(80, Math.max(1, legacyRadius)),
+      distance_unit:
+        audience.distanceUnit === 'mile' ? 'mile' : 'kilometer',
+    });
+    // Pin replaces whole-country fallback for that draft shape.
+    includedCountries.clear();
+  }
+
+  const geoLocations: Record<string, unknown> = {
+    location_types: ['home', 'recent'],
+  };
   if (includedCountries.size) {
     geoLocations.countries = [...includedCountries];
   }
@@ -249,6 +269,9 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   }
 
   const excludedGeo: Record<string, unknown> = {};
+  if (excludedCountries.size || uniqueExcludedCustom.length) {
+    excludedGeo.location_types = ['home', 'recent'];
+  }
   if (excludedCountries.size) {
     excludedGeo.countries = [...excludedCountries];
   }
