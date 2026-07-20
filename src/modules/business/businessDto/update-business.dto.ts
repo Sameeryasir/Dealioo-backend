@@ -5,6 +5,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -24,7 +25,10 @@ export class UpdateBusinessDto {
   logoUrl?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true },
+    { message: 'websiteUrl must be a valid https URL' },
+  )
   @MaxLength(2048)
   websiteUrl?: string;
 
@@ -42,18 +46,26 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
   city?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
   state?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
   country?: string;
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
   postalCode?: string;
 
   @IsOptional()

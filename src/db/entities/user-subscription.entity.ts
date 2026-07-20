@@ -54,6 +54,21 @@ export class UserSubscription {
   @Column({ name: 'stripe_subscription_id', type: 'varchar', nullable: true })
   stripeSubscriptionId: string | null;
 
+  @Column({ name: 'cancel_at_period_end', type: 'boolean', default: false })
+  cancelAtPeriodEnd: boolean;
+
+  @Column({ name: 'cancel_requested_at', type: 'timestamptz', nullable: true })
+  cancelRequestedAt: Date | null;
+
+  @Column({ name: 'cancellation_reason', type: 'varchar', length: 255, nullable: true })
+  cancellationReason: string | null;
+
+  @Column({ name: 'cancellation_comment', type: 'text', nullable: true })
+  cancellationComment: string | null;
+
+  @Column({ name: 'cancels_at', type: 'timestamptz', nullable: true })
+  cancelsAt: Date | null;
+
   @Column({ name: 'started_at', type: 'timestamptz', nullable: true })
   startedAt: Date | null;
 

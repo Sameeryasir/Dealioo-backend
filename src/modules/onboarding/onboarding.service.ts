@@ -14,6 +14,7 @@ import {
   OnboardingNextStep,
   OnboardingStatusResponse,
 } from './onboarding.types';
+import { SavePlanFitDto } from './onboardingDto/save-plan-fit.dto';
 import {
   ADMIN_ROLE,
   MANAGER_ROLE,
@@ -21,6 +22,18 @@ import {
   STAFF_ROLE,
   SUPER_ADMIN_ROLE,
 } from '../../utils/user-roles';
+
+export type SavePlanFitResult = {
+  planFitAnswers: Record<string, string>;
+  planFitRecommendedPlan: string;
+  planFitCompletedAt: string;
+};
+
+export type GetPlanFitResult = {
+  planFitAnswers: Record<string, string> | null;
+  planFitRecommendedPlan: string | null;
+  planFitCompletedAt: string | null;
+};
 
 @Injectable()
 export class OnboardingService {
@@ -32,6 +45,64 @@ export class OnboardingService {
     private readonly userSubscriptionsService: UserSubscriptionsService,
     private readonly businessAccessService: BusinessAccessService,
   ) {}
+
+  async getPlanFit(userId: number): Promise<GetPlanFitResult> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: {
+        id: true,
+        planFitAnswers: true,
+        planFitRecommendedPlan: true,
+        planFitCompletedAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    return {
+      planFitAnswers: user.planFitAnswers ?? null,
+      planFitRecommendedPlan: user.planFitRecommendedPlan ?? null,
+      planFitCompletedAt: user.planFitCompletedAt
+        ? user.planFitCompletedAt.toISOString()
+        : null,
+    };
+  }
+
+  async savePlanFit(
+    userId: number,
+    dto: SavePlanFitDto,
+  ): Promise<SavePlanFitResult> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const completedAt = new Date();
+    const answers = {
+      businesses: dto.answers.businesses,
+      paidMarketing: dto.answers.paidMarketing,
+      helpStyle: dto.answers.helpStyle,
+      priority: dto.answers.priority,
+    };
+
+    await this.userRepository.update(userId, {
+      planFitAnswers: answers,
+      planFitRecommendedPlan: dto.recommendedPlanSlug,
+      planFitCompletedAt: completedAt,
+    });
+
+    return {
+      planFitAnswers: answers,
+      planFitRecommendedPlan: dto.recommendedPlanSlug,
+      planFitCompletedAt: completedAt.toISOString(),
+    };
+  }
 
   async getStatusForUser(
     userId: number,

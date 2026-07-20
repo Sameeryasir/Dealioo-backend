@@ -78,6 +78,15 @@ export class User {
   @Column({ name: 'stripe_customer_id', type: 'varchar', nullable: true })
   stripeCustomerId: string | null;
 
+  @Column({ name: 'plan_fit_answers', type: 'jsonb', nullable: true })
+  planFitAnswers: Record<string, string> | null;
+
+  @Column({ name: 'plan_fit_recommended_plan', type: 'varchar', nullable: true })
+  planFitRecommendedPlan: string | null;
+
+  @Column({ name: 'plan_fit_completed_at', type: 'timestamptz', nullable: true })
+  planFitCompletedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

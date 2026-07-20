@@ -722,6 +722,7 @@ export class StripeService {
             quantity,
           },
         ],
+        cancel_at_period_end: false,
         proration_behavior: 'always_invoice',
         metadata: {
           ...(subscription.metadata ?? {}),
@@ -765,6 +766,89 @@ export class StripeService {
       newPriceId,
       paymentIntentClientSecret,
     };
+  }
+
+  async cancelPlatformSubscription(opts: {
+    stripeSubscriptionId: string;
+    reason: string;
+    comment?: string | null;
+    cancelledByUserId: number;
+  }): Promise<{
+    subscription: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>
+    >;
+    alreadyScheduled: boolean;
+  }> {
+    const subscriptionId = opts.stripeSubscriptionId?.trim();
+    if (!subscriptionId) {
+      throw new BadRequestException('Missing Stripe subscription id.');
+    }
+
+    let subscription: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>
+    >;
+    try {
+      subscription = await this.stripe.subscriptions.retrieve(subscriptionId);
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new BadRequestException(
+          (err as { message?: string }).message ||
+            'Unable to load the Stripe subscription.',
+        );
+      }
+      throw err;
+    }
+
+    if (
+      subscription.status === 'canceled' ||
+      subscription.status === 'incomplete_expired'
+    ) {
+      throw new BadRequestException('This subscription has already ended.');
+    }
+
+    if (subscription.cancel_at_period_end) {
+      return { subscription, alreadyScheduled: true };
+    }
+
+    const comment = opts.comment?.trim() || undefined;
+
+    try {
+      const updated = await this.stripe.subscriptions.update(subscription.id, {
+        cancel_at_period_end: true,
+        ...(comment
+          ? {
+              cancellation_details: {
+                comment,
+              },
+            }
+          : {}),
+        metadata: {
+          ...(subscription.metadata ?? {}),
+          purpose: 'platform_subscription',
+          cancellationReason: opts.reason,
+          cancelledByUserId: String(opts.cancelledByUserId),
+        },
+      });
+      return { subscription: updated, alreadyScheduled: false };
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new BadRequestException(
+          (err as { message?: string }).message ||
+            'Unable to schedule subscription cancellation.',
+        );
+      }
+      throw err;
+    }
   }
 
   private extractPaymentIntentClientSecret(

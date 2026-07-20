@@ -1,8 +1,12 @@
 import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt/jwt-auth.guard';
-import { SelectUserPlanDto } from './user-subscriptions.dto';
+import {
+  CancelSubscriptionDto,
+  SelectUserPlanDto,
+} from './user-subscriptions.dto';
 import {
   UserSubscriptionsService,
+  type CancelUserSubscriptionResponse,
   type UserSubscriptionCheckoutResponse,
   type UserSubscriptionResponse,
 } from './user-subscriptions.service';
@@ -68,6 +72,18 @@ export class UserSubscriptionsController {
     return this.userSubscriptionsService.completeCheckout(
       req.user.id,
       sessionId ?? '',
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('cancel')
+  cancelSubscription(
+    @Req() req: { user: { id: number } },
+    @Body() dto: CancelSubscriptionDto,
+  ): Promise<CancelUserSubscriptionResponse> {
+    return this.userSubscriptionsService.cancelSubscriptionForUser(
+      req.user.id,
+      dto,
     );
   }
 }

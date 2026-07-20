@@ -13,7 +13,7 @@ import {
   type UserSubscriptionBillingCycle,
 } from '../../db/entities/user-subscription.entity';
 import { StripeService } from '../stripe/stripe.service';
-import { SelectUserPlanDto } from './user-subscriptions.dto';
+import { SelectUserPlanDto, CancelSubscriptionDto } from './user-subscriptions.dto';
 
 export type UserSubscriptionResponse = {
   id: string;
@@ -23,11 +23,21 @@ export type UserSubscriptionResponse = {
   billingCycle: UserSubscriptionBillingCycle;
   status: string;
   startedAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancellationDate: string | null;
 };
 
 export type UserSubscriptionCheckoutResponse = {
   checkoutUrl: string;
   sessionId: string;
+};
+
+export type CancelUserSubscriptionResponse = {
+  success: true;
+  alreadyScheduled?: boolean;
+  subscriptionStatus: string;
+  cancelAtPeriodEnd: boolean;
+  cancellationDate: string | null;
 };
 
 type StripeCheckoutSession = {
@@ -50,9 +60,12 @@ type StripeSubscriptionWebhookObject = StripeSubscription & {
     data?: Array<{
       price?: string | { id?: string } | null;
       quantity?: number | null;
+      current_period_end?: number | null;
     }>;
   };
   customer?: string | { id?: string } | null;
+  cancel_at_period_end?: boolean | null;
+  cancel_at?: number | null;
 };
 
 const PLATFORM_SUBSCRIPTION = 'platform_subscription';
@@ -87,6 +100,8 @@ export class UserSubscriptionsService {
         'sub.billingCycle',
         'sub.status',
         'sub.startedAt',
+        'sub.cancelAtPeriodEnd',
+        'sub.cancelsAt',
         'plan.id',
         'plan.slug',
         'plan.name',
@@ -108,6 +123,8 @@ export class UserSubscriptionsService {
           billingCycle: row.billingCycle,
           status: row.status,
           startedAt: row.startedAt?.toISOString() ?? null,
+          cancelAtPeriodEnd: Boolean(row.cancelAtPeriodEnd),
+          cancellationDate: row.cancelsAt?.toISOString() ?? null,
         };
       });
   }
@@ -116,6 +133,53 @@ export class UserSubscriptionsService {
     return this.subscriptionRepository
       .count({ where: { userId, status: In(['active', 'trialing']) } })
       .then((count) => count > 0);
+  }
+
+  async cancelSubscriptionForUser(
+    userId: number,
+    dto: CancelSubscriptionDto,
+  ): Promise<CancelUserSubscriptionResponse> {
+    const localSub = await this.subscriptionRepository.findOne({
+      where: {
+        userId,
+        status: In(['active', 'trialing', 'past_due']),
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!localSub?.stripeSubscriptionId?.trim()) {
+      throw new BadRequestException('No active subscription was found.');
+    }
+
+    const { subscription, alreadyScheduled } =
+      await this.stripeService.cancelPlatformSubscription({
+        stripeSubscriptionId: localSub.stripeSubscriptionId,
+        reason: dto.reason,
+        comment: dto.comment,
+        cancelledByUserId: userId,
+      });
+
+    const cancellationDate = this.toIsoFromUnixSeconds(
+      subscription.cancel_at ??
+        subscription.items?.data?.[0]?.current_period_end ??
+        null,
+    );
+
+    await this.subscriptionRepository.update(localSub.id, {
+      cancelAtPeriodEnd: true,
+      cancelRequestedAt: localSub.cancelRequestedAt ?? new Date(),
+      cancellationReason: dto.reason.trim(),
+      cancellationComment: dto.comment?.trim() || null,
+      cancelsAt: cancellationDate ? new Date(cancellationDate) : null,
+    });
+
+    return {
+      success: true,
+      ...(alreadyScheduled ? { alreadyScheduled: true } : {}),
+      subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+      cancellationDate,
+    };
   }
 
   async createCheckoutForUser(
@@ -328,6 +392,8 @@ export class UserSubscriptionsService {
     await this.subscriptionRepository.update(record.id, {
       status: 'cancelled',
       cancelledAt: new Date(),
+      cancelAtPeriodEnd: false,
+      cancelsAt: null,
     });
   }
 
@@ -373,7 +439,21 @@ export class UserSubscriptionsService {
       ...(billingCycle ? { billingCycle } : {}),
       ...(status ? { status } : {}),
       ...(stripeCustomerId ? { stripeCustomerId } : {}),
-      ...(status === 'cancelled' ? { cancelledAt: new Date() } : {}),
+      ...(typeof subscription.cancel_at_period_end === 'boolean'
+        ? { cancelAtPeriodEnd: subscription.cancel_at_period_end }
+        : {}),
+      ...(subscription.cancel_at_period_end
+        ? {
+            cancelsAt: this.toDateFromUnixSeconds(
+              subscription.cancel_at ??
+                subscription.items?.data?.[0]?.current_period_end ??
+                null,
+            ),
+          }
+        : { cancelsAt: null }),
+      ...(status === 'cancelled'
+        ? { cancelledAt: new Date(), cancelAtPeriodEnd: false }
+        : {}),
     });
 
     if (stripeCustomerId && record.userId) {
@@ -443,6 +523,22 @@ export class UserSubscriptionsService {
     return value.id?.trim() || null;
   }
 
+  private toIsoFromUnixSeconds(
+    value: number | null | undefined,
+  ): string | null {
+    const date = this.toDateFromUnixSeconds(value);
+    return date?.toISOString() ?? null;
+  }
+
+  private toDateFromUnixSeconds(
+    value: number | null | undefined,
+  ): Date | null {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return null;
+    }
+    return new Date(value * 1000);
+  }
+
   private toResponse(subscription: UserSubscription): UserSubscriptionResponse {
     return {
       id: subscription.id,
@@ -452,6 +548,8 @@ export class UserSubscriptionsService {
       billingCycle: subscription.billingCycle,
       status: subscription.status,
       startedAt: subscription.startedAt?.toISOString() ?? null,
+      cancelAtPeriodEnd: Boolean(subscription.cancelAtPeriodEnd),
+      cancellationDate: subscription.cancelsAt?.toISOString() ?? null,
     };
   }
 }

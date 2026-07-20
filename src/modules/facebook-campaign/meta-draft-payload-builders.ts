@@ -156,7 +156,6 @@ function haversineKm(
   return 2 * 6371 * Math.asin(Math.sqrt(a));
 }
 
-/** Drop near-identical pins only (same center). Overlapping radii are allowed by Meta. */
 function dedupeNearIdenticalCustomLocations(
   entries: CustomGeoEntry[],
 ): CustomGeoEntry[] {
@@ -240,7 +239,6 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
     includedCountries.add(audience.country.toUpperCase());
   }
 
-  // When only legacy lat/lng/radius exist (no locations[]), still send the pin.
   if (
     !uniqueIncludedCustom.length &&
     toFiniteNumber(audience.latitude) != null &&
@@ -254,7 +252,6 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
       distance_unit:
         audience.distanceUnit === 'mile' ? 'mile' : 'kilometer',
     });
-    // Pin replaces whole-country fallback for that draft shape.
     includedCountries.clear();
   }
 

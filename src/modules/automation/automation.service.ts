@@ -2660,7 +2660,6 @@ export class AutomationService {
     const blocked = new Set<AutomationPurpose>([
       AutomationPurpose.MANUAL,
       AutomationPurpose.FUNNEL_SIGNUP,
-      AutomationPurpose.FUNNEL_PAYMENT,
     ]);
     if (blocked.has(purpose)) {
       throw new BadRequestException(

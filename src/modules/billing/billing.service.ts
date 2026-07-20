@@ -80,6 +80,11 @@ export class BillingService {
       planId: targetPlan.id,
       billingCycle,
       ...(mappedStatus ? { status: mappedStatus } : {}),
+      cancelAtPeriodEnd: false,
+      cancelRequestedAt: null,
+      cancellationReason: null,
+      cancellationComment: null,
+      cancelsAt: null,
     });
 
     const customerId =

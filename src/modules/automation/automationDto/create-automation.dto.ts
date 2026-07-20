@@ -16,33 +16,34 @@ import { AutomationTrigger } from '../../../db/entities/automation.entity';
 const CREATABLE_AUTOMATION_PURPOSES = [
   AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
   AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
+  AutomationPurpose.FUNNEL_PAYMENT,
 ] as const;
 
 export class CreateAutomationDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  businessId: number;
+  businessId!: number;
 
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  campaignId: number;
+  campaignId!: number;
 
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
-  name: string;
+  name!: string;
 
   @IsOptional()
   @IsString()
   description?: string;
 
   @IsEnum(AutomationTrigger)
-  trigger: AutomationTrigger;
+  trigger!: AutomationTrigger;
 
   @IsIn(CREATABLE_AUTOMATION_PURPOSES)
-  purpose: AutomationPurpose;
+  purpose!: AutomationPurpose;
 
   @IsOptional()
   @Type(() => Boolean)

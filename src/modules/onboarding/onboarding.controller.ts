@@ -1,7 +1,12 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt/jwt-auth.guard';
-import { OnboardingService } from './onboarding.service';
+import {
+  GetPlanFitResult,
+  OnboardingService,
+  SavePlanFitResult,
+} from './onboarding.service';
 import { OnboardingStatusResponse } from './onboarding.types';
+import { SavePlanFitDto } from './onboardingDto/save-plan-fit.dto';
 
 @Controller('onboarding')
 export class OnboardingController {
@@ -28,5 +33,22 @@ export class OnboardingController {
       req.user.role.name,
       businessId,
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('plan-fit')
+  getPlanFit(
+    @Req() req: { user: { id: number } },
+  ): Promise<GetPlanFitResult> {
+    return this.onboardingService.getPlanFit(req.user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('plan-fit')
+  savePlanFit(
+    @Req() req: { user: { id: number } },
+    @Body() dto: SavePlanFitDto,
+  ): Promise<SavePlanFitResult> {
+    return this.onboardingService.savePlanFit(req.user.id, dto);
   }
 }
