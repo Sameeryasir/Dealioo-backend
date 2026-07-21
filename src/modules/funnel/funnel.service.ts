@@ -11,6 +11,7 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isBusinessOwnerScopedUser } from '../../utils/business-access';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
 import { BusinessFunnelSummary } from './funnelDto/business-funnel-summary.dto';
@@ -26,6 +27,7 @@ export class FunnelService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly redemptionService: RedemptionService,
+    private readonly businessHistoryService: BusinessHistoryService,
   ) {}
 
   async createOrUpdateFunnel(
@@ -61,16 +63,24 @@ export class FunnelService {
         updatedBy: { id: user.id } as User,
       });
 
-      return this.funnelRepository.save(funnel);
+      const saved = await this.funnelRepository.save(funnel);
+      return saved;
     }
 
     funnel.pages = dto.pages ?? funnel.pages;
-
     funnel.version += 1;
-
     funnel.updatedBy = { id: user.id } as User;
 
-    return this.funnelRepository.save(funnel);
+    const saved = await this.funnelRepository.save(funnel);
+
+    await this.businessHistoryService.logFunnelUpdated({
+      businessId: campaign.businessId,
+      funnelId: saved.id,
+      funnelName: campaign.campaignName,
+      actorUserId: user.id,
+    });
+
+    return saved;
   }
 
   async getFunnelById(id: number): Promise<Funnel> {
@@ -206,7 +216,16 @@ export class FunnelService {
     funnel.version = funnel.version + 1;
     funnel.updatedBy = { id: user.id } as User;
 
-    return this.funnelRepository.save(funnel);
+    const saved = await this.funnelRepository.save(funnel);
+
+    await this.businessHistoryService.logFunnelUpdated({
+      businessId: funnel.campaign.businessId,
+      funnelId: saved.id,
+      funnelName: funnel.campaign.campaignName,
+      actorUserId: user.id,
+    });
+
+    return saved;
   }
 
   async deleteFunnel(id: number, user: User): Promise<void> {
@@ -215,9 +234,21 @@ export class FunnelService {
       'You do not have permission to delete a funnel.',
     );
 
-    const result = await this.funnelRepository.delete({ id });
-    if (result.affected === 0) {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
+
+    await this.businessHistoryService.logFunnelDeleted({
+      businessId: funnel.campaign.businessId,
+      funnelId: funnel.id,
+      funnelName: funnel.campaign.campaignName,
+      actorUserId: user.id,
+    });
+
+    await this.funnelRepository.delete({ id });
   }
 }

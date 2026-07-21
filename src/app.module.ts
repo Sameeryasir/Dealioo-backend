@@ -22,6 +22,7 @@ import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { BusinessHistoryModule } from './modules/business-history/business-history.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
@@ -84,6 +85,7 @@ import { UploadModule } from './modules/upload/upload.module';
     AutomationModule,
     RedemptionModule,
     ActivityModule,
+    BusinessHistoryModule,
     ChatModule,
     MemberModule,
     InvitationModule,

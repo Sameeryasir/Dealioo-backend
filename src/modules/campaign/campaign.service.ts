@@ -26,7 +26,6 @@ import {
 } from '../../db/entities/funnel-event.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
-import { User } from '../../db/entities/user.entity';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -35,8 +34,8 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import { AutomationService } from '../automation/automation.service';
-import { ActivityService } from '../activity/activity.service';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -55,31 +54,13 @@ export class CampaignService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly automationService: AutomationService,
-    private readonly activityService: ActivityService,
+    private readonly businessHistoryService: BusinessHistoryService,
   ) {}
-
-  private async resolveActor(user: AuthUser): Promise<{
-    actorUserId: number;
-    actorName: string;
-  }> {
-    const row = await this.userRepository.findOne({
-      where: { id: user.id },
-      select: ['id', 'name', 'email'],
-    });
-    const actorName =
-      row?.name?.trim() ||
-      row?.email?.trim() ||
-      user.email?.trim() ||
-      `User #${user.id}`;
-    return { actorUserId: user.id, actorName };
-  }
 
   async uploadCampaignImage(
     file?: Express.Multer.File,
@@ -171,14 +152,11 @@ export class CampaignService {
       stripeAccountId: business.stripeAccountId,
     });
 
-    const actor = await this.resolveActor(user);
-    await this.activityService.logCampaignCreated({
+    await this.businessHistoryService.logCampaignCreated({
       businessId: savedCampaign.businessId,
       campaignId: savedCampaign.id,
       campaignName: savedCampaign.campaignName,
-      offer: savedCampaign.offer,
-      actorUserId: actor.actorUserId,
-      actorName: actor.actorName,
+      actorUserId: user.id,
     });
 
     return savedCampaign;
@@ -325,14 +303,11 @@ export class CampaignService {
 
     const saved = await this.campaignRepository.save(campaign);
 
-    const actor = await this.resolveActor(user);
-    await this.activityService.logCampaignUpdated({
+    await this.businessHistoryService.logCampaignUpdated({
       businessId: saved.businessId,
       campaignId: saved.id,
       campaignName: saved.campaignName,
-      offer: saved.offer,
-      actorUserId: actor.actorUserId,
-      actorName: actor.actorName,
+      actorUserId: user.id,
     });
 
     return saved;
@@ -358,9 +333,6 @@ export class CampaignService {
 
     const businessId = campaign.businessId;
     const campaignName = campaign.campaignName;
-    const offer = campaign.offer;
-    const actor = await this.resolveActor(user);
-
     const linkedFunnel = await this.funnelRepository.findOne({
       where: { campaignId },
       select: ['id'],
@@ -540,13 +512,11 @@ export class CampaignService {
       }
     });
 
-    await this.activityService.logCampaignDeleted({
+    await this.businessHistoryService.logCampaignDeleted({
       businessId,
       campaignId,
       campaignName,
-      offer,
-      actorUserId: actor.actorUserId,
-      actorName: actor.actorName,
+      actorUserId: user.id,
     });
 
     return { deleted: true, campaignId };

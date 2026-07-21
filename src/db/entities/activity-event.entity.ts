@@ -1,5 +1,5 @@
 /**
- * Unified business activity feed — visited, redeemed, prepaid funnel payments.
+ * Guest-facing activity feed — visits, redemptions, prepaid offers, messages.
  */
 import {
   Column,
@@ -18,9 +18,6 @@ export enum ActivityEventType {
   REDEEMED_REWARD = 'redeemed_reward',
   PREPAID_FOR_OFFER = 'prepaid_for_offer',
   MESSAGE_SENT = 'message_sent',
-  CAMPAIGN_CREATED = 'campaign_created',
-  CAMPAIGN_UPDATED = 'campaign_updated',
-  CAMPAIGN_DELETED = 'campaign_deleted',
 }
 
 @Entity('activity_event')
@@ -28,38 +25,37 @@ export enum ActivityEventType {
 @Index('IDX_activity_event_idempotency', ['idempotencyKey'], { unique: true })
 export class ActivityEvent {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ name: 'restaurant_id' })
-  businessId: number;
+  businessId!: number;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
-  business: Business;
+  business!: Business;
 
   @Column({ name: 'customer_id', type: 'int', nullable: true })
-  customerId: number | null;
+  customerId!: number | null;
 
   @ManyToOne(() => Customer, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'customer_id' })
-  customer: Customer | null;
+  customer!: Customer | null;
 
   @Column({ name: 'event_type', type: 'varchar', length: 32 })
-  eventType: ActivityEventType;
+  eventType!: ActivityEventType;
 
   @Column({ type: 'text' })
-  description: string;
+  description!: string;
 
   @Column({ type: 'jsonb', nullable: true })
-  metadata: Record<string, unknown> | null;
+  metadata!: Record<string, unknown> | null;
 
   @Column({ name: 'occurred_at', type: 'timestamptz' })
-  occurredAt: Date;
+  occurredAt!: Date;
 
-  /** Prevents duplicate rows when webhooks and frontend both confirm payment. */
   @Column({ name: 'idempotency_key', type: 'varchar', length: 128 })
-  idempotencyKey: string;
+  idempotencyKey!: string;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
-  createdAt: Date;
+  createdAt!: Date;
 }

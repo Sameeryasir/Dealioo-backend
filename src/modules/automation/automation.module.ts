@@ -18,6 +18,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
+import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
@@ -75,6 +76,7 @@ import { AutomationService } from './automation.service';
       CustomerVisit,
     ]),
     ActivityModule,
+    BusinessHistoryModule,
     ChatModule,
     AuthModule,
     forwardRef(() => RedemptionModule),

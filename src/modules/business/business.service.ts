@@ -23,6 +23,7 @@ import {
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import {
   isValidBusinessSlug,
   slugifyBusinessName,
@@ -46,6 +47,7 @@ export class BusinessService {
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessHistoryService: BusinessHistoryService,
   ) {}
 
   async findByUserId(userId: number): Promise<Business | null> {
@@ -133,6 +135,12 @@ export class BusinessService {
     });
 
     await this.businessRepository.save(business);
+
+    await this.businessHistoryService.logBusinessCreated({
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+    });
 
     return business;
   }
@@ -312,7 +320,15 @@ export class BusinessService {
     if (postalCode !== undefined) business.postalCode = postalCode;
     if (branchCount !== undefined) business.branchCount = branchCount;
 
-    return this.businessRepository.save(business);
+    const saved = await this.businessRepository.save(business);
+
+    await this.businessHistoryService.logBusinessUpdated({
+      businessId: saved.id,
+      businessName: saved.name,
+      actorUserId: user.id,
+    });
+
+    return saved;
   }
   async deleteBusiness(businessId: number, user: User): Promise<Business> {
     await this.businessAccessService.assertOwner(
@@ -330,6 +346,13 @@ export class BusinessService {
         'Business not found or you do not own this business.',
       );
     }
+
+    await this.businessHistoryService.logBusinessDeleted({
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+    });
+
     await this.businessRepository.delete(businessId);
     return business;
   }

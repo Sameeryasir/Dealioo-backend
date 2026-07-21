@@ -8,9 +8,6 @@ export const ACTIVITY_EVENT_TYPE_FILTERS = [
   ActivityEventType.REDEEMED_REWARD,
   ActivityEventType.PREPAID_FOR_OFFER,
   ActivityEventType.MESSAGE_SENT,
-  ActivityEventType.CAMPAIGN_CREATED,
-  ActivityEventType.CAMPAIGN_UPDATED,
-  ActivityEventType.CAMPAIGN_DELETED,
 ] as const;
 
 export type ActivityEventTypeFilter =

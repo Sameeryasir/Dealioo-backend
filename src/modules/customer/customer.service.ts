@@ -70,12 +70,12 @@ export class CustomerService {
       .addSelect('customer.phone', 'phone')
       .addSelect('link.joinedAt', 'joiningDate')
       .addSelect(
-        (subQuery) =>
-          subQuery
-            .select('COUNT(visit.id)')
-            .from(CustomerVisit, 'visit')
-            .where('visit.customerId = link.customerId')
-            .andWhere('visit.businessId = link.businessId'),
+        `COALESCE((
+          SELECT COUNT(visit.id)
+          FROM customer_visits visit
+          WHERE visit.customer_id = "link"."customer_id"
+            AND visit.restaurant_id = "link"."business_id"
+        ), 0)`,
         'visitCount',
       )
       .orderBy('link.joinedAt', 'DESC')

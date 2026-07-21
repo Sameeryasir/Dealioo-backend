@@ -39,6 +39,7 @@ import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { ActivityService } from '../activity/activity.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import { ChatMessageService } from '../chat/chat-message.service';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CheckoutResumeService } from '../payment/checkout-resume.service';
@@ -120,6 +121,7 @@ export class AutomationService {
     private readonly deadLetterService: AutomationDeadLetterService,
     private readonly metricsService: AutomationMetricsService,
     private readonly activityService: ActivityService,
+    private readonly businessHistoryService: BusinessHistoryService,
     private readonly chatMessageService: ChatMessageService,
     private readonly checkoutResumeService: CheckoutResumeService,
   ) {}
@@ -150,7 +152,18 @@ export class AutomationService {
       isTemplate: false,
     });
 
-    return this.automationRepository.save(automation);
+    const saved = await this.automationRepository.save(automation);
+
+    if (saved.isActive) {
+      await this.businessHistoryService.logAutomationActivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
+    }
+
+    return saved;
   }
 
   async updateAutomation(
@@ -245,6 +258,22 @@ export class AutomationService {
       this.logPrepaidOfferActivated(saved, 'updated');
     }
 
+    await this.businessHistoryService.logAutomationUpdated({
+      businessId: saved.businessId,
+      automationId: saved.id,
+      automationName: saved.name,
+      actorUserId: user.id,
+    });
+
+    if (becomingActive) {
+      await this.businessHistoryService.logAutomationActivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
+    }
+
     return saved;
   }
 
@@ -293,6 +322,14 @@ export class AutomationService {
     const executionIds =
       await this.executionService.findExecutionIdsByAutomationId(id);
     await this.queueService.purgeAutomationJobs(id, executionIds);
+
+    await this.businessHistoryService.logAutomationDeleted({
+      businessId: automation.businessId,
+      automationId: automation.id,
+      automationName: automation.name,
+      actorUserId: user.id,
+    });
+
     await this.automationRepository.remove(automation);
   }
 
@@ -373,6 +410,15 @@ export class AutomationService {
 
     if (saved.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       this.logPrepaidOfferActivated(saved, 'activated');
+    }
+
+    if (becomingActive) {
+      await this.businessHistoryService.logAutomationActivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
     }
 
     return saved;
