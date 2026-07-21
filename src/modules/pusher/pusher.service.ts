@@ -13,11 +13,13 @@ import {
 import {
   PUSHER_EVENT,
   pusherAutomationChannel,
+  pusherBusinessActivityChannel,
   pusherBusinessConversationsChannel,
   pusherConversationMessagesChannel,
   pusherExecutionChannel,
 } from './pusher.constants';
 import type {
+  CampaignActivityPusherPayload,
   ChatMessagePusherPayload,
   ExecutionTerminalPusherPayload,
 } from './pusher.types';
@@ -172,6 +174,40 @@ export class PusherService implements OnModuleInit {
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
         `Pusher chat notify failed for business ${payload.businessId}, conversation ${payload.conversationId}: ${message}`,
+      );
+    }
+  }
+
+  async notifyCampaignActivity(
+    payload: CampaignActivityPusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.businessId) || payload.businessId < 1) {
+      this.logger.warn(
+        `Pusher activity notify skipped — invalid business id (${payload.businessId})`,
+      );
+      return;
+    }
+
+    const channel = pusherBusinessActivityChannel(payload.businessId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.ACTIVITY_CAMPAIGN_UPDATED,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.ACTIVITY_CAMPAIGN_UPDATED} | campaign: ${payload.campaignId} | type: ${payload.eventType}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher activity notify failed for business ${payload.businessId}: ${message}`,
       );
     }
   }

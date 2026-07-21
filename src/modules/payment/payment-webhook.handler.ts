@@ -225,7 +225,6 @@ export class PaymentWebhookHandler {
         paymentId: payment.id,
         occurredAt: new Date(),
       });
-      await this.funnelEventService.syncPaidFunnelPaymentAutomation(payment.id);
     }
   }
 
@@ -276,14 +275,12 @@ export class PaymentWebhookHandler {
       ...(receiptUrl ? { receiptUrl } : {}),
     });
 
-    if (wasAlreadyPaid) {
-      return;
+    if (!wasAlreadyPaid) {
+      await this.activityService.logPrepaidForOffer({
+        paymentId: payment.id,
+        occurredAt: new Date(),
+      });
     }
-
-    await this.activityService.logPrepaidForOffer({
-      paymentId: payment.id,
-      occurredAt: new Date(),
-    });
 
     await this.funnelEventService.syncPaidFunnelPaymentAutomation(payment.id);
   }

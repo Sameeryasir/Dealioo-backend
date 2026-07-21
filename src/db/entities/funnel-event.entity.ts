@@ -1,6 +1,7 @@
 import {
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   Entity,
   JoinColumn,
   ManyToOne,
@@ -23,12 +24,12 @@ export class FunnelEvent {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'funnel_id' })
-  funnelId: number;
+  @Column({ name: 'funnel_id', type: 'int', nullable: true })
+  funnelId!: number;
 
-  @ManyToOne(() => Funnel, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Funnel, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_id' })
-  funnel: Funnel;
+  funnel!: Funnel;
 
   @Column({
     name: 'event_type',
@@ -84,4 +85,7 @@ export class FunnelEvent {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
 }

@@ -80,6 +80,40 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/customers/:customerId/journey')
+  getCustomerJourney(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('customerId', ParseIntPipe) customerId: number,
+    @Query('campaignId', ParseIntPipe) campaignId: number,
+    @Query('funnelId') funnelIdRaw?: string,
+    @Query('funnelPaymentId') funnelPaymentIdRaw?: string,
+  ) {
+    const funnelId =
+      funnelIdRaw != null && funnelIdRaw.trim() !== ''
+        ? Number.parseInt(funnelIdRaw, 10)
+        : null;
+    const funnelPaymentId =
+      funnelPaymentIdRaw != null && funnelPaymentIdRaw.trim() !== ''
+        ? Number.parseInt(funnelPaymentIdRaw, 10)
+        : null;
+    return this.funnelEventService.getCustomerJourneyForBusiness({
+      businessId,
+      customerId,
+      campaignId,
+      funnelId:
+        funnelId != null && Number.isFinite(funnelId) && funnelId > 0
+          ? funnelId
+          : null,
+      funnelPaymentId:
+        funnelPaymentId != null &&
+        Number.isFinite(funnelPaymentId) &&
+        funnelPaymentId > 0
+          ? funnelPaymentId
+          : null,
+    });
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/events')
   getBusinessFunnelEvents(
     @Param('businessId', ParseIntPipe) businessId: number,

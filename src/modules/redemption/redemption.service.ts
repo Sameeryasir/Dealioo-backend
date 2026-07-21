@@ -25,6 +25,7 @@ import { Business } from '../../db/entities/business.entity';
 import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import { CouponService } from './coupon.service';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
@@ -155,6 +156,7 @@ export class RedemptionService {
     @Inject(forwardRef(() => AutomationService))
     private readonly automationService: AutomationService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly customerJourneyService: CustomerJourneyService,
   ) {}
 
   extractToken(raw: string): string {
@@ -691,6 +693,18 @@ export class RedemptionService {
       couponId: params.coupon.id,
       businessName,
       occurredAt: visitedAt,
+      manager: params.manager,
+    });
+
+    await this.customerJourneyService.recordQrRedeemed({
+      businessId: params.businessId,
+      customerId: params.coupon.customerId,
+      campaignId: params.coupon.campaignId,
+      funnelId: params.coupon.funnelId ?? null,
+      couponId: params.coupon.id,
+      funnelPaymentId: params.coupon.funnelPaymentId ?? null,
+      occurredAt: visitedAt,
+      source: 'qr_redemption',
       manager: params.manager,
     });
 

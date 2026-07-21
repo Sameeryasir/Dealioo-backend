@@ -305,6 +305,8 @@ export class SignupQrEmailService {
         ? `${getFrontendBaseUrl()}/pass/${params.funnelPaymentId}`
         : `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
 
+    const qr = await this.couponService.buildQrPayload(coupon);
+
     const subject = defaults.subject ?? 'Your payment is confirmed';
     const html = await render(
       React.createElement(PaymentConfirmationEmail, {
@@ -313,8 +315,9 @@ export class SignupQrEmailService {
         subject,
         headline: defaults.headline,
         message: defaults.message,
-        ctaLabel: 'View QR code',
+        ctaLabel: 'View QR code online',
         ctaUrl: passUrl,
+        qrImageDataUrl: qr.qrDataUrl,
       }),
     );
 
@@ -324,7 +327,7 @@ export class SignupQrEmailService {
       defaults.message ??
         'Thank you for trusting us. Your payment is confirmed.',
       '',
-      'Tap the link below to view your QR code.',
+      'Your coupon QR code is included in this email. You can also open it online:',
       '',
       `View QR code: ${passUrl}`,
       '',

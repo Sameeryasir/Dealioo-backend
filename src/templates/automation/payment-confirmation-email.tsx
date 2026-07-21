@@ -4,7 +4,7 @@ import type { AutomationEmailTemplateProps } from './types';
 import { splitAutomationEmailBody } from '../../modules/automation/automation-email-merge.util';
 
 const DEFAULT_PAYMENT_CONFIRMATION_MESSAGE =
-  'Thank you for trusting us. Your payment is confirmed. Tap the button below to view your QR code and show it at the business.';
+  'Thank you for trusting us. Your payment is confirmed. Your offer is ready whenever you visit — show your pass at the business when you arrive.';
 
 export function PaymentConfirmationEmail({
   customerName,
@@ -19,14 +19,19 @@ export function PaymentConfirmationEmail({
   const paragraphs = splitAutomationEmailBody(body);
   const useDirectBody = directBody || Boolean(message?.trim());
 
+  const passUrl = ctaUrl?.trim() || undefined;
+  const passLabel = passUrl
+    ? ctaLabel?.trim() || 'View my pass'
+    : undefined;
+
   return (
     <AutomationEmailLayout
       preview={subject}
       title={headline?.trim() || 'Your payment is confirmed'}
       customerName={customerName}
       paragraphs={paragraphs}
-      ctaLabel={ctaLabel}
-      ctaUrl={ctaUrl}
+      ctaLabel={passLabel}
+      ctaUrl={passUrl}
       skipTitle={useDirectBody}
       skipGreeting={useDirectBody}
     />

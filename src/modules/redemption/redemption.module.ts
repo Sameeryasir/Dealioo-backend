@@ -12,6 +12,7 @@ import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
+import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
 import { RedemptionValidationService } from './redemption-validation.service';
@@ -36,6 +37,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     AuthModule,
     forwardRef(() => ActivityModule),
     forwardRef(() => AutomationModule),
+    CustomerJourneyModule,
   ],
   controllers: [RedemptionController],
   providers: [

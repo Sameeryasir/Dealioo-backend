@@ -11,6 +11,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AutomationModule } from '../automation/automation.module';
+import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { FunnelEventController } from './funnel-event.controller';
@@ -32,6 +33,7 @@ import { FunnelEventService } from './funnel-event.service';
     forwardRef(() => AutomationModule),
     forwardRef(() => RedemptionModule),
     ActivityModule,
+    CustomerJourneyModule,
   ],
   controllers: [FunnelEventController],
   providers: [FunnelEventService, FunnelAnalyticsService],

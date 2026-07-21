@@ -87,6 +87,25 @@ export class User {
   @Column({ name: 'plan_fit_completed_at', type: 'timestamptz', nullable: true })
   planFitCompletedAt: Date | null;
 
+  @Column({ name: 'plan_fit_scores', type: 'jsonb', nullable: true })
+  planFitScores: Record<string, number> | null;
+
+  @Column({ name: 'plan_fit_version', type: 'varchar', length: 32, nullable: true })
+  planFitVersion: string | null;
+
+  @Column({ name: 'plan_fit_confidence', type: 'varchar', length: 16, nullable: true })
+  planFitConfidence: string | null;
+
+  @Column({ name: 'plan_fit_selected_plan', type: 'varchar', length: 64, nullable: true })
+  planFitSelectedPlan: string | null;
+
+  @Column({
+    name: 'plan_fit_recommendation_accepted',
+    type: 'boolean',
+    nullable: true,
+  })
+  planFitRecommendationAccepted: boolean | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

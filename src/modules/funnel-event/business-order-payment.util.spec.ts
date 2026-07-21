@@ -38,6 +38,23 @@ describe('business order payment summary', () => {
     expect(summary.orderStatus).toBe('paid_online');
     expect(summary.onlineAmountCents).toBe(2200);
   });
+
+  it('marks QR visit even when order subtotal is missing', () => {
+    const visitedAt = new Date('2026-07-21T15:15:00.000Z');
+    const summary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.PAYMENT,
+        amount: 1200,
+        paymentStatus: FunnelPaymentStatus.PAID,
+      },
+      { orderSubtotal: null, visitedAt },
+      { paidAt: visitedAt },
+    );
+
+    expect(summary.businessVisitedAt).toEqual(visitedAt);
+    expect(summary.businessAmount).toBeNull();
+    expect(summary.orderStatus).toBe('paid_online');
+  });
 });
 
 describe('business event paid filter', () => {

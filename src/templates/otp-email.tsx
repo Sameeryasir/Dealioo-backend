@@ -18,6 +18,7 @@ import {
   DEALIOO_EMAIL_LOGO_URL,
   DEALIOO_EMAIL_LOGO_WIDTH,
   DEALIOO_EMAIL_MUTED,
+  DEALIOO_EMAIL_DARK_MODE_STYLE,
 } from './dealioo-email-brand';
 
 export type OtpEmailProps = {
@@ -40,11 +41,12 @@ export function OtpEmail({
     <Html>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <meta name="color-scheme" content="light only" />
-        <meta name="supported-color-schemes" content="light" />
+        <meta name="color-scheme" content="light dark" />
+        <meta name="supported-color-schemes" content="light dark" />
         <style
           dangerouslySetInnerHTML={{
             __html: `
+${DEALIOO_EMAIL_DARK_MODE_STYLE}
 /* 2xl — very large viewports */
 @media only screen and (min-width: 1536px) {
   .email-body { padding: 56px 40px 80px !important; }
@@ -100,18 +102,20 @@ export function OtpEmail({
             />
           </Section>
 
-          <Heading as="h1" className="email-title" style={title}>
+          <Heading as="h1" className="email-title dealioo-email-title" style={title}>
             Verify Otp
           </Heading>
 
-          <Text style={greeting}>Hi {greetingName},</Text>
+          <Text className="dealioo-email-greeting" style={greeting}>
+            Hi {greetingName},
+          </Text>
 
-          <Text style={body}>
+          <Text className="dealioo-email-body" style={body}>
             Welcome to Dealioo. Please confirm your email address using the
             code below to activate your session and keep your account secure.
           </Text>
 
-          <Text style={body}>
+          <Text className="dealioo-email-body" style={body}>
             Enter this verification code where you left off:
           </Text>
 
@@ -121,18 +125,22 @@ export function OtpEmail({
             </Text>
           </Section>
 
-          <Text style={meta}>
+          <Text className="dealioo-email-meta" style={meta}>
             This code expires in {expiresInMinutes} {minuteLabel}. Do not share
             it with anyone.
           </Text>
 
-          <Text style={disclaimer}>
+          <Text className="dealioo-email-meta" style={disclaimer}>
             If you didn&apos;t request this code, you can safely ignore this
             message.
           </Text>
 
-          <Text style={signoffBold}>Best regards,</Text>
-          <Text style={signoffTeam}>Dealioo Team</Text>
+          <Text className="dealioo-email-signoff-bold" style={signoffBold}>
+            Best regards,
+          </Text>
+          <Text className="dealioo-email-signoff-team" style={signoffTeam}>
+            Dealioo Team
+          </Text>
         </Container>
       </Body>
     </Html>

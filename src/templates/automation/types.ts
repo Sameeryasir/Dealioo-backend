@@ -7,7 +7,10 @@ export type AutomationEmailTemplateProps = {
   ctaLabel?: string;
   ctaUrl?: string;
   directBody?: boolean;
+  /** Base64 data-URL for the guest coupon QR (prepaid / payment emails). */
+  qrImageDataUrl?: string;
 };
+
 
 export type AutomationEmailRenderResult = {
   html: string;

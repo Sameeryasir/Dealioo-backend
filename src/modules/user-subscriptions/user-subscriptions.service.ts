@@ -1,8 +1,10 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -12,6 +14,7 @@ import {
   UserSubscription,
   type UserSubscriptionBillingCycle,
 } from '../../db/entities/user-subscription.entity';
+import { OnboardingService } from '../onboarding/onboarding.service';
 import { StripeService } from '../stripe/stripe.service';
 import { SelectUserPlanDto, CancelSubscriptionDto } from './user-subscriptions.dto';
 
@@ -80,6 +83,8 @@ export class UserSubscriptionsService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly stripeService: StripeService,
+    @Inject(forwardRef(() => OnboardingService))
+    private readonly onboardingService: OnboardingService,
   ) {}
 
   getActiveSubscriptionForUser(
@@ -236,6 +241,8 @@ export class UserSubscriptionsService {
         stripeCustomerId: checkout.stripeCustomerId,
       });
     }
+
+    void this.onboardingService.recordPlanSelection(userId, plan.slug);
 
     return { checkoutUrl: checkout.url, sessionId: checkout.sessionId };
   }

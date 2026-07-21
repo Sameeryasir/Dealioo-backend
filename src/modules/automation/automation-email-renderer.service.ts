@@ -59,6 +59,14 @@ export class AutomationEmailRendererService {
       lines.splice(3, 0, `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`);
     }
 
+    if (props.qrImageDataUrl?.trim()) {
+      lines.splice(
+        props.ctaUrl ? 4 : 3,
+        0,
+        'Your coupon QR code is included in the HTML version of this email.',
+      );
+    }
+
     return lines.join('\n');
   }
 }

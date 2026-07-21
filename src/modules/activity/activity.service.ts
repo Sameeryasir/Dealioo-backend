@@ -38,6 +38,7 @@ import {
   clampOverviewMonths,
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
+import { PusherService } from '../pusher/pusher.service';
 
 export type ActivityEventListItem = {
   id: number;
@@ -99,6 +100,7 @@ export class ActivityService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
+    private readonly pusherService: PusherService,
   ) {}
 
   /**
@@ -331,15 +333,17 @@ export class ActivityService {
   }): Promise<void> {
     const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
     const actorName = params.actorName?.trim() || null;
+    const occurredAt = params.occurredAt ?? new Date();
+    const description = actorName
+      ? `${actorName} created campaign "${name}"`
+      : `Created campaign "${name}"`;
     await this.logInTransaction(this.activityRepository.manager, {
       businessId: params.businessId,
       customerId: null,
       eventType: ActivityEventType.CAMPAIGN_CREATED,
-      description: actorName
-        ? `${actorName} created campaign "${name}"`
-        : `Created campaign "${name}"`,
+      description,
       idempotencyKey: `campaign_created:${params.campaignId}`,
-      occurredAt: params.occurredAt ?? new Date(),
+      occurredAt,
       metadata: {
         campaignId: params.campaignId,
         campaignName: name,
@@ -347,6 +351,16 @@ export class ActivityService {
         actorUserId: params.actorUserId ?? null,
         actorName,
       },
+    });
+    void this.pusherService.notifyCampaignActivity({
+      businessId: params.businessId,
+      eventType: 'campaign_created',
+      campaignId: params.campaignId,
+      campaignName: name,
+      description,
+      actorUserId: params.actorUserId ?? null,
+      actorName,
+      occurredAt: occurredAt.toISOString(),
     });
   }
 
@@ -362,13 +376,14 @@ export class ActivityService {
     const occurredAt = params.occurredAt ?? new Date();
     const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
     const actorName = params.actorName?.trim() || null;
+    const description = actorName
+      ? `${actorName} updated campaign "${name}"`
+      : `Updated campaign "${name}"`;
     await this.logInTransaction(this.activityRepository.manager, {
       businessId: params.businessId,
       customerId: null,
       eventType: ActivityEventType.CAMPAIGN_UPDATED,
-      description: actorName
-        ? `${actorName} updated campaign "${name}"`
-        : `Updated campaign "${name}"`,
+      description,
       idempotencyKey: `campaign_updated:${params.campaignId}:${occurredAt.toISOString()}`,
       occurredAt,
       metadata: {
@@ -378,6 +393,16 @@ export class ActivityService {
         actorUserId: params.actorUserId ?? null,
         actorName,
       },
+    });
+    void this.pusherService.notifyCampaignActivity({
+      businessId: params.businessId,
+      eventType: 'campaign_updated',
+      campaignId: params.campaignId,
+      campaignName: name,
+      description,
+      actorUserId: params.actorUserId ?? null,
+      actorName,
+      occurredAt: occurredAt.toISOString(),
     });
   }
 
@@ -393,13 +418,14 @@ export class ActivityService {
     const occurredAt = params.occurredAt ?? new Date();
     const name = params.campaignName.trim() || `Campaign #${params.campaignId}`;
     const actorName = params.actorName?.trim() || null;
+    const description = actorName
+      ? `${actorName} deleted campaign "${name}"`
+      : `Deleted campaign "${name}"`;
     await this.logInTransaction(this.activityRepository.manager, {
       businessId: params.businessId,
       customerId: null,
       eventType: ActivityEventType.CAMPAIGN_DELETED,
-      description: actorName
-        ? `${actorName} deleted campaign "${name}"`
-        : `Deleted campaign "${name}"`,
+      description,
       idempotencyKey: `campaign_deleted:${params.campaignId}:${occurredAt.toISOString()}`,
       occurredAt,
       metadata: {
@@ -409,6 +435,16 @@ export class ActivityService {
         actorUserId: params.actorUserId ?? null,
         actorName,
       },
+    });
+    void this.pusherService.notifyCampaignActivity({
+      businessId: params.businessId,
+      eventType: 'campaign_deleted',
+      campaignId: params.campaignId,
+      campaignName: name,
+      description,
+      actorUserId: params.actorUserId ?? null,
+      actorName,
+      occurredAt: occurredAt.toISOString(),
     });
   }
 

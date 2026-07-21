@@ -80,6 +80,12 @@ export class AutomationEmailService {
         message: message || defaults.message,
         headline: String(config.headline ?? defaults.headline ?? '').trim() || undefined,
         ctaLabel: ctaLabel || undefined,
+        ...(String(config.ctaUrl ?? '').trim()
+          ? { ctaUrl: String(config.ctaUrl).trim() }
+          : {}),
+        ...(String(config.qrImageDataUrl ?? '').trim()
+          ? { qrImageDataUrl: String(config.qrImageDataUrl).trim() }
+          : {}),
       },
     };
   }
@@ -126,6 +132,10 @@ export class AutomationEmailService {
     }
     if (parsed.ctaUrl) {
       templateProps.ctaUrl = parsed.ctaUrl;
+    }
+    const qrImageDataUrl = String(emailNodeConfig.qrImageDataUrl ?? '').trim();
+    if (qrImageDataUrl) {
+      templateProps.qrImageDataUrl = qrImageDataUrl;
     }
 
     return { subject, templateKey, templateProps };

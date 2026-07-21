@@ -1,6 +1,7 @@
 import {
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   Entity,
   JoinColumn,
   ManyToOne,
@@ -25,14 +26,15 @@ export class FunnelPayment {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'funnel_id' })
-  funnelId: number;
+  @Column({ name: 'funnel_id', type: 'int', nullable: true })
+  funnelId!: number;
 
   @ManyToOne(() => Funnel, (funnel) => funnel.payments, {
-    onDelete: 'RESTRICT',
+    onDelete: 'SET NULL',
+    nullable: true,
   })
   @JoinColumn({ name: 'funnel_id' })
-  funnel: Funnel;
+  funnel!: Funnel;
 
   @Column({ name: 'restaurant_id' })
   businessId: number;
@@ -156,4 +158,7 @@ export class FunnelPayment {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
 }

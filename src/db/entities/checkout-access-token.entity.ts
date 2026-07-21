@@ -1,6 +1,7 @@
 import {
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   Entity,
   Index,
   JoinColumn,
@@ -27,7 +28,7 @@ export class CheckoutAccessToken {
   customer: Customer;
 
   @Column({ name: 'funnel_id' })
-  funnelId: number;
+  funnelId!: number;
 
   @Column({ name: 'restaurant_id' })
   businessId: number;
@@ -47,4 +48,7 @@ export class CheckoutAccessToken {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
 }

@@ -17,12 +17,12 @@ export class CreateCampaignDto {
   @Type(() => Number)
   @IsNumber()
   @IsNotEmpty()
-  businessId: number;
+  businessId!: number;
 
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
-  campaignName: string;
+  campaignName!: string;
 
   @IsString()
   @IsNotEmpty()
@@ -35,7 +35,7 @@ export class CreateCampaignDto {
     },
     { message: 'websiteUrl must be a valid http or https URL' },
   )
-  websiteUrl: string;
+  websiteUrl!: string;
 
   @IsOptional()
   @Transform(({ value }) =>
@@ -55,13 +55,13 @@ export class CreateCampaignDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
-  offer: string;
+  offer!: string;
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(99_999_999.99)
-  price: number;
+  price!: number;
 
   @IsOptional()
   @IsEnum(CampaignPublicationStatus)

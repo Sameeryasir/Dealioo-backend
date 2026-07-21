@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, DataSource, Repository } from 'typeorm';
+import { Brackets, DataSource, In, IsNull, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -14,7 +14,17 @@ import {
   Campaign,
   CampaignPublicationStatus,
 } from '../../db/entities/campaign.entity';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
+import { Coupon } from '../../db/entities/coupon.entity';
+import { Customer } from '../../db/entities/customer.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
+import {
+  FunnelEvent,
+  FunnelEventType,
+} from '../../db/entities/funnel-event.entity';
+import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -368,146 +378,165 @@ export class CampaignService {
         select: ['id'],
       });
       const funnelId = funnel?.id ?? null;
+      const softDeletedAt = new Date();
 
       const guestIdSet = new Set<number>();
+      const collectGuestIds = (
+        rows: Array<{ customerId?: number | null }>,
+      ): void => {
+        for (const row of rows) {
+          const id = Number(row.customerId);
+          if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
+        }
+      };
 
       if (funnelId != null) {
-        const funnelGuestRows: Array<{ id: string | number }> =
-          await manager.query(
-            `
-              SELECT DISTINCT customer_id AS id
-              FROM funnel_event
-              WHERE funnel_id = $1 AND customer_id IS NOT NULL
-            `,
-            [funnelId],
-          );
-        for (const row of funnelGuestRows) {
-          const id = Number(row.id);
-          if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
-        }
-
-        const checkoutGuestRows: Array<{ id: string | number }> =
-          await manager.query(
-            `
-              SELECT DISTINCT customer_id AS id
-              FROM checkout_access_token
-              WHERE funnel_id = $1
-            `,
-            [funnelId],
-          );
-        for (const row of checkoutGuestRows) {
-          const id = Number(row.id);
-          if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
-        }
-      }
-
-      const campaignGuestRows: Array<{ id: string | number }> =
-        await manager.query(
-          `
-            SELECT DISTINCT customer_id AS id FROM (
-              SELECT customer_id FROM coupons WHERE campaign_id = $1
-              UNION
-              SELECT customer_id FROM customer_visits WHERE campaign_id = $1
-              UNION
-              SELECT customer_id FROM checkout_access_token WHERE campaign_id = $1
-            ) campaign_guests
-            WHERE customer_id IS NOT NULL
-          `,
-          [campaignId],
+        collectGuestIds(
+          await manager.find(FunnelEvent, {
+            where: { funnelId, deletedAt: IsNull() },
+            select: ['customerId'],
+          }),
         );
-      for (const row of campaignGuestRows) {
-        const id = Number(row.id);
-        if (Number.isFinite(id) && id > 0) guestIdSet.add(id);
+        collectGuestIds(
+          await manager.find(CheckoutAccessToken, {
+            where: { funnelId },
+            select: ['customerId'],
+          }),
+        );
       }
+
+      collectGuestIds(
+        await manager.find(Coupon, {
+          where: { campaignId, deletedAt: IsNull() },
+          select: ['customerId'],
+        }),
+      );
+      collectGuestIds(
+        await manager.find(CustomerVisit, {
+          where: { campaignId, deletedAt: IsNull() },
+          select: ['customerId'],
+        }),
+      );
+      collectGuestIds(
+        await manager.find(CheckoutAccessToken, {
+          where: { campaignId },
+          select: ['customerId'],
+        }),
+      );
       const guestIds = [...guestIdSet];
 
-      await manager.query(
-        `DELETE FROM customer_visits WHERE campaign_id = $1`,
-        [campaignId],
-      );
+      await manager.softDelete(CustomerVisit, { campaignId });
+      await manager.softDelete(RedemptionLog, { campaignId });
 
-      await manager.query(
-        `DELETE FROM redemption_logs WHERE campaign_id = $1`,
-        [campaignId],
-      );
-
-      await manager.query(
-        `
-          DELETE FROM checkout_access_token
-          WHERE campaign_id = $1
-             OR ($2::int IS NOT NULL AND funnel_id = $2)
-        `,
-        [campaignId, funnelId],
-      );
-
-      await manager.query(
-        `UPDATE coupons SET funnel_payment_id = NULL WHERE campaign_id = $1 OR ($2::int IS NOT NULL AND funnel_id = $2)`,
-        [campaignId, funnelId],
-      );
-
-      await manager.query(
-        `
-          DELETE FROM coupons
-          WHERE campaign_id = $1
-             OR ($2::int IS NOT NULL AND funnel_id = $2)
-        `,
-        [campaignId, funnelId],
-      );
-
-      await manager.query(
-        `
-          DELETE FROM funnel_payment
-          WHERE campaign_id = $1
-             OR ($2::int IS NOT NULL AND funnel_id = $2)
-        `,
-        [campaignId, funnelId],
-      );
-
+      const tokenDelete = manager
+        .createQueryBuilder()
+        .delete()
+        .from(CheckoutAccessToken)
+        .where('campaign_id = :campaignId', { campaignId });
       if (funnelId != null) {
-        await manager.query(`DELETE FROM funnel_order WHERE funnel_id = $1`, [
-          funnelId,
-        ]);
-        await manager.query(
-          `DELETE FROM funnel_analytics_event WHERE funnel_id = $1`,
-          [funnelId],
+        tokenDelete.orWhere('funnel_id = :funnelId', { funnelId });
+      }
+      await tokenDelete.execute();
+
+      const couponUpdate = manager
+        .createQueryBuilder()
+        .update(Coupon)
+        .set({
+          deletedAt: softDeletedAt,
+          funnelPaymentId: null,
+        })
+        .where('deleted_at IS NULL')
+        .andWhere(
+          new Brackets((qb) => {
+            qb.where('campaign_id = :campaignId', { campaignId });
+            if (funnelId != null) {
+              qb.orWhere('funnel_id = :funnelId', { funnelId });
+            }
+          }),
         );
-        await manager.query(`DELETE FROM funnel_event WHERE funnel_id = $1`, [
-          funnelId,
-        ]);
+      await couponUpdate.execute();
+
+      if (funnelId != null) {
+        await manager
+          .createQueryBuilder()
+          .update('funnel_order')
+          .set({ deleted_at: softDeletedAt })
+          .where('funnel_id = :funnelId', { funnelId })
+          .andWhere('deleted_at IS NULL')
+          .andWhere(`status <> 'paid'`)
+          .execute();
+
+        await manager
+          .createQueryBuilder()
+          .update(FunnelAnalyticsEvent)
+          .set({ deletedAt: softDeletedAt })
+          .where('funnel_id = :funnelId', { funnelId })
+          .andWhere('deleted_at IS NULL')
+          .execute();
+
+        await manager
+          .createQueryBuilder()
+          .update(FunnelEvent)
+          .set({ deletedAt: softDeletedAt })
+          .where('funnel_id = :funnelId', { funnelId })
+          .andWhere('deleted_at IS NULL')
+          .andWhere('event_type != :paymentType', {
+            paymentType: FunnelEventType.PAYMENT,
+          })
+          .execute();
       } else {
-        await manager.query(`DELETE FROM funnel_order WHERE campaign_id = $1`, [
-          campaignId,
-        ]);
+        await manager
+          .createQueryBuilder()
+          .update('funnel_order')
+          .set({ deleted_at: softDeletedAt })
+          .where('campaign_id = :campaignId', { campaignId })
+          .andWhere('deleted_at IS NULL')
+          .andWhere(`status <> 'paid'`)
+          .execute();
       }
 
       if (funnelId != null) {
-        await manager.query(`DELETE FROM funnels WHERE id = $1`, [funnelId]);
+        await manager.softDelete(Funnel, { id: funnelId });
       }
 
-      await manager.query(`DELETE FROM campaigns WHERE id = $1`, [campaignId]);
+      await manager.softDelete(Campaign, { id: campaignId });
 
       if (guestIds.length > 0) {
-        await manager.query(
-          `
-            DELETE FROM customers c
-            WHERE c.id = ANY($1::int[])
-              AND NOT EXISTS (
-                SELECT 1 FROM funnel_event fe WHERE fe.customer_id = c.id
-              )
-              AND NOT EXISTS (
-                SELECT 1 FROM coupons cp WHERE cp.customer_id = c.id
-              )
-              AND NOT EXISTS (
-                SELECT 1 FROM customer_visits cv WHERE cv.customer_id = c.id
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                FROM checkout_access_token cat
-                WHERE cat.customer_id = c.id
-              )
-          `,
-          [guestIds],
-        );
+        const [linkedEvents, linkedCoupons, linkedVisits, linkedTokens] =
+          await Promise.all([
+            manager.find(FunnelEvent, {
+              where: { customerId: In(guestIds), deletedAt: IsNull() },
+              select: ['customerId'],
+            }),
+            manager.find(Coupon, {
+              where: { customerId: In(guestIds), deletedAt: IsNull() },
+              select: ['customerId'],
+            }),
+            manager.find(CustomerVisit, {
+              where: { customerId: In(guestIds), deletedAt: IsNull() },
+              select: ['customerId'],
+            }),
+            manager.find(CheckoutAccessToken, {
+              where: { customerId: In(guestIds) },
+              select: ['customerId'],
+            }),
+          ]);
+
+        const stillLinked = new Set<number>();
+        for (const row of [
+          ...linkedEvents,
+          ...linkedCoupons,
+          ...linkedVisits,
+          ...linkedTokens,
+        ]) {
+          const id = Number(row.customerId);
+          if (Number.isFinite(id) && id > 0) stillLinked.add(id);
+        }
+
+        const orphanGuestIds = guestIds.filter((id) => !stillLinked.has(id));
+        if (orphanGuestIds.length > 0) {
+          await manager.softDelete(Customer, { id: In(orphanGuestIds) });
+        }
       }
     });
 

@@ -27,6 +27,7 @@ import {
 import { Business } from '../../db/entities/business.entity';
 import { AutomationService } from '../automation/automation.service';
 import { ActivityService } from '../activity/activity.service';
+import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import { CouponService } from '../redemption/coupon.service';
 import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
@@ -35,7 +36,7 @@ import {
 } from './overview-monthly.util';
 import {
   buildBusinessOrderPaymentSummary,
-  customerFunnelVisitKey,
+  customerCampaignVisitKey,
   type BusinessOrderPaymentStatus,
   type BusinessVisitSnapshot,
 } from './business-order-payment.util';
@@ -76,6 +77,7 @@ export class FunnelEventService {
     private readonly couponService: CouponService,
     private readonly signupQrEmailService: SignupQrEmailService,
     private readonly activityService: ActivityService,
+    private readonly customerJourneyService: CustomerJourneyService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
@@ -172,6 +174,8 @@ export class FunnelEventService {
         customerId: tracked.event.customerId,
       });
     }
+
+    await this.recordJourneyFromTrackedEvent(funnel, tracked.event);
 
     return tracked.event;
   }
@@ -339,6 +343,17 @@ export class FunnelEventService {
           couponId: coupon.id,
           businessName: business.name?.trim() || 'Business',
           occurredAt: visitedAt,
+        });
+
+        await this.customerJourneyService.recordQrRedeemed({
+          businessId,
+          customerId,
+          campaignId: funnel.campaign.id,
+          funnelId,
+          couponId: coupon.id,
+          funnelPaymentId: coupon.funnelPaymentId ?? savedPayment.id,
+          occurredAt: visitedAt,
+          source: 'scanner_purchase',
         });
       }
 
@@ -523,6 +538,65 @@ export class FunnelEventService {
       currency: currencyRow?.currency ?? null,
       data,
     };
+  }
+
+  private async recordJourneyFromTrackedEvent(
+    funnel: Funnel,
+    event: FunnelEvent,
+  ): Promise<void> {
+    if (event.customerId == null) {
+      return;
+    }
+
+    const campaign =
+      funnel.campaign ??
+      (await this.campaignRepository.findOne({
+        where: { id: funnel.campaignId },
+      }));
+    if (!campaign) {
+      return;
+    }
+
+    if (
+      event.eventType === FunnelEventType.SIGNUP ||
+      event.customerId != null
+    ) {
+      await this.customerJourneyService.recordSignup({
+        businessId: campaign.businessId,
+        customerId: event.customerId,
+        campaignId: campaign.id,
+        funnelId: funnel.id,
+        occurredAt: event.createdAt,
+        source: 'funnel_track',
+        funnelEventId: event.id,
+      });
+    }
+
+    if (
+      event.eventType === FunnelEventType.PAYMENT &&
+      this.isPaidFunnelEvent(event) &&
+      event.funnelPaymentId != null
+    ) {
+      await this.customerJourneyService.recordPayment({
+        businessId: campaign.businessId,
+        customerId: event.customerId,
+        campaignId: campaign.id,
+        funnelId: funnel.id,
+        funnelPaymentId: event.funnelPaymentId,
+        occurredAt: event.createdAt,
+        source: 'funnel_track',
+      });
+    }
+  }
+
+  async getCustomerJourneyForBusiness(params: {
+    businessId: number;
+    customerId: number;
+    campaignId: number;
+    funnelId?: number | null;
+    funnelPaymentId?: number | null;
+  }) {
+    return this.customerJourneyService.getJourney(params);
   }
 
   private async trackSignup(
@@ -813,6 +887,7 @@ export class FunnelEventService {
   ): Promise<{
     data: Array<{
       id: number;
+      rowKey: string;
       eventType: FunnelEventType;
       createdAt: Date;
       funnelId: number;
@@ -859,22 +934,26 @@ export class FunnelEventService {
 
     const allEventsTotal = await this.funnelEventRepository
       .createQueryBuilder('event')
+      .withDeleted()
       .innerJoin('event.funnel', 'funnel')
       .innerJoin('funnel.campaign', 'campaign')
       .where('campaign.restaurant_id = :businessId', { businessId })
+      .andWhere('event.deleted_at IS NULL')
       .getCount();
 
-    const qb = this.funnelEventRepository
+    const eventQb = this.funnelEventRepository
       .createQueryBuilder('event')
+      .withDeleted()
       .innerJoinAndSelect('event.funnel', 'funnel')
       .innerJoinAndSelect('funnel.campaign', 'campaign')
       .leftJoinAndSelect('event.customer', 'customer')
       .leftJoinAndSelect('event.funnelPayment', 'funnelPayment')
-      .where('campaign.restaurant_id = :businessId', { businessId });
+      .where('campaign.restaurant_id = :businessId', { businessId })
+      .andWhere('event.deleted_at IS NULL');
 
     if (search) {
       const searchPattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`;
-      qb.andWhere(
+      eventQb.andWhere(
         `(
           COALESCE(customer.name, '') ILIKE :searchPattern
           OR COALESCE(event.customer_email, '') ILIKE :searchPattern
@@ -885,49 +964,60 @@ export class FunnelEventService {
       );
     }
 
-    const rows = await qb.getMany();
-    const filteredRows = rows.filter((row) => row.funnel?.campaign != null);
+    const eventRows = (await eventQb.getMany()).filter(
+      (row) => row.funnel?.campaign != null,
+    );
+
     const linkedPaymentIds = new Set(
-      filteredRows
+      eventRows
         .map((row) => row.funnelPaymentId)
         .filter((id): id is number => id != null),
     );
-    const orphanPaidPayments = await this.loadUnlinkedPaidPayments(
+
+    const unlinkedPaidPayments = await this.loadUnlinkedPaidPayments(
       businessId,
       linkedPaymentIds,
       search,
     );
 
     const visitPairs = [
-      ...filteredRows
-        .filter((row) => row.customerId != null)
+      ...eventRows
+        .filter((row) => row.customerId != null && row.funnel?.campaign?.id != null)
         .map((row) => ({
           customerId: row.customerId!,
-          funnelId: row.funnelId,
+          campaignId: row.funnel.campaign.id,
         })),
-      ...orphanPaidPayments
-        .filter((payment) => payment.customerId != null)
+      ...unlinkedPaidPayments
+        .filter((payment) => {
+          const campaignId =
+            payment.campaignId ??
+            payment.campaign?.id ??
+            payment.funnel?.campaign?.id ??
+            null;
+          return payment.customerId != null && campaignId != null;
+        })
         .map((payment) => ({
           customerId: payment.customerId!,
-          funnelId: payment.funnelId,
+          campaignId:
+            payment.campaignId ??
+            payment.campaign?.id ??
+            payment.funnel!.campaign!.id,
         })),
     ];
 
-    const visitByCustomerFunnel = await this.loadLatestBusinessVisits(
+    const visitByCustomerCampaign = await this.loadLatestBusinessVisits(
       businessId,
       visitPairs,
     );
 
-    const mappedRows = filteredRows.map((row) =>
-      this.mapFunnelEventToBusinessRow(row, visitByCustomerFunnel),
+    const mappedRows = eventRows.map((row) =>
+      this.mapFunnelEventToBusinessRow(row, visitByCustomerCampaign),
     );
-    const orphanRows = await Promise.all(
-      orphanPaidPayments.map((payment) =>
-        this.mapOrphanPaidPaymentToBusinessRow(payment, visitByCustomerFunnel),
-      ),
+    const paymentOnlyRows = unlinkedPaidPayments.map((payment) =>
+      this.mapPaidPaymentToBusinessRow(payment, visitByCustomerCampaign),
     );
 
-    const combinedRows = [...mappedRows, ...orphanRows].filter((row) =>
+    const combinedRows = [...mappedRows, ...paymentOnlyRows].filter((row) =>
       matchesBusinessFunnelEventDateFilter(
         {
           createdAt: row.createdAt,
@@ -966,21 +1056,20 @@ export class FunnelEventService {
     };
   }
 
-  /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */
   private mapFunnelEventToBusinessRow(
     row: FunnelEvent & {
       funnel: Funnel & { campaign: Campaign };
       customer?: Customer | null;
       funnelPayment?: FunnelPayment | null;
     },
-    visitByCustomerFunnel: Map<string, BusinessVisitSnapshot>,
+    visitByCustomerCampaign: Map<string, BusinessVisitSnapshot>,
   ) {
     const visitKey =
       row.customerId != null
-        ? customerFunnelVisitKey(row.customerId, row.funnelId)
+        ? customerCampaignVisitKey(row.customerId, row.funnel.campaign.id)
         : null;
     const visit =
-      visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+      visitKey != null ? (visitByCustomerCampaign.get(visitKey) ?? null) : null;
     const paidAt = row.funnelPayment?.paidAt ?? null;
     const paymentSummary = buildBusinessOrderPaymentSummary(row, visit, {
       paidAt,
@@ -988,6 +1077,7 @@ export class FunnelEventService {
 
     return {
       id: row.id,
+      rowKey: `event:${row.id}`,
       eventType: row.eventType,
       createdAt: row.createdAt,
       funnelId: row.funnelId,
@@ -1015,20 +1105,24 @@ export class FunnelEventService {
     };
   }
 
-  private async mapOrphanPaidPaymentToBusinessRow(
+  private mapPaidPaymentToBusinessRow(
     payment: FunnelPayment & {
-      funnel: Funnel & { campaign: Campaign };
+      funnel?: (Funnel & { campaign?: Campaign | null }) | null;
+      campaign?: Campaign | null;
       customerId: number | null;
       customer: Customer | null;
     },
-    visitByCustomerFunnel: Map<string, BusinessVisitSnapshot>,
+    visitByCustomerCampaign: Map<string, BusinessVisitSnapshot>,
   ) {
+    const funnelId = payment.funnelId ?? payment.funnel?.id ?? null;
+    const campaign = payment.campaign ?? payment.funnel?.campaign ?? null;
+    const campaignId = payment.campaignId ?? campaign?.id ?? null;
     const visitKey =
-      payment.customerId != null
-        ? customerFunnelVisitKey(payment.customerId, payment.funnelId)
+      payment.customerId != null && campaignId != null
+        ? customerCampaignVisitKey(payment.customerId, campaignId)
         : null;
     const visit =
-      visitKey != null ? (visitByCustomerFunnel.get(visitKey) ?? null) : null;
+      visitKey != null ? (visitByCustomerCampaign.get(visitKey) ?? null) : null;
     const paidAt = payment.paidAt ?? payment.updatedAt ?? payment.createdAt;
     const paymentSummary = buildBusinessOrderPaymentSummary(
       {
@@ -1041,12 +1135,13 @@ export class FunnelEventService {
     );
 
     return {
-      id: -payment.id,
+      id: payment.id,
+      rowKey: `payment:${payment.id}`,
       eventType: FunnelEventType.PAYMENT,
       createdAt: paidAt,
-      funnelId: payment.funnelId,
-      campaignId: payment.funnel.campaign.id,
-      campaignName: payment.funnel.campaign.campaignName,
+      funnelId: funnelId ?? 0,
+      campaignId: payment.campaignId ?? campaign?.id ?? 0,
+      campaignName: campaign?.campaignName?.trim() || 'Deleted campaign',
       customer: payment.customer
         ? {
             id: payment.customer.id,
@@ -1076,7 +1171,8 @@ export class FunnelEventService {
   ): Promise<
     Array<
       FunnelPayment & {
-        funnel: Funnel & { campaign: Campaign };
+        funnel: (Funnel & { campaign?: Campaign | null }) | null;
+        campaign: Campaign | null;
         customerId: number | null;
         customer: Customer | null;
       }
@@ -1084,10 +1180,11 @@ export class FunnelEventService {
   > {
     const qb = this.funnelPaymentRepository
       .createQueryBuilder('payment')
-      .innerJoinAndSelect('payment.funnel', 'funnel')
-      .innerJoinAndSelect('funnel.campaign', 'campaign')
-      .where('campaign.restaurant_id = :businessId', { businessId })
-      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID });
+      .withDeleted()
+      .leftJoinAndSelect('payment.funnel', 'funnel')
+      .where('payment.restaurant_id = :businessId', { businessId })
+      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+      .andWhere('payment.deleted_at IS NULL');
 
     if (linkedPaymentIds.size > 0) {
       qb.andWhere('payment.id NOT IN (:...linkedPaymentIds)', {
@@ -1096,26 +1193,63 @@ export class FunnelEventService {
     }
 
     const payments = await qb.getMany();
-    const searchPattern = search?.toLowerCase();
+    if (payments.length === 0) {
+      return [];
+    }
 
-    const enriched = await Promise.all(
-      payments.map(async (payment) => {
-        const customerId = await this.resolveCustomerIdForPayment(payment);
-        const customer =
-          customerId != null
-            ? await this.customerRepository.findOne({
-                where: { id: customerId },
-              })
-            : null;
-
-        return {
-          ...payment,
-          customerId,
-          customer,
-        };
-      }),
+    const campaignIds = [
+      ...new Set(
+        payments
+          .map((payment) => payment.campaignId)
+          .filter((id): id is number => id != null && id > 0),
+      ),
+    ];
+    const campaigns =
+      campaignIds.length > 0
+        ? await this.campaignRepository.find({
+            where: { id: In(campaignIds) },
+            withDeleted: true,
+          })
+        : [];
+    const campaignById = new Map(
+      campaigns.map((campaign) => [campaign.id, campaign]),
     );
 
+    const customerIdByPaymentId =
+      await this.resolveCustomerIdsForPayments(payments);
+    const customerIds = [
+      ...new Set(
+        [...customerIdByPaymentId.values()].filter(
+          (id): id is number => id != null,
+        ),
+      ),
+    ];
+    const customers =
+      customerIds.length > 0
+        ? await this.customerRepository.find({
+            where: { id: In(customerIds) },
+            withDeleted: true,
+          })
+        : [];
+    const customerById = new Map(
+      customers.map((customer) => [customer.id, customer]),
+    );
+
+    const enriched = payments.map((payment) => {
+      const customerId = customerIdByPaymentId.get(payment.id) ?? null;
+      return {
+        ...payment,
+        funnel: payment.funnel ?? null,
+        campaign:
+          payment.campaignId != null
+            ? (campaignById.get(payment.campaignId) ?? null)
+            : null,
+        customerId,
+        customer: customerId != null ? (customerById.get(customerId) ?? null) : null,
+      };
+    });
+
+    const searchPattern = search?.toLowerCase();
     if (!searchPattern) {
       return enriched;
     }
@@ -1126,7 +1260,7 @@ export class FunnelEventService {
         payment.customer?.email,
         payment.customer?.phone,
         payment.customerEmail,
-        payment.funnel.campaign.campaignName,
+        payment.campaign?.campaignName,
       ]
         .filter(Boolean)
         .join(' ')
@@ -1135,10 +1269,102 @@ export class FunnelEventService {
     });
   }
 
-  /** Latest scanner visit amounts keyed by customer + funnel (one batch query per page). */
+  private async resolveCustomerIdsForPayments(
+    payments: FunnelPayment[],
+  ): Promise<Map<number, number | null>> {
+    const result = new Map<number, number | null>();
+    if (payments.length === 0) {
+      return result;
+    }
+
+    const paymentIds = payments.map((payment) => payment.id);
+
+    const tokens = await this.checkoutAccessTokenRepository.find({
+      where: { funnelPaymentId: In(paymentIds) },
+      select: ['funnelPaymentId', 'customerId', 'createdAt'],
+      order: { createdAt: 'DESC' },
+    });
+    const customerIdFromToken = new Map<number, number>();
+    for (const token of tokens) {
+      if (
+        token.funnelPaymentId != null &&
+        token.customerId != null &&
+        !customerIdFromToken.has(token.funnelPaymentId)
+      ) {
+        customerIdFromToken.set(token.funnelPaymentId, token.customerId);
+      }
+    }
+
+    const couponRows: Array<{ funnelPaymentId: number; customerId: number }> =
+      await this.funnelEventRepository.manager.query(
+        `
+          SELECT DISTINCT ON (funnel_payment_id)
+            funnel_payment_id AS "funnelPaymentId",
+            customer_id AS "customerId"
+          FROM coupons
+          WHERE funnel_payment_id = ANY($1)
+            AND customer_id IS NOT NULL
+            AND deleted_at IS NULL
+          ORDER BY funnel_payment_id, id DESC
+        `,
+        [paymentIds],
+      );
+    const customerIdFromCoupon = new Map(
+      couponRows.map((row) => [Number(row.funnelPaymentId), Number(row.customerId)]),
+    );
+
+    const unresolvedEmails = [
+      ...new Set(
+        payments
+          .filter(
+            (payment) =>
+              !customerIdFromToken.has(payment.id) &&
+              !customerIdFromCoupon.has(payment.id) &&
+              Boolean(payment.customerEmail?.trim()),
+          )
+          .map((payment) => payment.customerEmail!.trim().toLowerCase()),
+      ),
+    ];
+
+    const customersByEmail = new Map<string, number>();
+    if (unresolvedEmails.length > 0) {
+      const emailCustomers = await this.customerRepository
+        .createQueryBuilder('customer')
+        .where('LOWER(customer.email) IN (:...emails)', {
+          emails: unresolvedEmails,
+        })
+        .orderBy('customer.id', 'DESC')
+        .getMany();
+      for (const customer of emailCustomers) {
+        const key = customer.email.trim().toLowerCase();
+        if (!customersByEmail.has(key)) {
+          customersByEmail.set(key, customer.id);
+        }
+      }
+    }
+
+    for (const payment of payments) {
+      const fromToken = customerIdFromToken.get(payment.id);
+      if (fromToken != null) {
+        result.set(payment.id, fromToken);
+        continue;
+      }
+      const fromCoupon = customerIdFromCoupon.get(payment.id);
+      if (fromCoupon != null) {
+        result.set(payment.id, fromCoupon);
+        continue;
+      }
+      const email = payment.customerEmail?.trim().toLowerCase();
+      result.set(payment.id, email ? (customersByEmail.get(email) ?? null) : null);
+    }
+
+    return result;
+  }
+
+  /** Latest scanner visits keyed by customer + campaign. */
   private async loadLatestBusinessVisits(
     businessId: number,
-    pairs: Array<{ customerId: number; funnelId: number }>,
+    pairs: Array<{ customerId: number; campaignId: number }>,
   ): Promise<Map<string, BusinessVisitSnapshot>> {
     const result = new Map<string, BusinessVisitSnapshot>();
     if (pairs.length === 0) {
@@ -1146,37 +1372,26 @@ export class FunnelEventService {
     }
 
     const customerIds = [...new Set(pairs.map((pair) => pair.customerId))];
-    const funnelIds = [...new Set(pairs.map((pair) => pair.funnelId))];
+    const campaignIds = [...new Set(pairs.map((pair) => pair.campaignId))];
 
     const visits = await this.customerVisitRepository.find({
       where: {
         businessId,
-        coupon: {
-          customerId: In(customerIds),
-          funnelId: In(funnelIds),
-        },
+        customerId: In(customerIds),
+        campaignId: In(campaignIds),
       },
-      relations: { coupon: true },
       order: { visitedAt: 'DESC' },
     });
 
     for (const visit of visits) {
-      const customerId = visit.coupon?.customerId;
-      const funnelId = visit.coupon?.funnelId;
-      if (customerId == null || funnelId == null) {
-        continue;
-      }
-      if (visit.orderSubtotal == null) {
-        continue;
-      }
-
-      const key = customerFunnelVisitKey(customerId, funnelId);
+      const key = customerCampaignVisitKey(visit.customerId, visit.campaignId);
       if (result.has(key)) {
         continue;
       }
 
       result.set(key, {
-        orderSubtotal: Number(visit.orderSubtotal),
+        orderSubtotal:
+          visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
       });
     }

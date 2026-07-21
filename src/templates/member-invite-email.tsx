@@ -19,6 +19,7 @@ import {
   DEALIOO_EMAIL_LOGO_URL,
   DEALIOO_EMAIL_LOGO_WIDTH,
   DEALIOO_EMAIL_MUTED,
+  DEALIOO_EMAIL_DARK_MODE_STYLE,
 } from './dealioo-email-brand';
 
 export type MemberInviteEmailProps = {
@@ -46,7 +47,13 @@ export function MemberInviteEmail({
 
   return (
     <Html>
-      <Head />
+      <Head>
+        <meta name="color-scheme" content="light dark" />
+        <meta name="supported-color-schemes" content="light dark" />
+        <style
+          dangerouslySetInnerHTML={{ __html: DEALIOO_EMAIL_DARK_MODE_STYLE }}
+        />
+      </Head>
       <Preview>
         {inviterName} invited you to join {businessName} on RetentionPlus
       </Preview>
@@ -62,24 +69,26 @@ export function MemberInviteEmail({
             />
           </Section>
           <Section style={cardStyle}>
-            <Heading style={headingStyle}>You&apos;re invited</Heading>
-            <Text style={textStyle}>
+            <Heading className="dealioo-email-title" style={headingStyle}>
+              You&apos;re invited
+            </Heading>
+            <Text className="dealioo-email-body" style={textStyle}>
               <strong>{inviterName}</strong> invited you to join{' '}
               <strong>{businessName}</strong> as a <strong>{role}</strong>.
             </Text>
             {permissionLine ? (
-              <Text style={textStyle}>
+              <Text className="dealioo-email-body" style={textStyle}>
                 You will have access to: <strong>{permissionLine}</strong>.
               </Text>
             ) : null}
-            <Text style={textStyle}>
+            <Text className="dealioo-email-body" style={textStyle}>
               Click the button below to accept the invitation. This link expires
               in {expiresInDays} {dayLabel}.
             </Text>
             <Link href={acceptUrl} style={buttonStyle}>
               Accept invitation
             </Link>
-            <Text style={footerStyle}>
+            <Text className="dealioo-email-meta" style={footerStyle}>
               If you did not expect this email, you can safely ignore it.
             </Text>
           </Section>

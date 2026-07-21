@@ -1180,24 +1180,26 @@ export class AutomationEngineService {
       return config;
     }
 
+    const {
+      qrImageDataUrl: _qrImageDataUrl,
+      ...withoutQr
+    } = config;
+
     const attachPassLink = await this.shouldAttachPassLink(execution, nodeId);
     if (!attachPassLink) {
-      return config;
+      return withoutQr;
     }
 
     const passUrl = await this.resolvePassUrlForExecution(execution);
     if (!passUrl) {
-      return config;
+      return withoutQr;
     }
 
-    const enriched = { ...config };
-    if (!String(enriched.ctaUrl ?? '').trim()) {
-      enriched.ctaUrl = passUrl;
-    }
-    if (!String(enriched.ctaLabel ?? '').trim()) {
-      enriched.ctaLabel = 'View QR code';
-    }
-    return enriched;
+    return {
+      ...withoutQr,
+      ctaUrl: String(withoutQr.ctaUrl ?? '').trim() || passUrl,
+      ctaLabel: String(withoutQr.ctaLabel ?? '').trim() || 'View my pass',
+    };
   }
 
   private async shouldAttachPassLink(

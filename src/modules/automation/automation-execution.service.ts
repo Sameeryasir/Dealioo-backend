@@ -76,6 +76,76 @@ export class AutomationExecutionService {
     return this.executionRepository.save(execution);
   }
 
+  async createPrepaidExecutionForPayment(
+    dto: CreateAutomationExecutionDto,
+    customerId: number,
+    funnelPaymentId: number,
+  ): Promise<AutomationExecution | null> {
+    if (!Number.isFinite(funnelPaymentId) || funnelPaymentId < 1) {
+      return this.createExecution(dto, customerId, {
+        executionContext: { funnelPaymentId },
+      });
+    }
+
+    return this.executionRepository.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
+        dto.automationId,
+        funnelPaymentId,
+      ]);
+
+      const existing = await manager
+        .createQueryBuilder(AutomationExecution, 'execution')
+        .select('execution.id', 'id')
+        .where('execution.automation_id = :automationId', {
+          automationId: dto.automationId,
+        })
+        .andWhere('execution.customer_id = :customerId', { customerId })
+        .andWhere('execution.status != :failed', {
+          failed: AutomationExecutionStatus.FAILED,
+        })
+        .andWhere(
+          `(execution.execution_context->>'funnelPaymentId')::int = :funnelPaymentId`,
+          { funnelPaymentId },
+        )
+        .limit(1)
+        .getRawOne<{ id: string | number }>();
+
+      if (existing != null) {
+        return null;
+      }
+
+      const node = await manager.findOne(AutomationNode, {
+        where: { id: dto.currentNodeId, automationId: dto.automationId },
+      });
+      if (!node) {
+        throw new NotFoundException('Start node not found for this automation');
+      }
+
+      const automation = await manager.findOne(Automation, {
+        where: { id: dto.automationId },
+        select: ['id', 'version'],
+      });
+
+      const execution = manager.create(AutomationExecution, {
+        automationId: dto.automationId,
+        customerId,
+        currentNodeId: dto.currentNodeId,
+        purpose: dto.purpose,
+        status: AutomationExecutionStatus.RUNNING,
+        scheduledAt: null,
+        totalRecipients: 0,
+        emailsSentCount: 0,
+        queueJobId: null,
+        lastError: null,
+        automationVersion: automation?.version ?? 1,
+        executionContext: { funnelPaymentId },
+        lastEventId: null,
+      });
+
+      return manager.save(execution);
+    });
+  }
+
   async hasExecutionForFunnelPayment(
     automationId: number,
     customerId: number,

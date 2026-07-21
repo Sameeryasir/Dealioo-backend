@@ -11,7 +11,7 @@ export type BusinessOrderPaymentStatus =
   | 'paid_both';
 
 export type BusinessVisitSnapshot = {
-  orderSubtotal: number;
+  orderSubtotal: number | null;
   visitedAt: Date;
 };
 
@@ -27,6 +27,13 @@ export function customerFunnelVisitKey(
   funnelId: number,
 ): string {
   return `${customerId}:${funnelId}`;
+}
+
+export function customerCampaignVisitKey(
+  customerId: number,
+  campaignId: number,
+): string {
+  return `${customerId}:campaign:${campaignId}`;
 }
 
 export function isConfirmedOnlinePayment(input: {

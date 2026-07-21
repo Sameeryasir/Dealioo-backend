@@ -32,3 +32,14 @@ export type ChatMessagePusherPayload = {
   lastMessageAt: string;
   messageCount: number;
 };
+
+export type CampaignActivityPusherPayload = {
+  businessId: number;
+  eventType: 'campaign_created' | 'campaign_updated' | 'campaign_deleted';
+  campaignId: number;
+  campaignName: string;
+  description: string;
+  actorUserId: number | null;
+  actorName: string | null;
+  occurredAt: string;
+};

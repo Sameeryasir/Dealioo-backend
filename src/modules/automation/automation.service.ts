@@ -106,6 +106,8 @@ export class AutomationService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     private readonly executionService: AutomationExecutionService,
     private readonly engineService: AutomationEngineService,
     private readonly logService: AutomationLogService,
@@ -208,7 +210,7 @@ export class AutomationService {
 
     const saved = await this.automationRepository.save(automation);
 
-    if (wasActive && !saved.isActive) {
+    if (!saved.isActive && (wasActive || dto.isActive === false)) {
       await this.pauseAutomationExecutions(saved.id);
     }
 
@@ -385,7 +387,6 @@ export class AutomationService {
     automation.isActive = false;
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
-
     await this.pauseAutomationExecutions(saved.id);
 
     return saved;
@@ -396,12 +397,25 @@ export class AutomationService {
       await this.executionService.pauseInProgressExecutionsForAutomation(
         automationId,
       );
-    if (pausedExecutionIds.length > 0) {
-      await this.queueService.purgeExecutionJobs(pausedExecutionIds);
-      this.logger.log(
-        `Paused ${pausedExecutionIds.length} execution(s) for automation ${automationId}`,
-      );
+
+    const executionIds =
+      await this.executionService.findExecutionIdsByAutomationId(automationId);
+    await this.queueService.purgeAutomationJobs(automationId, executionIds);
+
+    for (const executionId of pausedExecutionIds) {
+      const execution = await this.executionService.findById(executionId);
+      await this.logService.createLog({
+        executionId,
+        nodeId: execution.currentNodeId,
+        customerId: execution.customerId,
+        message:
+          'Automation paused — run stopped and Redis scheduled jobs cleared',
+      });
     }
+
+    this.logger.log(
+      `Deactivated automation ${automationId}: paused ${pausedExecutionIds.length} run(s), purged Redis jobs for ${executionIds.length} execution(s)`,
+    );
   }
 
   private async resumePausedExecutionsForAutomation(
@@ -2458,6 +2472,7 @@ export class AutomationService {
         automation.id,
         event.customerId,
         funnelPaymentId,
+        event.funnelId,
       );
     } else {
       const hasActive = await this.executionService.hasActiveExecution(
@@ -2501,17 +2516,36 @@ export class AutomationService {
       return;
     }
 
-    const execution = await this.executionService.createExecution(
-      {
-        automationId: automation.id,
-        currentNodeId: startNodeId,
-        purpose: automation.purpose,
-      },
-      event.customerId,
+    const execution =
+      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT &&
       funnelPaymentId != null
-        ? { executionContext: { funnelPaymentId } }
-        : undefined,
-    );
+        ? await this.executionService.createPrepaidExecutionForPayment(
+            {
+              automationId: automation.id,
+              currentNodeId: startNodeId,
+              purpose: automation.purpose,
+            },
+            event.customerId,
+            funnelPaymentId,
+          )
+        : await this.executionService.createExecution(
+            {
+              automationId: automation.id,
+              currentNodeId: startNodeId,
+              purpose: automation.purpose,
+            },
+            event.customerId,
+            funnelPaymentId != null
+              ? { executionContext: { funnelPaymentId } }
+              : undefined,
+          );
+
+    if (!execution) {
+      this.logger.log(
+        `[Prepaid Offer] Skipped automation ${automation.id} — payment ${funnelPaymentId} journey already created (race)`,
+      );
+      return;
+    }
 
     const startNode = await this.executionService.findNodeForAutomation(
       automation.id,
@@ -2531,11 +2565,11 @@ export class AutomationService {
     }
   }
 
-  /** Stop in-progress prepaid runs when the same guest pays again — new payment starts fresh. */
   private async supersedeActivePrepaidExecutionsForCustomer(
     automationId: number,
     customerId: number,
     incomingFunnelPaymentId: number | null,
+    incomingFunnelId: number,
   ): Promise<void> {
     const activeExecutions =
       await this.executionService.findActiveExecutionsForCustomer(customerId);
@@ -2557,6 +2591,19 @@ export class AutomationService {
         existingPaymentId === incomingFunnelPaymentId
       ) {
         continue;
+      }
+
+      if (existingPaymentId != null) {
+        const existingPayment = await this.funnelPaymentRepository.findOne({
+          where: { id: existingPaymentId },
+          select: ['id', 'funnelId'],
+        });
+        if (
+          existingPayment &&
+          existingPayment.funnelId !== incomingFunnelId
+        ) {
+          continue;
+        }
       }
 
       await this.queueService.removeResumeExecutionJob(execution.id);
