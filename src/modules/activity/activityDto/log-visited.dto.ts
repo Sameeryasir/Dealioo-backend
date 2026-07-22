@@ -37,5 +37,9 @@ export class LogVisitedDto {
   visitSource?: CustomerVisitSource;
 
   @IsOptional()
+  @IsString()
+  offerName?: string | null;
+
+  @IsOptional()
   manager?: EntityManager;
 }

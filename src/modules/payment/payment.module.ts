@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
+import { Order } from '../../db/entities/order.entity';
 import { StripeWebhookEvent } from '../../db/entities/stripe-webhook-event.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
@@ -25,6 +26,7 @@ import { UserSubscriptionsModule } from '../user-subscriptions/user-subscription
       Business,
       Funnel,
       FunnelPayment,
+      Order,
       StripeWebhookEvent,
       Customer,
       CheckoutAccessToken,

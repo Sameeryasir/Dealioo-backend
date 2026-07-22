@@ -34,6 +34,11 @@ import {
   FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import {
+  Order,
+  OrderSource,
+  OrderStatus,
+} from '../../db/entities/order.entity';
 import { ScannerPurchaseRequest } from '../../db/entities/scanner-purchase-request.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AutomationService } from '../automation/automation.service';
@@ -50,7 +55,6 @@ import {
   buildRecentMonthBuckets,
 } from './overview-monthly.util';
 import {
-  buildBusinessOrderPaymentSummary,
   customerCampaignVisitKey,
   type BusinessOrderPaymentStatus,
   type BusinessVisitSnapshot,
@@ -60,7 +64,6 @@ import {
   matchesBusinessFunnelEventDateFilter,
   normalizeBusinessFunnelEventSearch,
   resolveBusinessEventDisplayStatus,
-  dedupeBusinessOrderEventRows,
   sortBusinessFunnelEventsByPaymentDate,
 } from './business-funnel-events-filters.util';
 import {
@@ -87,6 +90,8 @@ export class FunnelEventService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Order)
+    private readonly orderRepository: Repository<Order>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(CustomerVisit)
@@ -384,7 +389,7 @@ export class FunnelEventService {
       amountCents: number;
     };
 
-    const pendingDeals = await this.dataSource.transaction(async (manager) => {
+    const purchaseBatch = await this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
         businessId,
         customerId,
@@ -407,12 +412,27 @@ export class FunnelEventService {
       }
 
       const created: PendingDeal[] = [];
+      const order = await manager.save(
+        manager.create(Order, {
+          businessId,
+          customerId,
+          status: OrderStatus.PAID,
+          source: OrderSource.SCANNER,
+          totalAmount: expectedTotalCents,
+          currency: 'usd',
+          paidAt: collectedAt,
+          collectedByUserId: staffUserId,
+        }),
+      );
+
       for (const funnel of funnelsForPurchase) {
         const amountCents = dollarsToCents(Number(funnel.campaign.price));
         const payment = manager.create(FunnelPayment, {
           funnelId: funnel.id,
           businessId,
           campaignId: funnel.campaign.id,
+          customerId,
+          orderId: order.id,
           amount: amountCents,
           currency: 'usd',
           status: FunnelPaymentStatus.PAID,
@@ -449,18 +469,26 @@ export class FunnelEventService {
         );
       }
 
-      return created;
+      return { orderId: order.id, deals: created };
     });
 
-    if (pendingDeals == null && idempotencyKey) {
+    if (purchaseBatch == null && idempotencyKey) {
       const existing = await this.scannerPurchaseRequestRepository.findOne({
         where: { businessId, idempotencyKey },
       });
       return (existing?.responseJson as ScannerPurchasedDeal[]) ?? [];
     }
 
-    const deals = pendingDeals ?? [];
+    const deals = purchaseBatch?.deals ?? [];
+    const orderId = purchaseBatch?.orderId ?? null;
     const purchased: ScannerPurchasedDeal[] = [];
+    const issuedCoupons: Array<{
+      couponId: number;
+      campaignId: number;
+      funnelId: number;
+      paymentId: number;
+      funnelPaymentId: number | null;
+    }> = [];
 
     try {
       for (const deal of deals) {
@@ -493,38 +521,45 @@ export class FunnelEventService {
           throw new BadRequestException('Could not issue pass for this deal.');
         }
 
-        const existingVisit = await this.customerVisitRepository.findOne({
-          where: { couponId: coupon.id },
+        issuedCoupons.push({
+          couponId: coupon.id,
+          campaignId: funnel.campaign.id,
+          funnelId,
+          paymentId,
+          funnelPaymentId: coupon.funnelPaymentId ?? paymentId,
         });
-        if (!existingVisit) {
-          await this.customerVisitRepository.save({
-            customerId,
-            campaignId: funnel.campaign.id,
-            businessId,
-            couponId: coupon.id,
-            staffUserId,
-            visitedAt: collectedAt,
-            source: CustomerVisitSource.STAFF_LOOKUP,
-            orderSubtotal: visitOrderSubtotalDollars,
-          });
-
-          await this.customerJourneyService.recordQrRedeemed({
-            businessId,
-            customerId,
-            campaignId: funnel.campaign.id,
-            funnelId,
-            couponId: coupon.id,
-            funnelPaymentId: coupon.funnelPaymentId ?? paymentId,
-            occurredAt: collectedAt,
-            source: 'scanner_purchase',
-          });
-        }
 
         purchased.push({
           funnelId,
           campaignName: funnel.campaign.campaignName,
           couponId: coupon.id,
         });
+      }
+
+      if (issuedCoupons.length > 0) {
+        const campaignIds = [
+          ...new Set(issuedCoupons.map((row) => row.campaignId)),
+        ];
+        const primary = issuedCoupons[0]!;
+        const existingVisit = await this.customerVisitRepository.findOne({
+          where: { couponId: primary.couponId },
+        });
+        if (!existingVisit) {
+          await this.customerVisitRepository.save({
+            customerId,
+            campaignId: primary.campaignId,
+            businessId,
+            couponId: primary.couponId,
+            orderId,
+            staffUserId,
+            visitedAt: collectedAt,
+            source: CustomerVisitSource.STAFF_LOOKUP,
+            orderSubtotal: visitOrderSubtotalDollars,
+            visitCampaigns: campaignIds.map((campaignId) => ({
+              campaignId,
+            })),
+          });
+        }
       }
 
       if (idempotencyKey) {
@@ -1119,6 +1154,9 @@ export class FunnelEventService {
       businessVisitedAt: Date | null;
       paidAt: Date | null;
       funnelPaymentId: number | null;
+      paymentCollectedAt: Date | null;
+      orderId: number | null;
+      paymentSource: string | null;
     }>;
     meta: PaginationMeta & {
       campaignCount: number;
@@ -1141,6 +1179,7 @@ export class FunnelEventService {
       .where('campaign.restaurant_id = :businessId', { businessId })
       .getCount();
 
+    // allEventsTotal still counts funnel_event rows for dashboard meta.
     const allEventsTotal = await this.funnelEventRepository
       .createQueryBuilder('event')
       .withDeleted()
@@ -1150,79 +1189,34 @@ export class FunnelEventService {
       .andWhere('event.deleted_at IS NULL')
       .getCount();
 
-    const eventQb = this.funnelEventRepository
-      .createQueryBuilder('event')
-      .withDeleted()
-      .innerJoinAndSelect('event.funnel', 'funnel')
-      .innerJoinAndSelect('funnel.campaign', 'campaign')
-      .leftJoinAndSelect('event.customer', 'customer')
-      .leftJoinAndSelect('event.funnelPayment', 'funnelPayment')
-      .where('campaign.restaurant_id = :businessId', { businessId })
-      .andWhere('event.deleted_at IS NULL');
-
-    if (search) {
-      const searchPattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`;
-      eventQb.andWhere(
-        `(
-          COALESCE(customer.name, '') ILIKE :searchPattern
-          OR COALESCE(event.customer_email, '') ILIKE :searchPattern
-          OR COALESCE(customer.phone, '') ILIKE :searchPattern
-          OR COALESCE(campaign.campaign_name, '') ILIKE :searchPattern
-        )`,
-        { searchPattern },
-      );
-    }
-
-    const eventRows = (await eventQb.getMany()).filter(
-      (row) => row.funnel?.campaign != null,
-    );
-
-    const linkedPaymentIds = new Set(
-      eventRows
-        .map((row) => row.funnelPaymentId)
-        .filter((id): id is number => id != null),
-    );
-
-    const unlinkedPayments = await this.loadUnlinkedPayments(
+    const orders = await this.loadBusinessOrders(businessId);
+    const orderIds = orders.map((order) => order.id);
+    const paymentsByOrderId = await this.loadPaymentsGroupedByOrderId(
       businessId,
-      linkedPaymentIds,
-      search,
+      orderIds,
     );
 
-    const visitPairs = [
-      ...eventRows
-        .filter((row) => row.customerId != null && row.funnel?.campaign?.id != null)
-        .map((row) => ({
-          customerId: row.customerId!,
-          campaignId: row.funnel.campaign.id,
-        })),
-      ...unlinkedPayments
-        .filter((payment) => {
-          const campaignId =
-            payment.campaignId ??
-            payment.campaign?.id ??
-            payment.funnel?.campaign?.id ??
-            null;
-          return payment.customerId != null && campaignId != null;
-        })
-        .map((payment) => ({
-          customerId: payment.customerId!,
-          campaignId:
-            payment.campaignId ??
-            payment.campaign?.id ??
-            payment.funnel!.campaign!.id,
-        })),
-    ];
+    const allPaymentsForVisits = [...paymentsByOrderId.values()].flat();
+
+    const visitPairs = allPaymentsForVisits
+      .filter((payment) => {
+        const campaignId =
+          payment.campaignId ??
+          payment.campaign?.id ??
+          payment.funnel?.campaign?.id ??
+          null;
+        return payment.customerId != null && campaignId != null;
+      })
+      .map((payment) => ({
+        customerId: payment.customerId!,
+        campaignId:
+          payment.campaignId ??
+          payment.campaign?.id ??
+          payment.funnel!.campaign!.id,
+      }));
 
     const paymentIdsForVisits = [
-      ...new Set(
-        [
-          ...eventRows
-            .map((row) => row.funnelPaymentId)
-            .filter((id): id is number => id != null),
-          ...unlinkedPayments.map((payment) => payment.id),
-        ],
-      ),
+      ...new Set(allPaymentsForVisits.map((payment) => payment.id)),
     ];
 
     const visitByPaymentId = await this.loadVisitsByFunnelPaymentId(
@@ -1233,35 +1227,46 @@ export class FunnelEventService {
       businessId,
       visitPairs,
     );
+    const visitByOrderId = await this.loadVisitsByOrderId(businessId, orderIds);
 
-    const mappedRows = eventRows.map((row) =>
-      this.mapFunnelEventToBusinessRow(
-        row,
-        visitByPaymentId,
-        visitByCustomerCampaign,
-      ),
-    );
-    const paymentOnlyRows = unlinkedPayments.map((payment) =>
-      this.mapPaymentToBusinessRow(
-        payment,
-        visitByPaymentId,
-        visitByCustomerCampaign,
-      ),
-    );
-
-    const combinedRows = dedupeBusinessOrderEventRows([
-      ...mappedRows,
-      ...paymentOnlyRows,
-    ]).filter((row) =>
-      matchesBusinessFunnelEventDateFilter(
-        {
-          createdAt: row.createdAt,
-          paidAt: row.paidAt,
-          businessVisitedAt: row.businessVisitedAt,
-        },
-        dateFilter,
-      ),
-    );
+    const combinedRows = orders
+      .map((order) =>
+        this.mapOrderToBusinessRow(
+          order,
+          paymentsByOrderId.get(order.id) ?? [],
+          visitByPaymentId,
+          visitByCustomerCampaign,
+          visitByOrderId.get(order.id) ?? null,
+        ),
+      )
+      .filter((row) => {
+      if (
+        !matchesBusinessFunnelEventDateFilter(
+          {
+            createdAt: row.createdAt,
+            paidAt: row.paidAt,
+            businessVisitedAt: row.businessVisitedAt,
+          },
+          dateFilter,
+        )
+      ) {
+        return false;
+      }
+      if (!search) {
+        return true;
+      }
+      const haystack = [
+        row.customer?.name,
+        row.customer?.email,
+        row.customer?.phone,
+        row.customerEmail,
+        row.campaignName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(search.toLowerCase());
+    });
 
     const statusFilteredRows =
       statusFilter === 'all'
@@ -1291,135 +1296,74 @@ export class FunnelEventService {
     };
   }
 
-  private mapFunnelEventToBusinessRow(
-    row: FunnelEvent & {
-      funnel: Funnel & { campaign: Campaign };
-      customer?: Customer | null;
-      funnelPayment?: FunnelPayment | null;
-    },
-    visitByPaymentId: Map<number, BusinessVisitSnapshot>,
-    visitByCustomerCampaign: Map<string, BusinessVisitSnapshot>,
-  ) {
-    const visitFromPayment =
-      row.funnelPaymentId != null
-        ? (visitByPaymentId.get(row.funnelPaymentId) ?? null)
-        : null;
-    const visitKey =
-      row.customerId != null
-        ? customerCampaignVisitKey(row.customerId, row.funnel.campaign.id)
-        : null;
-    const visitFallback =
-      visitKey != null ? (visitByCustomerCampaign.get(visitKey) ?? null) : null;
-    const visit = visitFromPayment ?? visitFallback;
-    const livePaymentStatus = row.funnelPayment?.status ?? null;
-    const paidAt =
-      livePaymentStatus === FunnelPaymentStatus.PAID
-        ? (row.funnelPayment?.paidAt ??
-            row.funnelPayment?.createdAt ??
-            null)
-        : null;
-    const paymentSummary = buildBusinessOrderPaymentSummary(row, visitFromPayment, {
-      paidAt,
-      livePaymentStatus,
-    });
-
-    return {
-      id: row.id,
-      rowKey: `event:${row.id}`,
-      eventType: row.eventType,
-      createdAt: row.createdAt,
-      funnelId: row.funnelId,
-      campaignId: row.funnel.campaign.id,
-      campaignName: row.funnel.campaign.campaignName,
-      customer: row.customer
-        ? {
-            id: row.customer.id,
-            name: row.customer.name,
-            email: row.customer.email,
-            phone: row.customer.phone,
-          }
-        : null,
-      customerEmail: row.customerEmail,
-      amount: row.amount,
-      currency: row.currency,
-      paymentStatus: livePaymentStatus ?? row.paymentStatus,
-      receiptUrl: row.receiptUrl,
-      orderStatus: paymentSummary.orderStatus,
-      onlineAmountCents: paymentSummary.onlineAmountCents,
-      businessAmount: paymentSummary.businessAmount,
-      businessVisitedAt: paymentSummary.businessVisitedAt,
-      paidAt,
-      funnelPaymentId: row.funnelPaymentId,
-    };
+  private async loadBusinessOrders(
+    businessId: number,
+  ): Promise<Array<Order & { customer: Customer | null }>> {
+    return this.orderRepository
+      .createQueryBuilder('ord')
+      .leftJoinAndSelect('ord.customer', 'customer')
+      .where('ord.restaurant_id = :businessId', { businessId })
+      .andWhere('ord.deleted_at IS NULL')
+      .getMany() as Promise<Array<Order & { customer: Customer | null }>>;
   }
 
-  private mapPaymentToBusinessRow(
-    payment: FunnelPayment & {
-      funnel?: (Funnel & { campaign?: Campaign | null }) | null;
-      campaign?: Campaign | null;
-      customerId: number | null;
-      customer: Customer | null;
-    },
-    visitByPaymentId: Map<number, BusinessVisitSnapshot>,
-    visitByCustomerCampaign: Map<string, BusinessVisitSnapshot>,
-  ) {
-    const funnelId = payment.funnelId ?? payment.funnel?.id ?? null;
-    const campaign = payment.campaign ?? payment.funnel?.campaign ?? null;
-    const campaignId = payment.campaignId ?? campaign?.id ?? null;
-    const visitFromPayment = visitByPaymentId.get(payment.id) ?? null;
-    const visitKey =
-      payment.customerId != null && campaignId != null
-        ? customerCampaignVisitKey(payment.customerId, campaignId)
-        : null;
-    const visitFallback =
-      visitKey != null ? (visitByCustomerCampaign.get(visitKey) ?? null) : null;
-    const visit = visitFromPayment ?? visitFallback;
-    const sortAt =
-      payment.paidAt ?? payment.updatedAt ?? payment.createdAt;
-    const paymentSummary = buildBusinessOrderPaymentSummary(
-      {
-        eventType: FunnelEventType.PAYMENT,
-        amount: payment.amount,
-        paymentStatus: payment.status,
-      },
-      visitFromPayment,
-      { paidAt: payment.paidAt ?? payment.createdAt },
+  private async loadPaymentsGroupedByOrderId(
+    businessId: number,
+    orderIds: number[],
+  ): Promise<
+    Map<
+      number,
+      Array<
+        FunnelPayment & {
+          funnel: (Funnel & { campaign?: Campaign | null }) | null;
+          campaign: Campaign | null;
+          customerId: number | null;
+          customer: Customer | null;
+        }
+      >
+    >
+  > {
+    const grouped = new Map<
+      number,
+      Array<
+        FunnelPayment & {
+          funnel: (Funnel & { campaign?: Campaign | null }) | null;
+          campaign: Campaign | null;
+          customerId: number | null;
+          customer: Customer | null;
+        }
+      >
+    >();
+
+    if (orderIds.length === 0) {
+      return grouped;
+    }
+
+    const payments = await this.enrichPaymentsForBusinessOrders(
+      await this.funnelPaymentRepository
+        .createQueryBuilder('payment')
+        .withDeleted()
+        .leftJoinAndSelect('payment.funnel', 'funnel')
+        .where('payment.restaurant_id = :businessId', { businessId })
+        .andWhere('payment.deleted_at IS NULL')
+        .andWhere('payment.order_id IN (:...orderIds)', { orderIds })
+        .getMany(),
     );
 
-    return {
-      id: payment.id,
-      rowKey: `payment:${payment.id}`,
-      eventType: FunnelEventType.PAYMENT,
-      createdAt: sortAt,
-      funnelId: funnelId ?? 0,
-      campaignId: payment.campaignId ?? campaign?.id ?? 0,
-      campaignName: campaign?.campaignName?.trim() || 'Deleted campaign',
-      customer: payment.customer
-        ? {
-            id: payment.customer.id,
-            name: payment.customer.name,
-            email: payment.customer.email,
-            phone: payment.customer.phone,
-          }
-        : null,
-      customerEmail: payment.customerEmail,
-      amount: payment.amount,
-      currency: payment.currency,
-      paymentStatus: payment.status,
-      receiptUrl: payment.receiptUrl,
-      orderStatus: paymentSummary.orderStatus,
-      onlineAmountCents: paymentSummary.onlineAmountCents,
-      businessAmount: paymentSummary.businessAmount,
-      businessVisitedAt: paymentSummary.businessVisitedAt,
-      paidAt: payment.paidAt ?? payment.createdAt,
-      funnelPaymentId: payment.id,
-    };
+    for (const payment of payments) {
+      if (payment.orderId == null) {
+        continue;
+      }
+      const existing = grouped.get(payment.orderId) ?? [];
+      existing.push(payment);
+      grouped.set(payment.orderId, existing);
+    }
+
+    return grouped;
   }
 
-  private async loadUnlinkedPayments(
-    businessId: number,
-    linkedPaymentIds: Set<number>,
-    search?: string,
+  private async enrichPaymentsForBusinessOrders(
+    payments: FunnelPayment[],
   ): Promise<
     Array<
       FunnelPayment & {
@@ -1430,20 +1374,6 @@ export class FunnelEventService {
       }
     >
   > {
-    const qb = this.funnelPaymentRepository
-      .createQueryBuilder('payment')
-      .withDeleted()
-      .leftJoinAndSelect('payment.funnel', 'funnel')
-      .where('payment.restaurant_id = :businessId', { businessId })
-      .andWhere('payment.deleted_at IS NULL');
-
-    if (linkedPaymentIds.size > 0) {
-      qb.andWhere('payment.id NOT IN (:...linkedPaymentIds)', {
-        linkedPaymentIds: [...linkedPaymentIds],
-      });
-    }
-
-    const payments = await qb.getMany();
     if (payments.length === 0) {
       return [];
     }
@@ -1470,9 +1400,12 @@ export class FunnelEventService {
       await this.resolveCustomerIdsForPayments(payments);
     const customerIds = [
       ...new Set(
-        [...customerIdByPaymentId.values()].filter(
-          (id): id is number => id != null,
-        ),
+        [
+          ...payments
+            .map((payment) => payment.customerId)
+            .filter((id): id is number => id != null),
+          ...customerIdByPaymentId.values(),
+        ].filter((id): id is number => id != null),
       ),
     ];
     const customers =
@@ -1486,8 +1419,9 @@ export class FunnelEventService {
       customers.map((customer) => [customer.id, customer]),
     );
 
-    const enriched = payments.map((payment) => {
-      const customerId = customerIdByPaymentId.get(payment.id) ?? null;
+    return payments.map((payment) => {
+      const customerId =
+        payment.customerId ?? customerIdByPaymentId.get(payment.id) ?? null;
       return {
         ...payment,
         funnel: payment.funnel ?? null,
@@ -1496,28 +1430,170 @@ export class FunnelEventService {
             ? (campaignById.get(payment.campaignId) ?? null)
             : null,
         customerId,
-        customer: customerId != null ? (customerById.get(customerId) ?? null) : null,
+        customer:
+          customerId != null ? (customerById.get(customerId) ?? null) : null,
       };
     });
+  }
 
-    const searchPattern = search?.toLowerCase();
-    if (!searchPattern) {
-      return enriched;
+  private mapOrderToBusinessRow(
+    order: Order & { customer: Customer | null },
+    payments: Array<
+      FunnelPayment & {
+        funnel: (Funnel & { campaign?: Campaign | null }) | null;
+        campaign: Campaign | null;
+        customerId: number | null;
+        customer: Customer | null;
+      }
+    >,
+    visitByPaymentId: Map<number, BusinessVisitSnapshot>,
+    visitByCustomerCampaign: Map<string, BusinessVisitSnapshot>,
+    visitForOrder: BusinessVisitSnapshot | null,
+  ) {
+    const sortedPayments = [...payments].sort((left, right) => {
+      const leftAt = new Date(left.paidAt ?? left.createdAt).getTime();
+      const rightAt = new Date(right.paidAt ?? right.createdAt).getTime();
+      return rightAt - leftAt;
+    });
+    const primary = sortedPayments[0] ?? null;
+
+    const campaignNames: string[] = [];
+    const seenCampaignNames = new Set<string>();
+    let totalVisitNetDollars = 0;
+    let receiptUrl: string | null = null;
+    let paymentCollectedAt: Date | null = order.paidAt;
+    let anyPaid = order.status === OrderStatus.PAID;
+    const seenVisitIds = new Set<number>();
+
+    if (
+      visitForOrder?.orderSubtotal != null &&
+      Number(visitForOrder.orderSubtotal) > 0
+    ) {
+      totalVisitNetDollars = Number(visitForOrder.orderSubtotal);
+      if (visitForOrder.visitId != null) {
+        seenVisitIds.add(visitForOrder.visitId);
+      }
     }
 
-    return enriched.filter((payment) => {
-      const haystack = [
-        payment.customer?.name,
-        payment.customer?.email,
-        payment.customer?.phone,
-        payment.customerEmail,
-        payment.campaign?.campaignName,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(searchPattern);
-    });
+    for (const payment of sortedPayments) {
+      const campaign =
+        payment.campaign ?? payment.funnel?.campaign ?? null;
+      const campaignName = campaign?.campaignName?.trim();
+      if (campaignName && !seenCampaignNames.has(campaignName.toLowerCase())) {
+        seenCampaignNames.add(campaignName.toLowerCase());
+        campaignNames.push(campaignName);
+      }
+
+      if (totalVisitNetDollars <= 0) {
+        const visitFromPayment = visitByPaymentId.get(payment.id) ?? null;
+        const campaignId = payment.campaignId ?? campaign?.id ?? null;
+        const visitKey =
+          payment.customerId != null && campaignId != null
+            ? customerCampaignVisitKey(payment.customerId, campaignId)
+            : null;
+        const visitFallback =
+          visitKey != null
+            ? (visitByCustomerCampaign.get(visitKey) ?? null)
+            : null;
+        const visit = visitFromPayment ?? visitFallback;
+        if (
+          visit?.orderSubtotal != null &&
+          Number(visit.orderSubtotal) > 0 &&
+          (visit.visitId == null || !seenVisitIds.has(visit.visitId))
+        ) {
+          if (visit.visitId != null) {
+            seenVisitIds.add(visit.visitId);
+          }
+          totalVisitNetDollars += Number(visit.orderSubtotal);
+        }
+      }
+
+      if (!receiptUrl && payment.receiptUrl) {
+        receiptUrl = payment.receiptUrl;
+      }
+      if (payment.paymentCollectedAt) {
+        paymentCollectedAt = payment.paymentCollectedAt;
+      }
+      if (payment.status === FunnelPaymentStatus.PAID) {
+        anyPaid = true;
+      }
+    }
+
+    const customer =
+      order.customer ??
+      primary?.customer ??
+      null;
+    const paidAt = order.paidAt ?? primary?.paidAt ?? order.createdAt;
+    const onlineAmountCents =
+      order.totalAmount > 0
+        ? order.totalAmount
+        : sortedPayments.reduce(
+            (sum, payment) =>
+              payment.status === FunnelPaymentStatus.PAID
+                ? sum + (payment.amount ?? 0)
+                : sum,
+            0,
+          );
+    const hasOnline = anyPaid && onlineAmountCents > 0;
+    const hasBusiness = totalVisitNetDollars > 0;
+    let orderStatus: BusinessOrderPaymentStatus = 'not_paid';
+    if (hasOnline && hasBusiness) {
+      orderStatus = 'paid_both';
+    } else if (hasOnline) {
+      orderStatus = 'paid_online';
+    } else if (hasBusiness) {
+      orderStatus = 'paid_walk_in';
+    }
+
+    return {
+      id: order.id,
+      rowKey: `order:${order.id}`,
+      eventType: FunnelEventType.PAYMENT,
+      createdAt: paidAt ?? order.createdAt,
+      funnelId: primary?.funnelId ?? primary?.funnel?.id ?? 0,
+      campaignId:
+        primary?.campaignId ??
+        primary?.campaign?.id ??
+        primary?.funnel?.campaign?.id ??
+        0,
+      campaignName:
+        campaignNames.join(', ') ||
+        primary?.campaign?.campaignName?.trim() ||
+        'Order',
+      customer: customer
+        ? {
+            id: customer.id,
+            name: customer.name,
+            email: customer.email,
+            phone: customer.phone,
+          }
+        : null,
+      customerEmail:
+        customer?.email ?? primary?.customerEmail ?? null,
+      amount: onlineAmountCents > 0 ? onlineAmountCents : null,
+      currency: order.currency || primary?.currency || 'usd',
+      paymentStatus: anyPaid
+        ? FunnelPaymentStatus.PAID
+        : (primary?.status ?? null),
+      receiptUrl,
+      orderStatus,
+      onlineAmountCents: hasOnline ? onlineAmountCents : null,
+      businessAmount: hasBusiness
+        ? Math.round(totalVisitNetDollars * 100) / 100
+        : null,
+      businessVisitedAt: hasBusiness
+        ? (visitForOrder?.visitedAt ??
+            sortedPayments
+              .map((payment) => visitByPaymentId.get(payment.id)?.visitedAt)
+              .find((value) => value != null) ??
+            null)
+        : null,
+      paidAt: anyPaid ? paidAt : null,
+      funnelPaymentId: primary?.id ?? null,
+      paymentCollectedAt,
+      orderId: order.id,
+      paymentSource: primary?.paymentSource ?? null,
+    };
   }
 
   private async resolveCustomerIdsForPayments(
@@ -1612,6 +1688,38 @@ export class FunnelEventService {
     return result;
   }
 
+  private async loadVisitsByOrderId(
+    businessId: number,
+    orderIds: number[],
+  ): Promise<Map<number, BusinessVisitSnapshot>> {
+    const result = new Map<number, BusinessVisitSnapshot>();
+    if (orderIds.length === 0) {
+      return result;
+    }
+
+    const visits = await this.customerVisitRepository.find({
+      where: {
+        businessId,
+        orderId: In(orderIds),
+      },
+      order: { visitedAt: 'DESC' },
+    });
+
+    for (const visit of visits) {
+      if (visit.orderId == null || result.has(visit.orderId)) {
+        continue;
+      }
+      result.set(visit.orderId, {
+        visitId: visit.id,
+        orderSubtotal:
+          visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
+        visitedAt: visit.visitedAt,
+      });
+    }
+
+    return result;
+  }
+
   private async loadVisitsByFunnelPaymentId(
     businessId: number,
     paymentIds: number[],
@@ -1636,6 +1744,7 @@ export class FunnelEventService {
         continue;
       }
       result.set(paymentId, {
+        visitId: visit.id,
         orderSubtotal:
           visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
@@ -1655,28 +1764,37 @@ export class FunnelEventService {
     }
 
     const customerIds = [...new Set(pairs.map((pair) => pair.customerId))];
-    const campaignIds = [...new Set(pairs.map((pair) => pair.campaignId))];
+    const campaignIdSet = new Set(pairs.map((pair) => pair.campaignId));
 
     const visits = await this.customerVisitRepository.find({
       where: {
         businessId,
         customerId: In(customerIds),
-        campaignId: In(campaignIds),
       },
+      relations: { visitCampaigns: true },
       order: { visitedAt: 'DESC' },
     });
 
     for (const visit of visits) {
-      const key = customerCampaignVisitKey(visit.customerId, visit.campaignId);
-      if (result.has(key)) {
-        continue;
+      const ids = [
+        visit.campaignId,
+        ...(visit.visitCampaigns ?? []).map((row) => row.campaignId),
+      ];
+      for (const campaignId of ids) {
+        if (!campaignIdSet.has(campaignId)) {
+          continue;
+        }
+        const key = customerCampaignVisitKey(visit.customerId, campaignId);
+        if (result.has(key)) {
+          continue;
+        }
+        result.set(key, {
+          visitId: visit.id,
+          orderSubtotal:
+            visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
+          visitedAt: visit.visitedAt,
+        });
       }
-
-      result.set(key, {
-        orderSubtotal:
-          visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
-        visitedAt: visit.visitedAt,
-      });
     }
 
     return result;

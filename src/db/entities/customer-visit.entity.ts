@@ -6,12 +6,15 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Campaign } from './campaign.entity';
 import { Coupon } from './coupon.entity';
 import { Customer } from './customer.entity';
 import { Business } from './business.entity';
+import { CustomerVisitCampaign } from './customer-visit-campaign.entity';
+import { Order } from './order.entity';
 import { User } from './user.entity';
 
 export enum CustomerVisitSource {
@@ -42,6 +45,11 @@ export class CustomerVisit {
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
+  @OneToMany(() => CustomerVisitCampaign, (row) => row.customerVisit, {
+    cascade: true,
+  })
+  visitCampaigns: CustomerVisitCampaign[];
+
   @Column({ name: 'restaurant_id' })
   businessId: number;
 
@@ -55,6 +63,13 @@ export class CustomerVisit {
   @ManyToOne(() => Coupon, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'coupon_id' })
   coupon: Coupon;
+
+  @Column({ name: 'order_id', type: 'int', nullable: true })
+  orderId: number | null;
+
+  @ManyToOne(() => Order, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'order_id' })
+  order: Order | null;
 
   @Column({ name: 'staff_user_id', type: 'int', nullable: true })
   staffUserId: number | null;

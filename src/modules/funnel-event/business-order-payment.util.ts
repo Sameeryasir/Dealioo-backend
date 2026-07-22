@@ -11,6 +11,7 @@ export type BusinessOrderPaymentStatus =
   | 'paid_both';
 
 export type BusinessVisitSnapshot = {
+  visitId?: number;
   orderSubtotal: number | null;
   visitedAt: Date;
 };

@@ -5,6 +5,7 @@ import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
+import { CustomerVisitCampaign } from '../../db/entities/customer-visit-campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
@@ -28,6 +29,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Coupon,
       RedemptionLog,
       CustomerVisit,
+      CustomerVisitCampaign,
       Customer,
       Campaign,
       Funnel,

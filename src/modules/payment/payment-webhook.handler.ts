@@ -8,6 +8,11 @@ import {
   FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import {
+  Order,
+  OrderSource,
+  OrderStatus,
+} from '../../db/entities/order.entity';
 import { ActivityService } from '../activity/activity.service';
 import { FunnelEventService } from '../funnel-event/funnel-event.service';
 import { CouponService } from '../redemption/coupon.service';
@@ -67,6 +72,8 @@ export class PaymentWebhookHandler {
   constructor(
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Order)
+    private readonly orderRepository: Repository<Order>,
     private readonly stripeService: StripeService,
     private readonly couponService: CouponService,
     private readonly activityService: ActivityService,
@@ -223,6 +230,7 @@ export class PaymentWebhookHandler {
 
 
     if (session.payment_status === 'paid' && !wasAlreadyPaid) {
+      await this.ensureOrderForPaidPayment(payment.id);
       await this.activityService.logPrepaidForOffer({
         paymentId: payment.id,
         occurredAt: new Date(),
@@ -278,6 +286,8 @@ export class PaymentWebhookHandler {
       ...(paymentMethodId ? { paymentMethod: paymentMethodId } : {}),
       ...(receiptUrl ? { receiptUrl } : {}),
     });
+
+    await this.ensureOrderForPaidPayment(payment.id);
 
     if (!wasAlreadyPaid) {
       await this.activityService.logPrepaidForOffer({
@@ -562,6 +572,41 @@ export class PaymentWebhookHandler {
     });
   }
 
+  private async ensureOrderForPaidPayment(paymentId: number): Promise<void> {
+    const payment = await this.funnelPaymentRepository.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment || payment.orderId != null) {
+      return;
+    }
+    if (payment.status !== FunnelPaymentStatus.PAID) {
+      return;
+    }
+
+    const source =
+      payment.paymentSource === FunnelPaymentSource.SCANNER
+        ? OrderSource.SCANNER
+        : payment.paymentSource === FunnelPaymentSource.MANUAL
+          ? OrderSource.MANUAL
+          : OrderSource.STRIPE;
+
+    const order = await this.orderRepository.save(
+      this.orderRepository.create({
+        businessId: payment.businessId,
+        customerId: payment.customerId ?? null,
+        status: OrderStatus.PAID,
+        source,
+        totalAmount: payment.amount,
+        currency: payment.currency || 'usd',
+        paidAt: payment.paidAt ?? new Date(),
+        collectedByUserId: payment.paymentCollectedBy ?? null,
+      }),
+    );
+
+    await this.funnelPaymentRepository.update(payment.id, {
+      orderId: order.id,
+    });
+  }
 
   static readonly PENDING_REUSE_HOURS = 24;
 

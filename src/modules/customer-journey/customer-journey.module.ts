@@ -6,6 +6,7 @@ import { CustomerJourneyEvent } from '../../db/entities/customer-journey-event.e
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { CustomerJourneyService } from './customer-journey.service';
 
 @Module({
@@ -17,6 +18,7 @@ import { CustomerJourneyService } from './customer-journey.service';
       Funnel,
       Campaign,
       Coupon,
+      FunnelPayment,
     ]),
   ],
   providers: [CustomerJourneyService],

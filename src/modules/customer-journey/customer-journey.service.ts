@@ -5,12 +5,16 @@ import {
   CustomerJourneyEvent,
   CustomerJourneyStep,
 } from '../../db/entities/customer-journey-event.entity';
-import { CustomerVisit } from '../../db/entities/customer-visit.entity';
+import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
-import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentSource,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Coupon, CouponStatus } from '../../db/entities/coupon.entity';
@@ -81,6 +85,8 @@ export class CustomerJourneyService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Coupon)
     private readonly couponRepository: Repository<Coupon>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
   ) {}
 
   async recordStep(input: RecordJourneyStepInput): Promise<void> {
@@ -225,6 +231,11 @@ export class CustomerJourneyService {
     const signup = this.pickSignupStep(events);
     const payment = this.pickPaymentStep(events, params.funnelPaymentId);
     const qr = await this.pickQrStep(events, params.funnelPaymentId);
+    const includeQrStep = await this.shouldIncludeQrJourneyStep({
+      funnelPaymentId: params.funnelPaymentId,
+      payment,
+      qr,
+    });
 
     const resolved: Record<CustomerJourneyStep, ResolvedStep> = {
       [CustomerJourneyStep.SIGNUP]: signup,
@@ -232,8 +243,14 @@ export class CustomerJourneyService {
       [CustomerJourneyStep.QR_REDEEMED]: qr,
     };
 
+    const stepsToShow = includeQrStep
+      ? JOURNEY_STEPS
+      : JOURNEY_STEPS.filter(
+          (item) => item.step !== CustomerJourneyStep.QR_REDEEMED,
+        );
+
     let foundCurrent = false;
-    const steps: JourneyStepView[] = JOURNEY_STEPS.map((item) => {
+    const steps: JourneyStepView[] = stepsToShow.map((item) => {
       const match = resolved[item.step];
       if (match.occurredAt) {
         return {
@@ -272,7 +289,7 @@ export class CustomerJourneyService {
     const completedAt = [
       signup.occurredAt,
       payment.occurredAt,
-      qr.occurredAt,
+      ...(includeQrStep ? [qr.occurredAt] : []),
     ].filter((value): value is Date => value != null);
 
     const lastUpdatedAt =
@@ -334,11 +351,19 @@ export class CustomerJourneyService {
     events: CustomerJourneyEvent[],
     funnelPaymentId?: number | null,
   ): Promise<ResolvedStep> {
-    // Without a payment scope, still honor an explicit qr_redeemed journey row
+    const isNonQrSource = (source: string | null | undefined) =>
+      source === 'scanner_purchase' ||
+      source === 'staff_lookup' ||
+      source === 'backfill_payment_scope' ||
+      source === 'backfill_customer_visit';
+
     if (funnelPaymentId == null) {
       const event =
-        events.find((row) => row.step === CustomerJourneyStep.QR_REDEEMED) ??
-        null;
+        events.find(
+          (row) =>
+            row.step === CustomerJourneyStep.QR_REDEEMED &&
+            !isNonQrSource(row.source),
+        ) ?? null;
       return {
         event,
         occurredAt: event?.occurredAt ?? null,
@@ -358,11 +383,13 @@ export class CustomerJourneyService {
       events.find(
         (row) =>
           row.step === CustomerJourneyStep.QR_REDEEMED &&
+          !isNonQrSource(row.source) &&
           row.refType === 'coupon' &&
           row.refId === String(coupon.id),
       ) ??
       events.find((row) => {
         if (row.step !== CustomerJourneyStep.QR_REDEEMED) return false;
+        if (isNonQrSource(row.source)) return false;
         const metaPaymentId = row.metadata?.funnelPaymentId;
         return Number(metaPaymentId) === funnelPaymentId;
       }) ??
@@ -381,6 +408,9 @@ export class CustomerJourneyService {
       order: { visitedAt: 'DESC' },
     });
     if (visit) {
+      if (visit.source === CustomerVisitSource.STAFF_LOOKUP) {
+        return { event: null, occurredAt: null, source: null };
+      }
       return {
         event: null,
         occurredAt: visit.visitedAt,
@@ -388,7 +418,6 @@ export class CustomerJourneyService {
       };
     }
 
-    // Coupon marked redeemed (QR scanned) even if visit row is missing
     if (coupon.redeemedAt != null || coupon.status === CouponStatus.REDEEMED) {
       return {
         event: null,
@@ -398,6 +427,48 @@ export class CustomerJourneyService {
     }
 
     return { event: null, occurredAt: null, source: null };
+  }
+
+  private async shouldIncludeQrJourneyStep(params: {
+    funnelPaymentId?: number | null;
+    payment: ResolvedStep;
+    qr: ResolvedStep;
+  }): Promise<boolean> {
+    if (params.qr.occurredAt != null) {
+      return true;
+    }
+
+    if (params.funnelPaymentId != null) {
+      const payment = await this.funnelPaymentRepository.findOne({
+        where: { id: params.funnelPaymentId },
+      });
+      if (payment?.paymentSource === FunnelPaymentSource.SCANNER) {
+        return false;
+      }
+
+      const coupon = await this.couponRepository.findOne({
+        where: { funnelPaymentId: params.funnelPaymentId },
+        order: { createdAt: 'DESC' },
+      });
+      if (coupon) {
+        const visit = await this.customerVisitRepository.findOne({
+          where: { couponId: coupon.id },
+          order: { visitedAt: 'DESC' },
+        });
+        if (visit?.source === CustomerVisitSource.STAFF_LOOKUP) {
+          return false;
+        }
+      }
+    }
+
+    if (
+      params.payment.source === 'scanner_purchase' ||
+      params.payment.source === 'staff_lookup'
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   private async ensurePaymentScopedBackfill(params: {
@@ -442,7 +513,7 @@ export class CustomerJourneyService {
       where: { couponId: coupon.id },
       order: { visitedAt: 'DESC' },
     });
-    if (!visit) {
+    if (!visit || visit.source === CustomerVisitSource.STAFF_LOOKUP) {
       return;
     }
 
@@ -540,6 +611,9 @@ export class CustomerJourneyService {
     });
 
     for (const visit of visits) {
+      if (visit.source === CustomerVisitSource.STAFF_LOOKUP) {
+        continue;
+      }
       await this.recordQrRedeemed({
         businessId: params.businessId,
         customerId: params.customerId,

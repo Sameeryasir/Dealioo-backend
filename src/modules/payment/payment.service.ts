@@ -18,6 +18,11 @@ import {
   FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import {
+  Order,
+  OrderSource,
+  OrderStatus,
+} from '../../db/entities/order.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
@@ -64,6 +69,8 @@ export class PaymentService implements OnModuleInit {
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Order)
+    private readonly orderRepository: Repository<Order>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly stripeService: StripeService,
@@ -238,6 +245,7 @@ export class PaymentService implements OnModuleInit {
               ? { stripePaymentIntentId: paymentIntentId }
               : {}),
           });
+          await this.ensureOrderForPaidPayment(payment.id);
           logStripePayment({
             phase: 'payment_status_sync',
             outcome: 'marked_paid_from_checkout_session',
@@ -281,6 +289,7 @@ export class PaymentService implements OnModuleInit {
           status: FunnelPaymentStatus.PAID,
           paidAt: payment.paidAt ?? new Date(),
         });
+        await this.ensureOrderForPaidPayment(payment.id);
         logStripePayment({
           phase: 'payment_status_sync',
           outcome: 'marked_paid_from_stripe',
@@ -643,6 +652,7 @@ export class PaymentService implements OnModuleInit {
             ? { stripePaymentIntentId: paymentIntentId }
             : {}),
         });
+        await this.ensureOrderForPaidPayment(payment.id);
         await this.linkSignupPassToPayment(
           opts.customerId,
           opts.funnelId,
@@ -946,5 +956,41 @@ export class PaymentService implements OnModuleInit {
         error: message,
       });
     }
+  }
+
+  private async ensureOrderForPaidPayment(paymentId: number): Promise<void> {
+    const payment = await this.funnelPaymentRepository.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment || payment.orderId != null) {
+      return;
+    }
+    if (payment.status !== FunnelPaymentStatus.PAID) {
+      return;
+    }
+
+    const source =
+      payment.paymentSource === FunnelPaymentSource.SCANNER
+        ? OrderSource.SCANNER
+        : payment.paymentSource === FunnelPaymentSource.MANUAL
+          ? OrderSource.MANUAL
+          : OrderSource.STRIPE;
+
+    const order = await this.orderRepository.save(
+      this.orderRepository.create({
+        businessId: payment.businessId,
+        customerId: payment.customerId ?? null,
+        status: OrderStatus.PAID,
+        source,
+        totalAmount: payment.amount,
+        currency: payment.currency || 'usd',
+        paidAt: payment.paidAt ?? new Date(),
+        collectedByUserId: payment.paymentCollectedBy ?? null,
+      }),
+    );
+
+    await this.funnelPaymentRepository.update(payment.id, {
+      orderId: order.id,
+    });
   }
 }

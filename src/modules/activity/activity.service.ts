@@ -31,10 +31,9 @@ import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import {
-  CustomerVisit,
   CustomerVisitSource,
 } from '../../db/entities/customer-visit.entity';
-import { dollarsToCents } from '../../common/money.util';
+import { CouponPaymentStatus } from '../../db/entities/coupon.entity';
 import { visitedActivityDescription } from './visited-activity-description.util';
 import {
   escapeIlikePattern,
@@ -112,8 +111,6 @@ export class ActivityService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
-    @InjectRepository(CustomerVisit)
-    private readonly customerVisitRepository: Repository<CustomerVisit>,
     private readonly pusherService: PusherService,
   ) {}
 
@@ -232,18 +229,26 @@ export class ActivityService {
       params.coupon.campaign?.offer?.trim() ||
       params.coupon.campaign?.campaignName?.trim() ||
       'Reward';
+    const businessName = params.businessName.trim() || 'Business';
+    const paymentLabel =
+      params.coupon.paymentStatus === CouponPaymentStatus.PENDING
+        ? 'pay at counter'
+        : 'prepaid';
+    const description = `Redeemed ${offerName} (${paymentLabel}) at ${businessName}`;
 
     const payload: CreateActivityEventDto = {
       businessId: params.businessId,
       customerId: params.customerId,
       eventType: ActivityEventType.REDEEMED_REWARD,
-      description: offerName,
+      description,
       idempotencyKey: `redeemed:coupon:${params.coupon.id}`,
       occurredAt: params.occurredAt,
       metadata: {
         couponId: params.coupon.id,
         campaignId: params.coupon.campaignId,
         offerName,
+        businessName,
+        paymentStatus: params.coupon.paymentStatus ?? null,
       },
     };
 
@@ -258,6 +263,7 @@ export class ActivityService {
   async logVisited(params: LogVisitedDto): Promise<void> {
     const visitSource =
       params.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
+    const offerName = params.offerName?.trim() || null;
     const payload: CreateActivityEventDto = {
       businessId: params.businessId,
       customerId: params.customerId,
@@ -265,12 +271,14 @@ export class ActivityService {
       description: visitedActivityDescription(
         params.businessName,
         visitSource,
+        offerName,
       ),
       idempotencyKey: `visited:coupon:${params.couponId}`,
       occurredAt: params.occurredAt,
       metadata: {
         couponId: params.couponId,
         visitSource,
+        ...(offerName ? { offerName } : {}),
       },
     };
 
@@ -320,7 +328,7 @@ export class ActivityService {
     const isScannerWalkIn = isScannerFunnelPayment(payment);
 
     const description = isScannerWalkIn
-      ? `${amountLabel} at ${businessName}`
+      ? `${amountLabel} · ${campaignName || 'Campaign'} at ${businessName}`
       : `${amountLabel} · ${campaignName || 'Campaign'}`;
 
     const payload: CreateActivityEventDto = {
@@ -494,22 +502,6 @@ export class ActivityService {
       }
     }
 
-    const prepaidPaymentIds = Array.from(
-      new Set(
-        rows
-          .filter(
-            (row) => row.eventType === ActivityEventType.PREPAID_FOR_OFFER,
-          )
-          .map((row) => {
-            const paymentId = row.metadata?.funnelPaymentId;
-            return typeof paymentId === 'number' ? paymentId : null;
-          })
-          .filter((id): id is number => id != null && id > 0),
-      ),
-    );
-    const visitSubtotalByPaymentId =
-      await this.loadVisitOrderSubtotalByPaymentId(prepaidPaymentIds);
-
     return {
       data: rows.map((row) => ({
         id: row.id,
@@ -517,11 +509,7 @@ export class ActivityService {
         occurredAt: row.occurredAt.toISOString(),
         customerName: row.customer?.name?.trim() || null,
         customerEmail: row.customer?.email?.trim() || null,
-        description: this.prepaidActivityDescription(
-          row,
-          campaignNameById,
-          visitSubtotalByPaymentId,
-        ),
+        description: this.prepaidActivityDescription(row, campaignNameById),
         paymentChannel: this.resolvePaymentChannel(row),
         visitChannel: this.resolveVisitChannel(row),
       })),
@@ -530,37 +518,6 @@ export class ActivityService {
         allEventsTotal,
       },
     };
-  }
-
-  private async loadVisitOrderSubtotalByPaymentId(
-    paymentIds: number[],
-  ): Promise<Map<number, number>> {
-    const result = new Map<number, number>();
-    if (paymentIds.length === 0) {
-      return result;
-    }
-
-    const visits = await this.customerVisitRepository
-      .createQueryBuilder('visit')
-      .innerJoinAndSelect('visit.coupon', 'coupon')
-      .where('coupon.funnelPaymentId IN (:...paymentIds)', { paymentIds })
-      .andWhere('visit.deletedAt IS NULL')
-      .andWhere('visit.orderSubtotal IS NOT NULL')
-      .orderBy('visit.visitedAt', 'DESC')
-      .getMany();
-
-    for (const visit of visits) {
-      const paymentId = visit.coupon?.funnelPaymentId;
-      if (paymentId == null || result.has(paymentId)) {
-        continue;
-      }
-      const subtotal = Number(visit.orderSubtotal);
-      if (Number.isFinite(subtotal) && subtotal >= 0) {
-        result.set(paymentId, subtotal);
-      }
-    }
-
-    return result;
   }
 
   private resolvePaymentChannel(
@@ -615,7 +572,6 @@ export class ActivityService {
   private prepaidActivityDescription(
     row: ActivityEvent,
     campaignNameById: Map<number, string>,
-    visitSubtotalByPaymentId: Map<number, number> = new Map(),
   ): string {
     if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
       return row.description;
@@ -624,42 +580,10 @@ export class ActivityService {
     const metadata = row.metadata ?? {};
     const currency =
       typeof metadata.currency === 'string' ? metadata.currency : 'usd';
-    const paymentId =
-      typeof metadata.funnelPaymentId === 'number'
-        ? metadata.funnelPaymentId
-        : null;
-    const visitSubtotalDollars =
-      paymentId != null
-        ? (visitSubtotalByPaymentId.get(paymentId) ?? null)
-        : null;
-
-    // Prefer visit order_subtotal (deal + extras) for in-person / scanner pays
-    const amountCentsFromVisit =
-      visitSubtotalDollars != null
-        ? dollarsToCents(visitSubtotalDollars)
-        : null;
-    const amountCentsFromPayment =
+    const amountCents =
       typeof metadata.amountCents === 'number' ? metadata.amountCents : null;
-    const amountCents = amountCentsFromVisit ?? amountCentsFromPayment;
     const amountLabel =
       amountCents != null ? formatMoney(amountCents, currency) : null;
-
-    const source =
-      typeof metadata.source === 'string' ? metadata.source.trim() : '';
-    const businessName =
-      typeof metadata.businessName === 'string'
-        ? metadata.businessName.trim()
-        : '';
-
-    if (source === 'scanner_purchase' || row.description.includes(' at ')) {
-      const location =
-        businessName ||
-        row.description.replace(/^.*? at\s+/i, '').trim() ||
-        'Business';
-      return amountLabel
-        ? `${amountLabel} at ${location}`
-        : `Paid at ${location}`;
-    }
 
     const storedCampaignName =
       typeof metadata.campaignName === 'string'
@@ -674,6 +598,10 @@ export class ActivityService {
 
     if (amountLabel && campaignName) {
       return `${amountLabel} · ${campaignName}`;
+    }
+
+    if (amountLabel) {
+      return amountLabel;
     }
 
     return row.description;

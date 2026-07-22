@@ -179,3 +179,237 @@ export function dedupeBusinessOrderEventRows<
     return true;
   });
 }
+
+function businessOrderCheckoutGroupKey(row: {
+  id?: number;
+  rowKey?: string;
+  customer?: { id: number } | null;
+  paymentCollectedAt?: Date | string | null;
+  funnelPaymentId?: number | null;
+  orderId?: number | null;
+}): string {
+  if (row.orderId != null && row.orderId > 0) {
+    return `order:${row.orderId}`;
+  }
+
+  const customerId = row.customer?.id;
+  const collectedAtMs =
+    row.paymentCollectedAt != null
+      ? new Date(row.paymentCollectedAt).getTime()
+      : NaN;
+
+  if (customerId != null && Number.isFinite(collectedAtMs)) {
+    return `checkout:${customerId}:${collectedAtMs}`;
+  }
+
+  if (row.funnelPaymentId != null) {
+    return `payment:${row.funnelPaymentId}`;
+  }
+
+  return row.rowKey ?? `orphan:${row.id ?? 'unknown'}`;
+}
+
+/** Campaign / payment price only (cents). Ignores visit extras. */
+function businessOrderCampaignPriceCents(row: {
+  onlineAmountCents?: number | null;
+  amount?: number | null;
+}): number {
+  if (row.onlineAmountCents != null && row.onlineAmountCents > 0) {
+    return row.onlineAmountCents;
+  }
+  if (row.amount != null && row.amount > 0) {
+    return row.amount;
+  }
+  return 0;
+}
+
+/** Visit order_subtotal in dollars (deal + anything else). */
+function businessOrderVisitNetDollars(row: {
+  businessAmount?: number | null;
+}): number {
+  if (row.businessAmount != null && Number(row.businessAmount) > 0) {
+    return Number(row.businessAmount);
+  }
+  return 0;
+}
+
+function pickBetterOrderStatus(
+  current: BusinessOrderPaymentStatus,
+  next: BusinessOrderPaymentStatus,
+): BusinessOrderPaymentStatus {
+  const rank: Record<BusinessOrderPaymentStatus, number> = {
+    not_paid: 0,
+    paid_walk_in: 1,
+    paid_online: 1,
+    paid_both: 2,
+  };
+  return rank[next] > rank[current] ? next : current;
+}
+
+function latestDate(
+  left: Date | string | null | undefined,
+  right: Date | string | null | undefined,
+): Date | string | null {
+  const leftMs = left != null ? new Date(left).getTime() : NaN;
+  const rightMs = right != null ? new Date(right).getTime() : NaN;
+  if (!Number.isFinite(leftMs) && !Number.isFinite(rightMs)) {
+    return null;
+  }
+  if (!Number.isFinite(leftMs)) {
+    return right ?? null;
+  }
+  if (!Number.isFinite(rightMs)) {
+    return left ?? null;
+  }
+  return rightMs >= leftMs ? (right ?? null) : (left ?? null);
+}
+
+/** One Orders row per checkout batch (multi-funnel same collect time). */
+export function mergeBusinessOrderRowsByCheckout<
+  T extends {
+    id: number;
+    rowKey?: string;
+    eventType: string;
+    createdAt: Date | string;
+    funnelId: number;
+    campaignId: number;
+    campaignName: string;
+    customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
+    customerEmail?: string | null;
+    amount?: number | null;
+    currency?: string | null;
+    paymentStatus?: string | null;
+    receiptUrl?: string | null;
+    orderStatus: BusinessOrderPaymentStatus;
+    onlineAmountCents?: number | null;
+    businessAmount?: number | null;
+    businessVisitedAt?: Date | string | null;
+    paidAt?: Date | string | null;
+    funnelPaymentId?: number | null;
+    paymentCollectedAt?: Date | string | null;
+    orderId?: number | null;
+  },
+>(rows: T[]): T[] {
+  const groups = new Map<string, T[]>();
+
+  for (const row of rows) {
+    const key = businessOrderCheckoutGroupKey(row);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.push(row);
+      continue;
+    }
+    groups.set(key, [row]);
+  }
+
+  const merged: T[] = [];
+
+  for (const [groupKey, groupRows] of groups) {
+    if (groupRows.length === 1) {
+      const only = groupRows[0];
+      merged.push({
+        ...only,
+        rowKey: groupKey.startsWith('orphan:')
+          ? (only.rowKey ?? groupKey)
+          : groupKey,
+      });
+      continue;
+    }
+
+    const sorted = [...groupRows].sort(
+      (left, right) =>
+        resolveBusinessEventPaymentSortDate(right) -
+        resolveBusinessEventPaymentSortDate(left),
+    );
+    const primary = sorted[0];
+    let totalCampaignCents = 0;
+    let totalVisitNetDollars = 0;
+    let orderStatus: BusinessOrderPaymentStatus = 'not_paid';
+    let paymentStatus: string | null = primary.paymentStatus ?? null;
+    let paidAt: Date | string | null = primary.paidAt ?? null;
+    let businessVisitedAt: Date | string | null =
+      primary.businessVisitedAt ?? null;
+    let createdAt: Date | string = primary.createdAt;
+    let paymentCollectedAt: Date | string | null =
+      primary.paymentCollectedAt ?? null;
+    const campaignNames: string[] = [];
+    const seenCampaignNames = new Set<string>();
+
+    for (const row of sorted) {
+      totalCampaignCents += businessOrderCampaignPriceCents(row);
+      totalVisitNetDollars += businessOrderVisitNetDollars(row);
+      orderStatus = pickBetterOrderStatus(orderStatus, row.orderStatus);
+      paidAt = latestDate(paidAt, row.paidAt);
+      businessVisitedAt = latestDate(
+        businessVisitedAt,
+        row.businessVisitedAt,
+      );
+      createdAt = latestDate(createdAt, row.createdAt) ?? createdAt;
+      paymentCollectedAt = latestDate(
+        paymentCollectedAt,
+        row.paymentCollectedAt,
+      );
+
+      const status = (row.paymentStatus ?? '').toLowerCase();
+      if (status === 'paid') {
+        paymentStatus = row.paymentStatus ?? 'paid';
+      } else if (paymentStatus == null) {
+        paymentStatus = row.paymentStatus ?? null;
+      }
+
+      const campaignName = row.campaignName?.trim();
+      if (campaignName && !seenCampaignNames.has(campaignName.toLowerCase())) {
+        seenCampaignNames.add(campaignName.toLowerCase());
+        campaignNames.push(campaignName);
+      }
+    }
+
+    merged.push({
+      ...primary,
+      rowKey: groupKey,
+      createdAt,
+      campaignName: campaignNames.join(', ') || primary.campaignName,
+      amount: totalCampaignCents > 0 ? totalCampaignCents : primary.amount,
+      paymentStatus,
+      orderStatus,
+      onlineAmountCents: totalCampaignCents > 0 ? totalCampaignCents : null,
+      businessAmount:
+        totalVisitNetDollars > 0
+          ? Math.round(totalVisitNetDollars * 100) / 100
+          : null,
+      businessVisitedAt,
+      paidAt,
+      paymentCollectedAt,
+    });
+  }
+
+  return merged;
+}
+
+/** @deprecated Use mergeBusinessOrderRowsByCheckout */
+export function mergeBusinessOrderRowsByCustomer<
+  T extends {
+    id: number;
+    rowKey?: string;
+    eventType: string;
+    createdAt: Date | string;
+    funnelId: number;
+    campaignId: number;
+    campaignName: string;
+    customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
+    customerEmail?: string | null;
+    amount?: number | null;
+    currency?: string | null;
+    paymentStatus?: string | null;
+    receiptUrl?: string | null;
+    orderStatus: BusinessOrderPaymentStatus;
+    onlineAmountCents?: number | null;
+    businessAmount?: number | null;
+    businessVisitedAt?: Date | string | null;
+    paidAt?: Date | string | null;
+    funnelPaymentId?: number | null;
+    paymentCollectedAt?: Date | string | null;
+  },
+>(rows: T[]): T[] {
+  return mergeBusinessOrderRowsByCheckout(rows);
+}

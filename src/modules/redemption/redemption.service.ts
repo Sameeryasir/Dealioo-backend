@@ -22,11 +22,16 @@ import {
   RedemptionLog,
 } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
-import { dollarsEqualInCents } from '../../common/money.util';
+import {
+  centsToDollars,
+  dollarsEqualInCents,
+  dollarsToCents,
+} from '../../common/money.util';
 import { CouponService } from './coupon.service';
 import {
   isOnlineFunnelPayment,
@@ -326,13 +331,6 @@ export class RedemptionService {
     const validation =
       this.validationService.validateCouponForRedemption(liveCoupon);
 
-    const visit = await this.recordVisitFromQrScan({
-      coupon: liveCoupon,
-      businessId,
-      audit,
-    });
-    await this.notifyAutomationAfterVisit(visit);
-
     const profile = await this.getCustomerBusinessProfile(
       liveCoupon.customerId,
       businessId,
@@ -418,15 +416,6 @@ export class RedemptionService {
       }
     }
 
-    if (couponIds?.length) {
-      return this.redeemSelectedCoupons(
-        couponIds,
-        businessId,
-        audit,
-        orderSubtotal,
-      );
-    }
-
     const qrToken = this.extractToken(rawToken);
     const coupon = await this.couponService.findByQrToken(qrToken);
 
@@ -466,28 +455,38 @@ export class RedemptionService {
 
     await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
 
-    const validation = this.validationService.validateCouponForRedemption(
-      liveCoupon,
-      { orderSubtotal },
-    );
-    if (!validation.canRedeem) {
-      await this.logAudit({
-        eventType: RedemptionEventType.REDEEM_FAILURE,
-        coupon: liveCoupon,
-        businessId,
-        audit,
-        success: false,
-        failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
-      });
-      return {
-        success: false,
-        message: validation.redeemBlockedReason ?? 'Redemption blocked',
-        errorCode: validation.errorCode ?? undefined,
-      };
+    // QR scan redeems only the coupon row for this token.
+    // Staff lookup may redeem multiple selected deals for the same guest.
+    const idsToRedeem =
+      audit.visitSource === CustomerVisitSource.STAFF_LOOKUP &&
+      couponIds?.length
+        ? couponIds
+        : [liveCoupon.id];
+
+    if (audit.visitSource !== CustomerVisitSource.STAFF_LOOKUP) {
+      const validation = this.validationService.validateCouponForRedemption(
+        liveCoupon,
+        { orderSubtotal },
+      );
+      if (!validation.canRedeem) {
+        await this.logAudit({
+          eventType: RedemptionEventType.REDEEM_FAILURE,
+          coupon: liveCoupon,
+          businessId,
+          audit,
+          success: false,
+          failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
+        });
+        return {
+          success: false,
+          message: validation.redeemBlockedReason ?? 'Redemption blocked',
+          errorCode: validation.errorCode ?? undefined,
+        };
+      }
     }
 
     return this.redeemSelectedCoupons(
-      [liveCoupon.id],
+      idsToRedeem,
       businessId,
       audit,
       orderSubtotal,
@@ -712,13 +711,19 @@ export class RedemptionService {
       }
 
       const primaryCoupon = lockedCoupons[0];
+      const visitOrderSubtotal = await this.resolveVisitOrderSubtotal(
+        manager,
+        lockedCoupons,
+        orderSubtotal,
+        hasPrepaid && !hasUnpaid,
+      );
 
       await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         businessId,
         audit,
         visitedAt: redeemedAt,
-        orderSubtotal: orderSubtotal ?? null,
+        orderSubtotal: visitOrderSubtotal,
         manager,
         businessName,
       });
@@ -763,6 +768,13 @@ export class RedemptionService {
       where: { couponId: params.coupon.id },
     });
     if (existingVisit) {
+      if (
+        params.orderSubtotal != null &&
+        Number.isFinite(params.orderSubtotal)
+      ) {
+        existingVisit.orderSubtotal = params.orderSubtotal;
+        await manager.save(existingVisit);
+      }
       return {
         recorded: false,
         customerId: params.coupon.customerId,
@@ -778,17 +790,20 @@ export class RedemptionService {
       businessName = business?.name?.trim() || 'Business';
     }
 
-    await manager.save(CustomerVisit, {
+    const visit = manager.create(CustomerVisit, {
       customerId: params.coupon.customerId,
       campaignId: params.coupon.campaignId,
       businessId: params.businessId,
       couponId: params.coupon.id,
+      orderId: null,
       staffUserId: params.audit.scannedBy,
       visitedAt,
       source:
         params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION,
       orderSubtotal: params.orderSubtotal ?? null,
+      visitCampaigns: [{ campaignId: params.coupon.campaignId }],
     });
+    await manager.save(visit);
 
     const visitSource =
       params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
@@ -800,23 +815,26 @@ export class RedemptionService {
       businessName,
       occurredAt: visitedAt,
       visitSource,
+      offerName:
+        params.coupon.campaign?.offer?.trim() ||
+        params.coupon.campaign?.campaignName?.trim() ||
+        null,
       manager: params.manager,
     });
 
-    await this.customerJourneyService.recordQrRedeemed({
-      businessId: params.businessId,
-      customerId: params.coupon.customerId,
-      campaignId: params.coupon.campaignId,
-      funnelId: params.coupon.funnelId ?? null,
-      couponId: params.coupon.id,
-      funnelPaymentId: params.coupon.funnelPaymentId ?? null,
-      occurredAt: visitedAt,
-      source:
-        visitSource === CustomerVisitSource.STAFF_LOOKUP
-          ? 'staff_lookup'
-          : 'qr_redemption',
-      manager: params.manager,
-    });
+    if (visitSource !== CustomerVisitSource.STAFF_LOOKUP) {
+      await this.customerJourneyService.recordQrRedeemed({
+        businessId: params.businessId,
+        customerId: params.coupon.customerId,
+        campaignId: params.coupon.campaignId,
+        funnelId: params.coupon.funnelId ?? null,
+        couponId: params.coupon.id,
+        funnelPaymentId: params.coupon.funnelPaymentId ?? null,
+        occurredAt: visitedAt,
+        source: 'qr_redemption',
+        manager: params.manager,
+      });
+    }
 
     return {
       recorded: true,
@@ -1047,42 +1065,38 @@ export class RedemptionService {
       canSelect: boolean;
     }>
   > {
-    const coupons = await this.couponRepository.find({
-      where: { customerId, businessId, status: CouponStatus.ACTIVE },
+    const coupon = await this.couponRepository.findOne({
+      where: {
+        id: scannedCouponId,
+        customerId,
+        businessId,
+        status: CouponStatus.ACTIVE,
+      },
       relations: ['campaign', 'funnelPayment'],
-      order: { issuedAt: 'ASC' },
     });
 
-    const results: Array<{
-      couponId: number;
-      label: string;
-      paymentLabel: 'PREPAID' | 'UNPAID';
-      campaignPrice: number | null;
-      isScannedCoupon: boolean;
-      canSelect: boolean;
-    }> = [];
-    for (const coupon of coupons) {
-      if (this.couponService.isExpired(coupon)) {
-        continue;
-      }
+    if (!coupon || this.couponService.isExpired(coupon)) {
+      return [];
+    }
 
-      await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+    await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
 
-      const offer =
-        coupon.campaign?.offer?.trim() ||
-        coupon.campaign?.campaignName?.trim() ||
-        'Reward';
-      const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
-      const paymentLabel = isPrepaid ? 'PREPAID' : 'UNPAID';
+    const offer =
+      coupon.campaign?.offer?.trim() ||
+      coupon.campaign?.campaignName?.trim() ||
+      'Reward';
+    const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
+    const paymentLabel = isPrepaid ? 'PREPAID' : 'UNPAID';
 
-      if (paymentLabel !== scannedPaymentLabel) {
-        continue;
-      }
+    if (paymentLabel !== scannedPaymentLabel) {
+      return [];
+    }
 
-      const campaignPrice =
-        coupon.campaign?.price != null ? Number(coupon.campaign.price) : null;
+    const campaignPrice =
+      coupon.campaign?.price != null ? Number(coupon.campaign.price) : null;
 
-      results.push({
+    return [
+      {
         couponId: coupon.id,
         label: `${offer} [${paymentLabel}]`,
         paymentLabel,
@@ -1090,13 +1104,11 @@ export class RedemptionService {
           campaignPrice != null && Number.isFinite(campaignPrice)
             ? campaignPrice
             : null,
-        isScannedCoupon: coupon.id === scannedCouponId,
+        isScannedCoupon: true,
         canSelect:
           isPrepaid || coupon.paymentStatus === CouponPaymentStatus.PENDING,
-      });
-    }
-
-    return results;
+      },
+    ];
   }
 
   private async getGuestActiveDeals(
@@ -1210,6 +1222,84 @@ export class RedemptionService {
       success: params.success,
       failureReason: params.failureReason,
     });
+  }
+
+  private async resolveVisitOrderSubtotal(
+    manager: EntityManager,
+    lockedCoupons: Coupon[],
+    orderSubtotal: number | undefined,
+    allPrepaid: boolean,
+  ): Promise<number | null> {
+    let offerCents = 0;
+    let hasAllOfferPrices = true;
+
+    for (const coupon of lockedCoupons) {
+      const offerPriceCents = await this.resolveCouponOfferPriceCents(
+        manager,
+        coupon,
+      );
+      if (offerPriceCents == null) {
+        hasAllOfferPrices = false;
+        break;
+      }
+      offerCents += offerPriceCents;
+    }
+
+    if (allPrepaid) {
+      const extraCents =
+        orderSubtotal != null &&
+        Number.isFinite(orderSubtotal) &&
+        orderSubtotal >= 0
+          ? dollarsToCents(orderSubtotal)
+          : 0;
+      if (hasAllOfferPrices) {
+        return centsToDollars(offerCents + extraCents);
+      }
+      return extraCents > 0 ? centsToDollars(extraCents) : null;
+    }
+
+    if (
+      orderSubtotal != null &&
+      Number.isFinite(orderSubtotal) &&
+      orderSubtotal >= 0
+    ) {
+      return centsToDollars(dollarsToCents(orderSubtotal));
+    }
+
+    return hasAllOfferPrices ? centsToDollars(offerCents) : null;
+  }
+
+  private async resolveCouponOfferPriceCents(
+    manager: EntityManager,
+    coupon: Coupon,
+  ): Promise<number | null> {
+    let price =
+      coupon.campaign?.price != null ? Number(coupon.campaign.price) : null;
+
+    if (price == null || !Number.isFinite(price) || price < 0) {
+      const campaign = await manager.findOne(Campaign, {
+        where: { id: coupon.campaignId },
+      });
+      price = campaign?.price != null ? Number(campaign.price) : null;
+    }
+
+    if (price != null && Number.isFinite(price) && price >= 0) {
+      return dollarsToCents(price);
+    }
+
+    const paymentAmountCents =
+      coupon.funnelPayment?.amount != null
+        ? Number(coupon.funnelPayment.amount)
+        : null;
+    if (
+      paymentAmountCents != null &&
+      Number.isFinite(paymentAmountCents) &&
+      paymentAmountCents >= 0
+    ) {
+      return Math.round(paymentAmountCents);
+    }
+
+    return null;
   }
 
   private async lockCouponForRedemption(
