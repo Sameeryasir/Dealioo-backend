@@ -4,19 +4,25 @@ import {
   CouponPaymentStatus,
   CouponStatus,
 } from '../../db/entities/coupon.entity';
-import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
+import {
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
 import { CouponService } from './coupon.service';
+import {
+  ScannerErrorCode,
+  ScannerErrorMessage,
+  type ScannerErrorCode as ScannerErrorCodeType,
+} from './scanner-error-codes';
 
 export type RedemptionValidationOptions = {
-  /** Order subtotal entered by staff at the business (walk-in payment). */
   orderSubtotal?: number;
 };
 
 export type RedemptionValidationResult = {
   canRedeem: boolean;
-  /** Unpaid signup — staff must enter order amount before redeem completes. */
   requiresWalkInPayment: boolean;
   redeemBlockedReason: string | null;
+  errorCode: ScannerErrorCodeType | null;
   paymentStatus: CouponPaymentStatus;
   couponStatus: CouponStatus;
   couponExpired: boolean;
@@ -26,7 +32,6 @@ export type RedemptionValidationResult = {
 export class RedemptionValidationService {
   constructor(private readonly couponService: CouponService) {}
 
-  /** Map live funnel payment status onto coupon payment status for scanner display. */
   mapFunnelPaymentToCouponStatus(
     status: FunnelPaymentStatus,
   ): CouponPaymentStatus {
@@ -36,6 +41,7 @@ export class RedemptionValidationService {
       case FunnelPaymentStatus.PENDING:
         return CouponPaymentStatus.PENDING;
       case FunnelPaymentStatus.FAILED:
+        return CouponPaymentStatus.FAILED;
       case FunnelPaymentStatus.CANCELLED:
         return CouponPaymentStatus.FAILED;
       case FunnelPaymentStatus.REFUNDED:
@@ -48,37 +54,83 @@ export class RedemptionValidationService {
     }
   }
 
-  paymentBlockedReason(status: CouponPaymentStatus): string | null {
+  paymentBlockedReason(status: CouponPaymentStatus): {
+    message: string;
+    code: ScannerErrorCodeType;
+  } {
     switch (status) {
       case CouponPaymentStatus.PAID:
-        return null;
+        return { message: '', code: ScannerErrorCode.PAYMENT_PENDING };
       case CouponPaymentStatus.PENDING:
-        return 'Payment not completed';
+        return {
+          message: ScannerErrorMessage.PAYMENT_PENDING,
+          code: ScannerErrorCode.PAYMENT_PENDING,
+        };
       case CouponPaymentStatus.FAILED:
-        return 'Payment failed';
+        return {
+          message: ScannerErrorMessage.PAYMENT_FAILED,
+          code: ScannerErrorCode.PAYMENT_FAILED,
+        };
       case CouponPaymentStatus.REFUNDED:
-        return 'Payment refunded';
+        return {
+          message: ScannerErrorMessage.PAYMENT_REFUNDED,
+          code: ScannerErrorCode.PAYMENT_REFUNDED,
+        };
       case CouponPaymentStatus.DISPUTED:
-        return 'Payment disputed';
+        return {
+          message: ScannerErrorMessage.PAYMENT_DISPUTED,
+          code: ScannerErrorCode.PAYMENT_DISPUTED,
+        };
       default:
-        return 'Payment not completed';
+        return {
+          message: ScannerErrorMessage.PAYMENT_PENDING,
+          code: ScannerErrorCode.PAYMENT_PENDING,
+        };
     }
   }
 
-  /** Shared server-side checks for preview and redeem — never trust the frontend. */
+  resolveAuthoritativePaymentStatus(coupon: Coupon): {
+    couponPaymentStatus: CouponPaymentStatus;
+    funnelStatus: FunnelPaymentStatus | null;
+    cancelled: boolean;
+  } {
+    const funnelStatus = coupon.funnelPayment?.status ?? null;
+    if (funnelStatus === FunnelPaymentStatus.CANCELLED) {
+      return {
+        couponPaymentStatus: CouponPaymentStatus.FAILED,
+        funnelStatus,
+        cancelled: true,
+      };
+    }
+    if (funnelStatus != null) {
+      return {
+        couponPaymentStatus: this.mapFunnelPaymentToCouponStatus(funnelStatus),
+        funnelStatus,
+        cancelled: false,
+      };
+    }
+    return {
+      couponPaymentStatus: coupon.paymentStatus,
+      funnelStatus: null,
+      cancelled: false,
+    };
+  }
+
   validateCouponForRedemption(
     coupon: Coupon,
     options?: RedemptionValidationOptions,
   ): RedemptionValidationResult {
     const couponExpired = this.couponService.isExpired(coupon);
-    const paymentStatus = coupon.paymentStatus;
     const couponStatus = coupon.status;
+    const authoritative = this.resolveAuthoritativePaymentStatus(coupon);
+    const paymentStatus = authoritative.couponPaymentStatus;
 
     if (couponExpired) {
       return {
         canRedeem: false,
         requiresWalkInPayment: false,
-        redeemBlockedReason: 'Coupon expired',
+        redeemBlockedReason: ScannerErrorMessage.EXPIRED_COUPON,
+        errorCode: ScannerErrorCode.EXPIRED_COUPON,
         paymentStatus,
         couponStatus,
         couponExpired,
@@ -89,7 +141,8 @@ export class RedemptionValidationService {
       return {
         canRedeem: false,
         requiresWalkInPayment: false,
-        redeemBlockedReason: 'Coupon already redeemed',
+        redeemBlockedReason: ScannerErrorMessage.ALREADY_REDEEMED,
+        errorCode: ScannerErrorCode.ALREADY_REDEEMED,
         paymentStatus,
         couponStatus,
         couponExpired,
@@ -100,7 +153,8 @@ export class RedemptionValidationService {
       return {
         canRedeem: false,
         requiresWalkInPayment: false,
-        redeemBlockedReason: 'This pass was replaced by a newer one',
+        redeemBlockedReason: ScannerErrorMessage.COUPON_REVOKED,
+        errorCode: ScannerErrorCode.COUPON_REVOKED,
         paymentStatus,
         couponStatus,
         couponExpired,
@@ -111,7 +165,20 @@ export class RedemptionValidationService {
       return {
         canRedeem: false,
         requiresWalkInPayment: false,
-        redeemBlockedReason: 'Coupon is not active',
+        redeemBlockedReason: ScannerErrorMessage.COUPON_NOT_ACTIVE,
+        errorCode: ScannerErrorCode.COUPON_NOT_ACTIVE,
+        paymentStatus,
+        couponStatus,
+        couponExpired,
+      };
+    }
+
+    if (authoritative.cancelled) {
+      return {
+        canRedeem: false,
+        requiresWalkInPayment: false,
+        redeemBlockedReason: ScannerErrorMessage.PAYMENT_CANCELLED,
+        errorCode: ScannerErrorCode.PAYMENT_CANCELLED,
         paymentStatus,
         couponStatus,
         couponExpired,
@@ -123,6 +190,7 @@ export class RedemptionValidationService {
         canRedeem: true,
         requiresWalkInPayment: false,
         redeemBlockedReason: null,
+        errorCode: null,
         paymentStatus,
         couponStatus,
         couponExpired,
@@ -139,6 +207,7 @@ export class RedemptionValidationService {
           canRedeem: true,
           requiresWalkInPayment: true,
           redeemBlockedReason: null,
+          errorCode: null,
           paymentStatus,
           couponStatus,
           couponExpired,
@@ -148,18 +217,20 @@ export class RedemptionValidationService {
       return {
         canRedeem: false,
         requiresWalkInPayment: true,
-        redeemBlockedReason:
-          'Guest has not paid online — enter order amount to redeem',
+        redeemBlockedReason: ScannerErrorMessage.PAYMENT_PENDING,
+        errorCode: ScannerErrorCode.PAYMENT_PENDING,
         paymentStatus,
         couponStatus,
         couponExpired,
       };
     }
 
+    const blocked = this.paymentBlockedReason(paymentStatus);
     return {
       canRedeem: false,
       requiresWalkInPayment: false,
-      redeemBlockedReason: this.paymentBlockedReason(paymentStatus),
+      redeemBlockedReason: blocked.message,
+      errorCode: blocked.code,
       paymentStatus,
       couponStatus,
       couponExpired,

@@ -19,6 +19,7 @@ export enum BusinessHistoryEventType {
   BUSINESS_DELETED = 'business_deleted',
   AUTOMATION_UPDATED = 'automation_updated',
   AUTOMATION_ACTIVATED = 'automation_activated',
+  AUTOMATION_DEACTIVATED = 'automation_deactivated',
   AUTOMATION_DELETED = 'automation_deleted',
   FUNNEL_UPDATED = 'funnel_updated',
   FUNNEL_DELETED = 'funnel_deleted',

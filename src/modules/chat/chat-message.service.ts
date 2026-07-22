@@ -131,6 +131,14 @@ export class ChatMessageService {
     }
   }
 
+  async hasOutboundMessage(idempotencyKey: string): Promise<boolean> {
+    const key = idempotencyKey.trim();
+    if (!key) {
+      return false;
+    }
+    return this.messageRepository.exist({ where: { idempotencyKey: key } });
+  }
+
   private async persistOutboundMessage(
     params: RecordOutboundMessageDto,
   ): Promise<number | null> {

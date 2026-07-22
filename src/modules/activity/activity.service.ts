@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   EntityManager,
+  In,
   Repository,
 } from 'typeorm';
 import {
@@ -17,6 +18,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
+import { isScannerFunnelPayment } from '../../common/payment-provenance.util';
 import { Business } from '../../db/entities/business.entity';
 import {
   Campaign,
@@ -28,6 +30,12 @@ import { LogPrepaidForOfferDto } from './activityDto/log-prepaid-for-offer.dto';
 import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
+import {
+  CustomerVisit,
+  CustomerVisitSource,
+} from '../../db/entities/customer-visit.entity';
+import { dollarsToCents } from '../../common/money.util';
+import { visitedActivityDescription } from './visited-activity-description.util';
 import {
   escapeIlikePattern,
   normalizeActivitySearch,
@@ -47,6 +55,10 @@ export type ActivityEventListItem = {
   customerName: string | null;
   customerEmail: string | null;
   description: string;
+  /** online = funnel Stripe prepaid; in_store = counter / physical pay */
+  paymentChannel?: 'online' | 'in_store' | null;
+  /** scanned = QR redeem visit logged in activity */
+  visitChannel?: 'scanned' | null;
 };
 
 export type ActivitySummary = {
@@ -100,6 +112,8 @@ export class ActivityService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
+    @InjectRepository(CustomerVisit)
+    private readonly customerVisitRepository: Repository<CustomerVisit>,
     private readonly pusherService: PusherService,
   ) {}
 
@@ -242,15 +256,21 @@ export class ActivityService {
   }
 
   async logVisited(params: LogVisitedDto): Promise<void> {
+    const visitSource =
+      params.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
     const payload: CreateActivityEventDto = {
       businessId: params.businessId,
       customerId: params.customerId,
       eventType: ActivityEventType.VISITED,
-      description: `Scanned at ${params.businessName}`,
+      description: visitedActivityDescription(
+        params.businessName,
+        visitSource,
+      ),
       idempotencyKey: `visited:coupon:${params.couponId}`,
       occurredAt: params.occurredAt,
       metadata: {
         couponId: params.couponId,
+        visitSource,
       },
     };
 
@@ -265,9 +285,13 @@ export class ActivityService {
   async logPrepaidForOffer(params: LogPrepaidForOfferDto): Promise<void> {
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: params.paymentId },
-      relations: ['business'],
+      relations: ['funnel', 'funnel.campaign', 'business'],
     });
     if (!payment) {
+      return;
+    }
+
+    if (payment.status !== FunnelPaymentStatus.PAID) {
       return;
     }
 
@@ -280,15 +304,30 @@ export class ActivityService {
       customerId = customer?.id ?? null;
     }
 
+    let campaignName =
+      payment.funnel?.campaign?.campaignName?.trim() || null;
+    if (!campaignName && payment.campaignId) {
+      const campaign = await this.campaignRepository.findOne({
+        where: { id: payment.campaignId },
+        select: ['id', 'campaignName'],
+      });
+      campaignName = campaign?.campaignName?.trim() || null;
+    }
+
     const businessName =
-      payment.business?.name?.trim() || 'Unknown location';
+      payment.business?.name?.trim() || 'Business';
     const amountLabel = formatMoney(payment.amount, payment.currency);
+    const isScannerWalkIn = isScannerFunnelPayment(payment);
+
+    const description = isScannerWalkIn
+      ? `${amountLabel} at ${businessName}`
+      : `${amountLabel} · ${campaignName || 'Campaign'}`;
 
     const payload: CreateActivityEventDto = {
       businessId: payment.businessId,
       customerId,
       eventType: ActivityEventType.PREPAID_FOR_OFFER,
-      description: `${amountLabel} at ${businessName}`,
+      description,
       idempotencyKey: `prepaid:payment:${payment.id}`,
       occurredAt: params.occurredAt ?? payment.paidAt ?? new Date(),
       metadata: {
@@ -297,6 +336,11 @@ export class ActivityService {
         currency: payment.currency,
         funnelId: payment.funnelId,
         campaignId: payment.campaignId,
+        campaignName: campaignName || null,
+        businessName,
+        source: isScannerWalkIn ? 'scanner_purchase' : 'online_payment',
+        paymentSource: payment.paymentSource ?? null,
+        collectionChannel: payment.collectionChannel ?? null,
       },
     };
 
@@ -347,6 +391,22 @@ export class ActivityService {
         .andWhere('activity.occurredAt >= :from', { from: range.from })
         .andWhere('activity.occurredAt <= :to', { to: range.to });
 
+      // Staff check-in visits are implied by In-person payment — hide from the log
+      qb.andWhere(
+        `NOT (
+          activity.event_type = :hideVisitedType
+          AND (
+            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
+            OR activity.description ILIKE :hideCheckedInPrefix
+          )
+        )`,
+        {
+          hideVisitedType: ActivityEventType.VISITED,
+          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
+          hideCheckedInPrefix: 'Checked in at%',
+        },
+      );
+
       if (options.eventType) {
         qb.andWhere('activity.eventType = :eventType', {
           eventType: options.eventType,
@@ -381,6 +441,20 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
+      .andWhere(
+        `NOT (
+          activity.event_type = :hideVisitedType
+          AND (
+            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
+            OR activity.description ILIKE :hideCheckedInPrefix
+          )
+        )`,
+        {
+          hideVisitedType: ActivityEventType.VISITED,
+          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
+          hideCheckedInPrefix: 'Checked in at%',
+        },
+      )
       .getCount();
 
     const [rows, total] = await Promise.all([
@@ -392,6 +466,50 @@ export class ActivityService {
       countQb.getCount(),
     ]);
 
+    const prepaidCampaignIds = Array.from(
+      new Set(
+        rows
+          .filter(
+            (row) => row.eventType === ActivityEventType.PREPAID_FOR_OFFER,
+          )
+          .map((row) => {
+            const campaignId = row.metadata?.campaignId;
+            return typeof campaignId === 'number' ? campaignId : null;
+          })
+          .filter((id): id is number => id != null && id > 0),
+      ),
+    );
+
+    const campaignNameById = new Map<number, string>();
+    if (prepaidCampaignIds.length > 0) {
+      const campaigns = await this.campaignRepository.find({
+        where: { id: In(prepaidCampaignIds) },
+        select: ['id', 'campaignName'],
+      });
+      for (const campaign of campaigns) {
+        const name = campaign.campaignName?.trim();
+        if (name) {
+          campaignNameById.set(campaign.id, name);
+        }
+      }
+    }
+
+    const prepaidPaymentIds = Array.from(
+      new Set(
+        rows
+          .filter(
+            (row) => row.eventType === ActivityEventType.PREPAID_FOR_OFFER,
+          )
+          .map((row) => {
+            const paymentId = row.metadata?.funnelPaymentId;
+            return typeof paymentId === 'number' ? paymentId : null;
+          })
+          .filter((id): id is number => id != null && id > 0),
+      ),
+    );
+    const visitSubtotalByPaymentId =
+      await this.loadVisitOrderSubtotalByPaymentId(prepaidPaymentIds);
+
     return {
       data: rows.map((row) => ({
         id: row.id,
@@ -399,13 +517,166 @@ export class ActivityService {
         occurredAt: row.occurredAt.toISOString(),
         customerName: row.customer?.name?.trim() || null,
         customerEmail: row.customer?.email?.trim() || null,
-        description: row.description,
+        description: this.prepaidActivityDescription(
+          row,
+          campaignNameById,
+          visitSubtotalByPaymentId,
+        ),
+        paymentChannel: this.resolvePaymentChannel(row),
+        visitChannel: this.resolveVisitChannel(row),
       })),
       meta: {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         allEventsTotal,
       },
     };
+  }
+
+  private async loadVisitOrderSubtotalByPaymentId(
+    paymentIds: number[],
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (paymentIds.length === 0) {
+      return result;
+    }
+
+    const visits = await this.customerVisitRepository
+      .createQueryBuilder('visit')
+      .innerJoinAndSelect('visit.coupon', 'coupon')
+      .where('coupon.funnelPaymentId IN (:...paymentIds)', { paymentIds })
+      .andWhere('visit.deletedAt IS NULL')
+      .andWhere('visit.orderSubtotal IS NOT NULL')
+      .orderBy('visit.visitedAt', 'DESC')
+      .getMany();
+
+    for (const visit of visits) {
+      const paymentId = visit.coupon?.funnelPaymentId;
+      if (paymentId == null || result.has(paymentId)) {
+        continue;
+      }
+      const subtotal = Number(visit.orderSubtotal);
+      if (Number.isFinite(subtotal) && subtotal >= 0) {
+        result.set(paymentId, subtotal);
+      }
+    }
+
+    return result;
+  }
+
+  private resolvePaymentChannel(
+    row: ActivityEvent,
+  ): 'online' | 'in_store' | null {
+    if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
+      return null;
+    }
+    const metadata = row.metadata ?? {};
+    const source =
+      typeof metadata.source === 'string' ? metadata.source.trim() : '';
+    const paymentSource =
+      typeof metadata.paymentSource === 'string'
+        ? metadata.paymentSource.trim()
+        : '';
+    const collectionChannel =
+      typeof metadata.collectionChannel === 'string'
+        ? metadata.collectionChannel.trim()
+        : '';
+
+    if (
+      source === 'scanner_purchase' ||
+      paymentSource === 'SCANNER' ||
+      collectionChannel === 'IN_STORE' ||
+      row.description.includes(' at ')
+    ) {
+      return 'in_store';
+    }
+    return 'online';
+  }
+
+  // --- Visit channel (QR scan → Activity "Scanned" tag) ---
+  private resolveVisitChannel(row: ActivityEvent): 'scanned' | null {
+    if (row.eventType !== ActivityEventType.VISITED) {
+      return null;
+    }
+    const metadata = row.metadata ?? {};
+    const visitSource =
+      typeof metadata.visitSource === 'string'
+        ? metadata.visitSource.trim()
+        : '';
+    // Business rule: QR redeem check-ins show as Scanned in Activity Log
+    if (
+      visitSource === CustomerVisitSource.QR_REDEMPTION ||
+      row.description.trim().toLowerCase().startsWith('scanned at')
+    ) {
+      return 'scanned';
+    }
+    return null;
+  }
+
+  private prepaidActivityDescription(
+    row: ActivityEvent,
+    campaignNameById: Map<number, string>,
+    visitSubtotalByPaymentId: Map<number, number> = new Map(),
+  ): string {
+    if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
+      return row.description;
+    }
+
+    const metadata = row.metadata ?? {};
+    const currency =
+      typeof metadata.currency === 'string' ? metadata.currency : 'usd';
+    const paymentId =
+      typeof metadata.funnelPaymentId === 'number'
+        ? metadata.funnelPaymentId
+        : null;
+    const visitSubtotalDollars =
+      paymentId != null
+        ? (visitSubtotalByPaymentId.get(paymentId) ?? null)
+        : null;
+
+    // Prefer visit order_subtotal (deal + extras) for in-person / scanner pays
+    const amountCentsFromVisit =
+      visitSubtotalDollars != null
+        ? dollarsToCents(visitSubtotalDollars)
+        : null;
+    const amountCentsFromPayment =
+      typeof metadata.amountCents === 'number' ? metadata.amountCents : null;
+    const amountCents = amountCentsFromVisit ?? amountCentsFromPayment;
+    const amountLabel =
+      amountCents != null ? formatMoney(amountCents, currency) : null;
+
+    const source =
+      typeof metadata.source === 'string' ? metadata.source.trim() : '';
+    const businessName =
+      typeof metadata.businessName === 'string'
+        ? metadata.businessName.trim()
+        : '';
+
+    if (source === 'scanner_purchase' || row.description.includes(' at ')) {
+      const location =
+        businessName ||
+        row.description.replace(/^.*? at\s+/i, '').trim() ||
+        'Business';
+      return amountLabel
+        ? `${amountLabel} at ${location}`
+        : `Paid at ${location}`;
+    }
+
+    const storedCampaignName =
+      typeof metadata.campaignName === 'string'
+        ? metadata.campaignName.trim()
+        : '';
+    const campaignId =
+      typeof metadata.campaignId === 'number' ? metadata.campaignId : null;
+    const campaignName =
+      storedCampaignName ||
+      (campaignId != null ? campaignNameById.get(campaignId) : undefined) ||
+      '';
+
+    if (amountLabel && campaignName) {
+      return `${amountLabel} · ${campaignName}`;
+    }
+
+    return row.description;
   }
 
   async getBusinessSummary(
@@ -425,6 +696,20 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
+      .andWhere(
+        `NOT (
+          activity.event_type = :hideVisitedType
+          AND (
+            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
+            OR activity.description ILIKE :hideCheckedInPrefix
+          )
+        )`,
+        {
+          hideVisitedType: ActivityEventType.VISITED,
+          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
+          hideCheckedInPrefix: 'Checked in at%',
+        },
+      )
       .groupBy('activity.eventType');
 
     if (options.eventType) {

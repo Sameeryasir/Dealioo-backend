@@ -469,6 +469,10 @@ export class AutomationEngineService {
       }
 
       case AutomationNodeType.EMAIL: {
+        if (!(await this.ensureExecutionStillRunnable(execution.id))) {
+          return 'complete';
+        }
+
         const campaignName =
           execution.automation?.campaign?.campaignName?.trim() ||
           'the campaign';
@@ -491,6 +495,17 @@ export class AutomationEngineService {
           purpose,
           { campaignName },
         );
+
+        const chatIdempotencyKey = this.resolveAutomationChatIdempotencyKey(
+          execution,
+          node.id,
+        );
+        if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
+          this.logger.log(
+            `Execution ${execution.id}: skipping duplicate email for key ${chatIdempotencyKey}`,
+          );
+          return 'advance';
+        }
 
         const sendResult = await this.automationEmailService.sendToCustomer(
           purpose,
@@ -599,8 +614,6 @@ export class AutomationEngineService {
             });
             return 'advance';
           }
-
-          await this.reissuePassForPrepaidLoop(execution);
 
           const loopConfig = {
             ...config,
@@ -802,6 +815,10 @@ export class AutomationEngineService {
     >,
     config: Record<string, unknown>,
   ): Promise<NodeRunResult> {
+    if (!(await this.ensureExecutionStillRunnable(execution.id))) {
+      return 'complete';
+    }
+
     this.logger.log(
       `[Prepaid Offer] Running prepaid payment actions — execution ${execution.id} customer ${execution.customerId} node ${node.id}`,
     );
@@ -816,6 +833,10 @@ export class AutomationEngineService {
     for (const rawAction of actions) {
       if (!rawAction || typeof rawAction !== 'object') {
         continue;
+      }
+
+      if (!(await this.ensureExecutionStillRunnable(execution.id))) {
+        return 'complete';
       }
 
       const action = rawAction as Record<string, unknown>;
@@ -837,6 +858,17 @@ export class AutomationEngineService {
         purpose,
         { campaignName },
       );
+
+      const chatIdempotencyKey = this.resolveAutomationChatIdempotencyKey(
+        execution,
+        node.id,
+      );
+      if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
+        this.logger.log(
+          `[Prepaid Offer] Skipping duplicate email for execution ${execution.id} key ${chatIdempotencyKey}`,
+        );
+        continue;
+      }
 
       const sendResult = await this.automationEmailService.sendToCustomer(
         purpose,
@@ -1056,7 +1088,35 @@ export class AutomationEngineService {
   ): string {
     const loopCount =
       normalizeExecutionContext(execution.executionContext).loopCount ?? 0;
+    const paymentId =
+      normalizeExecutionContext(execution.executionContext).funnelPaymentId ??
+      null;
+
+    if (
+      execution.purpose === AutomationPurpose.FUNNEL_PAYMENT &&
+      paymentId != null
+    ) {
+      return `chat_message:payment:${paymentId}:node:${nodeId}:customer:${execution.customerId}:loop:${loopCount}`;
+    }
+
     return `chat_message:execution:${execution.id}:node:${nodeId}:customer:${execution.customerId}:loop:${loopCount}`;
+  }
+
+  private async ensureExecutionStillRunnable(
+    executionId: number,
+  ): Promise<boolean> {
+    const refreshed = await this.executionService.findById(executionId);
+    if (
+      refreshed.status === AutomationExecutionStatus.COMPLETED ||
+      refreshed.status === AutomationExecutionStatus.FAILED ||
+      refreshed.status === AutomationExecutionStatus.PAUSED
+    ) {
+      this.logger.log(
+        `Execution ${executionId}: skipping node — status is ${refreshed.status}`,
+      );
+      return false;
+    }
+    return true;
   }
 
   private async recordAutomationEmailInChat(
@@ -1078,7 +1138,10 @@ export class AutomationEngineService {
       customerId: execution.customerId,
       messagePreview:
         this.automationEmailService.resolvePreparedEmailPreview(prepared),
-      idempotencyKey: `message_sent:execution:${execution.id}:node:${nodeId}:customer:${execution.customerId}:loop:${normalizeExecutionContext(execution.executionContext).loopCount ?? 0}`,
+      idempotencyKey: idempotencyKey.replace(
+        /^chat_message:/,
+        'message_sent:',
+      ),
       metadata: {
         automationId: execution.automationId,
         automationExecutionId: execution.id,
@@ -1326,43 +1389,6 @@ export class AutomationEngineService {
       nodeType: loopNode.type,
     });
     return 'wait';
-  }
-
-  private async reissuePassForPrepaidLoop(
-    execution: AutomationExecution,
-  ): Promise<void> {
-    const funnelId = execution.automation?.funnelId;
-    if (!funnelId) {
-      return;
-    }
-
-    const event = await this.funnelEventRepository.findOne({
-      where: {
-        customerId: execution.customerId,
-        funnelId,
-        funnelPaymentId: Not(IsNull()),
-        eventType: FunnelEventType.PAYMENT,
-      },
-      order: { createdAt: 'DESC' },
-    });
-
-    if (!event?.funnelPaymentId) {
-      return;
-    }
-
-    const reissued = await this.couponService.reissuePassForPayment(
-      event.funnelPaymentId,
-    );
-    if (!reissued || reissued.status === CouponStatus.REDEEMED) {
-      return;
-    }
-
-    await this.logService.createLog({
-      executionId: execution.id,
-      nodeId: execution.currentNodeId ?? undefined,
-      customerId: execution.customerId,
-      message: 'New QR pass issued — previous pass revoked',
-    });
   }
 
   private async customerHasVisitedForAutomation(

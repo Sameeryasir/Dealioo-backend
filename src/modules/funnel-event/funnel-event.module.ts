@@ -8,6 +8,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
+import { ScannerPurchaseRequest } from '../../db/entities/scanner-purchase-request.entity';
 import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AutomationModule } from '../automation/automation.module';
@@ -29,6 +30,7 @@ import { FunnelEventService } from './funnel-event.service';
       CustomerVisit,
       CheckoutAccessToken,
       Business,
+      ScannerPurchaseRequest,
     ]),
     forwardRef(() => AutomationModule),
     forwardRef(() => RedemptionModule),

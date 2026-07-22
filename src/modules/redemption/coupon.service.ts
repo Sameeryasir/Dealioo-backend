@@ -42,7 +42,10 @@ export class CouponService {
     funnelId: number,
     customerId: number,
   ): Promise<IssueSignupCouponResult> {
-    const existing = await this.findByCustomerAndFunnel(customerId, funnelId);
+    const existing = await this.findActiveByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
     if (existing) {
       return { coupon: existing, created: false };
     }
@@ -76,7 +79,10 @@ export class CouponService {
       const saved = await this.couponRepository.save(coupon);
       return { coupon: saved, created: true };
     } catch (err) {
-      const raced = await this.findByCustomerAndFunnel(customerId, funnelId);
+      const raced = await this.findActiveByCustomerAndFunnel(
+        customerId,
+        funnelId,
+      );
       if (raced) {
         return { coupon: raced, created: false };
       }
@@ -92,6 +98,14 @@ export class CouponService {
     customerId: number,
     funnelId: number,
   ): Promise<Coupon | null> {
+    const active = await this.findActiveByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
+    if (active) {
+      return active;
+    }
+
     const coupons = await this.couponRepository.find({
       where: { customerId, funnelId },
       relations: ['customer', 'campaign', 'funnelPayment'],
@@ -101,13 +115,55 @@ export class CouponService {
     return coupons[0] ?? null;
   }
 
+  async findActiveByCustomerAndFunnel(
+    customerId: number,
+    funnelId: number,
+  ): Promise<Coupon | null> {
+    const coupons = await this.couponRepository.find({
+      where: {
+        customerId,
+        funnelId,
+        status: CouponStatus.ACTIVE,
+      },
+      relations: ['customer', 'campaign', 'funnelPayment'],
+      order: { id: 'DESC' },
+      take: 5,
+    });
+
+    for (const coupon of coupons) {
+      if (!this.isExpired(coupon)) {
+        return coupon;
+      }
+    }
+    return null;
+  }
+
+  async resolveLiveCouponForScan(coupon: Coupon): Promise<Coupon> {
+    if (coupon.status !== CouponStatus.REVOKED || coupon.funnelId == null) {
+      return coupon;
+    }
+
+    const live = await this.findActiveByCustomerAndFunnel(
+      coupon.customerId,
+      coupon.funnelId,
+    );
+    if (!live || live.businessId !== coupon.businessId) {
+      return coupon;
+    }
+
+    return live;
+  }
+
   /** Attach the signup pass to a pending checkout session. */
   async linkSignupCouponToPayment(
     customerId: number,
     funnelId: number,
     funnelPaymentId: number,
   ): Promise<Coupon | null> {
-    const coupon = await this.findByCustomerAndFunnel(customerId, funnelId);
+    const coupon = await this.findActiveByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
     if (!coupon) {
       return null;
     }
@@ -139,8 +195,19 @@ export class CouponService {
       relations: ['customer', 'campaign', 'funnelPayment'],
     });
     if (existing) {
-      await this.syncPaymentStatusFromFunnelPayment(existing);
-      return existing;
+      if (
+        existing.status === CouponStatus.REDEEMED ||
+        existing.status === CouponStatus.REVOKED ||
+        existing.status === CouponStatus.EXPIRED ||
+        this.isExpired(existing)
+      ) {
+        await this.couponRepository.update(existing.id, {
+          funnelPaymentId: null,
+        });
+      } else {
+        await this.syncPaymentStatusFromFunnelPayment(existing);
+        return existing;
+      }
     }
 
     const payment = await this.funnelPaymentRepository.findOne({
@@ -150,25 +217,29 @@ export class CouponService {
       return null;
     }
 
-    const signupCoupon = await this.findByCustomerAndFunnel(
+    const activeSignupCoupon = await this.findActiveByCustomerAndFunnel(
       customerId,
       funnelId,
     );
 
-    if (signupCoupon) {
+    if (
+      activeSignupCoupon &&
+      (activeSignupCoupon.funnelPaymentId == null ||
+        activeSignupCoupon.funnelPaymentId === funnelPaymentId)
+    ) {
       const paymentStatus =
         payment.status === FunnelPaymentStatus.PAID
           ? CouponPaymentStatus.PAID
           : this.mapFunnelPaymentToCouponStatus(payment.status);
 
-      await this.couponRepository.update(signupCoupon.id, {
+      await this.couponRepository.update(activeSignupCoupon.id, {
         funnelPaymentId,
         paymentStatus,
       });
 
-      signupCoupon.funnelPaymentId = funnelPaymentId;
-      signupCoupon.paymentStatus = paymentStatus;
-      return signupCoupon;
+      activeSignupCoupon.funnelPaymentId = funnelPaymentId;
+      activeSignupCoupon.paymentStatus = paymentStatus;
+      return activeSignupCoupon;
     }
 
     if (payment.status !== FunnelPaymentStatus.PAID) {

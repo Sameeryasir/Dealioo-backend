@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ActivityEvent } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Business } from '../../db/entities/business.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
@@ -18,6 +19,7 @@ import { ActivityService } from './activity.service';
       Campaign,
       Customer,
       FunnelPayment,
+      CustomerVisit,
     ]),
     AuthModule,
     forwardRef(() => RedemptionModule),

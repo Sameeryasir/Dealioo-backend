@@ -14,6 +14,7 @@ import { Customer } from './customer.entity';
 import { Funnel } from './funnel.entity';
 import { FunnelPayment } from './funnel-payment.entity';
 import { Business } from './business.entity';
+import { User } from './user.entity';
 
 export enum CouponStatus {
   ACTIVE = 'ACTIVE',
@@ -95,6 +96,19 @@ export class Coupon {
 
   @Column({ name: 'redeemed_at', type: 'timestamptz', nullable: true })
   redeemedAt: Date | null;
+
+  @Column({ name: 'redeemed_by_user_id', type: 'int', nullable: true })
+  redeemedByUserId: number | null;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'redeemed_by_user_id' })
+  redeemedByUser: User | null;
+
+  @Column({ name: 'scanner_device', type: 'varchar', length: 255, nullable: true })
+  scannerDevice: string | null;
+
+  @Column({ name: 'register_id', type: 'varchar', length: 64, nullable: true })
+  registerId: string | null;
 
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date | null;

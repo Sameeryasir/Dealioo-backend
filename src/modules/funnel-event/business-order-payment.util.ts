@@ -39,22 +39,30 @@ export function customerCampaignVisitKey(
 export function isConfirmedOnlinePayment(input: {
   paymentStatus?: string | null;
   paidAt?: Date | string | null;
+  /** Live funnel_payment.status — wins over stale event DTO values. */
+  livePaymentStatus?: string | null;
 }): boolean {
-  return (
-    input.paymentStatus === FunnelPaymentStatus.PAID ||
-    input.paidAt != null
-  );
+  const status = input.livePaymentStatus ?? input.paymentStatus;
+  return status === FunnelPaymentStatus.PAID;
 }
 
 export function buildBusinessOrderPaymentSummary(
   event: Pick<FunnelEvent, 'eventType' | 'amount' | 'paymentStatus'>,
   visit: BusinessVisitSnapshot | null,
-  options: { paidAt?: Date | null } = {},
+  options: {
+    paidAt?: Date | null;
+    livePaymentStatus?: string | null;
+  } = {},
 ): BusinessOrderPaymentSummary {
+  const effectiveStatus = options.livePaymentStatus ?? event.paymentStatus;
   const paidOnline = isConfirmedOnlinePayment({
-    paymentStatus: event.paymentStatus,
-    paidAt: options.paidAt,
+    paymentStatus: effectiveStatus,
+    livePaymentStatus: options.livePaymentStatus,
   });
+
+  // Visit totals belong on the PAYMENT row only.
+  // Applying them to SIGNUP makes $12 + "nothing else" look like two Paid orders.
+  const attachVisitToRow = event.eventType === FunnelEventType.PAYMENT;
 
   const onlineAmountCents =
     event.eventType === FunnelEventType.PAYMENT &&
@@ -63,7 +71,9 @@ export function buildBusinessOrderPaymentSummary(
       ? event.amount
       : null;
   const businessAmount =
-    visit?.orderSubtotal != null ? Number(visit.orderSubtotal) : null;
+    attachVisitToRow && visit?.orderSubtotal != null
+      ? Number(visit.orderSubtotal)
+      : null;
 
   const hasOnline = onlineAmountCents != null && onlineAmountCents > 0;
   const hasBusiness = businessAmount != null && businessAmount > 0;
@@ -81,6 +91,6 @@ export function buildBusinessOrderPaymentSummary(
     orderStatus,
     onlineAmountCents: hasOnline ? onlineAmountCents : null,
     businessAmount: hasBusiness ? businessAmount : null,
-    businessVisitedAt: visit?.visitedAt ?? null,
+    businessVisitedAt: attachVisitToRow ? (visit?.visitedAt ?? null) : null,
   };
 }

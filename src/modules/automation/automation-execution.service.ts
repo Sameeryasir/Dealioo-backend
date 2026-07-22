@@ -90,10 +90,10 @@ export class AutomationExecutionService {
     return this.executionRepository.manager.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
         dto.automationId,
-        funnelPaymentId,
+        customerId,
       ]);
 
-      const existing = await manager
+      const existingForPayment = await manager
         .createQueryBuilder(AutomationExecution, 'execution')
         .select('execution.id', 'id')
         .where('execution.automation_id = :automationId', {
@@ -110,8 +110,35 @@ export class AutomationExecutionService {
         .limit(1)
         .getRawOne<{ id: string | number }>();
 
-      if (existing != null) {
+      if (existingForPayment != null) {
         return null;
+      }
+
+      const activeStatuses = [
+        AutomationExecutionStatus.QUEUED,
+        AutomationExecutionStatus.RUNNING,
+        AutomationExecutionStatus.WAITING,
+      ];
+      const activeRows = await manager.find(AutomationExecution, {
+        where: {
+          automationId: dto.automationId,
+          customerId,
+          status: In(activeStatuses),
+        },
+      });
+
+      for (const row of activeRows) {
+        const existingPaymentId = this.readFunnelPaymentIdFromContext(
+          row.executionContext,
+        );
+        if (existingPaymentId === funnelPaymentId) {
+          return null;
+        }
+        await manager.update(AutomationExecution, row.id, {
+          status: AutomationExecutionStatus.COMPLETED,
+          scheduledAt: null,
+          queueJobId: null,
+        });
       }
 
       const node = await manager.findOne(AutomationNode, {
@@ -144,6 +171,14 @@ export class AutomationExecutionService {
 
       return manager.save(execution);
     });
+  }
+
+  private readFunnelPaymentIdFromContext(
+    context: Record<string, unknown> | null | undefined,
+  ): number | null {
+    const raw = context?.funnelPaymentId;
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   async hasExecutionForFunnelPayment(

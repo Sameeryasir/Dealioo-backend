@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import { requireScannerRole } from '../../utils/require-scanner-role';
 import { CouponService } from './coupon.service';
 import { ScanQrDto } from './dto/scan-qr.dto';
+import { redemptionChannelToVisitSource } from './redemption-channel.util';
 import { RedemptionService } from './redemption.service';
 
 type AuthRequest = Request & {
@@ -86,6 +87,8 @@ export class RedemptionController {
         deviceInfo: dto.deviceInfo,
         ipAddress: resolveClientIp(req),
         idempotencyKey: dto.idempotencyKey,
+        registerId: dto.registerId,
+        visitSource: redemptionChannelToVisitSource(dto.channel),
       },
       dto.couponIds,
       dto.orderSubtotal,
@@ -159,21 +162,22 @@ export class RedemptionController {
     if (!coupon) {
       throw new NotFoundException('Coupon not found');
     }
-    await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+    const liveCoupon = await this.couponService.resolveLiveCouponForScan(coupon);
+    await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
     const paymentConfirmed =
-      await this.couponService.isPaymentConfirmed(coupon);
-    const passDisplay = this.couponService.resolveGuestPassDisplay(coupon);
+      await this.couponService.isPaymentConfirmed(liveCoupon);
+    const passDisplay = this.couponService.resolveGuestPassDisplay(liveCoupon);
 
     if (!passDisplay.passAvailable) {
       return {
-        id: coupon.id,
-        status: coupon.status,
-        paymentStatus: coupon.paymentStatus,
+        id: liveCoupon.id,
+        status: liveCoupon.status,
+        paymentStatus: liveCoupon.paymentStatus,
         paymentConfirmed,
-        issuedAt: coupon.issuedAt,
-        expiresAt: coupon.expiresAt,
-        campaignName: coupon.campaign?.campaignName ?? null,
-        customerName: coupon.customer?.name ?? null,
+        issuedAt: liveCoupon.issuedAt,
+        expiresAt: liveCoupon.expiresAt,
+        campaignName: liveCoupon.campaign?.campaignName ?? null,
+        customerName: liveCoupon.customer?.name ?? null,
         passAvailable: false,
         passUnavailableReason: passDisplay.passUnavailableReason,
         passMessage: passDisplay.passMessage,
@@ -181,16 +185,16 @@ export class RedemptionController {
       };
     }
 
-    const qr = await this.couponService.buildQrPayload(coupon);
+    const qr = await this.couponService.buildQrPayload(liveCoupon);
     return {
-      id: coupon.id,
-      status: coupon.status,
-      paymentStatus: coupon.paymentStatus,
+      id: liveCoupon.id,
+      status: liveCoupon.status,
+      paymentStatus: liveCoupon.paymentStatus,
       paymentConfirmed,
-      issuedAt: coupon.issuedAt,
-      expiresAt: coupon.expiresAt,
-      campaignName: coupon.campaign?.campaignName ?? null,
-      customerName: coupon.customer?.name ?? null,
+      issuedAt: liveCoupon.issuedAt,
+      expiresAt: liveCoupon.expiresAt,
+      campaignName: liveCoupon.campaign?.campaignName ?? null,
+      customerName: liveCoupon.customer?.name ?? null,
       passAvailable: true,
       passUnavailableReason: null,
       passMessage: null,

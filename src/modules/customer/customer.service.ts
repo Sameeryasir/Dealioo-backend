@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import {
@@ -209,6 +209,12 @@ export class CustomerService {
       .getOne();
 
     if (existing) {
+      if (dto.rejectDuplicateEmail) {
+        throw new ConflictException(
+          'A guest with this email already exists. Search for them instead.',
+        );
+      }
+
       let changed = false;
       if (name && existing.name !== name) {
         existing.name = name;

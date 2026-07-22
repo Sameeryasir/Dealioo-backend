@@ -13,7 +13,7 @@ import {
 import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
-import { Coupon } from '../../db/entities/coupon.entity';
+import { Coupon, CouponStatus } from '../../db/entities/coupon.entity';
 
 export type RecordJourneyStepInput = {
   businessId: number;
@@ -334,8 +334,16 @@ export class CustomerJourneyService {
     events: CustomerJourneyEvent[],
     funnelPaymentId?: number | null,
   ): Promise<ResolvedStep> {
+    // Without a payment scope, still honor an explicit qr_redeemed journey row
     if (funnelPaymentId == null) {
-      return { event: null, occurredAt: null, source: null };
+      const event =
+        events.find((row) => row.step === CustomerJourneyStep.QR_REDEEMED) ??
+        null;
+      return {
+        event,
+        occurredAt: event?.occurredAt ?? null,
+        source: event?.source ?? null,
+      };
     }
 
     const coupon = await this.couponRepository.findOne({
@@ -372,15 +380,24 @@ export class CustomerJourneyService {
       where: { couponId: coupon.id },
       order: { visitedAt: 'DESC' },
     });
-    if (!visit) {
-      return { event: null, occurredAt: null, source: null };
+    if (visit) {
+      return {
+        event: null,
+        occurredAt: visit.visitedAt,
+        source: 'customer_visit',
+      };
     }
 
-    return {
-      event: null,
-      occurredAt: visit.visitedAt,
-      source: 'customer_visit',
-    };
+    // Coupon marked redeemed (QR scanned) even if visit row is missing
+    if (coupon.redeemedAt != null || coupon.status === CouponStatus.REDEEMED) {
+      return {
+        event: null,
+        occurredAt: coupon.redeemedAt ?? coupon.updatedAt ?? null,
+        source: 'coupon_redeemed',
+      };
+    }
+
+    return { event: null, occurredAt: null, source: null };
   }
 
   private async ensurePaymentScopedBackfill(params: {

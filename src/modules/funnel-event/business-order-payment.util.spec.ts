@@ -55,6 +55,37 @@ describe('business order payment summary', () => {
     expect(summary.businessAmount).toBeNull();
     expect(summary.orderStatus).toBe('paid_online');
   });
+
+  it('prefers live funnel_payment status over stale event paid flag', () => {
+    const summary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.PAYMENT,
+        amount: 1200,
+        paymentStatus: FunnelPaymentStatus.PAID,
+      },
+      null,
+      { livePaymentStatus: FunnelPaymentStatus.PENDING },
+    );
+
+    expect(summary.orderStatus).toBe('not_paid');
+    expect(summary.onlineAmountCents).toBeNull();
+  });
+
+  it('does not treat signup + visit subtotal as a second paid order', () => {
+    const visitedAt = new Date('2026-07-22T14:52:00.000Z');
+    const summary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.SIGNUP,
+        amount: null,
+        paymentStatus: null,
+      },
+      { orderSubtotal: 12, visitedAt },
+    );
+
+    expect(summary.orderStatus).toBe('not_paid');
+    expect(summary.businessAmount).toBeNull();
+    expect(summary.businessVisitedAt).toBeNull();
+  });
 });
 
 describe('business event paid filter', () => {
@@ -67,6 +98,22 @@ describe('business event paid filter', () => {
 
     expect(displayStatus).toBe('pending');
     expect(matchesBusinessEventStatusFilter(displayStatus, 'paid')).toBe(false);
+    expect(matchesBusinessEventStatusFilter(displayStatus, 'not_paid')).toBe(
+      true,
+    );
+  });
+
+  it('treats cancelled payments as not paid', () => {
+    const displayStatus = resolveBusinessEventDisplayStatus({
+      paymentStatus: FunnelPaymentStatus.CANCELLED,
+      orderStatus: 'not_paid',
+      paidAt: null,
+    });
+
+    expect(displayStatus).toBe('failed');
+    expect(matchesBusinessEventStatusFilter(displayStatus, 'not_paid')).toBe(
+      true,
+    );
   });
 
   it('includes rows with paidAt even when event created earlier', () => {
@@ -93,5 +140,21 @@ describe('business event paid filter', () => {
         paidAt: null,
       }),
     ).toBe(true);
+    expect(
+      isConfirmedOnlinePayment({
+        paymentStatus: FunnelPaymentStatus.PAID,
+        paidAt: null,
+        livePaymentStatus: FunnelPaymentStatus.PENDING,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not treat paidAt alone as paid when status is pending', () => {
+    expect(
+      isConfirmedOnlinePayment({
+        paymentStatus: FunnelPaymentStatus.PENDING,
+        paidAt: new Date('2026-07-13T20:27:00.000Z'),
+      }),
+    ).toBe(false);
   });
 });

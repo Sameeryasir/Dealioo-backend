@@ -171,6 +171,18 @@ export class BusinessHistoryService {
     });
   }
 
+  async logAutomationDeactivated(params: LogAutomationParams): Promise<void> {
+    const occurredAt = new Date();
+    await this.insert({
+      businessId: params.businessId,
+      eventType: BusinessHistoryEventType.AUTOMATION_DEACTIVATED,
+      description: `Deactivated automation "${this.automationLabel(params)}"`,
+      actorUserId: params.actorUserId,
+      occurredAt,
+      idempotencyKey: `automation_deactivated:${params.automationId}:${occurredAt.getTime()}`,
+    });
+  }
+
   async logAutomationDeleted(params: LogAutomationParams): Promise<void> {
     await this.insert({
       businessId: params.businessId,

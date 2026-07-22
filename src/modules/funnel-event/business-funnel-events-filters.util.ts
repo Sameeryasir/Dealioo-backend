@@ -1,5 +1,6 @@
 import type { BusinessOrderPaymentStatus } from './business-order-payment.util';
 import type { BusinessFunnelEventDateFilter } from './funnelEventDto/get-business-funnel-events-query.dto';
+import { FunnelEventType } from '../../db/entities/funnel-event.entity';
 
 export type BusinessEventDisplayStatus =
   | 'paid'
@@ -27,7 +28,6 @@ export function resolveBusinessEventDisplayStatus(event: {
 
   const isPaid =
     paymentStatus === 'paid' ||
-    event.paidAt != null ||
     event.orderStatus === 'paid_walk_in' ||
     event.orderStatus === 'paid_both';
 
@@ -50,7 +50,8 @@ export function matchesBusinessEventStatusFilter(
     return displayStatus === 'paid';
   }
 
-  return displayStatus === 'pending';
+  // Not paid = anything that is not a successful paid order
+  return displayStatus !== 'paid';
 }
 
 export function getBusinessFunnelEventDateFrom(
@@ -103,29 +104,17 @@ export function normalizeBusinessFunnelEventSearch(
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Timestamp used to order business funnel events by when money was collected. */
 export function resolveBusinessEventPaymentSortDate(event: {
   createdAt: Date | string;
   paidAt?: Date | string | null;
   businessVisitedAt?: Date | string | null;
 }): number {
-  const paidAt =
-    event.paidAt != null ? new Date(event.paidAt).getTime() : null;
-  const visitedAt =
-    event.businessVisitedAt != null
-      ? new Date(event.businessVisitedAt).getTime()
-      : null;
-
-  if (paidAt != null && visitedAt != null) {
-    return Math.max(paidAt, visitedAt);
+  if (event.paidAt != null) {
+    return new Date(event.paidAt).getTime();
   }
-  if (paidAt != null) {
-    return paidAt;
+  if (event.businessVisitedAt != null) {
+    return new Date(event.businessVisitedAt).getTime();
   }
-  if (visitedAt != null) {
-    return visitedAt;
-  }
-
   return new Date(event.createdAt).getTime();
 }
 
@@ -141,4 +130,52 @@ export function sortBusinessFunnelEventsByPaymentDate<
       resolveBusinessEventPaymentSortDate(right) -
       resolveBusinessEventPaymentSortDate(left),
   );
+}
+
+/** Hide SIGNUP when a payment exists; keep one row per funnelPaymentId. */
+export function dedupeBusinessOrderEventRows<
+  T extends {
+    eventType: string;
+    funnelId: number;
+    customer?: { id: number } | null;
+    funnelPaymentId?: number | null;
+  },
+>(rows: T[]): T[] {
+  const customerFunnelsWithPayment = new Set<string>();
+
+  for (const row of rows) {
+    const customerId = row.customer?.id;
+    if (customerId == null) {
+      continue;
+    }
+    if (
+      row.eventType === FunnelEventType.PAYMENT ||
+      row.funnelPaymentId != null
+    ) {
+      customerFunnelsWithPayment.add(`${customerId}:${row.funnelId}`);
+    }
+  }
+
+  const withoutSignupDupes = rows.filter((row) => {
+    if (row.eventType !== FunnelEventType.SIGNUP) {
+      return true;
+    }
+    const customerId = row.customer?.id;
+    if (customerId == null) {
+      return true;
+    }
+    return !customerFunnelsWithPayment.has(`${customerId}:${row.funnelId}`);
+  });
+
+  const seenPaymentIds = new Set<number>();
+  return withoutSignupDupes.filter((row) => {
+    if (row.funnelPaymentId == null) {
+      return true;
+    }
+    if (seenPaymentIds.has(row.funnelPaymentId)) {
+      return false;
+    }
+    seenPaymentIds.add(row.funnelPaymentId);
+    return true;
+  });
 }

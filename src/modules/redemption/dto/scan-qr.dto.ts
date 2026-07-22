@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -8,6 +9,11 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+
+export enum RedemptionChannel {
+  QR_SCAN = 'qr_scan',
+  STAFF_LOOKUP = 'staff_lookup',
+}
 
 export class ScanQrDto {
   @IsString()
@@ -26,11 +32,19 @@ export class ScanQrDto {
   orderSubtotal?: number;
 
   @IsOptional()
+  @IsEnum(RedemptionChannel)
+  channel?: RedemptionChannel;
+
+  @IsOptional()
   @IsString()
   @MaxLength(500)
   deviceInfo?: string;
 
-  /** Client-generated key to safely retry redemption after network failures. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  registerId?: string;
+
   @IsOptional()
   @IsString()
   @MinLength(8)

@@ -351,7 +351,7 @@ export class SignupQrEmailService {
       this.logger.warn(
         `Failed to send payment pass email to ${email}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      throw err;
+      return false;
     }
   }
 
@@ -418,7 +418,7 @@ export class SignupQrEmailService {
       this.logger.warn(
         `Failed to send signup pass email to ${email}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      throw err;
+      return false;
     }
   }
 }

@@ -5,6 +5,9 @@ export type AutomationExecutionContext = {
   lastConditionType?: string | null;
   lastConditionResult?: boolean | null;
   stepHistoryPointer?: number | null;
+  funnelPaymentId?: number | null;
+  pausedFromStatus?: string;
+  pausedAt?: string;
 };
 
 export type AutomationExecutionSnapshot = {
@@ -21,6 +24,17 @@ export function normalizeExecutionContext(
   if (!raw || typeof raw !== 'object') {
     return {};
   }
+
+  const rawPaymentId = raw.funnelPaymentId;
+  const funnelPaymentId =
+    typeof rawPaymentId === 'number' && Number.isFinite(rawPaymentId) && rawPaymentId > 0
+      ? rawPaymentId
+      : typeof rawPaymentId === 'string' &&
+          Number.isFinite(Number(rawPaymentId)) &&
+          Number(rawPaymentId) > 0
+        ? Number(rawPaymentId)
+        : null;
+
   return {
     loopCount:
       typeof raw.loopCount === 'number' && Number.isFinite(raw.loopCount)
@@ -42,6 +56,11 @@ export function normalizeExecutionContext(
         : null,
     stepHistoryPointer:
       typeof raw.stepHistoryPointer === 'number' ? raw.stepHistoryPointer : null,
+    ...(funnelPaymentId != null ? { funnelPaymentId } : {}),
+    ...(typeof raw.pausedFromStatus === 'string'
+      ? { pausedFromStatus: raw.pausedFromStatus }
+      : {}),
+    ...(typeof raw.pausedAt === 'string' ? { pausedAt: raw.pausedAt } : {}),
   };
 }
 

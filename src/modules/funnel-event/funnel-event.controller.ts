@@ -75,7 +75,9 @@ export class FunnelEventController {
       customerId,
       funnelIds: dto.funnelIds,
       orderSubtotal: dto.orderSubtotal,
+      extraItemsAmount: dto.extraItemsAmount ?? 0,
       staffUserId: req.user.id,
+      idempotencyKey: dto.idempotencyKey,
     });
   }
 

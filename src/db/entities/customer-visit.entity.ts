@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -15,9 +16,14 @@ import { User } from './user.entity';
 
 export enum CustomerVisitSource {
   QR_REDEMPTION = 'QR_REDEMPTION',
+  STAFF_LOOKUP = 'STAFF_LOOKUP',
 }
 
 @Entity('customer_visits')
+@Index('UQ_customer_visits_coupon_id', ['couponId'], {
+  unique: true,
+  where: '"deleted_at" IS NULL',
+})
 export class CustomerVisit {
   @PrimaryGeneratedColumn()
   id: number;

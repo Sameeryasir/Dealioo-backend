@@ -228,6 +228,7 @@ export class AutomationService {
     }
 
     const becomingActive = !wasActive && saved.isActive;
+    const becomingInactive = wasActive && !saved.isActive;
     const cronPaymentReminder =
       becomingActive &&
       saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
@@ -258,15 +259,22 @@ export class AutomationService {
       this.logPrepaidOfferActivated(saved, 'updated');
     }
 
-    await this.businessHistoryService.logAutomationUpdated({
-      businessId: saved.businessId,
-      automationId: saved.id,
-      automationName: saved.name,
-      actorUserId: user.id,
-    });
-
     if (becomingActive) {
       await this.businessHistoryService.logAutomationActivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
+    } else if (becomingInactive) {
+      await this.businessHistoryService.logAutomationDeactivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
+    } else {
+      await this.businessHistoryService.logAutomationUpdated({
         businessId: saved.businessId,
         automationId: saved.id,
         automationName: saved.name,
@@ -430,10 +438,20 @@ export class AutomationService {
       'You do not have permission to deactivate automations.',
     );
     const automation = await this.findAutomationById(id);
+    const wasActive = automation.isActive;
     automation.isActive = false;
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
     await this.pauseAutomationExecutions(saved.id);
+
+    if (wasActive) {
+      await this.businessHistoryService.logAutomationDeactivated({
+        businessId: saved.businessId,
+        automationId: saved.id,
+        automationName: saved.name,
+        actorUserId: user.id,
+      });
+    }
 
     return saved;
   }
@@ -2488,30 +2506,24 @@ export class AutomationService {
         : null;
 
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
-      if (funnelPaymentId != null) {
-        const alreadyStartedForPayment =
-          await this.executionService.hasExecutionForFunnelPayment(
-            automation.id,
-            event.customerId,
-            funnelPaymentId,
-          );
-        if (alreadyStartedForPayment) {
-          this.logger.log(
-            `[Prepaid Offer] Skipped automation ${automation.id} — payment ${funnelPaymentId} already has a journey for customer ${event.customerId}`,
-          );
-          return;
-        }
-      } else if (options?.onlyIfNoExecutionForPayment) {
-        const hasActive = await this.executionService.hasActiveExecution(
+      if (funnelPaymentId == null) {
+        this.logger.warn(
+          `[Prepaid Offer] Skipped automation ${automation.id} — missing funnelPaymentId for customer ${event.customerId}`,
+        );
+        return;
+      }
+
+      const alreadyStartedForPayment =
+        await this.executionService.hasExecutionForFunnelPayment(
           automation.id,
           event.customerId,
+          funnelPaymentId,
         );
-        if (hasActive) {
-          this.logger.log(
-            `[Prepaid Offer] Skipped automation ${automation.id} — active journey already exists for customer ${event.customerId}`,
-          );
-          return;
-        }
+      if (alreadyStartedForPayment) {
+        this.logger.log(
+          `[Prepaid Offer] Skipped automation ${automation.id} — payment ${funnelPaymentId} already has a journey for customer ${event.customerId}`,
+        );
+        return;
       }
 
       await this.supersedeActivePrepaidExecutionsForCustomer(
@@ -2563,8 +2575,7 @@ export class AutomationService {
     }
 
     const execution =
-      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT &&
-      funnelPaymentId != null
+      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT
         ? await this.executionService.createPrepaidExecutionForPayment(
             {
               automationId: automation.id,
@@ -2572,7 +2583,7 @@ export class AutomationService {
               purpose: automation.purpose,
             },
             event.customerId,
-            funnelPaymentId,
+            funnelPaymentId!,
           )
         : await this.executionService.createExecution(
             {

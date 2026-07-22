@@ -21,6 +21,24 @@ export enum FunnelPaymentStatus {
   DISPUTED = 'disputed',
 }
 
+export enum FunnelPaymentSource {
+  STRIPE = 'STRIPE',
+  SCANNER = 'SCANNER',
+  MANUAL = 'MANUAL',
+}
+
+export enum FunnelCollectionChannel {
+  ONLINE = 'ONLINE',
+  IN_STORE = 'IN_STORE',
+}
+
+export enum FunnelPaymentMethod {
+  CASH = 'CASH',
+  CARD = 'CARD',
+  ONLINE_CARD = 'ONLINE_CARD',
+  OTHER = 'OTHER',
+}
+
 @Entity('funnel_payment')
 export class FunnelPayment {
   @PrimaryGeneratedColumn()
@@ -126,6 +144,28 @@ export class FunnelPayment {
     nullable: true,
   })
   paymentMethod: string | null;
+
+  @Column({
+    name: 'payment_source',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  paymentSource: FunnelPaymentSource | null;
+
+  @Column({
+    name: 'collection_channel',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  collectionChannel: FunnelCollectionChannel | null;
+
+  @Column({ name: 'payment_collected_by', type: 'int', nullable: true })
+  paymentCollectedBy: number | null;
+
+  @Column({ name: 'payment_collected_at', type: 'timestamptz', nullable: true })
+  paymentCollectedAt: Date | null;
 
   @Column({ name: 'receipt_url', type: 'text', nullable: true })
   receiptUrl: string | null;

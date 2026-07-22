@@ -1,7 +1,9 @@
 import {
+  dedupeBusinessOrderEventRows,
   resolveBusinessEventPaymentSortDate,
   sortBusinessFunnelEventsByPaymentDate,
 } from './business-funnel-events-filters.util';
+import { FunnelEventType } from '../../db/entities/funnel-event.entity';
 
 describe('business funnel event payment sort', () => {
   it('prefers paidAt over event createdAt', () => {
@@ -47,5 +49,93 @@ describe('business funnel event payment sort', () => {
         businessVisitedAt: visitedAt,
       }),
     ).toBe(visitedAt.getTime());
+  });
+
+  it('sorts by paidAt even when a later visit exists (matches Payment Date column)', () => {
+    const paidAt = new Date('2026-07-22T01:39:00.000Z');
+    const visitedAt = new Date('2026-07-22T06:30:00.000Z');
+    const laterPaidAt = new Date('2026-07-22T06:10:00.000Z');
+
+    const sorted = sortBusinessFunnelEventsByPaymentDate([
+      {
+        id: 1,
+        createdAt: '2026-07-22T01:00:00.000Z',
+        paidAt,
+        businessVisitedAt: visitedAt,
+      },
+      {
+        id: 2,
+        createdAt: '2026-07-22T06:00:00.000Z',
+        paidAt: laterPaidAt,
+        businessVisitedAt: null,
+      },
+    ]);
+
+    expect(sorted.map((row) => row.id)).toEqual([2, 1]);
+    expect(
+      resolveBusinessEventPaymentSortDate({
+        createdAt: '2026-07-22T01:00:00.000Z',
+        paidAt,
+        businessVisitedAt: visitedAt,
+      }),
+    ).toBe(paidAt.getTime());
+  });
+});
+
+describe('dedupeBusinessOrderEventRows', () => {
+  it('keeps payment and drops signup for the same guest + funnel', () => {
+    const rows = dedupeBusinessOrderEventRows([
+      {
+        eventType: FunnelEventType.SIGNUP,
+        funnelId: 10,
+        customer: { id: 5 },
+        funnelPaymentId: null,
+        id: 1,
+      },
+      {
+        eventType: FunnelEventType.PAYMENT,
+        funnelId: 10,
+        customer: { id: 5 },
+        funnelPaymentId: 99,
+        id: 2,
+      },
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual([2]);
+  });
+
+  it('keeps unpaid signup when no payment exists', () => {
+    const rows = dedupeBusinessOrderEventRows([
+      {
+        eventType: FunnelEventType.SIGNUP,
+        funnelId: 10,
+        customer: { id: 5 },
+        funnelPaymentId: null,
+        id: 1,
+      },
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual([1]);
+  });
+
+  it('keeps only one row per funnelPaymentId', () => {
+    const rows = dedupeBusinessOrderEventRows([
+      {
+        eventType: FunnelEventType.PAYMENT,
+        funnelId: 10,
+        customer: { id: 5 },
+        funnelPaymentId: 99,
+        id: 1,
+      },
+      {
+        eventType: FunnelEventType.PAYMENT,
+        funnelId: 10,
+        customer: { id: 5 },
+        funnelPaymentId: 99,
+        id: 2,
+      },
+    ]);
+
+    expect(rows.map((row) => row.id)).toEqual([1]);
   });
 });

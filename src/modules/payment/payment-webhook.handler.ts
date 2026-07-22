@@ -3,7 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import {
+  FunnelCollectionChannel,
   FunnelPayment,
+  FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { ActivityService } from '../activity/activity.service';
@@ -268,6 +270,8 @@ export class PaymentWebhookHandler {
     await this.funnelPaymentRepository.update(payment.id, {
       status: FunnelPaymentStatus.PAID,
       paidAt: payment.paidAt ?? new Date(),
+      paymentSource: FunnelPaymentSource.STRIPE,
+      collectionChannel: FunnelCollectionChannel.ONLINE,
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
       ...(chargeId ? { stripeChargeId: chargeId } : {}),
