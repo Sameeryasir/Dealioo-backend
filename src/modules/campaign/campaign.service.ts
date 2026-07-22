@@ -142,22 +142,27 @@ export class CampaignService {
       campaign: savedCampaign,
       campaignId: savedCampaign.id,
       pages: {},
-      published: false,
+      published: true,
       version: 1,
     });
     await this.funnelRepository.save(funnel);
 
-    await this.stripeCatalogService.createCatalogForNewCampaign({
-      campaign: savedCampaign,
-      stripeAccountId: business.stripeAccountId,
-    });
+    // Don't block create on Stripe / history — return the campaign immediately.
+    void this.stripeCatalogService
+      .createCatalogForNewCampaign({
+        campaign: savedCampaign,
+        stripeAccountId: business.stripeAccountId,
+      })
+      .catch(() => undefined);
 
-    await this.businessHistoryService.logCampaignCreated({
-      businessId: savedCampaign.businessId,
-      campaignId: savedCampaign.id,
-      campaignName: savedCampaign.campaignName,
-      actorUserId: user.id,
-    });
+    void this.businessHistoryService
+      .logCampaignCreated({
+        businessId: savedCampaign.businessId,
+        campaignId: savedCampaign.id,
+        campaignName: savedCampaign.campaignName,
+        actorUserId: user.id,
+      })
+      .catch(() => undefined);
 
     return savedCampaign;
   }
