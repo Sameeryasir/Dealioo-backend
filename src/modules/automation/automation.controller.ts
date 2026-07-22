@@ -179,6 +179,37 @@ export class AutomationController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('execution/:id/steps')
+  getExecutionSteps(@Param('id', ParseIntPipe) id: number) {
+    return this.automationService.getExecutionSteps(id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('execution/:id/recipients')
+  getExecutionRecipients(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('customerId') customerIdRaw?: string,
+  ) {
+    const customerId =
+      customerIdRaw && /^\d+$/.test(customerIdRaw)
+        ? Number.parseInt(customerIdRaw, 10)
+        : undefined;
+    return this.automationService.getExecutionRecipients(id, customerId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('execution/:id/summary')
+  getExecutionSummary(@Param('id', ParseIntPipe) id: number) {
+    return this.automationService.getExecutionSummary(id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('execution/recover-stuck')
+  recoverStuckExecutions(@Req() req) {
+    return this.automationService.recoverStuckExecutions(req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Post('execution/:id/recover')
   recoverExecution(
     @Param('id', ParseIntPipe) id: number,

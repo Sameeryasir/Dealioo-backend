@@ -21,6 +21,8 @@ export enum AutomationExecutionStatus {
   PAUSED = 'paused',
   FAILED = 'failed',
   COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  TIMED_OUT = 'timed_out',
 }
 
 export { AutomationPurpose as AutomationExecutionPurpose };
@@ -66,6 +68,48 @@ export class AutomationExecution {
 
   @Column({ name: 'emails_sent_count', type: 'int', default: 0 })
   emailsSentCount: number;
+
+  @Column({ name: 'started_at', type: 'timestamptz', nullable: true })
+  startedAt!: Date | null;
+
+  @Column({ name: 'completed_at', type: 'timestamptz', nullable: true })
+  completedAt!: Date | null;
+
+  @Column({ name: 'attempt_number', type: 'int', default: 1 })
+  attemptNumber!: number;
+
+  @Column({ name: 'next_retry_at', type: 'timestamptz', nullable: true })
+  nextRetryAt!: Date | null;
+
+  @Column({ name: 'recipients_found', type: 'int', default: 0 })
+  recipientsFound!: number;
+
+  @Column({ name: 'recipients_eligible', type: 'int', default: 0 })
+  recipientsEligible!: number;
+
+  @Column({ name: 'recipients_filtered', type: 'int', default: 0 })
+  recipientsFiltered!: number;
+
+  @Column({ name: 'recipients_sent', type: 'int', default: 0 })
+  recipientsSent!: number;
+
+  @Column({ name: 'recipients_failed', type: 'int', default: 0 })
+  recipientsFailed!: number;
+
+  @Column({ name: 'recipients_skipped', type: 'int', default: 0 })
+  recipientsSkipped!: number;
+
+  @Column({ name: 'recipients_bounced', type: 'int', default: 0 })
+  recipientsBounced!: number;
+
+  @Column({ name: 'recipients_paid_during_wait', type: 'int', default: 0 })
+  recipientsPaidDuringWait!: number;
+
+  @Column({ name: 'pass_emails_sent', type: 'int', default: 0 })
+  passEmailsSent!: number;
+
+  @Column({ type: 'jsonb', nullable: true })
+  summary!: Record<string, unknown> | null;
 
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError: string | null;

@@ -208,6 +208,8 @@ export class CustomerService {
       .orderBy('customer.id', 'DESC')
       .getOne();
 
+    let customer: Customer;
+
     if (existing) {
       if (dto.rejectDuplicateEmail) {
         throw new ConflictException(
@@ -224,16 +226,24 @@ export class CustomerService {
         existing.phone = phone;
         changed = true;
       }
-      return changed ? this.customerRepository.save(existing) : existing;
+      customer = changed
+        ? await this.customerRepository.save(existing)
+        : existing;
+    } else {
+      customer = await this.customerRepository.save(
+        this.customerRepository.create({
+          name,
+          email,
+          phone,
+        }),
+      );
     }
 
-    const customer = this.customerRepository.create({
-      name,
-      email,
-      phone,
-    });
+    if (dto.businessId != null && dto.businessId > 0) {
+      await this.ensureBusinessCustomerLink(dto.businessId, customer.id);
+    }
 
-    return this.customerRepository.save(customer);
+    return customer;
   }
 
   async searchCustomers(

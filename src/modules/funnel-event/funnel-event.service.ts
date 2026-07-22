@@ -44,6 +44,7 @@ import { Business } from '../../db/entities/business.entity';
 import { AutomationService } from '../automation/automation.service';
 import { ActivityService } from '../activity/activity.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
+import { CustomerService } from '../customer/customer.service';
 import { CouponService } from '../redemption/coupon.service';
 import {
   ScannerErrorCode,
@@ -108,11 +109,13 @@ export class FunnelEventService {
     private readonly signupQrEmailService: SignupQrEmailService,
     private readonly activityService: ActivityService,
     private readonly customerJourneyService: CustomerJourneyService,
+    private readonly customerService: CustomerService,
   ) {}
 
   async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: dto.funnelId },
+      relations: ['campaign'],
     });
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
@@ -127,6 +130,14 @@ export class FunnelEventService {
       dto.eventType === FunnelEventType.SIGNUP &&
       tracked.event.customerId
     ) {
+      const businessId = funnel.campaign?.businessId;
+      if (businessId != null && businessId > 0) {
+        await this.customerService.ensureBusinessCustomerLink(
+          businessId,
+          tracked.event.customerId,
+        );
+      }
+
       const issued = await this.couponService.issueFromSignup(
         dto.funnelId,
         tracked.event.customerId,

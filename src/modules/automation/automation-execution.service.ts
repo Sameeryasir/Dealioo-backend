@@ -71,6 +71,20 @@ export class AutomationExecutionService {
       automationVersion: automation?.version ?? 1,
       executionContext: options?.executionContext ?? {},
       lastEventId: null,
+      startedAt: new Date(),
+      completedAt: null,
+      attemptNumber: 1,
+      nextRetryAt: null,
+      recipientsFound: options?.totalRecipients ?? 0,
+      recipientsEligible: options?.totalRecipients ?? 0,
+      recipientsFiltered: 0,
+      recipientsSent: 0,
+      recipientsFailed: 0,
+      recipientsSkipped: 0,
+      recipientsBounced: 0,
+      recipientsPaidDuringWait: 0,
+      passEmailsSent: 0,
+      summary: null,
     });
 
     return this.executionRepository.save(execution);
@@ -221,6 +235,9 @@ export class AutomationExecutionService {
     const execution = await this.findById(executionId);
     execution.status = AutomationExecutionStatus.RUNNING;
     execution.lastError = null;
+    if (!execution.startedAt) {
+      execution.startedAt = new Date();
+    }
     return this.executionRepository.save(execution);
   }
 
@@ -554,7 +571,9 @@ export class AutomationExecutionService {
   isTerminalExecutionStatus(status: AutomationExecutionStatus): boolean {
     return (
       status === AutomationExecutionStatus.COMPLETED ||
-      status === AutomationExecutionStatus.FAILED
+      status === AutomationExecutionStatus.FAILED ||
+      status === AutomationExecutionStatus.CANCELLED ||
+      status === AutomationExecutionStatus.TIMED_OUT
     );
   }
 
@@ -906,6 +925,10 @@ export class AutomationExecutionService {
     const execution = await this.findById(executionId);
     execution.status = AutomationExecutionStatus.COMPLETED;
     execution.scheduledAt = null;
+    execution.completedAt = new Date();
+    if (!execution.startedAt) {
+      execution.startedAt = execution.createdAt;
+    }
     const saved = await this.executionRepository.save(execution);
 
     await this.pusherService.notifyExecutionCompleted(
@@ -927,6 +950,10 @@ export class AutomationExecutionService {
     const execution = await this.findById(executionId);
     execution.status = AutomationExecutionStatus.FAILED;
     execution.scheduledAt = null;
+    execution.completedAt = new Date();
+    if (!execution.startedAt) {
+      execution.startedAt = execution.createdAt;
+    }
     if (error) {
       execution.lastError = error;
     }
@@ -937,6 +964,25 @@ export class AutomationExecutionService {
     );
 
     return saved;
+  }
+
+  async markTimedOut(
+    executionId: number,
+    error?: string,
+  ): Promise<AutomationExecution> {
+    const execution = await this.findById(executionId);
+    if (this.isTerminalExecutionStatus(execution.status)) {
+      return execution;
+    }
+    execution.status = AutomationExecutionStatus.TIMED_OUT;
+    execution.scheduledAt = null;
+    execution.completedAt = new Date();
+    if (!execution.startedAt) {
+      execution.startedAt = execution.createdAt;
+    }
+    execution.lastError =
+      error?.trim() || 'Execution timed out while stuck in a non-terminal state';
+    return this.executionRepository.save(execution);
   }
 
   async resolveStartNodeId(automationId: number): Promise<number | null> {

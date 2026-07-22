@@ -48,6 +48,9 @@ import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
+import { AutomationExecutionObservabilityService } from './automation-execution-observability.service';
+import { AutomationRecipientDeliveryStatus } from '../../db/entities/automation-execution-recipient.entity';
+import { AutomationExecutionStepStatus } from '../../db/entities/automation-execution-step.entity';
 import {
   AUTOMATION_RECIPIENT_PAGE_SIZE,
   AUTOMATION_SEND_CHUNK_SIZE,
@@ -120,6 +123,7 @@ export class AutomationService {
     private readonly recoveryService: AutomationExecutionRecoveryService,
     private readonly deadLetterService: AutomationDeadLetterService,
     private readonly metricsService: AutomationMetricsService,
+    private readonly observabilityService: AutomationExecutionObservabilityService,
     private readonly activityService: ActivityService,
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly chatMessageService: ChatMessageService,
@@ -1317,6 +1321,13 @@ export class AutomationService {
       message: `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${AUTOMATION_RECIPIENT_PAGE_SIZE} and send chunks of ${AUTOMATION_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
     });
 
+    void this.observabilityService.onBatchExecutionCreated({
+      executionId: execution.id,
+      nodeId: plan.emailNode?.id ?? actionNode.id,
+      unpaidCount,
+      triggeredByCron: options.triggeredByCron,
+    });
+
     const baseBatch: Omit<
       UnpaidReminderBatchJob,
       'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
@@ -1687,11 +1698,23 @@ export class AutomationService {
       campaignName || (funnelId != null ? `Funnel #${funnelId}` : null);
 
     if (batchPhase === 'pass') {
+      const beforeFilterCount = batch.recipients.length;
       batch.recipients =
         await this.recipientsService.filterStillUnpaidRecipients(
           batch.funnelId,
           batch.recipients,
         );
+      const paidDuringWait = Math.max(
+        0,
+        beforeFilterCount - batch.recipients.length,
+      );
+      if (paidDuringWait > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsPaidDuringWait: paidDuringWait,
+          recipientsFiltered: paidDuringWait,
+          recipientsSkipped: paidDuringWait,
+        });
+      }
 
       if (batch.recipients.length === 0) {
         await this.logService.createLog({
@@ -1708,14 +1731,23 @@ export class AutomationService {
         return;
       }
     } else {
+      const beforeFilterCount = batch.recipients.length;
       batch.recipients =
         await this.recipientsService.filterStillUnpaidRecipients(
           batch.funnelId,
           batch.recipients,
         );
+      const filtered = Math.max(0, beforeFilterCount - batch.recipients.length);
+      if (filtered > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsFiltered: filtered,
+          recipientsSkipped: filtered,
+        });
+      }
     }
 
     const lockedRecipients: EmailRecipient[] = [];
+    const lockSkipped: EmailRecipient[] = [];
     for (const recipient of batch.recipients) {
       if (recipient.customerId == null) {
         continue;
@@ -1728,7 +1760,26 @@ export class AutomationService {
       );
       if (acquired) {
         lockedRecipients.push(recipient);
+      } else {
+        lockSkipped.push(recipient);
       }
+    }
+    if (lockSkipped.length > 0) {
+      void this.observabilityService.recordRecipients(
+        lockSkipped
+          .filter((row) => row.customerId != null)
+          .map((row) => ({
+            executionId: batch.executionId,
+            customerId: row.customerId!,
+            nodeId: batch.emailNodeId,
+            phase: batchPhase,
+            status: AutomationRecipientDeliveryStatus.LOCK_SKIPPED,
+            reason: 'Send lock already held for this execution phase',
+          })),
+      );
+      void this.observabilityService.incrementMetrics(batch.executionId, {
+        recipientsSkipped: lockSkipped.length,
+      });
     }
     batch.recipients = lockedRecipients;
 
@@ -1741,6 +1792,17 @@ export class AutomationService {
     }
 
     await this.executionService.markProcessing(batch.executionId);
+
+    const stepKey = batchPhase === 'pass' ? 'pass_email' : 'payment_email';
+    const stepLabel = batchPhase === 'pass' ? 'Pass Email' : 'Payment Email';
+    void this.observabilityService.startStep({
+      executionId: batch.executionId,
+      stepKey,
+      stepLabel,
+      nodeId: batch.emailNodeId,
+      phase: batchPhase,
+      recipientsTotal: batch.recipients.length,
+    });
 
     if (!batch.anchorStepOnTrigger && batchPhase === 'payment' && chunkIndex === 0) {
       if (batch.plan.conditionNode) {
@@ -1978,6 +2040,24 @@ export class AutomationService {
         });
       }
 
+      void this.observabilityService.recordRecipients(
+        sent.map((row) => ({
+          executionId: batch.executionId,
+          customerId: row.customerId,
+          nodeId: batch.emailNodeId,
+          phase: batchPhase,
+          status: AutomationRecipientDeliveryStatus.SENT,
+          reason:
+            batchPhase === 'pass'
+              ? 'QR pass email sent'
+              : 'Payment reminder email sent',
+        })),
+      );
+      void this.observabilityService.incrementMetrics(batch.executionId, {
+        recipientsSent: sent.length,
+        ...(batchPhase === 'pass' ? { passEmailsSent: sent.length } : {}),
+      });
+
       await this.executionService.incrementEmailsSentBy(
         batch.executionId,
         sendResult.recipientCount,
@@ -1991,6 +2071,16 @@ export class AutomationService {
         customerId: firstCustomerId,
         message: 'Bulk payment reminder send failed',
         error: message,
+      });
+      void this.observabilityService.completeStep({
+        executionId: batch.executionId,
+        stepKey: batchPhase === 'pass' ? 'pass_email' : 'payment_email',
+        status: AutomationExecutionStepStatus.FAILED,
+        error: message,
+        recipientsFailed: batch.recipients.length,
+      });
+      void this.observabilityService.incrementMetrics(batch.executionId, {
+        recipientsFailed: batch.recipients.length,
       });
       await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
         sent,
@@ -2181,6 +2271,17 @@ export class AutomationService {
         ? new Date(Date.now() + batch.waitDelayMs)
         : null,
     );
+
+    void this.observabilityService.onWaiting({
+      executionId: batch.executionId,
+      nodeId: waitNodeId,
+      waitDelayMs: batch.waitDelayMs ?? 0,
+    });
+    void this.observabilityService.completeStep({
+      executionId: batch.executionId,
+      stepKey: 'payment_email',
+      status: AutomationExecutionStepStatus.COMPLETED,
+    });
   }
 
   private async finishUnpaidReminderBatchExecution(
@@ -2220,6 +2321,11 @@ export class AutomationService {
         batch.executionId,
         'All send attempts failed',
       );
+      void this.observabilityService.onExecutionFinished({
+        executionId: batch.executionId,
+        failed: true,
+        error: 'All send attempts failed',
+      });
       return;
     }
 
@@ -2235,6 +2341,15 @@ export class AutomationService {
       );
     }
     await this.executionService.markCompleted(batch.executionId);
+
+    void this.observabilityService.completeStep({
+      executionId: batch.executionId,
+      stepKey: batchPhase === 'pass' ? 'pass_email' : 'payment_email',
+      status: AutomationExecutionStepStatus.COMPLETED,
+    });
+    void this.observabilityService.onExecutionFinished({
+      executionId: batch.executionId,
+    });
 
     if (batch.anchorStepOnTrigger) {
       this.logger.log(
@@ -2995,6 +3110,64 @@ export class AutomationService {
 
   async getExecutionEvents(id: number) {
     return this.recoveryService.getExecutionEvents(id);
+  }
+
+  async getExecutionSteps(id: number) {
+    await this.executionService.findById(id);
+    return this.observabilityService.findSteps(id);
+  }
+
+  async getExecutionRecipients(
+    id: number,
+    customerId?: number,
+  ) {
+    await this.executionService.findById(id);
+    return this.observabilityService.findRecipientOutcomes({
+      executionId: id,
+      customerId,
+    });
+  }
+
+  async getExecutionSummary(id: number) {
+    const execution = await this.executionService.findById(id);
+    const steps = await this.observabilityService.findSteps(id);
+    return {
+      executionId: execution.id,
+      status: execution.status,
+      startedAt: execution.startedAt ?? execution.createdAt,
+      completedAt: execution.completedAt,
+      durationMs:
+        execution.startedAt != null && execution.completedAt != null
+          ? Math.max(
+              0,
+              execution.completedAt.getTime() - execution.startedAt.getTime(),
+            )
+          : null,
+      metrics: {
+        recipientsFound: execution.recipientsFound,
+        recipientsEligible: execution.recipientsEligible,
+        recipientsFiltered: execution.recipientsFiltered,
+        recipientsSent: execution.recipientsSent,
+        recipientsFailed: execution.recipientsFailed,
+        recipientsSkipped: execution.recipientsSkipped,
+        recipientsBounced: execution.recipientsBounced,
+        recipientsPaidDuringWait: execution.recipientsPaidDuringWait,
+        passEmailsSent: execution.passEmailsSent,
+        emailsSentCount: execution.emailsSentCount,
+      },
+      summary: execution.summary,
+      steps,
+    };
+  }
+
+  async recoverStuckExecutions(user: User) {
+    requireAdminRole(
+      user,
+      'You do not have permission to recover automations.',
+    );
+    const recovered =
+      await this.observabilityService.recoverStuckExecutions();
+    return { recovered };
   }
 
   async recoverExecution(id: number, user: User) {

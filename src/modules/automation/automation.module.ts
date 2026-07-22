@@ -8,6 +8,8 @@ import { AutomationConnection } from '../../db/entities/automation-connection.en
 import { AutomationDeadLetter } from '../../db/entities/automation-dead-letter.entity';
 import { AutomationExecution } from '../../db/entities/automation-execution.entity';
 import { AutomationExecutionEvent } from '../../db/entities/automation-execution-event.entity';
+import { AutomationExecutionRecipient } from '../../db/entities/automation-execution-recipient.entity';
+import { AutomationExecutionStep } from '../../db/entities/automation-execution-step.entity';
 import { AutomationLog } from '../../db/entities/automation-log.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
@@ -30,6 +32,7 @@ import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationExecutionEventService } from './automation-execution-event.service';
+import { AutomationExecutionObservabilityService } from './automation-execution-observability.service';
 import { AutomationExecutionRecoveryService } from './automation-execution-recovery.service';
 import { AutomationMetricsService } from './automation-metrics.service';
 import { AutomationRecipientsService } from './automation-recipients.service';
@@ -65,6 +68,8 @@ import { AutomationService } from './automation.service';
       AutomationConnection,
       AutomationExecution,
       AutomationExecutionEvent,
+      AutomationExecutionStep,
+      AutomationExecutionRecipient,
       AutomationDeadLetter,
       AutomationLog,
       Business,
@@ -92,6 +97,7 @@ import { AutomationService } from './automation.service';
     AutomationEngineService,
     AutomationExecutionService,
     AutomationExecutionEventService,
+    AutomationExecutionObservabilityService,
     AutomationExecutionRecoveryService,
     AutomationDeadLetterService,
     AutomationMetricsService,
