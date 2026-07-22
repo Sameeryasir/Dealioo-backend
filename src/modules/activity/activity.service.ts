@@ -36,9 +36,11 @@ import {
 import { CouponPaymentStatus } from '../../db/entities/coupon.entity';
 import { visitedActivityDescription } from './visited-activity-description.util';
 import {
+  ACTIVITY_IN_PERSON_FILTER,
   escapeIlikePattern,
   normalizeActivitySearch,
   resolveActivityDateRange,
+  type ParsedActivityEventFilter,
 } from './activity-filters.util';
 import {
   buildRecentMonthBuckets,
@@ -379,7 +381,7 @@ export class ActivityService {
     options: {
       page?: number;
       limit?: number;
-      eventType?: ActivityEventType | null;
+      eventType?: ParsedActivityEventFilter;
       from?: Date | null;
       to?: Date | null;
       search?: string;
@@ -399,7 +401,6 @@ export class ActivityService {
         .andWhere('activity.occurredAt >= :from', { from: range.from })
         .andWhere('activity.occurredAt <= :to', { to: range.to });
 
-      // Staff check-in visits are implied by In-person payment — hide from the log
       qb.andWhere(
         `NOT (
           activity.event_type = :hideVisitedType
@@ -415,11 +416,7 @@ export class ActivityService {
         },
       );
 
-      if (options.eventType) {
-        qb.andWhere('activity.eventType = :eventType', {
-          eventType: options.eventType,
-        });
-      }
+      this.applyEventTypeFilter(qb, options.eventType);
 
       if (search) {
         const searchPattern = `%${escapeIlikePattern(search)}%`;
@@ -520,6 +517,38 @@ export class ActivityService {
     };
   }
 
+  private readonly inStorePrepaidSql = `(
+    COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
+    OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
+    OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
+    OR activity.description ILIKE '% at %'
+  )`;
+
+  private applyEventTypeFilter(
+    qb: ReturnType<Repository<ActivityEvent>['createQueryBuilder']>,
+    eventType?: ParsedActivityEventFilter,
+  ): void {
+    if (!eventType) {
+      return;
+    }
+
+    if (eventType === ACTIVITY_IN_PERSON_FILTER) {
+      qb.andWhere('activity.eventType = :prepaidType', {
+        prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
+      }).andWhere(this.inStorePrepaidSql);
+      return;
+    }
+
+    if (eventType === ActivityEventType.PREPAID_FOR_OFFER) {
+      qb.andWhere('activity.eventType = :prepaidType', {
+        prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
+      }).andWhere(`NOT ${this.inStorePrepaidSql}`);
+      return;
+    }
+
+    qb.andWhere('activity.eventType = :eventType', { eventType });
+  }
+
   private resolvePaymentChannel(
     row: ActivityEvent,
   ): 'online' | 'in_store' | null {
@@ -610,7 +639,7 @@ export class ActivityService {
   async getBusinessSummary(
     businessId: number,
     options: {
-      eventType?: ActivityEventType | null;
+      eventType?: ParsedActivityEventFilter;
       from?: Date | null;
       to?: Date | null;
     },
@@ -640,11 +669,7 @@ export class ActivityService {
       )
       .groupBy('activity.eventType');
 
-    if (options.eventType) {
-      qb.andWhere('activity.eventType = :eventType', {
-        eventType: options.eventType,
-      });
-    }
+    this.applyEventTypeFilter(qb, options.eventType);
 
     const rows = await qb.getRawMany<{ eventType: ActivityEventType; count: string }>();
 

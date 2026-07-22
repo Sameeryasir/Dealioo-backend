@@ -2,20 +2,28 @@ import { ActivityEventType } from '../../db/entities/activity-event.entity';
 
 export const ACTIVITY_DEFAULT_MONTH_COUNT = 6;
 
+export const ACTIVITY_IN_PERSON_FILTER = 'in_person' as const;
+
 export const ACTIVITY_EVENT_TYPE_FILTERS = [
   'all',
   ActivityEventType.VISITED,
   ActivityEventType.REDEEMED_REWARD,
   ActivityEventType.PREPAID_FOR_OFFER,
+  ACTIVITY_IN_PERSON_FILTER,
   ActivityEventType.MESSAGE_SENT,
 ] as const;
 
 export type ActivityEventTypeFilter =
   (typeof ACTIVITY_EVENT_TYPE_FILTERS)[number];
 
+export type ParsedActivityEventFilter =
+  | ActivityEventType
+  | typeof ACTIVITY_IN_PERSON_FILTER
+  | null;
+
 export function parseActivityEventTypeFilter(
   raw?: string,
-): ActivityEventType | null {
+): ParsedActivityEventFilter {
   if (!raw?.trim()) {
     return null;
   }
@@ -23,6 +31,10 @@ export function parseActivityEventTypeFilter(
   const value = raw.trim().toLowerCase();
   if (value === 'all') {
     return null;
+  }
+
+  if (value === ACTIVITY_IN_PERSON_FILTER) {
+    return ACTIVITY_IN_PERSON_FILTER;
   }
 
   if (Object.values(ActivityEventType).includes(value as ActivityEventType)) {
