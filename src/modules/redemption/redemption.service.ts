@@ -23,9 +23,27 @@ import {
 } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { Funnel } from '../../db/entities/funnel.entity';
+import {
+  FunnelEvent,
+  FunnelEventType,
+} from '../../db/entities/funnel-event.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentMethod,
+  FunnelPaymentSource,
+  FunnelPaymentStatus,
+  FunnelCollectionChannel,
+} from '../../db/entities/funnel-payment.entity';
+import {
+  Order,
+  OrderSource,
+  OrderStatus,
+} from '../../db/entities/order.entity';
 import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import {
   centsToDollars,
@@ -50,7 +68,6 @@ export type ScanAuditContext = {
   ipAddress?: string;
   idempotencyKey?: string;
   visitSource?: CustomerVisitSource;
-  registerId?: string;
 };
 
 export type ScanResult =
@@ -173,12 +190,17 @@ export class RedemptionService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectRepository(FunnelEvent)
+    private readonly funnelEventRepository: Repository<FunnelEvent>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @Inject(forwardRef(() => ActivityService))
     private readonly activityService: ActivityService,
     @Inject(forwardRef(() => AutomationService))
     private readonly automationService: AutomationService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly customerJourneyService: CustomerJourneyService,
+    private readonly businessHistoryService: BusinessHistoryService,
   ) {}
 
   extractToken(raw: string): string {
@@ -314,16 +336,20 @@ export class RedemptionService {
       return { success: false, message: 'Customer not found' };
     }
 
-    if (!liveCoupon.campaign) {
+    if (!liveCoupon.campaign || liveCoupon.campaign.deletedAt) {
       await this.logAudit({
         eventType: RedemptionEventType.PREVIEW_FAILURE,
         coupon: liveCoupon,
         businessId,
         audit,
         success: false,
-        failureReason: 'Campaign not found',
+        failureReason: ScannerErrorMessage.CAMPAIGN_INACTIVE,
       });
-      return { success: false, message: 'Campaign not found' };
+      return {
+        success: false,
+        message: ScannerErrorMessage.CAMPAIGN_INACTIVE,
+        errorCode: ScannerErrorCode.CAMPAIGN_INACTIVE,
+      };
     }
 
     await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
@@ -405,6 +431,7 @@ export class RedemptionService {
     audit: ScanAuditContext,
     couponIds?: number[],
     orderSubtotal?: number,
+    extraItemsAmount?: number,
   ): Promise<ScanResult> {
     if (audit.idempotencyKey?.trim()) {
       const cached = await this.findIdempotentRedemption(
@@ -490,6 +517,7 @@ export class RedemptionService {
       businessId,
       audit,
       orderSubtotal,
+      extraItemsAmount,
     );
   }
 
@@ -498,6 +526,7 @@ export class RedemptionService {
     businessId: number,
     audit: ScanAuditContext,
     orderSubtotal?: number,
+    extraItemsAmount?: number,
   ): Promise<ScanResult> {
     const uniqueIds = [...new Set(couponIds)].sort((a, b) => a - b);
     if (uniqueIds.length === 0) {
@@ -517,6 +546,15 @@ export class RedemptionService {
     const redeemedAt = new Date();
     const resumeTarget: {
       value: { customerId: number; campaignId: number } | null;
+    } = { value: null };
+    const historyHint: {
+      value: {
+        collectedPayment: boolean;
+        amountLabel: string;
+        couponIds: number[];
+        customerName: string;
+        campaignName: string;
+      } | null;
     } = { value: null };
 
     const result = await this.dataSource.transaction(async (manager) => {
@@ -656,6 +694,8 @@ export class RedemptionService {
         }
       }
 
+      const settledOrderIdByCouponId = new Map<number, number>();
+
       for (const coupon of lockedCoupons) {
         const walkInPayment =
           coupon.paymentStatus === CouponPaymentStatus.PENDING;
@@ -668,7 +708,6 @@ export class RedemptionService {
             redeemedAt,
             redeemedByUserId: audit.scannedBy,
             scannerDevice: audit.deviceInfo?.slice(0, 255) ?? null,
-            registerId: audit.registerId?.slice(0, 64) ?? null,
             ...(walkInPayment
               ? { paymentStatus: CouponPaymentStatus.PAID }
               : {}),
@@ -689,6 +728,21 @@ export class RedemptionService {
             message: ScannerErrorMessage.ALREADY_REDEEMED,
             errorCode: ScannerErrorCode.ALREADY_REDEEMED,
           } as ScanResult;
+        }
+
+        if (walkInPayment) {
+          const settledOrderId = await this.settleUnpaidFunnelCheckoutAtCounter(
+            manager,
+            {
+              coupon,
+              businessId,
+              staffUserId: audit.scannedBy,
+              paidAt: redeemedAt,
+            },
+          );
+          if (settledOrderId != null) {
+            settledOrderIdByCouponId.set(coupon.id, settledOrderId);
+          }
         }
 
         await this.logAuditInTransaction(manager, {
@@ -716,14 +770,18 @@ export class RedemptionService {
         lockedCoupons,
         orderSubtotal,
         hasPrepaid && !hasUnpaid,
+        extraItemsAmount,
       );
 
+      // Visit activity 1ms after redeem so newest-first feed shows Scanned above Redeemed.
       await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         businessId,
         audit,
         visitedAt: redeemedAt,
+        activityOccurredAt: new Date(redeemedAt.getTime() + 1),
         orderSubtotal: visitOrderSubtotal,
+        orderId: settledOrderIdByCouponId.get(primaryCoupon.id) ?? null,
         manager,
         businessName,
       });
@@ -733,12 +791,30 @@ export class RedemptionService {
         campaignId: primaryCoupon.campaignId,
       };
 
-      return this.buildRedeemSuccessResult(
+      const successResult = await this.buildRedeemSuccessResult(
         manager,
         primaryCoupon,
         lockedCoupons,
         redeemedAt,
       );
+
+      if (successResult.success) {
+        // History shows offer/campaign price only (not visit total with extras).
+        const offerDollars = lockedCoupons.reduce((sum, coupon) => {
+          const price = Number(coupon.campaign?.price);
+          return Number.isFinite(price) && price >= 0 ? sum + price : sum;
+        }, 0);
+        historyHint.value = {
+          collectedPayment: hasUnpaid,
+          amountLabel:
+            offerDollars > 0 ? `$${offerDollars.toFixed(2)}` : 'payment',
+          couponIds: lockedCoupons.map((coupon) => coupon.id),
+          customerName: successResult.customerName,
+          campaignName: successResult.campaignName,
+        };
+      }
+
+      return successResult;
     });
 
     if (resumeTarget.value) {
@@ -749,7 +825,142 @@ export class RedemptionService {
       });
     }
 
+    if (result.success && historyHint.value) {
+      const hint = historyHint.value;
+      try {
+        await this.businessHistoryService.logScannerRedeemed({
+          businessId,
+          customerName: hint.customerName,
+          campaignName: hint.campaignName,
+          couponIds: hint.couponIds,
+          actorUserId: audit.scannedBy,
+          occurredAt: redeemedAt,
+        });
+        if (hint.collectedPayment) {
+          await this.businessHistoryService.logScannerPayment({
+            businessId,
+            customerName: hint.customerName,
+            campaignName: hint.campaignName,
+            amountLabel: hint.amountLabel,
+            couponIds: hint.couponIds,
+            actorUserId: audit.scannedBy,
+            occurredAt: redeemedAt,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to write scanner redeem business history', error);
+      }
+    }
+
     return result;
+  }
+
+  private async settleUnpaidFunnelCheckoutAtCounter(
+    manager: EntityManager,
+    params: {
+      coupon: Coupon;
+      businessId: number;
+      staffUserId: number | null;
+      paidAt: Date;
+    },
+  ): Promise<number | null> {
+    const { coupon, businessId, staffUserId, paidAt } = params;
+
+    let payment: FunnelPayment | null = null;
+    if (coupon.funnelPaymentId != null) {
+      payment = await manager.findOne(FunnelPayment, {
+        where: { id: coupon.funnelPaymentId },
+        lock: { mode: 'pessimistic_write' },
+      });
+    }
+
+    if (
+      payment == null ||
+      (payment.status !== FunnelPaymentStatus.PENDING &&
+        payment.status !== FunnelPaymentStatus.PAID)
+    ) {
+      if (coupon.funnelId != null && coupon.customerId != null) {
+        payment = await manager.findOne(FunnelPayment, {
+          where: {
+            funnelId: coupon.funnelId,
+            businessId,
+            customerId: coupon.customerId,
+            status: FunnelPaymentStatus.PENDING,
+          },
+          order: { createdAt: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+      }
+    }
+
+    if (!payment) {
+      return null;
+    }
+
+    await manager.update(FunnelPayment, payment.id, {
+      status: FunnelPaymentStatus.PAID,
+      paidAt: payment.paidAt ?? paidAt,
+      paymentSource: FunnelPaymentSource.SCANNER,
+      collectionChannel: FunnelCollectionChannel.IN_STORE,
+      paymentMethod: FunnelPaymentMethod.OTHER,
+      paymentCollectedBy: staffUserId,
+      paymentCollectedAt: paidAt,
+      ...(coupon.customerId != null
+        ? { customerId: coupon.customerId }
+        : {}),
+    });
+    payment.status = FunnelPaymentStatus.PAID;
+    payment.paidAt = payment.paidAt ?? paidAt;
+
+    if (coupon.funnelPaymentId !== payment.id) {
+      await manager.update(Coupon, coupon.id, {
+        funnelPaymentId: payment.id,
+      });
+    }
+
+    let orderId = payment.orderId;
+    if (orderId != null) {
+      await manager.update(Order, orderId, {
+        status: OrderStatus.PAID,
+        source: OrderSource.SCANNER,
+        totalAmount: payment.amount,
+        currency: payment.currency || 'usd',
+        paidAt: payment.paidAt ?? paidAt,
+        collectedByUserId: staffUserId,
+        ...(coupon.customerId != null
+          ? { customerId: coupon.customerId }
+          : {}),
+      });
+    } else {
+      const order = await manager.save(
+        manager.create(Order, {
+          businessId,
+          customerId: coupon.customerId,
+          status: OrderStatus.PAID,
+          source: OrderSource.SCANNER,
+          totalAmount: payment.amount,
+          currency: payment.currency || 'usd',
+          paidAt: payment.paidAt ?? paidAt,
+          collectedByUserId: staffUserId,
+        }),
+      );
+      orderId = order.id;
+      await manager.update(FunnelPayment, payment.id, { orderId });
+      payment.orderId = orderId;
+    }
+
+    await manager.update(
+      FunnelEvent,
+      { funnelPaymentId: payment.id },
+      {
+        eventType: FunnelEventType.PAYMENT,
+        paymentStatus: FunnelPaymentStatus.PAID,
+        amount: payment.amount,
+        currency: payment.currency || 'usd',
+      },
+    );
+
+    return orderId;
   }
 
   private async recordVisitFromQrScan(params: {
@@ -757,22 +968,33 @@ export class RedemptionService {
     businessId: number;
     audit: ScanAuditContext;
     visitedAt?: Date;
+    activityOccurredAt?: Date;
     orderSubtotal?: number | null;
+    orderId?: number | null;
     manager?: EntityManager;
     businessName?: string;
   }): Promise<CustomerVisitRecordResult> {
     const visitedAt = params.visitedAt ?? new Date();
+    const activityOccurredAt = params.activityOccurredAt ?? visitedAt;
     const manager = params.manager ?? this.dataSource.manager;
 
     const existingVisit = await manager.findOne(CustomerVisit, {
       where: { couponId: params.coupon.id },
     });
     if (existingVisit) {
+      let changed = false;
       if (
         params.orderSubtotal != null &&
         Number.isFinite(params.orderSubtotal)
       ) {
         existingVisit.orderSubtotal = params.orderSubtotal;
+        changed = true;
+      }
+      if (params.orderId != null && existingVisit.orderId == null) {
+        existingVisit.orderId = params.orderId;
+        changed = true;
+      }
+      if (changed) {
         await manager.save(existingVisit);
       }
       return {
@@ -795,7 +1017,7 @@ export class RedemptionService {
       campaignId: params.coupon.campaignId,
       businessId: params.businessId,
       couponId: params.coupon.id,
-      orderId: null,
+      orderId: params.orderId ?? null,
       staffUserId: params.audit.scannedBy,
       visitedAt,
       source:
@@ -813,7 +1035,7 @@ export class RedemptionService {
       customerId: params.coupon.customerId,
       couponId: params.coupon.id,
       businessName,
-      occurredAt: visitedAt,
+      occurredAt: activityOccurredAt,
       visitSource,
       offerName:
         params.coupon.campaign?.offer?.trim() ||
@@ -1130,6 +1352,8 @@ export class RedemptionService {
       qrToken: string;
     }>
   > {
+    await this.ensureUnpaidFunnelDealsForGuest(customerId, businessId);
+
     const coupons = await this.couponRepository.find({
       where: { customerId, businessId, status: CouponStatus.ACTIVE },
       relations: ['campaign', 'funnelPayment'],
@@ -1157,6 +1381,10 @@ export class RedemptionService {
       }
 
       await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
+
+      if (!coupon.campaign || coupon.campaign.deletedAt) {
+        continue;
+      }
 
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
       const paymentBadge = resolveGuestDealPaymentBadge({
@@ -1200,6 +1428,125 @@ export class RedemptionService {
     return results;
   }
 
+  private async ensureUnpaidFunnelDealsForGuest(
+    customerId: number,
+    businessId: number,
+  ): Promise<void> {
+    const customer = await this.customerRepository.findOne({
+      where: { id: customerId },
+    });
+    const email = customer?.email?.trim().toLowerCase() || null;
+    const funnelIds = new Set<number>();
+
+    const signupRows = await this.funnelEventRepository
+      .createQueryBuilder('fe')
+      .innerJoin(Funnel, 'f', 'f.id = fe.funnel_id')
+      .innerJoin(Campaign, 'c', 'c.id = f.campaign_id')
+      .where('fe.customer_id = :customerId', { customerId })
+      .andWhere('fe.event_type = :eventType', {
+        eventType: FunnelEventType.SIGNUP,
+      })
+      .andWhere('c.restaurant_id = :businessId', { businessId })
+      .andWhere('fe.deleted_at IS NULL')
+      .select('DISTINCT fe.funnel_id', 'funnelId')
+      .getRawMany<{ funnelId: number | string }>();
+
+    for (const row of signupRows) {
+      const funnelId = Number(row.funnelId);
+      if (Number.isFinite(funnelId) && funnelId > 0) {
+        funnelIds.add(funnelId);
+      }
+    }
+
+    if (email) {
+      const pendingOnline = await this.funnelPaymentRepository
+        .createQueryBuilder('fp')
+        .where('fp.restaurant_id = :businessId', { businessId })
+        .andWhere('LOWER(fp.customer_email) = :email', { email })
+        .andWhere('fp.status IN (:...statuses)', {
+          statuses: [
+            FunnelPaymentStatus.PENDING,
+            FunnelPaymentStatus.FAILED,
+            FunnelPaymentStatus.CANCELLED,
+          ],
+        })
+        .andWhere(
+          '(fp.payment_source = :stripe OR fp.collection_channel = :online)',
+          {
+            stripe: FunnelPaymentSource.STRIPE,
+            online: FunnelCollectionChannel.ONLINE,
+          },
+        )
+        .andWhere('fp.funnel_id IS NOT NULL')
+        .andWhere('fp.deleted_at IS NULL')
+        .select('DISTINCT fp.funnel_id', 'funnelId')
+        .getRawMany<{ funnelId: number | string }>();
+
+      for (const row of pendingOnline) {
+        const funnelId = Number(row.funnelId);
+        if (Number.isFinite(funnelId) && funnelId > 0) {
+          funnelIds.add(funnelId);
+        }
+      }
+    }
+
+    for (const funnelId of funnelIds) {
+      const onlinePaid = await this.findOnlinePaidPaymentForGuest({
+        funnelId,
+        customerId,
+        email,
+      });
+      if (onlinePaid) {
+        continue;
+      }
+      await this.couponService.ensurePendingCouponForUnpaidFunnel(
+        funnelId,
+        customerId,
+      );
+    }
+  }
+
+  private async findOnlinePaidPaymentForGuest(input: {
+    funnelId: number;
+    customerId: number;
+    email: string | null;
+  }): Promise<FunnelPayment | null> {
+    const byCustomer = await this.funnelPaymentRepository.find({
+      where: {
+        funnelId: input.funnelId,
+        customerId: input.customerId,
+        status: FunnelPaymentStatus.PAID,
+      },
+      order: { id: 'DESC' },
+      take: 10,
+    });
+    for (const payment of byCustomer) {
+      if (isOnlineFunnelPayment(payment)) {
+        return payment;
+      }
+    }
+
+    if (!input.email) {
+      return null;
+    }
+
+    const byEmail = await this.funnelPaymentRepository.find({
+      where: {
+        funnelId: input.funnelId,
+        customerEmail: input.email,
+        status: FunnelPaymentStatus.PAID,
+      },
+      order: { id: 'DESC' },
+      take: 10,
+    });
+    for (const payment of byEmail) {
+      if (isOnlineFunnelPayment(payment)) {
+        return payment;
+      }
+    }
+    return null;
+  }
+
   private async logAudit(params: {
     eventType: RedemptionEventType;
     coupon: Coupon | null;
@@ -1229,6 +1576,7 @@ export class RedemptionService {
     lockedCoupons: Coupon[],
     orderSubtotal: number | undefined,
     allPrepaid: boolean,
+    extraItemsAmount?: number,
   ): Promise<number | null> {
     let offerCents = 0;
     let hasAllOfferPrices = true;
@@ -1245,17 +1593,25 @@ export class RedemptionService {
       offerCents += offerPriceCents;
     }
 
+    const extraCents =
+      extraItemsAmount != null &&
+      Number.isFinite(extraItemsAmount) &&
+      extraItemsAmount >= 0
+        ? dollarsToCents(extraItemsAmount)
+        : 0;
+
     if (allPrepaid) {
-      const extraCents =
+      const prepaidExtraCents =
         orderSubtotal != null &&
         Number.isFinite(orderSubtotal) &&
         orderSubtotal >= 0
           ? dollarsToCents(orderSubtotal)
           : 0;
+      const combinedExtra = prepaidExtraCents + extraCents;
       if (hasAllOfferPrices) {
-        return centsToDollars(offerCents + extraCents);
+        return centsToDollars(offerCents + combinedExtra);
       }
-      return extraCents > 0 ? centsToDollars(extraCents) : null;
+      return combinedExtra > 0 ? centsToDollars(combinedExtra) : null;
     }
 
     if (
@@ -1263,10 +1619,13 @@ export class RedemptionService {
       Number.isFinite(orderSubtotal) &&
       orderSubtotal >= 0
     ) {
-      return centsToDollars(dollarsToCents(orderSubtotal));
+      return centsToDollars(dollarsToCents(orderSubtotal) + extraCents);
     }
 
-    return hasAllOfferPrices ? centsToDollars(offerCents) : null;
+    if (hasAllOfferPrices) {
+      return centsToDollars(offerCents + extraCents);
+    }
+    return extraCents > 0 ? centsToDollars(extraCents) : null;
   }
 
   private async resolveCouponOfferPriceCents(

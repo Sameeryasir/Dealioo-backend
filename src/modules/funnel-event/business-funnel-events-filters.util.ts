@@ -26,6 +26,10 @@ export function resolveBusinessEventDisplayStatus(event: {
     return 'failed';
   }
 
+  if (paymentStatus === 'pending') {
+    return 'pending';
+  }
+
   const isPaid =
     paymentStatus === 'paid' ||
     event.orderStatus === 'paid_walk_in' ||

@@ -4,8 +4,7 @@ import * as jwt from 'jsonwebtoken';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtStrategy } from './jwt/jwt.strategy';
-import { GoogleStrategy } from './strategies/google.strategy';
-import { GoogleAuthGuard } from './guards/google-auth.guard';
+import { GoogleOAuthService } from './google-oauth.service';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { BusinessInvitation } from '../../db/entities/business-invitation.entity';
@@ -50,7 +49,7 @@ import { UserSubscription } from '../../db/entities/user-subscription.entity';
       },
     }),
   ],
-  providers: [AuthService, JwtStrategy, GoogleStrategy, GoogleAuthGuard],
+  providers: [AuthService, JwtStrategy, GoogleOAuthService],
   controllers: [AuthController],
   exports: [PassportModule, JwtModule, JwtStrategy],
 })

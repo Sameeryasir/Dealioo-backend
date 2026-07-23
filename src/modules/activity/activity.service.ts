@@ -465,6 +465,7 @@ export class ActivityService {
     const [rows, total] = await Promise.all([
       rowsQb
         .orderBy('activity.occurredAt', 'DESC')
+        .addOrderBy('activity.id', 'DESC')
         .skip(pagination.skip)
         .take(pagination.limit)
         .getMany(),

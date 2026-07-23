@@ -52,11 +52,11 @@ export class Coupon {
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
-  @Column({ name: 'restaurant_id' })
+  @Column({ name: 'business_id' })
   businessId: number;
 
   @ManyToOne(() => Business, { onDelete: 'RESTRICT' })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'customer_id' })
@@ -106,9 +106,6 @@ export class Coupon {
 
   @Column({ name: 'scanner_device', type: 'varchar', length: 255, nullable: true })
   scannerDevice: string | null;
-
-  @Column({ name: 'register_id', type: 'varchar', length: 64, nullable: true })
-  registerId: string | null;
 
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date | null;

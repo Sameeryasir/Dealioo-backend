@@ -14,6 +14,7 @@ import { ScannerPurchaseRequest } from '../../db/entities/scanner-purchase-reque
 import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AutomationModule } from '../automation/automation.module';
+import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CustomerModule } from '../customer/customer.module';
 import { RedemptionModule } from '../redemption/redemption.module';
@@ -40,6 +41,7 @@ import { FunnelEventService } from './funnel-event.service';
     forwardRef(() => AutomationModule),
     forwardRef(() => RedemptionModule),
     ActivityModule,
+    BusinessHistoryModule,
     CustomerJourneyModule,
     CustomerModule,
   ],

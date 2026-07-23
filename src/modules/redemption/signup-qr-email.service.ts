@@ -6,10 +6,7 @@ import { Queue } from 'bullmq';
 import * as React from 'react';
 import { DataSource, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
-import {
-  Coupon,
-  CouponPaymentStatus,
-} from '../../db/entities/coupon.entity';
+import { Coupon } from '../../db/entities/coupon.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { getPurposeEmailDefaults } from '../automation/automation-email-catalog';
@@ -76,14 +73,6 @@ export class SignupQrEmailService {
         return false;
       }
 
-      if (
-        coupon.signupPassEmailSentAt ||
-        coupon.signupPassEmailCancelledAt ||
-        coupon.paymentStatus === CouponPaymentStatus.PAID
-      ) {
-        return false;
-      }
-
       if (coupon.signupPassEmailScheduledAt) {
         return false;
       }
@@ -96,7 +85,7 @@ export class SignupQrEmailService {
 
     if (!shouldQueue) {
       this.logger.log(
-        `Skipping signup pass email schedule for coupon ${params.couponId} — already handled or paid`,
+        `Skipping signup pass email schedule for coupon ${params.couponId} — already scheduled or missing`,
       );
       return;
     }
@@ -209,46 +198,12 @@ export class SignupQrEmailService {
       return;
     }
 
-    const sendApproved = await this.dataSource.transaction(async (manager) => {
-      const coupon = await manager.findOne(Coupon, {
-        where: { id: params.couponId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!coupon) {
-        return false;
-      }
-
-      if (
-        coupon.signupPassEmailSentAt ||
-        coupon.signupPassEmailCancelledAt
-      ) {
-        return false;
-      }
-
-      if (coupon.paymentStatus === CouponPaymentStatus.PAID) {
-        await manager.update(Coupon, coupon.id, {
-          signupPassEmailCancelledAt: new Date(),
-          signupPassEmailScheduledAt: null,
-        });
-        return false;
-      }
-
-      const paymentConfirmed =
-        await this.couponService.isPaymentConfirmed(coupon);
-      if (paymentConfirmed) {
-        await manager.update(Coupon, coupon.id, {
-          signupPassEmailCancelledAt: new Date(),
-          signupPassEmailScheduledAt: null,
-        });
-        return false;
-      }
-
-      return true;
+    const coupon = await this.couponRepository.findOne({
+      where: { id: params.couponId },
     });
-
-    if (!sendApproved) {
-      this.logger.log(
-        `Skipping signup pass email for coupon ${params.couponId} — paid, cancelled, or already sent`,
+    if (!coupon) {
+      this.logger.warn(
+        `Skipping signup pass email for coupon ${params.couponId} — coupon not found`,
       );
       return;
     }
@@ -261,7 +216,12 @@ export class SignupQrEmailService {
     await this.couponRepository.update(params.couponId, {
       signupPassEmailSentAt: new Date(),
       signupPassEmailScheduledAt: null,
+      signupPassEmailCancelledAt: null,
     });
+
+    this.logger.log(
+      `Signup pass email sent for coupon ${params.couponId}`,
+    );
   }
 
   private async deliverPaymentPassEmail(

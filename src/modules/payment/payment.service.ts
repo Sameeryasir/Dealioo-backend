@@ -822,8 +822,13 @@ export class PaymentService implements OnModuleInit {
     const [rows, total] = await this.funnelPaymentRepository
       .createQueryBuilder('payment')
       .where('payment.funnel_id = :funnelId', { funnelId })
-      .andWhere('payment.status = :status', {
-        status: FunnelPaymentStatus.PAID,
+      .andWhere('payment.status IN (:...statuses)', {
+        statuses: [
+          FunnelPaymentStatus.PAID,
+          FunnelPaymentStatus.PENDING,
+          FunnelPaymentStatus.FAILED,
+          FunnelPaymentStatus.CANCELLED,
+        ],
       })
       .orderBy('payment.paid_at', 'DESC', 'NULLS LAST')
       .addOrderBy('payment.created_at', 'DESC')
@@ -962,7 +967,7 @@ export class PaymentService implements OnModuleInit {
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: paymentId },
     });
-    if (!payment || payment.orderId != null) {
+    if (!payment) {
       return;
     }
     if (payment.status !== FunnelPaymentStatus.PAID) {
@@ -975,6 +980,21 @@ export class PaymentService implements OnModuleInit {
         : payment.paymentSource === FunnelPaymentSource.MANUAL
           ? OrderSource.MANUAL
           : OrderSource.STRIPE;
+
+    if (payment.orderId != null) {
+      await this.orderRepository.update(payment.orderId, {
+        status: OrderStatus.PAID,
+        source,
+        totalAmount: payment.amount,
+        currency: payment.currency || 'usd',
+        paidAt: payment.paidAt ?? new Date(),
+        collectedByUserId: payment.paymentCollectedBy ?? null,
+        ...(payment.customerId != null
+          ? { customerId: payment.customerId }
+          : {}),
+      });
+      return;
+    }
 
     const order = await this.orderRepository.save(
       this.orderRepository.create({

@@ -47,6 +47,36 @@ type LogFunnelParams = {
   actorUserId?: number | null;
 };
 
+type LogScannerRedeemParams = {
+  businessId: number;
+  customerName: string;
+  campaignName: string;
+  couponIds: number[];
+  actorUserId?: number | null;
+  occurredAt?: Date;
+};
+
+type LogScannerPaymentParams = {
+  businessId: number;
+  customerName: string;
+  campaignName: string;
+  amountLabel: string;
+  couponIds: number[];
+  actorUserId?: number | null;
+  occurredAt?: Date;
+};
+
+type LogScannerPurchaseParams = {
+  businessId: number;
+  customerName: string;
+  dealNames: string;
+  amountLabel: string;
+  couponIds: number[];
+  actorUserId?: number | null;
+  idempotencyKey?: string | null;
+  occurredAt?: Date;
+};
+
 const HISTORY_PAGE_SIZE = 10;
 
 @Injectable()
@@ -213,6 +243,61 @@ export class BusinessHistoryService {
       actorUserId: params.actorUserId,
       idempotencyKey: `funnel_deleted:${params.funnelId}`,
     });
+  }
+
+  async logScannerRedeemed(params: LogScannerRedeemParams): Promise<void> {
+    const couponKey = this.couponIdsKey(params.couponIds);
+    const guest = params.customerName.trim() || 'Guest';
+    const deal = params.campaignName.trim() || 'deal';
+    await this.insert({
+      businessId: params.businessId,
+      eventType: BusinessHistoryEventType.SCANNER_REDEEMED,
+      description: `Scanner redeemed "${deal}" for ${guest}`,
+      actorUserId: params.actorUserId,
+      occurredAt: params.occurredAt,
+      idempotencyKey: `scanner_redeemed:${params.businessId}:${couponKey}`,
+    });
+  }
+
+  async logScannerPayment(params: LogScannerPaymentParams): Promise<void> {
+    const couponKey = this.couponIdsKey(params.couponIds);
+    const guest = params.customerName.trim() || 'Guest';
+    const deal = params.campaignName.trim() || 'deal';
+    const amount = params.amountLabel.trim() || 'payment';
+    await this.insert({
+      businessId: params.businessId,
+      eventType: BusinessHistoryEventType.SCANNER_PAYMENT,
+      description: `Scanner collected ${amount} for "${deal}" (${guest})`,
+      actorUserId: params.actorUserId,
+      occurredAt: params.occurredAt,
+      idempotencyKey: `scanner_payment:${params.businessId}:${couponKey}`,
+    });
+  }
+
+  async logScannerPurchase(params: LogScannerPurchaseParams): Promise<void> {
+    const guest = params.customerName.trim() || 'Guest';
+    const deals = params.dealNames.trim() || 'deal';
+    const amount = params.amountLabel.trim() || 'payment';
+    const couponKey = this.couponIdsKey(params.couponIds);
+    const key =
+      params.idempotencyKey?.trim() ||
+      `scanner_purchase:${params.businessId}:${couponKey}`;
+    await this.insert({
+      businessId: params.businessId,
+      eventType: BusinessHistoryEventType.SCANNER_PURCHASE,
+      description: `Scanner sold "${deals}" to ${guest} for ${amount}`,
+      actorUserId: params.actorUserId,
+      occurredAt: params.occurredAt,
+      idempotencyKey: key.startsWith('scanner_purchase:')
+        ? key
+        : `scanner_purchase:${params.businessId}:${key}`,
+    });
+  }
+
+  private couponIdsKey(couponIds: number[]): string {
+    const ids = [...new Set(couponIds.filter((id) => Number.isFinite(id) && id > 0))]
+      .sort((a, b) => a - b);
+    return ids.length > 0 ? ids.join(',') : 'none';
   }
 
   private campaignLabel(

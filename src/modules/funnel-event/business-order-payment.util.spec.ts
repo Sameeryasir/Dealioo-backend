@@ -103,6 +103,20 @@ describe('business event paid filter', () => {
     );
   });
 
+  it('keeps pending when orderStatus wrongly says paid_walk_in', () => {
+    const displayStatus = resolveBusinessEventDisplayStatus({
+      paymentStatus: FunnelPaymentStatus.PENDING,
+      orderStatus: 'paid_walk_in',
+      paidAt: null,
+    });
+
+    expect(displayStatus).toBe('pending');
+    expect(matchesBusinessEventStatusFilter(displayStatus, 'paid')).toBe(false);
+    expect(matchesBusinessEventStatusFilter(displayStatus, 'not_paid')).toBe(
+      true,
+    );
+  });
+
   it('treats cancelled payments as not paid', () => {
     const displayStatus = resolveBusinessEventDisplayStatus({
       paymentStatus: FunnelPaymentStatus.CANCELLED,

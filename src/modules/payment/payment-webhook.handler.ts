@@ -576,7 +576,7 @@ export class PaymentWebhookHandler {
     const payment = await this.funnelPaymentRepository.findOne({
       where: { id: paymentId },
     });
-    if (!payment || payment.orderId != null) {
+    if (!payment) {
       return;
     }
     if (payment.status !== FunnelPaymentStatus.PAID) {
@@ -589,6 +589,21 @@ export class PaymentWebhookHandler {
         : payment.paymentSource === FunnelPaymentSource.MANUAL
           ? OrderSource.MANUAL
           : OrderSource.STRIPE;
+
+    if (payment.orderId != null) {
+      await this.orderRepository.update(payment.orderId, {
+        status: OrderStatus.PAID,
+        source,
+        totalAmount: payment.amount,
+        currency: payment.currency || 'usd',
+        paidAt: payment.paidAt ?? new Date(),
+        collectedByUserId: payment.paymentCollectedBy ?? null,
+        ...(payment.customerId != null
+          ? { customerId: payment.customerId }
+          : {}),
+      });
+      return;
+    }
 
     const order = await this.orderRepository.save(
       this.orderRepository.create({

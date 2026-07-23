@@ -507,6 +507,7 @@ export class AuthService {
   async handleGoogleLogin(
     profile: GoogleAuthProfile,
     mode: GoogleAuthMode = 'login',
+    frontendBase?: string,
   ): Promise<{ redirectUrl: string }> {
     this.logger.log(
       `OAuth Started — Google ${mode} for ${profile.email}`,
@@ -530,7 +531,9 @@ export class AuthService {
         user: session.user,
       };
 
-      return { redirectUrl: this.buildGoogleFrontendRedirect(result) };
+      return {
+        redirectUrl: this.buildGoogleFrontendRedirect(result, frontendBase),
+      };
     } catch (error) {
       this.logger.error(
         `OAuth Failed — Google ${mode} for ${profile.email}`,
@@ -540,8 +543,12 @@ export class AuthService {
     }
   }
 
-  buildGoogleFrontendRedirect(result: GoogleAuthResult): string {
+  buildGoogleFrontendRedirect(
+    result: GoogleAuthResult,
+    frontendBase?: string,
+  ): string {
     const frontend =
+      frontendBase?.trim() ||
       this.configService.get<string>('FRONTEND_URL')?.split(',')[0]?.trim() ||
       getFrontendBaseUrl();
     const base = frontend.replace(/\/$/, '');
@@ -557,8 +564,10 @@ export class AuthService {
   buildGoogleErrorRedirect(
     message: string,
     page: '/auth/login' | '/auth/signup' = '/auth/login',
+    frontendBase?: string,
   ): string {
     const frontend =
+      frontendBase?.trim() ||
       this.configService.get<string>('FRONTEND_URL')?.split(',')[0]?.trim() ||
       getFrontendBaseUrl();
     const base = frontend.replace(/\/$/, '');

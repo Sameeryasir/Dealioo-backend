@@ -32,6 +32,11 @@ export class ScanQrDto {
   orderSubtotal?: number;
 
   @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  extraItemsAmount?: number;
+
+  @IsOptional()
   @IsEnum(RedemptionChannel)
   channel?: RedemptionChannel;
 
@@ -39,11 +44,6 @@ export class ScanQrDto {
   @IsString()
   @MaxLength(500)
   deviceInfo?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  registerId?: string;
 
   @IsOptional()
   @IsString()

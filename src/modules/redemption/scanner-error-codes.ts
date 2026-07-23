@@ -36,5 +36,5 @@ export const ScannerErrorMessage: Record<ScannerErrorCode, string> = {
   COUPON_REVOKED: 'This pass was replaced by a newer one',
   COUPON_NOT_ACTIVE: 'Coupon is not active',
   INVALID_SELECTION: 'Invalid reward selection',
-  CAMPAIGN_INACTIVE: 'Campaign is not active',
+  CAMPAIGN_INACTIVE: 'This deal is no longer available',
 };

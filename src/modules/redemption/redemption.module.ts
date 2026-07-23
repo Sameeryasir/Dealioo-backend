@@ -7,12 +7,15 @@ import { Coupon } from '../../db/entities/coupon.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { CustomerVisitCampaign } from '../../db/entities/customer-visit-campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
+import { Order } from '../../db/entities/order.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
+import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
@@ -34,11 +37,14 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Campaign,
       Funnel,
       FunnelPayment,
+      FunnelEvent,
       Business,
+      Order,
     ]),
     AuthModule,
     forwardRef(() => ActivityModule),
     forwardRef(() => AutomationModule),
+    BusinessHistoryModule,
     CustomerJourneyModule,
   ],
   controllers: [RedemptionController],

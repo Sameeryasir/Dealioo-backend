@@ -23,6 +23,9 @@ export enum BusinessHistoryEventType {
   AUTOMATION_DELETED = 'automation_deleted',
   FUNNEL_UPDATED = 'funnel_updated',
   FUNNEL_DELETED = 'funnel_deleted',
+  SCANNER_REDEEMED = 'scanner_redeemed',
+  SCANNER_PAYMENT = 'scanner_payment',
+  SCANNER_PURCHASE = 'scanner_purchase',
 }
 
 @Entity('business_history')

@@ -22,8 +22,6 @@ async function bootstrap() {
     next();
   });
 
-  // --- Google OAuth CSRF state (passport-google-oauth20 state: true) ---
-  // Session is only used for OAuth state cookies, not for app login (JWT stays primary).
   const sessionSecret =
     process.env.JWT_SECRET?.trim() ||
     process.env.SESSION_SECRET?.trim() ||
@@ -33,7 +31,7 @@ async function bootstrap() {
       name: 'dealioo.sid',
       secret: sessionSecret,
       resave: false,
-      saveUninitialized: false,
+      saveUninitialized: true,
       cookie: {
         httpOnly: true,
         sameSite: 'lax',

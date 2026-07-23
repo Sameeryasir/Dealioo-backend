@@ -4,6 +4,7 @@ import {
   Get,
   Logger,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -14,27 +15,23 @@ import type { Request, Response } from 'express';
 import { RegisterUserDto } from './authDto/register.dto';
 import { RegisterWithInvitationDto } from './authDto/register-with-invitation.dto';
 import { AuthService } from './auth.service';
+import { GoogleOAuthService } from './google-oauth.service';
 import { LoginUserDto } from './authDto/login.dto';
 import { VerifyOtpDto } from './authDto/verify-otp.dto';
 import { RefreshTokenDto } from './authDto/refresh-token.dto';
 import { ResendOtpDto } from './authDto/resend-otp.dto';
 import { ResetPasswordDto } from './authDto/reset-password.dto';
-import { GoogleAuthGuard } from './guards/google-auth.guard';
-import { GoogleProfile } from './decorators/google-profile.decorator';
-import type { GoogleAuthMode, GoogleAuthProfile } from './interfaces/google-auth.interface';
+import type { GoogleAuthMode } from './interfaces/google-auth.interface';
 import { AcceptInvitationDto } from '../invitation/invitationDto/accept-invitation.dto';
-
-type GoogleCallbackRequest = Request & {
-  googleOAuthError?: string;
-  user?: GoogleAuthProfile;
-  session?: { googleAuthMode?: GoogleAuthMode };
-};
 
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly googleOAuthService: GoogleOAuthService,
+  ) {}
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register')
@@ -64,57 +61,84 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
-  async loginUsers(
-    @Body() loginUserDto: LoginUserDto,
-  ) {
+  async loginUsers(@Body() loginUserDto: LoginUserDto) {
     return await this.authService.loginUser(loginUserDto);
   }
 
- 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('google')
-  @UseGuards(GoogleAuthGuard)
-  googleAuth(): void {
+  googleAuth(
+    @Query('mode') modeRaw: string | undefined,
+    @Query('returnOrigin') returnOrigin: string | undefined,
+    @Res() res: Response,
+  ) {
+    const mode: GoogleAuthMode =
+      modeRaw?.trim().toLowerCase() === 'signup' ? 'signup' : 'login';
+    const url = this.googleOAuthService.buildAuthorizationUrl(
+      mode,
+      returnOrigin,
+    );
+    return res.redirect(302, url);
   }
 
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Get('google/callback')
-  @UseGuards(GoogleAuthGuard)
   async googleAuthCallback(
-    @Req() req: GoogleCallbackRequest,
+    @Query('code') code: string | undefined,
+    @Query('state') state: string | undefined,
+    @Query('error') oauthError: string | undefined,
+    @Query('error_description') oauthErrorDescription: string | undefined,
     @Res() res: Response,
-    @GoogleProfile() profile: GoogleAuthProfile | undefined,
   ) {
-    const mode: GoogleAuthMode =
-      req.session?.googleAuthMode === 'signup' ? 'signup' : 'login';
-    if (req.session) {
-      delete req.session.googleAuthMode;
-    }
+    const parsed = this.googleOAuthService.parseState(state);
+    const mode: GoogleAuthMode = parsed.ok ? parsed.mode : 'login';
+    const frontend = parsed.ok ? parsed.frontend : undefined;
 
-    if (req.googleOAuthError) {
+    if (oauthError) {
+      const message =
+        oauthErrorDescription?.trim() ||
+        (oauthError === 'access_denied'
+          ? 'Google sign-in was cancelled.'
+          : `Google sign-in failed (${oauthError}).`);
+      this.logger.warn(`OAuth Failed — ${message}`);
       return res.redirect(
         this.authService.buildGoogleErrorRedirect(
-          req.googleOAuthError,
+          message,
           mode === 'signup' ? '/auth/signup' : '/auth/login',
+          frontend,
         ),
       );
     }
 
-    const googleProfile = profile ?? req.user;
-    if (!googleProfile?.email || !googleProfile?.googleId) {
-      this.logger.warn('OAuth Failed — Missing Google profile after callback');
+    if (!parsed.ok) {
+      this.logger.warn(`OAuth Failed — ${parsed.message}`);
       return res.redirect(
         this.authService.buildGoogleErrorRedirect(
-          'Could not complete Google sign-in. Missing profile data.',
+          parsed.message,
+          '/auth/login',
+          frontend,
+        ),
+      );
+    }
+
+    if (!code?.trim()) {
+      return res.redirect(
+        this.authService.buildGoogleErrorRedirect(
+          'Google sign-in did not return an authorization code. Please try again.',
           mode === 'signup' ? '/auth/signup' : '/auth/login',
+          frontend,
         ),
       );
     }
 
     try {
+      const profile = await this.googleOAuthService.exchangeCodeForProfile(
+        code.trim(),
+      );
       const { redirectUrl } = await this.authService.handleGoogleLogin(
-        googleProfile,
+        profile,
         mode,
+        frontend,
       );
       return res.redirect(redirectUrl);
     } catch (error) {
@@ -127,6 +151,7 @@ export class AuthController {
         this.authService.buildGoogleErrorRedirect(
           message,
           this.authService.googleErrorPageFor(mode, error),
+          frontend,
         ),
       );
     }

@@ -87,11 +87,11 @@ export class RedemptionController {
         deviceInfo: dto.deviceInfo,
         ipAddress: resolveClientIp(req),
         idempotencyKey: dto.idempotencyKey,
-        registerId: dto.registerId,
         visitSource: redemptionChannelToVisitSource(dto.channel),
       },
       dto.couponIds,
       dto.orderSubtotal,
+      dto.extraItemsAmount,
     );
   }
 

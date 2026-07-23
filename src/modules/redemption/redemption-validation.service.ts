@@ -125,6 +125,19 @@ export class RedemptionValidationService {
     const authoritative = this.resolveAuthoritativePaymentStatus(coupon);
     const paymentStatus = authoritative.couponPaymentStatus;
 
+    // Deal/campaign must still exist (soft-deleted campaigns do not load on the relation).
+    if (!coupon.campaign || coupon.campaign.deletedAt) {
+      return {
+        canRedeem: false,
+        requiresWalkInPayment: false,
+        redeemBlockedReason: ScannerErrorMessage.CAMPAIGN_INACTIVE,
+        errorCode: ScannerErrorCode.CAMPAIGN_INACTIVE,
+        paymentStatus,
+        couponStatus,
+        couponExpired,
+      };
+    }
+
     if (couponExpired) {
       return {
         canRedeem: false,

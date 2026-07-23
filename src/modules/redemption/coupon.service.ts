@@ -42,14 +42,60 @@ export class CouponService {
     funnelId: number,
     customerId: number,
   ): Promise<IssueSignupCouponResult> {
-    const existing = await this.findActiveByCustomerAndFunnel(
+    const pending = await this.findActivePendingByCustomerAndFunnel(
       customerId,
       funnelId,
     );
-    if (existing) {
-      return { coupon: existing, created: false };
+    if (pending) {
+      return { coupon: pending, created: false };
     }
 
+    return this.createPendingSignupCoupon(funnelId, customerId);
+  }
+
+  async ensurePendingCouponForUnpaidFunnel(
+    funnelId: number,
+    customerId: number,
+  ): Promise<Coupon | null> {
+    const pending = await this.findActivePendingByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
+    if (pending) {
+      return pending;
+    }
+    const issued = await this.createPendingSignupCoupon(funnelId, customerId);
+    return issued.coupon;
+  }
+
+  private async findActivePendingByCustomerAndFunnel(
+    customerId: number,
+    funnelId: number,
+  ): Promise<Coupon | null> {
+    const coupons = await this.couponRepository.find({
+      where: {
+        customerId,
+        funnelId,
+        status: CouponStatus.ACTIVE,
+        paymentStatus: CouponPaymentStatus.PENDING,
+      },
+      relations: ['customer', 'campaign', 'funnelPayment'],
+      order: { id: 'DESC' },
+      take: 5,
+    });
+
+    for (const coupon of coupons) {
+      if (!this.isExpired(coupon)) {
+        return coupon;
+      }
+    }
+    return null;
+  }
+
+  private async createPendingSignupCoupon(
+    funnelId: number,
+    customerId: number,
+  ): Promise<IssueSignupCouponResult> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
       relations: ['campaign'],
@@ -79,7 +125,7 @@ export class CouponService {
       const saved = await this.couponRepository.save(coupon);
       return { coupon: saved, created: true };
     } catch (err) {
-      const raced = await this.findActiveByCustomerAndFunnel(
+      const raced = await this.findActivePendingByCustomerAndFunnel(
         customerId,
         funnelId,
       );
@@ -98,6 +144,14 @@ export class CouponService {
     customerId: number,
     funnelId: number,
   ): Promise<Coupon | null> {
+    const pending = await this.findActivePendingByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
+    if (pending) {
+      return pending;
+    }
+
     const active = await this.findActiveByCustomerAndFunnel(
       customerId,
       funnelId,
