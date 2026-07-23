@@ -274,6 +274,63 @@ export class RedemptionService {
     };
   }
 
+  async getGuestPreviousRedemptions(
+    customerId: number,
+    businessId: number,
+    page = 1,
+    limit = 10,
+  ): Promise<{
+    data: Array<{ campaignName: string; redeemedAt: string }>;
+    meta: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    const customer = await this.customerRepository.findOne({
+      where: { id: customerId },
+      select: { id: true },
+    });
+    if (!customer) {
+      throw new NotFoundException('Guest not found');
+    }
+
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeLimit = Math.min(50, Math.max(1, Math.floor(limit) || 10));
+    const skip = (safePage - 1) * safeLimit;
+
+    const [rows, total] = await this.couponRepository.findAndCount({
+      where: {
+        customerId,
+        businessId,
+        status: CouponStatus.REDEEMED,
+        paymentStatus: CouponPaymentStatus.PAID,
+      },
+      relations: ['campaign'],
+      order: { redeemedAt: 'DESC', id: 'DESC' },
+      skip,
+      take: safeLimit,
+    });
+
+    const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+
+    return {
+      data: rows.map((coupon) => ({
+        campaignName: coupon.campaign?.campaignName?.trim() || 'Campaign',
+        redeemedAt: coupon.redeemedAt
+          ? coupon.redeemedAt.toISOString()
+          : coupon.updatedAt?.toISOString?.() || new Date().toISOString(),
+      })),
+      meta: {
+        page: safePage,
+        limit: safeLimit,
+        total,
+        totalPages,
+      },
+    };
+  }
+
   async previewScan(
     rawToken: string,
     businessId: number,

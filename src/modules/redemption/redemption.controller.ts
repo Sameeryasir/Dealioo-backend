@@ -7,6 +7,8 @@ import {
   ParseIntPipe,
   Post,
   Body,
+  Query,
+  DefaultValuePipe,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -109,6 +111,29 @@ export class RedemptionController {
       req.user.role.name,
     );
     return this.redemptionService.getGuestProfile(customerId, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/guests/:customerId/previous-redemptions')
+  async getGuestPreviousRedemptions(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('customerId', ParseIntPipe) customerId: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Req() req: AuthRequest,
+  ) {
+    requireScannerRole(req.user);
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+    return this.redemptionService.getGuestPreviousRedemptions(
+      customerId,
+      businessId,
+      page,
+      limit,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))
