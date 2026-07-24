@@ -4,6 +4,7 @@ export const PUSHER_EVENT = {
   CHAT_CONVERSATION_UPDATED: 'chat-conversation-updated',
   CHAT_MESSAGE_SENT: 'chat-message-sent',
   ACTIVITY_CAMPAIGN_UPDATED: 'activity-campaign-updated',
+  META_PUBLISH_PROGRESS: 'meta-publish-progress',
 } as const;
 
 export function pusherExecutionChannel(executionId: number): string {
@@ -22,6 +23,10 @@ export function pusherBusinessConversationsChannel(businessId: number): string {
 
 export function pusherBusinessActivityChannel(businessId: number): string {
   return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-activity-${businessId}`;
+}
+
+export function pusherBusinessMetaPublishChannel(businessId: number): string {
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-meta-publish-${businessId}`;
 }
 
 export function pusherConversationMessagesChannel(
@@ -43,6 +48,12 @@ export function parseBusinessIdFromChatChannel(
   const activityPrefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-activity-`;
   if (channelName.startsWith(activityPrefix)) {
     const businessId = Number(channelName.slice(activityPrefix.length));
+    return Number.isFinite(businessId) && businessId > 0 ? businessId : null;
+  }
+
+  const metaPublishPrefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-meta-publish-`;
+  if (channelName.startsWith(metaPublishPrefix)) {
+    const businessId = Number(channelName.slice(metaPublishPrefix.length));
     return Number.isFinite(businessId) && businessId > 0 ? businessId : null;
   }
 
@@ -75,6 +86,10 @@ export function isAuthorizedBusinessChatChannel(
   }
 
   if (channelName === pusherBusinessActivityChannel(businessId)) {
+    return true;
+  }
+
+  if (channelName === pusherBusinessMetaPublishChannel(businessId)) {
     return true;
   }
 

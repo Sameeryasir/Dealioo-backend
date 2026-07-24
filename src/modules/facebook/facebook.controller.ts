@@ -114,6 +114,8 @@ export class FacebookController {
   async adCampaignStats(
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('insights') insightsRaw?: string,
+    @Query('refresh') refreshRaw?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -126,7 +128,19 @@ export class FacebookController {
       );
     }
 
-    return this.facebookService.getAdCampaignStats(business);
+    const insightsNormalized = insightsRaw?.trim().toLowerCase();
+    const includeInsights =
+      insightsNormalized !== '0' &&
+      insightsNormalized !== 'false' &&
+      insightsNormalized !== 'no';
+    const bypassCache =
+      refreshRaw?.trim().toLowerCase() === '1' ||
+      refreshRaw?.trim().toLowerCase() === 'true';
+
+    return this.facebookService.getAdCampaignStats(business, {
+      includeInsights,
+      bypassCache,
+    });
   }
 
   @UseGuards(AuthGuard('jwt'))

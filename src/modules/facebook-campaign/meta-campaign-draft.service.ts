@@ -1,10 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
@@ -12,6 +13,7 @@ import { BusinessAccessService } from '../business-access/business-access.servic
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
+import { AutosaveDraftDto } from './dto/autosave-draft.dto';
 import {
   CampaignStepDataDto,
   MetaCampaignDraftResponseDto,
@@ -21,7 +23,6 @@ import { SaveAdSetStepDto } from './dto/save-adset-step.dto';
 import { SaveCampaignStepDto, MetaBudgetStrategy } from './dto/save-campaign-step.dto';
 import {
   MetaAdSetBudgetType,
-  MetaBidStrategy,
   MetaCampaignObjective,
 } from './meta-campaign.constants';
 import {
@@ -54,7 +55,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveCampaignStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-
     await this.loadOwnedBusiness(user, businessId);
     this.assertCampaignStepBusinessRules(dto);
 
@@ -75,6 +75,8 @@ export class MetaCampaignDraftService {
       status: dto.status,
     };
 
+    const now = new Date();
+
     if (dto.draftId?.trim()) {
       const existing = await this.findEditableDraft(
         user.id,
@@ -84,6 +86,12 @@ export class MetaCampaignDraftService {
 
       existing.campaignData = campaignData;
       existing.currentStep = Math.max(existing.currentStep, 2);
+      existing.completedSteps = this.mergeCompletedSteps(
+        existing.completedSteps,
+        [1],
+      );
+      existing.lastSavedAt = now;
+      existing.version = (existing.version ?? 1) + 1;
       const saved = await this.draftRepository.save(existing);
       return this.toResponse(saved);
     }
@@ -97,6 +105,14 @@ export class MetaCampaignDraftService {
       adSetData: null,
       adCreativeData: null,
       errorMessage: null,
+      version: 1,
+      completedSteps: [1],
+      lastSavedAt: now,
+      publishStatus: null,
+      publishJobId: null,
+      publishStep: null,
+      publishProgress: 0,
+      publishedAt: null,
     });
 
     return this.toResponse(created);
@@ -107,7 +123,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdSetStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-
     await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.findEditableDraft(
@@ -199,6 +214,11 @@ export class MetaCampaignDraftService {
 
     draft.adSetData = adSetData;
     draft.currentStep = Math.max(draft.currentStep, 3);
+    draft.completedSteps = this.mergeCompletedSteps(draft.completedSteps, [
+      1, 2,
+    ]);
+    draft.lastSavedAt = new Date();
+    draft.version = (draft.version ?? 1) + 1;
     const saved = await this.draftRepository.save(draft);
     return this.toResponse(saved);
   }
@@ -208,7 +228,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdCreativeStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-
     await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.findEditableDraft(
@@ -268,6 +287,70 @@ export class MetaCampaignDraftService {
 
     draft.adCreativeData = adCreativeData;
     draft.currentStep = Math.max(draft.currentStep, 4);
+    draft.completedSteps = this.mergeCompletedSteps(draft.completedSteps, [
+      1, 2, 3,
+    ]);
+    draft.lastSavedAt = new Date();
+    draft.version = (draft.version ?? 1) + 1;
+    const saved = await this.draftRepository.save(draft);
+    return this.toResponse(saved);
+  }
+
+  async autosaveDraft(
+    user: User,
+    businessId: number,
+    draftId: string,
+    dto: AutosaveDraftDto,
+  ): Promise<MetaCampaignDraftResponseDto> {
+    await this.loadOwnedBusiness(user, businessId);
+
+    const draft = await this.findEditableDraft(
+      user.id,
+      businessId,
+      draftId.trim(),
+    );
+
+    if ((draft.version ?? 1) !== dto.expectedVersion) {
+      throw new ConflictException({
+        message:
+          'Draft was updated elsewhere. Reload and try saving again.',
+        currentVersion: draft.version ?? 1,
+      });
+    }
+
+    if (dto.campaignData) {
+      draft.campaignData = {
+        ...((draft.campaignData as Record<string, unknown>) ?? {}),
+        ...dto.campaignData,
+      };
+    }
+    if (dto.adSetData) {
+      draft.adSetData = {
+        ...((draft.adSetData as Record<string, unknown>) ?? {}),
+        ...dto.adSetData,
+      };
+    }
+    if (dto.adCreativeData) {
+      draft.adCreativeData = {
+        ...((draft.adCreativeData as Record<string, unknown>) ?? {}),
+        ...dto.adCreativeData,
+      };
+    }
+
+    if (dto.currentStep != null) {
+      draft.currentStep = Math.max(draft.currentStep, dto.currentStep);
+    }
+
+    if (dto.completedSteps?.length) {
+      draft.completedSteps = this.mergeCompletedSteps(
+        draft.completedSteps,
+        dto.completedSteps,
+      );
+    }
+
+    draft.lastSavedAt = new Date();
+    draft.version = (draft.version ?? 1) + 1;
+
     const saved = await this.draftRepository.save(draft);
     return this.toResponse(saved);
   }
@@ -277,7 +360,6 @@ export class MetaCampaignDraftService {
     businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
-
     await this.loadOwnedBusiness(user, businessId);
 
     const draft = await this.draftRepository.findOne({
@@ -295,19 +377,24 @@ export class MetaCampaignDraftService {
     user: User,
     businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
-
     await this.loadOwnedBusiness(user, businessId);
 
     const drafts = await this.draftRepository.find({
       where: {
         businessId,
         userId: user.id,
-        status: In(['draft', 'failed', 'publishing']),
       },
       order: { updatedAt: 'DESC' },
     });
 
     return drafts.map((draft) => this.toResponse(draft));
+  }
+
+  private mergeCompletedSteps(
+    existing: number[] | null | undefined,
+    next: number[],
+  ): number[] {
+    return [...new Set([...(existing ?? []), ...next])].sort((a, b) => a - b);
   }
 
   private assertCampaignStepBusinessRules(dto: SaveCampaignStepDto): void {
@@ -494,7 +581,6 @@ export class MetaCampaignDraftService {
     return business;
   }
 
-
   private toResponse(draft: MetaCampaignDraft): MetaCampaignDraftResponseDto {
     return {
       id: draft.id,
@@ -503,12 +589,21 @@ export class MetaCampaignDraftService {
       status: draft.status,
       campaignData: (draft.campaignData as CampaignStepDataDto | null) ?? null,
       adSetData: (draft.adSetData as AdSetStepDataDto | null) ?? null,
-      adCreativeData: (draft.adCreativeData as AdCreativeStepDataDto | null) ?? null,
+      adCreativeData:
+        (draft.adCreativeData as AdCreativeStepDataDto | null) ?? null,
       metaCampaignId: draft.metaCampaignId,
       metaAdsetId: draft.metaAdsetId,
       metaCreativeId: draft.metaCreativeId,
       metaAdId: draft.metaAdId,
       errorMessage: draft.errorMessage,
+      version: draft.version ?? 1,
+      completedSteps: draft.completedSteps ?? [],
+      lastSavedAt: draft.lastSavedAt,
+      publishStatus: draft.publishStatus,
+      publishJobId: draft.publishJobId,
+      publishStep: draft.publishStep,
+      publishProgress: draft.publishProgress ?? 0,
+      publishedAt: draft.publishedAt,
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt,
     };

@@ -85,10 +85,19 @@ const META_CAMPAIGN_FIELDS =
   'id,name,status,effective_status,daily_budget';
 const GRAPH_FETCH_TIMEOUT_MS = 25_000;
 const GRAPH_FETCH_RETRIES = 2;
+const CAMPAIGN_STATS_CACHE_TTL_MS = 2 * 60_000;
+const INSIGHTS_FETCH_CONCURRENCY = 4;
+
+type CampaignStatsCacheEntry = {
+  at: number;
+  includeInsights: boolean;
+  value: FacebookAdCampaignStatsDto;
+};
 
 @Injectable()
 export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
+  private readonly campaignStatsCache = new Map<string, CampaignStatsCacheEntry>();
 
   constructor(
     @InjectRepository(Business)
@@ -289,11 +298,36 @@ export class FacebookService {
 
   async getAdCampaignStats(
     business: Business,
+    options?: { includeInsights?: boolean; bypassCache?: boolean },
   ): Promise<FacebookAdCampaignStatsDto> {
+    const includeInsights = options?.includeInsights !== false;
+    const bypassCache = options?.bypassCache === true;
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     const adAccount = this.requireBusinessAdAccount(business);
+    const cacheKey = `${business.id}:${adAccount.id}`;
+
+    if (!bypassCache) {
+      const cached = this.campaignStatsCache.get(cacheKey);
+      if (
+        cached &&
+        Date.now() - cached.at < CAMPAIGN_STATS_CACHE_TTL_MS &&
+        (!includeInsights || cached.includeInsights)
+      ) {
+        if (includeInsights || !cached.includeInsights) {
+          return cached.value;
+        }
+        return {
+          ...cached.value,
+          campaigns: cached.value.campaigns.map((c) => ({
+            ...c,
+            insights: null,
+          })),
+        };
+      }
+    }
+
     const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
 
     const campaignsResponse =
@@ -316,30 +350,159 @@ export class FacebookService {
       return true;
     });
 
-    const campaigns = await Promise.all(
-      rows.map(async (row) => {
-        const insights = await this.fetchCampaignInsights(
-          row.id!,
-          accessToken,
-        );
-        return {
-          id: row.id!,
-          name: row.name!.trim(),
-          status: row.status ?? null,
-          effectiveStatus: row.effective_status ?? null,
-          dailyBudget: row.daily_budget ?? null,
-          insights,
-        };
+    let campaigns: FacebookAdCampaignStatsDto['campaigns'] = rows.map(
+      (row) => ({
+        id: row.id!,
+        name: row.name!.trim(),
+        status: row.status ?? null,
+        effectiveStatus: row.effective_status ?? null,
+        dailyBudget: row.daily_budget ?? null,
+        insights: null,
       }),
     );
 
-    return {
+    if (includeInsights && campaigns.length > 0) {
+      const insightsByCampaignId = await this.fetchAccountCampaignInsights(
+        adAccount.id,
+        accessToken,
+      );
+
+      campaigns = campaigns.map((c) => ({
+        ...c,
+        insights: insightsByCampaignId.get(c.id) ?? null,
+      }));
+
+      const stillMissing = campaigns.filter((c) => c.insights == null);
+      if (stillMissing.length > 0) {
+        const filled = await this.mapWithConcurrency(
+          stillMissing,
+          INSIGHTS_FETCH_CONCURRENCY,
+          async (campaign) => {
+            const insights = await this.fetchCampaignInsights(
+              campaign.id,
+              accessToken,
+            );
+            return { id: campaign.id, insights };
+          },
+        );
+        const byId = new Map(filled.map((row) => [row.id, row.insights]));
+        campaigns = campaigns.map((c) => ({
+          ...c,
+          insights: c.insights ?? byId.get(c.id) ?? null,
+        }));
+      }
+    }
+
+    const result: FacebookAdCampaignStatsDto = {
       adAccountId: adAccount.id,
       adAccountName: accountMeta.name,
       currency: accountMeta.currency,
       datePreset: META_AD_STATS_DATE_PRESET,
       campaigns,
     };
+
+    this.campaignStatsCache.set(cacheKey, {
+      at: Date.now(),
+      includeInsights,
+      value: result,
+    });
+
+    return result;
+  }
+
+  invalidateCampaignStatsCache(businessId: number): void {
+    const prefix = `${businessId}:`;
+    for (const key of this.campaignStatsCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.campaignStatsCache.delete(key);
+      }
+    }
+  }
+
+  private async fetchAccountCampaignInsights(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<
+    Map<
+      string,
+      {
+        spend: string | null;
+        impressions: string | null;
+        reach: string | null;
+        clicks: string | null;
+      }
+    >
+  > {
+    const out = new Map<
+      string,
+      {
+        spend: string | null;
+        impressions: string | null;
+        reach: string | null;
+        clicks: string | null;
+      }
+    >();
+
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          campaign_id?: string;
+          spend?: string;
+          impressions?: string;
+          reach?: string;
+          clicks?: string;
+        }>;
+      }>(`/${adAccountId}/insights`, accessToken, {
+        level: 'campaign',
+        date_preset: META_AD_STATS_DATE_PRESET,
+        fields: 'campaign_id,spend,impressions,reach,clicks',
+        limit: '50',
+      });
+
+      for (const row of response.data ?? []) {
+        const id = row.campaign_id?.trim();
+        if (!id) continue;
+        out.set(id, {
+          spend: row.spend ?? null,
+          impressions: row.impressions ?? null,
+          reach: row.reach ?? null,
+          clicks: row.clicks ?? null,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Account-level campaign insights skipped for ${adAccountId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    return out;
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    if (items.length === 0) return [];
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    const workers = Array.from(
+      { length: Math.min(concurrency, items.length) },
+      async () => {
+        while (true) {
+          const current = nextIndex;
+          nextIndex += 1;
+          if (current >= items.length) return;
+          results[current] = await mapper(items[current]!);
+        }
+      },
+    );
+
+    await Promise.all(workers);
+    return results;
   }
 
   getConnectionStatus(business: Business): FacebookConnectionStatusDto {

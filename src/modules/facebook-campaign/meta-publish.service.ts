@@ -4,11 +4,14 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Job, Queue, UnrecoverableError } from 'bullmq';
+import { DataSource, Repository } from 'typeorm';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
+import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
@@ -18,10 +21,15 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
+import { FacebookService } from '../facebook/facebook.service';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
 import { CampaignStepDataDto } from './dto/meta-campaign-draft-response.dto';
-import { PublishMetaCampaignResponseDto } from './dto/publish-meta-campaign-response.dto';
+import { EnqueueMetaPublishResponseDto } from './dto/enqueue-meta-publish-response.dto';
+import {
+  MetaPublishAttemptDto,
+  MetaPublishStatusDto,
+} from './dto/meta-publish-status.dto';
 import {
   adsManagerCampaignsUrl,
   assertDirectMetaVideoUrl,
@@ -49,6 +57,16 @@ import {
   buildCampaignPayloadFromDraft,
   buildCreativePayloadFromDraft,
 } from './meta-draft-payload-builders';
+import { isTransientMetaPublishError } from './meta-publish-errors.util';
+import {
+  META_PUBLISH_QUEUE,
+  MetaPublishJobName,
+  metaPublishJobId,
+  metaPublishProgressPercent,
+  type MetaPublishJobPayload,
+} from './meta-publish-queue.constants';
+import { MetaCampaignMediaService } from './meta-campaign-media.service';
+import { MetaPublishRealtimeService } from './meta-publish-realtime.service';
 import { logMetaPublishStep } from './meta-publish-trace';
 
 type MetaPageListResponse = {
@@ -79,63 +97,296 @@ export class MetaPublishService {
     private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
     @InjectRepository(MetaCampaignError)
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
+    @InjectRepository(MetaPublishAttempt)
+    private readonly attemptRepository: Repository<MetaPublishAttempt>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectQueue(META_PUBLISH_QUEUE)
+    private readonly metaPublishQueue: Queue<MetaPublishJobPayload>,
+    private readonly dataSource: DataSource,
     private readonly businessAccessService: BusinessAccessService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly auditService: FacebookIntegrationAuditService,
+    private readonly facebookService: FacebookService,
+    private readonly mediaService: MetaCampaignMediaService,
+    private readonly realtimeService: MetaPublishRealtimeService,
   ) {}
 
+  
   async publishFullCampaign(
     user: User,
     businessId: number,
     draftId: string,
-  ): Promise<PublishMetaCampaignResponseDto> {
+  ): Promise<EnqueueMetaPublishResponseDto> {
+    return this.enqueuePublish(user, businessId, draftId);
+  }
 
-    const business = await this.loadOwnedBusiness(user, businessId);
-    const draft = await this.loadDraftForUser(user.id, businessId, draftId);
+  async enqueuePublish(
+    user: User,
+    businessId: number,
+    draftId: string,
+  ): Promise<EnqueueMetaPublishResponseDto> {
+    await this.loadOwnedBusiness(user, businessId);
 
-    if (!draft.campaignData || !draft.adSetData || !draft.adCreativeData) {
-      throw new BadRequestException(
-        'Complete all builder steps (Campaign, Ad Set, Ad / Creative) before publishing.',
-      );
+    const jobId = metaPublishJobId(businessId, draftId.trim());
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const draftRepo = manager.getRepository(MetaCampaignDraft);
+
+      const draft = await draftRepo
+        .createQueryBuilder('draft')
+        .where('draft.id = :id', { id: draftId.trim() })
+        .andWhere('draft.businessId = :businessId', { businessId })
+        .andWhere('draft.userId = :userId', { userId: user.id })
+        .setLock('pessimistic_write')
+        .getOne();
+
+      if (!draft) {
+        throw new NotFoundException('Campaign draft not found.');
+      }
+
+      if (!draft.campaignData || !draft.adSetData || !draft.adCreativeData) {
+        throw new BadRequestException(
+          'Complete all builder steps (Campaign, Ad Set, Ad / Creative) before publishing.',
+        );
+      }
+
+      if (draft.status === 'published' && draft.metaAdId) {
+        throw new BadRequestException(
+          'This draft was already published. Create a new campaign to publish again.',
+        );
+      }
+
+      await this.recoverStalePublishingDraftInTx(draftRepo, draft);
+
+      
+      if (draft.status === 'publishing' && draft.publishJobId) {
+        const existingJob = await this.metaPublishQueue.getJob(
+          draft.publishJobId,
+        );
+        if (existingJob) {
+          const state = await existingJob.getState();
+          if (
+            state === 'waiting' ||
+            state === 'active' ||
+            state === 'delayed' ||
+            state === 'prioritized'
+          ) {
+            return {
+              alreadyQueued: true as const,
+              response: {
+                status: 'publishing' as const,
+                draftId: draft.id,
+                jobId: draft.publishJobId,
+                publishStatus: 'QUEUED' as const,
+                message:
+                  'Publish is already in progress for this campaign draft.',
+              },
+            };
+          }
+        }
+
+        
+        draft.status = 'failed';
+        draft.publishStatus = 'FAILED';
+        draft.errorMessage =
+          draft.errorMessage ??
+          'Previous publish did not finish. Retry to continue from saved Meta IDs.';
+      }
+
+      if (draft.status !== 'draft' && draft.status !== 'failed') {
+        throw new BadRequestException(
+          'This campaign cannot be published right now. It may already be publishing or published.',
+        );
+      }
+
+      draft.status = 'publishing';
+      draft.publishStatus = 'QUEUED';
+      draft.publishJobId = jobId;
+      draft.publishStep = 'queued';
+      draft.publishProgress = metaPublishProgressPercent('queued');
+      draft.errorMessage = null;
+      await draftRepo.save(draft);
+
+      return {
+        alreadyQueued: false as const,
+        draft,
+        response: {
+          status: 'publishing' as const,
+          draftId: draft.id,
+          jobId,
+          publishStatus: 'QUEUED' as const,
+          message:
+            'Campaign publish queued. Track progress via publish-status.',
+        },
+      };
+    });
+
+    if (result.alreadyQueued) {
+      return result.response;
     }
 
-    if (draft.status === 'published' && draft.metaAdId) {
-      throw new BadRequestException(
-        'This draft was already published. Create a new campaign to publish again.',
-      );
+    const { draft, response } = result;
+
+    
+    const prior = await this.metaPublishQueue.getJob(jobId);
+    if (prior) {
+      const state = await prior.getState();
+      if (state === 'completed' || state === 'failed') {
+        await prior.remove();
+      } else if (
+        state === 'waiting' ||
+        state === 'active' ||
+        state === 'delayed' ||
+        state === 'prioritized'
+      ) {
+        await this.notifyDraftProgress(draft);
+        return {
+          status: 'publishing',
+          draftId: draft.id,
+          jobId,
+          publishStatus: 'QUEUED',
+          message: 'Publish is already in progress for this campaign draft.',
+        };
+      }
     }
 
-    await this.recoverStalePublishingDraft(draft);
-
-    const lockResult = await this.draftRepository.update(
+    await this.metaPublishQueue.add(
+      MetaPublishJobName.PUBLISH_DRAFT,
       {
-        id: draft.id,
-        businessId,
         userId: user.id,
-        status: In(['draft', 'failed']),
+        businessId,
+        draftId: draft.id,
       },
       {
-        status: 'publishing',
-        errorMessage: null,
+        jobId,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { count: 20 },
+        removeOnFail: { count: 50 },
       },
     );
 
-    if (!lockResult.affected) {
-      throw new BadRequestException(
-        'This campaign cannot be published right now. It may already be publishing or published.',
-      );
+    await this.recordAttempt({
+      draftId: draft.id,
+      businessId,
+      userId: user.id,
+      jobId,
+      step: 'queued',
+      status: 'success',
+      metaId: null,
+      errorMessage: null,
+      complete: true,
+    });
+
+    await this.notifyDraftProgress(draft);
+
+    return response;
+  }
+
+  async processQueuedPublish(
+    job: Job<MetaPublishJobPayload>,
+  ): Promise<void> {
+    const { userId, businessId, draftId } = job.data;
+    const jobId = String(job.id ?? metaPublishJobId(businessId, draftId));
+
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+    if (!business) {
+      throw new UnrecoverableError(`Business ${businessId} not found.`);
     }
 
-    return this.runPublishPipeline(user, business, draft);
+    const draft = await this.draftRepository.findOne({
+      where: { id: draftId, businessId, userId },
+    });
+    if (!draft) {
+      throw new UnrecoverableError(`Draft ${draftId} not found.`);
+    }
+
+    if (draft.status === 'published' && draft.metaAdId) {
+      this.logger.log(`Draft ${draftId} already published; skipping job.`);
+      return;
+    }
+
+    draft.status = 'publishing';
+    draft.publishStatus = 'PUBLISHING';
+    draft.publishJobId = jobId;
+    draft.publishStep = 'preparing';
+    draft.publishProgress = metaPublishProgressPercent('preparing');
+    draft.errorMessage = null;
+    await this.draftRepository.save(draft);
+    await this.notifyDraftProgress(draft);
+
+    try {
+      await this.runPublishPipeline(userId, business, draft, jobId);
+    } catch (err) {
+      
+      if (!isTransientMetaPublishError(err)) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new UnrecoverableError(message);
+      }
+      throw err;
+    }
+  }
+
+  async getPublishStatus(
+    user: User,
+    businessId: number,
+    draftId: string,
+  ): Promise<MetaPublishStatusDto> {
+    await this.loadOwnedBusiness(user, businessId);
+
+    const draft = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        businessId,
+        userId: user.id,
+      },
+    });
+
+    if (!draft) {
+      throw new NotFoundException('Campaign draft not found.');
+    }
+
+    const attempts = await this.attemptRepository.find({
+      where: { draftId: draft.id },
+      order: { startedAt: 'ASC' },
+    });
+
+    return {
+      draftId: draft.id,
+      status: draft.status,
+      publishStatus: draft.publishStatus,
+      publishStep: draft.publishStep,
+      publishProgress: draft.publishProgress ?? 0,
+      jobId: draft.publishJobId,
+      metaCampaignId: draft.metaCampaignId,
+      metaAdsetId: draft.metaAdsetId,
+      metaCreativeId: draft.metaCreativeId,
+      metaAdId: draft.metaAdId,
+      errorMessage: draft.errorMessage,
+      publishedAt: draft.publishedAt,
+      attempts: attempts.map(
+        (row): MetaPublishAttemptDto => ({
+          id: row.id,
+          step: row.step,
+          status: row.status,
+          metaId: row.metaId,
+          errorMessage: row.errorMessage,
+          startedAt: row.startedAt,
+          completedAt: row.completedAt,
+        }),
+      ),
+    };
   }
 
   private async runPublishPipeline(
-    user: User,
+    userId: number,
     business: Business,
     draft: MetaCampaignDraft,
-  ): Promise<PublishMetaCampaignResponseDto> {
+    jobId: string | null,
+  ): Promise<void> {
     const businessId = business.id;
     const campaign = draft.campaignData as CampaignStepDataDto;
     const adSet = draft.adSetData as AdSetStepDataDto;
@@ -151,8 +402,10 @@ export class MetaPublishService {
       `Publish started: metaUserId=${business.metaUserId} adAccountId=${adAccountId} draft=${draft.id}`,
     );
 
+    await this.beginStep(draft, jobId, 'preparing', userId, businessId);
     await this.ensureAdAccountActive(adAccountId, accessToken);
     await this.assertPageAccessible(creative.facebookPageId, accessToken);
+    await this.completeStep(draft, jobId, 'preparing', null);
 
     const ctx: PublishContext = {
       accessToken,
@@ -167,7 +420,7 @@ export class MetaPublishService {
     let metaCreativeId: string | null = draft.metaCreativeId;
 
     const tracking = await this.findOrCreateTrackingRow(
-      user.id,
+      userId,
       businessId,
       adAccountId,
       campaign,
@@ -178,6 +431,7 @@ export class MetaPublishService {
 
     try {
       if (!metaCampaignId) {
+        await this.beginStep(draft, jobId, 'campaign', userId, businessId);
         logMetaPublishStep('campaign', 'start', {
           adAccountId: ctx.adAccountId,
           campaignName: ctx.campaign.name,
@@ -187,26 +441,34 @@ export class MetaPublishService {
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
         });
+        draft.metaCampaignId = metaCampaignId;
+        await this.completeStep(draft, jobId, 'campaign', metaCampaignId);
       }
 
       if (!metaAdsetId) {
+        await this.beginStep(draft, jobId, 'adset', userId, businessId);
         logMetaPublishStep('adset', 'start', { metaCampaignId });
-        metaAdsetId = await this.createAdSet(ctx, metaCampaignId);
+        metaAdsetId = await this.createAdSet(ctx, metaCampaignId!);
         this.logger.log(`Meta ad set created: ${metaAdsetId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
           metaAdsetId,
         });
+        draft.metaAdsetId = metaAdsetId;
+        await this.completeStep(draft, jobId, 'adset', metaAdsetId);
       }
 
       let metaAdId: string | null = draft.metaAdId;
 
       if (!metaCreativeId) {
+        await this.beginStep(draft, jobId, 'media', userId, businessId);
         logMetaPublishStep('media', 'start', {
           format: ctx.creative.creativeFormat,
         });
         const mediaRefs = await this.uploadCreativeMedia(ctx);
+        await this.completeStep(draft, jobId, 'media', null);
 
+        await this.beginStep(draft, jobId, 'creative', userId, businessId);
         logMetaPublishStep('creative', 'start', { mediaRefs });
         metaCreativeId = await this.createCreative(ctx, mediaRefs);
         this.logger.log(`Meta creative created: ${metaCreativeId}`);
@@ -215,12 +477,17 @@ export class MetaPublishService {
           metaAdsetId,
           metaCreativeId,
         });
+        draft.metaCreativeId = metaCreativeId;
+        await this.completeStep(draft, jobId, 'creative', metaCreativeId);
       }
 
       if (!metaAdId) {
+        await this.beginStep(draft, jobId, 'ad', userId, businessId);
         logMetaPublishStep('ad', 'start', { metaAdsetId, metaCreativeId });
-        metaAdId = await this.createAd(ctx, metaAdsetId, metaCreativeId);
+        metaAdId = await this.createAd(ctx, metaAdsetId!, metaCreativeId!);
         this.logger.log(`Meta ad created: ${metaAdId}`);
+        draft.metaAdId = metaAdId;
+        await this.completeStep(draft, jobId, 'ad', metaAdId);
       }
 
       if (!metaCampaignId || !metaAdsetId || !metaCreativeId || !metaAdId) {
@@ -230,10 +497,6 @@ export class MetaPublishService {
       }
 
       const deliveryStatus = campaign.status ?? 'PAUSED';
-      const publishMessage =
-        deliveryStatus === 'ACTIVE'
-          ? 'Campaign published to Meta as Active.'
-          : 'Campaign published successfully to Meta (paused).';
 
       await this.facebookCampaignRepository.update(tracking.id, {
         metaCampaignId,
@@ -244,14 +507,42 @@ export class MetaPublishService {
         errorMessage: null,
       });
 
+      const publishedAt = new Date();
       await this.draftRepository.update(draft.id, {
         metaCampaignId,
         metaAdsetId,
         metaCreativeId,
         metaAdId,
         status: 'published',
+        publishStatus: 'PUBLISHED',
+        publishStep: 'done',
+        publishProgress: 100,
+        publishedAt,
         errorMessage: null,
         currentStep: 4,
+      });
+
+      draft.status = 'published';
+      draft.publishStatus = 'PUBLISHED';
+      draft.publishStep = 'done';
+      draft.publishProgress = 100;
+      draft.publishedAt = publishedAt;
+      draft.metaCampaignId = metaCampaignId;
+      draft.metaAdsetId = metaAdsetId;
+      draft.metaCreativeId = metaCreativeId;
+      draft.metaAdId = metaAdId;
+      draft.errorMessage = null;
+
+      await this.recordAttempt({
+        draftId: draft.id,
+        businessId,
+        userId,
+        jobId,
+        step: 'done',
+        status: 'success',
+        metaId: metaAdId,
+        errorMessage: null,
+        complete: true,
       });
 
       await this.auditService.log(businessId, 'meta_campaign_published', {
@@ -261,30 +552,23 @@ export class MetaPublishService {
           metaAdsetId,
           metaCreativeId,
           metaAdId,
+          jobId,
         },
       });
 
-      this.logger.log(
-        `Draft ${draft.id} published for business ${businessId}: ad=${metaAdId}`,
-      );
+      this.facebookService.invalidateCampaignStatsCache(businessId);
+      await this.notifyDraftProgress(draft);
 
-      return {
-        draftId: draft.id,
-        trackingId: tracking.id,
-        metaCampaignId,
-        metaAdsetId,
-        metaCreativeId,
-        metaAdId,
-        status: deliveryStatus,
-        adsManagerUrl: adsManagerCampaignsUrl(adAccountId),
-        message: publishMessage,
-      };
+      this.logger.log(
+        `Draft ${draft.id} published for business ${businessId}: ad=${metaAdId} adsManager=${adsManagerCampaignsUrl(adAccountId)}`,
+      );
     } catch (err) {
       throw await this.handlePublishFailure(
-        user.id,
+        userId,
         businessId,
         draft.id,
         tracking.id,
+        jobId,
         err,
         { metaCampaignId, metaAdsetId, metaCreativeId },
       );
@@ -319,7 +603,19 @@ export class MetaPublishService {
   ): Promise<string> {
     const forMeta =
       normalizeCampaignImageUrlForMeta(imageUrl) ?? imageUrl.trim();
-    return sdkUploadAdImageHash(accessToken, adAccountId, forMeta);
+
+    const existing = await this.mediaService.findReadyMetaRefsByUrl(forMeta);
+    if (existing?.metaImageHash) {
+      return existing.metaImageHash;
+    }
+
+    const imageHash = await sdkUploadAdImageHash(
+      accessToken,
+      adAccountId,
+      forMeta,
+    );
+    await this.mediaService.markMetaRefs(forMeta, { imageHash });
+    return imageHash;
   }
 
   async uploadVideo(
@@ -330,7 +626,19 @@ export class MetaPublishService {
     const resolved =
       toAbsoluteAssetUrlIfRelative(videoUrl.trim()) ?? videoUrl.trim();
     assertDirectMetaVideoUrl(resolved);
-    return sdkUploadAdVideoId(accessToken, adAccountId, resolved);
+
+    const existing = await this.mediaService.findReadyMetaRefsByUrl(resolved);
+    if (existing?.metaVideoId) {
+      return existing.metaVideoId;
+    }
+
+    const videoId = await sdkUploadAdVideoId(
+      accessToken,
+      adAccountId,
+      resolved,
+    );
+    await this.mediaService.markMetaRefs(resolved, { videoId });
+    return videoId;
   }
 
   private async uploadCreativeMedia(ctx: PublishContext): Promise<{
@@ -419,6 +727,102 @@ export class MetaPublishService {
     );
   }
 
+  private async beginStep(
+    draft: MetaCampaignDraft,
+    jobId: string | null,
+    step: string,
+    userId: number,
+    businessId: number,
+  ): Promise<void> {
+    draft.publishStep = step;
+    draft.publishProgress = metaPublishProgressPercent(step);
+    draft.publishStatus = 'PUBLISHING';
+    await this.draftRepository.update(draft.id, {
+      publishStep: step,
+      publishProgress: draft.publishProgress,
+      publishStatus: 'PUBLISHING',
+      status: 'publishing',
+    });
+
+    await this.recordAttempt({
+      draftId: draft.id,
+      businessId,
+      userId,
+      jobId,
+      step,
+      status: 'running',
+      metaId: null,
+      errorMessage: null,
+      complete: false,
+    });
+
+    await this.notifyDraftProgress(draft);
+  }
+
+  private async completeStep(
+    draft: MetaCampaignDraft,
+    jobId: string | null,
+    step: string,
+    metaId: string | null,
+  ): Promise<void> {
+    await this.attemptRepository.update(
+      {
+        draftId: draft.id,
+        step,
+        status: 'running',
+        ...(jobId ? { jobId } : {}),
+      },
+      {
+        status: 'success',
+        metaId,
+        completedAt: new Date(),
+        errorMessage: null,
+      },
+    );
+  }
+
+  private async recordAttempt(params: {
+    draftId: string;
+    businessId: number;
+    userId: number;
+    jobId: string | null;
+    step: string;
+    status: string;
+    metaId: string | null;
+    errorMessage: string | null;
+    complete: boolean;
+  }): Promise<void> {
+    await this.attemptRepository.save({
+      draftId: params.draftId,
+      businessId: params.businessId,
+      userId: params.userId,
+      jobId: params.jobId,
+      step: params.step,
+      status: params.status,
+      metaId: params.metaId,
+      errorMessage: params.errorMessage,
+      startedAt: new Date(),
+      completedAt: params.complete ? new Date() : null,
+    });
+  }
+
+  private async notifyDraftProgress(draft: MetaCampaignDraft): Promise<void> {
+    await this.realtimeService.notifyProgress({
+      businessId: draft.businessId,
+      draftId: draft.id,
+      status: draft.status,
+      publishStatus: draft.publishStatus,
+      publishStep: draft.publishStep,
+      publishProgress: draft.publishProgress ?? 0,
+      jobId: draft.publishJobId,
+      metaCampaignId: draft.metaCampaignId,
+      metaAdsetId: draft.metaAdsetId,
+      metaCreativeId: draft.metaCreativeId,
+      metaAdId: draft.metaAdId,
+      errorMessage: draft.errorMessage,
+    });
+  }
+
   private async findOrCreateTrackingRow(
     userId: number,
     businessId: number,
@@ -504,6 +908,7 @@ export class MetaPublishService {
     businessId: number,
     draftId: string,
     trackingId: string,
+    jobId: string | null,
     err: unknown,
     partial: {
       metaCampaignId: string | null;
@@ -535,8 +940,21 @@ export class MetaPublishService {
       metaAdsetId: partial.metaAdsetId,
       metaCreativeId: partial.metaCreativeId,
       status: 'failed',
+      publishStatus: 'FAILED',
       errorMessage: userMessage,
     });
+
+    await this.attemptRepository.update(
+      {
+        draftId,
+        status: 'running',
+      },
+      {
+        status: 'failed',
+        errorMessage: userMessage,
+        completedAt: new Date(),
+      },
+    );
 
     await this.metaCampaignErrorRepository.save({
       userId,
@@ -550,17 +968,25 @@ export class MetaPublishService {
 
     await this.auditService.log(businessId, 'meta_campaign_publish_failed', {
       errorMessage: userMessage,
-      metadata: { draftId, step, metaErrorCode },
+      metadata: { draftId, step, metaErrorCode, jobId },
     });
+
+    const draft = await this.draftRepository.findOne({
+      where: { id: draftId },
+    });
+    if (draft) {
+      await this.notifyDraftProgress(draft);
+    }
 
     this.logger.error(
       `Draft publish failed at step=${step} for business ${businessId}: code=${metaErrorCode} message=${metaErrorMessage} partialIds=${JSON.stringify(partial)}`,
     );
 
-    throw new BadRequestException(userMessage);
+    throw err instanceof Error ? err : new BadRequestException(userMessage);
   }
 
-  private async recoverStalePublishingDraft(
+  private async recoverStalePublishingDraftInTx(
+    draftRepo: Repository<MetaCampaignDraft>,
     draft: MetaCampaignDraft,
   ): Promise<void> {
     if (draft.status !== 'publishing') {
@@ -570,37 +996,14 @@ export class MetaPublishService {
     const updatedAt = draft.updatedAt?.getTime?.() ?? 0;
     const staleMs = 15 * 60 * 1000;
     if (Date.now() - updatedAt < staleMs) {
-      throw new BadRequestException(
-        'Publish is already in progress. Wait a few minutes and try again.',
-      );
+      return;
     }
 
-    await this.draftRepository.update(draft.id, {
-      status: 'failed',
-      errorMessage:
-        'Previous publish timed out. Retry to continue from saved Meta IDs.',
-    });
     draft.status = 'failed';
-  }
-
-  private async loadDraftForUser(
-    userId: number,
-    businessId: number,
-    draftId: string,
-  ): Promise<MetaCampaignDraft> {
-    const draft = await this.draftRepository.findOne({
-      where: {
-        id: draftId.trim(),
-        businessId,
-        userId,
-      },
-    });
-
-    if (!draft) {
-      throw new NotFoundException('Campaign draft not found.');
-    }
-
-    return draft;
+    draft.publishStatus = 'FAILED';
+    draft.errorMessage =
+      'Previous publish timed out. Retry to continue from saved Meta IDs.';
+    await draftRepo.save(draft);
   }
 
   private async loadOwnedBusiness(
@@ -626,7 +1029,6 @@ export class MetaPublishService {
 
     return business;
   }
-
 
   private async assertPageAccessible(
     pageId: string,

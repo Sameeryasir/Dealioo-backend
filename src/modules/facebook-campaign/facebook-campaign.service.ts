@@ -20,8 +20,10 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
+import { FacebookService } from '../facebook/facebook.service';
 import { CreateFacebookCampaignDto } from './dto/create-facebook-campaign.dto';
 import { CreateFacebookCampaignResponseDto } from './dto/create-facebook-campaign-response.dto';
+import { MetaCampaignMediaService } from './meta-campaign-media.service';
 import {
   adsManagerCampaignsUrl,
   assertAgeRange,
@@ -80,7 +82,9 @@ export class FacebookCampaignService {
     private readonly businessAccessService: BusinessAccessService,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
+    private readonly facebookService: FacebookService,
     private readonly spacesService: SpacesService,
+    private readonly metaCampaignMediaService: MetaCampaignMediaService,
   ) {}
 
   async uploadAdImageForBusiness(
@@ -127,6 +131,18 @@ export class FacebookCampaignService {
       ? await sdkUploadAdImageBytes(accessToken, adAccountId, bytesBase64)
       : await sdkUploadAdImageHash(accessToken, adAccountId, imageUrl);
 
+    await this.metaCampaignMediaService.recordServerUpload({
+      userId: user.id,
+      businessId,
+      draftId: null,
+      mediaType: 'image',
+      filename: file.originalname || 'ad-image',
+      mimeType: file.mimetype || 'image/jpeg',
+      sizeBytes: file.size ?? file.buffer?.length ?? 0,
+      storageUrl: imageUrl,
+      metaImageHash: imageHash,
+    });
+
     return { imageUrl, imageHash };
   }
 
@@ -154,6 +170,17 @@ export class FacebookCampaignService {
         'PUBLIC_BASE_URL must use HTTPS so Meta can download the ad video.',
       );
     }
+
+    await this.metaCampaignMediaService.recordServerUpload({
+      userId: user.id,
+      businessId,
+      draftId: null,
+      mediaType: 'video',
+      filename: file.originalname || 'ad-video',
+      mimeType: file.mimetype || 'video/mp4',
+      sizeBytes: file.size ?? file.buffer?.length ?? 0,
+      storageUrl: videoUrl,
+    });
 
     return { videoUrl };
   }
@@ -333,6 +360,8 @@ export class FacebookCampaignService {
         },
       });
 
+      this.facebookService.invalidateCampaignStatsCache(businessId);
+
       this.logger.log(
         `Meta campaign published for business ${businessId}: campaign=${metaCampaignId}, ad=${adId}`,
       );
@@ -388,6 +417,8 @@ export class FacebookCampaignService {
     await this.auditService.log(businessId, 'meta_campaign_deleted', {
       metadata: { metaCampaignId: campaignId },
     });
+
+    this.facebookService.invalidateCampaignStatsCache(businessId);
 
     this.logger.log(
       `Meta campaign ${campaignId} deleted for business ${businessId}`,

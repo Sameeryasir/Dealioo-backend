@@ -6,7 +6,6 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-/** Local draft for the 4-step Meta campaign builder (no Meta API until publish). */
 @Entity('meta_campaign_drafts')
 export class MetaCampaignDraft {
   @PrimaryGeneratedColumn('uuid')
@@ -18,7 +17,6 @@ export class MetaCampaignDraft {
   @Column({ name: 'restaurant_id', type: 'int' })
   businessId: number;
 
-  /** Builder UI step: 1 Campaign, 2 Ad Set, 3 Ad/Creative, 4 Review */
   @Column({ name: 'current_step', type: 'int', default: 1 })
   currentStep: number;
 
@@ -48,6 +46,36 @@ export class MetaCampaignDraft {
 
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
+
+  // Manual optimistic lock — not @VersionColumn so autosave can check expectedVersion.
+  @Column({ name: 'version', type: 'int', default: 1 })
+  version: number;
+
+  @Column({
+    name: 'completed_steps',
+    type: 'int',
+    array: true,
+    default: '{}',
+  })
+  completedSteps: number[];
+
+  @Column({ name: 'last_saved_at', type: 'timestamptz', nullable: true })
+  lastSavedAt: Date | null;
+
+  @Column({ name: 'publish_status', type: 'varchar', length: 32, nullable: true })
+  publishStatus: string | null;
+
+  @Column({ name: 'publish_job_id', type: 'varchar', length: 128, nullable: true })
+  publishJobId: string | null;
+
+  @Column({ name: 'publish_step', type: 'varchar', length: 64, nullable: true })
+  publishStep: string | null;
+
+  @Column({ name: 'publish_progress', type: 'int', default: 0 })
+  publishProgress: number;
+
+  @Column({ name: 'published_at', type: 'timestamptz', nullable: true })
+  publishedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

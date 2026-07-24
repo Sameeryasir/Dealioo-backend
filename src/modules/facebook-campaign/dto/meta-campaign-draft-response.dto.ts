@@ -30,6 +30,14 @@ export class MetaCampaignDraftResponseDto {
   metaCreativeId: string | null;
   metaAdId: string | null;
   errorMessage: string | null;
+  version: number;
+  completedSteps: number[];
+  lastSavedAt: Date | null;
+  publishStatus: string | null;
+  publishJobId: string | null;
+  publishStep: string | null;
+  publishProgress: number;
+  publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

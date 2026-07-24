@@ -8,6 +8,8 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { randomUUID } from 'crypto';
 import { sanitizeStoredUploadFileName } from '../../utils/disk-file-upload-multer';
 import {
   resolveDigitalOceanSpacesPublicBaseUrl,
@@ -67,6 +69,45 @@ export class SpacesService {
   buildPublicUrl(objectKey: string): string {
     const key = objectKey.replace(/^\/+/, '');
     return toDigitalOceanSpacesCdnUrl(`${this.publicBaseUrl}/${key}`);
+  }
+
+  async createPresignedPutUrl(params: {
+    folder: string;
+    filename: string;
+    contentType: string;
+    expiresInSeconds?: number;
+  }): Promise<{
+    uploadUrl: string;
+    publicUrl: string;
+    objectKey: string;
+  }> {
+    if (!this.client || !this.bucket) {
+      throw new ServiceUnavailableException(
+        'DigitalOcean Spaces is not configured.',
+      );
+    }
+
+    const safeFolder = params.folder.replace(/^\/+|\/+$/g, '');
+    const storedName = sanitizeStoredUploadFileName(params.filename);
+    const objectKey = `${safeFolder}/${randomUUID()}-${storedName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: objectKey,
+      ACL: 'public-read',
+      ContentType: params.contentType,
+      CacheControl: 'public, max-age=31536000, immutable',
+    });
+
+    const uploadUrl = await getSignedUrl(this.client, command, {
+      expiresIn: params.expiresInSeconds ?? 900,
+    });
+
+    return {
+      uploadUrl,
+      publicUrl: this.buildPublicUrl(objectKey),
+      objectKey,
+    };
   }
 
   async uploadFile(

@@ -212,6 +212,17 @@ export class PusherService implements OnModuleInit {
     }
   }
 
+  async triggerRaw(
+    channel: string,
+    event: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+    await this.client.trigger(channel, event, payload);
+  }
+
   private async triggerExecution(
     event: string,
     payload: ExecutionTerminalPusherPayload,
