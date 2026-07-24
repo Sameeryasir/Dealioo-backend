@@ -11,9 +11,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Business } from './business.entity';
-import { Customer } from './customer.entity';
 import { FunnelPayment } from './funnel-payment.entity';
-import { User } from './user.entity';
 
 export enum OrderStatus {
   PENDING = 'pending',
@@ -29,7 +27,6 @@ export enum OrderSource {
 }
 
 @Entity('orders')
-@Index('IDX_orders_business_customer', ['businessId', 'customerId'])
 @Index('IDX_orders_business_paid_at', ['businessId', 'paidAt'])
 export class Order {
   @PrimaryGeneratedColumn()
@@ -41,13 +38,6 @@ export class Order {
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'restaurant_id' })
   business!: Business;
-
-  @Column({ name: 'customer_id', type: 'int', nullable: true })
-  customerId!: number | null;
-
-  @ManyToOne(() => Customer, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'customer_id' })
-  customer!: Customer | null;
 
   @Column({
     type: 'varchar',
@@ -73,13 +63,6 @@ export class Order {
 
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt!: Date | null;
-
-  @Column({ name: 'collected_by_user_id', type: 'int', nullable: true })
-  collectedByUserId!: number | null;
-
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'collected_by_user_id' })
-  collectedByUser!: User | null;
 
   @OneToMany(() => FunnelPayment, (payment) => payment.order)
   payments!: FunnelPayment[];

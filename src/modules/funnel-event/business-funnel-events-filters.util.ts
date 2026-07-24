@@ -227,7 +227,7 @@ function businessOrderCampaignPriceCents(row: {
   return 0;
 }
 
-/** Visit order_subtotal in dollars (deal + anything else). */
+/** Visit order_subtotal in dollars (counter extras only). */
 function businessOrderVisitNetDollars(row: {
   businessAmount?: number | null;
 }): number {

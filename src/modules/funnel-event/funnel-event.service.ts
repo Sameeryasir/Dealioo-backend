@@ -48,6 +48,10 @@ import { CustomerJourneyService } from '../customer-journey/customer-journey.ser
 import { CustomerService } from '../customer/customer.service';
 import { CouponService } from '../redemption/coupon.service';
 import {
+  CouponPaymentStatus,
+  CouponStatus,
+} from '../../db/entities/coupon.entity';
+import {
   ScannerErrorCode,
   ScannerErrorMessage,
 } from '../redemption/scanner-error-codes';
@@ -78,7 +82,7 @@ import {
 type ScannerPurchasedDeal = {
   funnelId: number;
   campaignName: string;
-  couponId: number;
+  couponId: number | null;
 };
 @Injectable()
 export class FunnelEventService {
@@ -115,7 +119,10 @@ export class FunnelEventService {
     private readonly businessHistoryService: BusinessHistoryService,
   ) {}
 
-  async track(dto: TrackFunnelEventDto): Promise<FunnelEvent> {
+  async track(
+    dto: TrackFunnelEventDto,
+    options?: { skipPendingOrder?: boolean },
+  ): Promise<FunnelEvent> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: dto.funnelId },
       relations: ['campaign'],
@@ -153,7 +160,12 @@ export class FunnelEventService {
         });
       }
 
-      if (businessId != null && businessId > 0 && funnel.campaign) {
+      if (
+        !options?.skipPendingOrder &&
+        businessId != null &&
+        businessId > 0 &&
+        funnel.campaign
+      ) {
         const customer = await this.customerRepository.findOne({
           where: { id: tracked.event.customerId },
         });
@@ -192,6 +204,7 @@ export class FunnelEventService {
     if (
       dto.eventType === FunnelEventType.PAYMENT &&
       tracked.event.customerId &&
+      tracked.event.funnelPaymentId &&
       this.isPaidFunnelEvent(tracked.event)
     ) {
       const skipBuiltinPaymentPassEmail =
@@ -201,7 +214,7 @@ export class FunnelEventService {
       await this.signupQrEmailService.sendSignupPassEmailOnPayment(
         tracked.event.customerId,
         dto.funnelId,
-        tracked.event.funnelPaymentId ?? undefined,
+        tracked.event.funnelPaymentId,
         { skipDelivery: skipBuiltinPaymentPassEmail },
       );
     }
@@ -415,15 +428,15 @@ export class FunnelEventService {
       });
     }
 
-    const visitOrderSubtotalDollars = centsToDollars(
-      expectedTotalCents + extraItemsCents,
-    );
+    const visitOrderSubtotalDollars =
+      extraItemsCents > 0 ? centsToDollars(extraItemsCents) : null;
     const collectedAt = new Date();
 
     type PendingDeal = {
       funnel: Funnel & { campaign: Campaign };
       paymentId: number;
       amountCents: number;
+      fromUnpaidOnlineCheckout: boolean;
     };
 
     const purchaseBatch = await this.dataSource.transaction(async (manager) => {
@@ -506,20 +519,16 @@ export class FunnelEventService {
               totalAmount: amountCents,
               currency: pending.currency || 'usd',
               paidAt: collectedAt,
-              collectedByUserId: staffUserId,
-              customerId,
             });
           } else {
             const settledOrder = await manager.save(
               manager.create(Order, {
                 businessId,
-                customerId,
                 status: OrderStatus.PAID,
                 source: OrderSource.SCANNER,
                 totalAmount: amountCents,
                 currency: pending.currency || 'usd',
                 paidAt: collectedAt,
-                collectedByUserId: staffUserId,
               }),
             );
             orderId = settledOrder.id;
@@ -530,6 +539,7 @@ export class FunnelEventService {
             funnel,
             paymentId: pending.id,
             amountCents,
+            fromUnpaidOnlineCheckout: true,
           });
           continue;
         }
@@ -542,13 +552,11 @@ export class FunnelEventService {
         const order = await manager.save(
           manager.create(Order, {
             businessId,
-            customerId,
             status: OrderStatus.PAID,
             source: OrderSource.SCANNER,
             totalAmount: newOrderTotalCents,
             currency: 'usd',
             paidAt: collectedAt,
-            collectedByUserId: staffUserId,
           }),
         );
 
@@ -579,6 +587,7 @@ export class FunnelEventService {
             funnel: row.funnel,
             paymentId: savedPayment.id,
             amountCents: row.amountCents,
+            fromUnpaidOnlineCheckout: false,
           });
         }
       }
@@ -627,73 +636,117 @@ export class FunnelEventService {
       paymentId: number;
       funnelPaymentId: number | null;
     }> = [];
+    const visitCampaignIds = [
+      ...new Set(deals.map((deal) => deal.funnel.campaign.id)),
+    ];
 
     try {
       for (const deal of deals) {
         const { funnel, paymentId, amountCents } = deal;
         const funnelId = funnel.id;
 
-        await this.track({
-          eventType: FunnelEventType.SIGNUP,
-          funnelId,
-          customerId,
-          visitorId: `scanner-${staffUserId}`,
-        });
-
-        await this.track({
-          eventType: FunnelEventType.PAYMENT,
-          funnelId,
-          customerId,
-          funnelPaymentId: paymentId,
-          amount: amountCents,
-          currency: 'usd',
-          paymentStatus: FunnelPaymentStatus.PAID,
-          customerEmail: customer.email.trim(),
-        });
-
-        const coupon = await this.couponService.findByCustomerAndFunnel(
+        const existingPass = await this.couponService.findByCustomerAndFunnel(
           customerId,
           funnelId,
         );
-        if (!coupon) {
-          throw new BadRequestException('Could not issue pass for this deal.');
-        }
+        const hasUnpaidOnlinePass =
+          existingPass != null &&
+          existingPass.status === CouponStatus.ACTIVE &&
+          existingPass.paymentStatus === CouponPaymentStatus.PENDING &&
+          !this.couponService.isExpired(existingPass);
 
-        issuedCoupons.push({
-          couponId: coupon.id,
-          campaignId: funnel.campaign.id,
-          funnelId,
-          paymentId,
-          funnelPaymentId: coupon.funnelPaymentId ?? paymentId,
-        });
+        // Coupons only for unpaid online / signup passes. Fresh counter Business deals: pay only.
+        const shouldIssueOrUpgradeCoupon =
+          deal.fromUnpaidOnlineCheckout || hasUnpaidOnlinePass;
+
+        if (shouldIssueOrUpgradeCoupon) {
+          await this.track(
+            {
+              eventType: FunnelEventType.SIGNUP,
+              funnelId,
+              customerId,
+              visitorId: `scanner-${staffUserId}`,
+            },
+            { skipPendingOrder: true },
+          );
+
+          await this.track({
+            eventType: FunnelEventType.PAYMENT,
+            funnelId,
+            customerId,
+            funnelPaymentId: paymentId,
+            amount: amountCents,
+            currency: 'usd',
+            paymentStatus: FunnelPaymentStatus.PAID,
+            customerEmail: customer.email.trim(),
+          });
+
+          const coupon = await this.couponService.findByCustomerAndFunnel(
+            customerId,
+            funnelId,
+          );
+          if (!coupon) {
+            throw new BadRequestException('Could not issue pass for this deal.');
+          }
+
+          issuedCoupons.push({
+            couponId: coupon.id,
+            campaignId: funnel.campaign.id,
+            funnelId,
+            paymentId,
+            funnelPaymentId: coupon.funnelPaymentId ?? paymentId,
+          });
+
+          purchased.push({
+            funnelId,
+            campaignName: funnel.campaign.campaignName,
+            couponId: coupon.id,
+          });
+          continue;
+        }
 
         purchased.push({
           funnelId,
           campaignName: funnel.campaign.campaignName,
-          couponId: coupon.id,
+          couponId: null,
         });
       }
 
-      if (issuedCoupons.length > 0) {
-        const campaignIds = [
-          ...new Set(issuedCoupons.map((row) => row.campaignId)),
-        ];
-        const primary = issuedCoupons[0]!;
-        const existingVisit = await this.customerVisitRepository.findOne({
-          where: { couponId: primary.couponId },
-        });
-        if (!existingVisit) {
+      if (visitCampaignIds.length > 0) {
+        const primaryCoupon = issuedCoupons[0] ?? null;
+        if (primaryCoupon) {
+          const existingVisit = await this.customerVisitRepository.findOne({
+            where: { couponId: primaryCoupon.couponId },
+          });
+          if (!existingVisit) {
+            await this.customerVisitRepository.save({
+              customerId,
+              campaignId: primaryCoupon.campaignId,
+              businessId,
+              couponId: primaryCoupon.couponId,
+              orderId,
+              staffUserId,
+              visitedAt: collectedAt,
+              source: CustomerVisitSource.STAFF_LOOKUP,
+              orderSubtotal: visitOrderSubtotalDollars,
+              visitCampaigns: visitCampaignIds.map((campaignId) => ({
+                campaignId,
+              })),
+            });
+          }
+        } else {
+          const primaryCampaignId = visitCampaignIds[0]!;
           await this.customerVisitRepository.save({
             customerId,
-            campaignId: primary.campaignId,
+            campaignId: primaryCampaignId,
             businessId,
-            couponId: primary.couponId,
+            couponId: null,
             orderId,
             staffUserId,
             visitedAt: collectedAt,
             source: CustomerVisitSource.STAFF_LOOKUP,
             orderSubtotal: visitOrderSubtotalDollars,
-            visitCampaigns: campaignIds.map((campaignId) => ({
+            visitCampaigns: visitCampaignIds.map((campaignId) => ({
               campaignId,
             })),
           });
@@ -720,7 +773,9 @@ export class FunnelEventService {
           customerName: guestName,
           dealNames,
           amountLabel: `$${expectedTotalDollars.toFixed(2)}`,
-          couponIds: purchased.map((row) => row.couponId),
+          couponIds: purchased
+            .map((row) => row.couponId)
+            .filter((id): id is number => id != null && id > 0),
           actorUserId: staffUserId,
           idempotencyKey,
           occurredAt: collectedAt,
@@ -1436,15 +1491,12 @@ export class FunnelEventService {
     };
   }
 
-  private async loadBusinessOrders(
-    businessId: number,
-  ): Promise<Array<Order & { customer: Customer | null }>> {
+  private async loadBusinessOrders(businessId: number): Promise<Order[]> {
     return this.orderRepository
       .createQueryBuilder('ord')
-      .leftJoinAndSelect('ord.customer', 'customer')
       .where('ord.restaurant_id = :businessId', { businessId })
       .andWhere('ord.deleted_at IS NULL')
-      .getMany() as Promise<Array<Order & { customer: Customer | null }>>;
+      .getMany();
   }
 
   private async ensurePendingOrderForUnpaidFunnelSignup(input: {
@@ -1457,6 +1509,27 @@ export class FunnelEventService {
     currency: string;
   }): Promise<void> {
     const email = input.customerEmail.trim().toLowerCase();
+
+    const alreadyPaid = await this.funnelPaymentRepository.findOne({
+      where: [
+        {
+          funnelId: input.funnelId,
+          businessId: input.businessId,
+          customerId: input.customerId,
+          status: FunnelPaymentStatus.PAID,
+        },
+        {
+          funnelId: input.funnelId,
+          businessId: input.businessId,
+          customerEmail: email,
+          status: FunnelPaymentStatus.PAID,
+        },
+      ],
+      order: { createdAt: 'DESC' },
+    });
+    if (alreadyPaid) {
+      return;
+    }
 
     let payment = await this.funnelPaymentRepository.findOne({
       where: {
@@ -1504,13 +1577,11 @@ export class FunnelEventService {
     const order = await this.orderRepository.save(
       this.orderRepository.create({
         businessId: input.businessId,
-        customerId: input.customerId,
         status: OrderStatus.PENDING,
         source: OrderSource.STRIPE,
         totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
         currency: payment.currency || input.currency || 'usd',
         paidAt: null,
-        collectedByUserId: null,
       }),
     );
 
@@ -1573,13 +1644,11 @@ export class FunnelEventService {
       const order = await this.orderRepository.save(
         this.orderRepository.create({
           businessId,
-          customerId,
           status: OrderStatus.PENDING,
           source: OrderSource.STRIPE,
           totalAmount: payment.amount ?? 0,
           currency: payment.currency || 'usd',
           paidAt: null,
-          collectedByUserId: null,
         }),
       );
 
@@ -1719,7 +1788,7 @@ export class FunnelEventService {
   }
 
   private mapOrderToBusinessRow(
-    order: Order & { customer: Customer | null },
+    order: Order,
     payments: Array<
       FunnelPayment & {
         funnel: (Funnel & { campaign?: Campaign | null }) | null;
@@ -1790,10 +1859,7 @@ export class FunnelEventService {
       }
     }
 
-    const customer =
-      order.customer ??
-      primary?.customer ??
-      null;
+    const customer = primary?.customer ?? null;
     const paidAt = anyPaid
       ? (order.paidAt ?? primary?.paidAt ?? order.createdAt)
       : null;

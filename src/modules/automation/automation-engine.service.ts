@@ -1292,6 +1292,10 @@ export class AutomationEngineService {
       return null;
     }
 
+    const contextPaymentId =
+      normalizeExecutionContext(execution.executionContext).funnelPaymentId ??
+      null;
+
     const event = await this.funnelEventRepository.findOne({
       where: {
         customerId: execution.customerId,
@@ -1302,18 +1306,47 @@ export class AutomationEngineService {
       order: { createdAt: 'DESC' },
     });
 
-    if (!event?.funnelPaymentId) {
-      return null;
-    }
-
-    const coupon = await this.couponService.findByPaymentId(
-      event.funnelPaymentId,
+    const candidates = [contextPaymentId, event?.funnelPaymentId ?? null].filter(
+      (id): id is number => id != null && Number.isFinite(id) && id > 0,
     );
-    if (!coupon) {
-      return null;
+
+    const seen = new Set<number>();
+    for (const paymentId of candidates) {
+      if (seen.has(paymentId)) {
+        continue;
+      }
+      seen.add(paymentId);
+
+      const paymentExists = await this.funnelPaymentRepository.exist({
+        where: { id: paymentId },
+      });
+      if (!paymentExists) {
+        this.logger.warn(
+          `Automation pass URL skipped missing payment ${paymentId} (execution ${execution.id})`,
+        );
+        continue;
+      }
+
+      const coupon =
+        (await this.couponService.findByPaymentId(paymentId)) ??
+        (await this.couponService.findLatestByPaymentId(paymentId));
+      if (!coupon) {
+        continue;
+      }
+
+      const linkedId = coupon.funnelPaymentId;
+      if (
+        linkedId != null &&
+        linkedId !== paymentId &&
+        (await this.funnelPaymentRepository.exist({ where: { id: linkedId } }))
+      ) {
+        return `${getFrontendBaseUrl()}/pass/${linkedId}`;
+      }
+
+      return `${getFrontendBaseUrl()}/pass/${paymentId}`;
     }
 
-    return `${getFrontendBaseUrl()}/pass/${event.funnelPaymentId}`;
+    return null;
   }
 
   async resolvePostVisitResumeNodeId(

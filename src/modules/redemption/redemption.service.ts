@@ -590,6 +590,13 @@ export class RedemptionService {
       return { success: false, message: 'Select at least one reward' };
     }
 
+    if (uniqueIds.length > 1) {
+      return {
+        success: false,
+        message: 'Redeem one guest deal at a time',
+      };
+    }
+
     if (audit.idempotencyKey?.trim()) {
       const cached = await this.findIdempotentRedemption(
         audit.idempotencyKey.trim(),
@@ -962,12 +969,12 @@ export class RedemptionService {
       paymentMethod: FunnelPaymentMethod.OTHER,
       paymentCollectedBy: staffUserId,
       paymentCollectedAt: paidAt,
-      ...(coupon.customerId != null
-        ? { customerId: coupon.customerId }
-        : {}),
+      customerId: coupon.customerId ?? payment.customerId ?? null,
     });
     payment.status = FunnelPaymentStatus.PAID;
     payment.paidAt = payment.paidAt ?? paidAt;
+    payment.customerId = coupon.customerId ?? payment.customerId ?? null;
+    payment.paymentCollectedBy = staffUserId;
 
     if (coupon.funnelPaymentId !== payment.id) {
       await manager.update(Coupon, coupon.id, {
@@ -983,22 +990,16 @@ export class RedemptionService {
         totalAmount: payment.amount,
         currency: payment.currency || 'usd',
         paidAt: payment.paidAt ?? paidAt,
-        collectedByUserId: staffUserId,
-        ...(coupon.customerId != null
-          ? { customerId: coupon.customerId }
-          : {}),
       });
     } else {
       const order = await manager.save(
         manager.create(Order, {
           businessId,
-          customerId: coupon.customerId,
           status: OrderStatus.PAID,
           source: OrderSource.SCANNER,
           totalAmount: payment.amount,
           currency: payment.currency || 'usd',
           paidAt: payment.paidAt ?? paidAt,
-          collectedByUserId: staffUserId,
         }),
       );
       orderId = order.id;
@@ -1444,6 +1445,17 @@ export class RedemptionService {
       }
 
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
+
+      // Unpaid guest deals only when tied to a real open checkout — not signup-only orphans.
+      if (!isPrepaid) {
+        if (
+          coupon.paymentStatus !== CouponPaymentStatus.PENDING ||
+          !this.isOpenOnlineCheckoutPayment(coupon.funnelPayment)
+        ) {
+          continue;
+        }
+      }
+
       const paymentBadge = resolveGuestDealPaymentBadge({
         couponPaid: isPrepaid,
         payment: coupon.funnelPayment,
@@ -1493,67 +1505,44 @@ export class RedemptionService {
       where: { id: customerId },
     });
     const email = customer?.email?.trim().toLowerCase() || null;
-    const funnelIds = new Set<number>();
 
-    const signupRows = await this.funnelEventRepository
-      .createQueryBuilder('fe')
-      .innerJoin(Funnel, 'f', 'f.id = fe.funnel_id')
-      .innerJoin(Campaign, 'c', 'c.id = f.campaign_id')
-      .where('fe.customer_id = :customerId', { customerId })
-      .andWhere('fe.event_type = :eventType', {
-        eventType: FunnelEventType.SIGNUP,
+    // Only open online checkouts — do not recreate passes from signup history alone.
+    const qb = this.funnelPaymentRepository
+      .createQueryBuilder('fp')
+      .where('fp.restaurant_id = :businessId', { businessId })
+      .andWhere('fp.status IN (:...statuses)', {
+        statuses: [
+          FunnelPaymentStatus.PENDING,
+          FunnelPaymentStatus.FAILED,
+          FunnelPaymentStatus.CANCELLED,
+        ],
       })
-      .andWhere('c.restaurant_id = :businessId', { businessId })
-      .andWhere('fe.deleted_at IS NULL')
-      .select('DISTINCT fe.funnel_id', 'funnelId')
-      .getRawMany<{ funnelId: number | string }>();
-
-    for (const row of signupRows) {
-      const funnelId = Number(row.funnelId);
-      if (Number.isFinite(funnelId) && funnelId > 0) {
-        funnelIds.add(funnelId);
-      }
-    }
+      .andWhere(
+        '(fp.payment_source = :stripe OR fp.collection_channel = :online)',
+        {
+          stripe: FunnelPaymentSource.STRIPE,
+          online: FunnelCollectionChannel.ONLINE,
+        },
+      )
+      .andWhere('fp.funnel_id IS NOT NULL')
+      .andWhere('fp.deleted_at IS NULL');
 
     if (email) {
-      const pendingOnline = await this.funnelPaymentRepository
-        .createQueryBuilder('fp')
-        .where('fp.restaurant_id = :businessId', { businessId })
-        .andWhere('LOWER(fp.customer_email) = :email', { email })
-        .andWhere('fp.status IN (:...statuses)', {
-          statuses: [
-            FunnelPaymentStatus.PENDING,
-            FunnelPaymentStatus.FAILED,
-            FunnelPaymentStatus.CANCELLED,
-          ],
-        })
-        .andWhere(
-          '(fp.payment_source = :stripe OR fp.collection_channel = :online)',
-          {
-            stripe: FunnelPaymentSource.STRIPE,
-            online: FunnelCollectionChannel.ONLINE,
-          },
-        )
-        .andWhere('fp.funnel_id IS NOT NULL')
-        .andWhere('fp.deleted_at IS NULL')
-        .select('DISTINCT fp.funnel_id', 'funnelId')
-        .getRawMany<{ funnelId: number | string }>();
-
-      for (const row of pendingOnline) {
-        const funnelId = Number(row.funnelId);
-        if (Number.isFinite(funnelId) && funnelId > 0) {
-          funnelIds.add(funnelId);
-        }
-      }
+      qb.andWhere(
+        '(fp.customer_id = :customerId OR LOWER(fp.customer_email) = :email)',
+        { customerId, email },
+      );
+    } else {
+      qb.andWhere('fp.customer_id = :customerId', { customerId });
     }
 
-    for (const funnelId of funnelIds) {
-      const onlinePaid = await this.findOnlinePaidPaymentForGuest({
-        funnelId,
-        customerId,
-        email,
-      });
-      if (onlinePaid) {
+    const pendingOnline = await qb
+      .select('DISTINCT fp.funnel_id', 'funnelId')
+      .getRawMany<{ funnelId: number | string }>();
+
+    for (const row of pendingOnline) {
+      const funnelId = Number(row.funnelId);
+      if (!Number.isFinite(funnelId) || funnelId < 1) {
         continue;
       }
       await this.couponService.ensurePendingCouponForUnpaidFunnel(
@@ -1563,45 +1552,23 @@ export class RedemptionService {
     }
   }
 
-  private async findOnlinePaidPaymentForGuest(input: {
-    funnelId: number;
-    customerId: number;
-    email: string | null;
-  }): Promise<FunnelPayment | null> {
-    const byCustomer = await this.funnelPaymentRepository.find({
-      where: {
-        funnelId: input.funnelId,
-        customerId: input.customerId,
-        status: FunnelPaymentStatus.PAID,
-      },
-      order: { id: 'DESC' },
-      take: 10,
-    });
-    for (const payment of byCustomer) {
-      if (isOnlineFunnelPayment(payment)) {
-        return payment;
-      }
+  private isOpenOnlineCheckoutPayment(
+    payment: FunnelPayment | null | undefined,
+  ): boolean {
+    if (!payment) {
+      return false;
     }
-
-    if (!input.email) {
-      return null;
+    const open =
+      payment.status === FunnelPaymentStatus.PENDING ||
+      payment.status === FunnelPaymentStatus.FAILED ||
+      payment.status === FunnelPaymentStatus.CANCELLED;
+    if (!open) {
+      return false;
     }
-
-    const byEmail = await this.funnelPaymentRepository.find({
-      where: {
-        funnelId: input.funnelId,
-        customerEmail: input.email,
-        status: FunnelPaymentStatus.PAID,
-      },
-      order: { id: 'DESC' },
-      take: 10,
-    });
-    for (const payment of byEmail) {
-      if (isOnlineFunnelPayment(payment)) {
-        return payment;
-      }
-    }
-    return null;
+    return (
+      payment.paymentSource === FunnelPaymentSource.STRIPE ||
+      payment.collectionChannel === FunnelCollectionChannel.ONLINE
+    );
   }
 
   private async logAudit(params: {
@@ -1629,27 +1596,12 @@ export class RedemptionService {
   }
 
   private async resolveVisitOrderSubtotal(
-    manager: EntityManager,
-    lockedCoupons: Coupon[],
+    _manager: EntityManager,
+    _lockedCoupons: Coupon[],
     orderSubtotal: number | undefined,
     allPrepaid: boolean,
     extraItemsAmount?: number,
   ): Promise<number | null> {
-    let offerCents = 0;
-    let hasAllOfferPrices = true;
-
-    for (const coupon of lockedCoupons) {
-      const offerPriceCents = await this.resolveCouponOfferPriceCents(
-        manager,
-        coupon,
-      );
-      if (offerPriceCents == null) {
-        hasAllOfferPrices = false;
-        break;
-      }
-      offerCents += offerPriceCents;
-    }
-
     const extraCents =
       extraItemsAmount != null &&
       Number.isFinite(extraItemsAmount) &&
@@ -1657,6 +1609,7 @@ export class RedemptionService {
         ? dollarsToCents(extraItemsAmount)
         : 0;
 
+    // Store counter extras only — never deal/campaign price.
     if (allPrepaid) {
       const prepaidExtraCents =
         orderSubtotal != null &&
@@ -1664,58 +1617,11 @@ export class RedemptionService {
         orderSubtotal >= 0
           ? dollarsToCents(orderSubtotal)
           : 0;
-      const combinedExtra = prepaidExtraCents + extraCents;
-      if (hasAllOfferPrices) {
-        return centsToDollars(offerCents + combinedExtra);
-      }
-      return combinedExtra > 0 ? centsToDollars(combinedExtra) : null;
+      const combined = prepaidExtraCents + extraCents;
+      return combined > 0 ? centsToDollars(combined) : null;
     }
 
-    if (
-      orderSubtotal != null &&
-      Number.isFinite(orderSubtotal) &&
-      orderSubtotal >= 0
-    ) {
-      return centsToDollars(dollarsToCents(orderSubtotal) + extraCents);
-    }
-
-    if (hasAllOfferPrices) {
-      return centsToDollars(offerCents + extraCents);
-    }
     return extraCents > 0 ? centsToDollars(extraCents) : null;
-  }
-
-  private async resolveCouponOfferPriceCents(
-    manager: EntityManager,
-    coupon: Coupon,
-  ): Promise<number | null> {
-    let price =
-      coupon.campaign?.price != null ? Number(coupon.campaign.price) : null;
-
-    if (price == null || !Number.isFinite(price) || price < 0) {
-      const campaign = await manager.findOne(Campaign, {
-        where: { id: coupon.campaignId },
-      });
-      price = campaign?.price != null ? Number(campaign.price) : null;
-    }
-
-    if (price != null && Number.isFinite(price) && price >= 0) {
-      return dollarsToCents(price);
-    }
-
-    const paymentAmountCents =
-      coupon.funnelPayment?.amount != null
-        ? Number(coupon.funnelPayment.amount)
-        : null;
-    if (
-      paymentAmountCents != null &&
-      Number.isFinite(paymentAmountCents) &&
-      paymentAmountCents >= 0
-    ) {
-      return Math.round(paymentAmountCents);
-    }
-
-    return null;
   }
 
   private async lockCouponForRedemption(

@@ -212,18 +212,29 @@ export class ActivityService {
       return;
     }
 
-    await manager.save(
-      ActivityEvent,
-      manager.create(ActivityEvent, {
-        businessId: params.businessId,
-        customerId: params.customerId,
-        eventType: params.eventType,
-        description: params.description,
-        metadata: params.metadata ?? null,
-        occurredAt: params.occurredAt ?? new Date(),
-        idempotencyKey: params.idempotencyKey,
-      }),
-    );
+    try {
+      await manager.save(
+        ActivityEvent,
+        manager.create(ActivityEvent, {
+          businessId: params.businessId,
+          customerId: params.customerId,
+          eventType: params.eventType,
+          description: params.description,
+          metadata: params.metadata ?? null,
+          occurredAt: params.occurredAt ?? new Date(),
+          idempotencyKey: params.idempotencyKey,
+        }),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        message.includes('UQ_activity_event_idempotency') ||
+        message.includes('duplicate key')
+      ) {
+        return;
+      }
+      throw err;
+    }
   }
 
   async logRedeemedReward(params: LogRedeemedRewardDto): Promise<void> {

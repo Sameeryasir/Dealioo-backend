@@ -1,23 +1,14 @@
-import { Inject, Injectable, forwardRef } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import {
-  FunnelCollectionChannel,
   FunnelPayment,
-  FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import {
-  Order,
-  OrderSource,
-  OrderStatus,
-} from '../../db/entities/order.entity';
-import { ActivityService } from '../activity/activity.service';
-import { FunnelEventService } from '../funnel-event/funnel-event.service';
 import { CouponService } from '../redemption/coupon.service';
 import { StripeService } from '../stripe/stripe.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
+import { PaymentFinalizeService } from './payment-finalize.service';
 
 type PaymentIntentPayload = {
   id: string;
@@ -72,13 +63,9 @@ export class PaymentWebhookHandler {
   constructor(
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
-    @InjectRepository(Order)
-    private readonly orderRepository: Repository<Order>,
     private readonly stripeService: StripeService,
     private readonly couponService: CouponService,
-    private readonly activityService: ActivityService,
-    @Inject(forwardRef(() => FunnelEventService))
-    private readonly funnelEventService: FunnelEventService,
+    private readonly paymentFinalizeService: PaymentFinalizeService,
   ) {}
 
   async routeEvent(
@@ -94,12 +81,15 @@ export class PaymentWebhookHandler {
         await this.handleCheckoutSessionCompleted(
           event.data.object as CheckoutSessionPayload,
           connectedAccountId,
+          event.id,
         );
         break;
       case 'payment_intent.succeeded':
         await this.handlePaymentIntentSucceeded(
           event.data.object as PaymentIntentPayload,
           connectedAccountId,
+          undefined,
+          event.id,
         );
         break;
       case 'payment_intent.payment_failed':
@@ -177,6 +167,7 @@ export class PaymentWebhookHandler {
   private async handleCheckoutSessionCompleted(
     session: CheckoutSessionPayload,
     connectedAccountId?: string,
+    webhookEventId?: string,
   ) {
     const paymentIntentId =
       typeof session.payment_intent === 'string'
@@ -201,47 +192,54 @@ export class PaymentWebhookHandler {
     const wasAlreadyPaid = payment.status === FunnelPaymentStatus.PAID;
     const shouldMarkPaid =
       session.payment_status === 'paid' &&
-      payment.status !== FunnelPaymentStatus.REFUNDED &&
-      !wasAlreadyPaid;
+      payment.status !== FunnelPaymentStatus.REFUNDED;
 
-    await this.funnelPaymentRepository.update(payment.id, {
+    if (!shouldMarkPaid) {
+      await this.funnelPaymentRepository.update(payment.id, {
+        stripeCheckoutSessionId: session.id,
+        ...(connectedAccountId?.trim()
+          ? { stripeConnectedAccountId: connectedAccountId.trim() }
+          : {}),
+        ...(paymentIntentId?.trim()
+          ? { stripePaymentIntentId: paymentIntentId.trim() }
+          : {}),
+      });
+      logStripePayment({
+        phase: 'checkout_session_completed',
+        outcome: 'ids_stored',
+        paymentId: payment.id,
+        checkoutSessionId: session.id,
+        paymentIntentId: paymentIntentId ?? null,
+        syncSource: 'webhook',
+      });
+      return;
+    }
+
+    await this.paymentFinalizeService.finalizeSuccessfulPayment({
+      paymentId: payment.id,
+      source: 'webhook',
+      webhookEventId: webhookEventId ?? null,
       stripeCheckoutSessionId: session.id,
-      ...(connectedAccountId?.trim()
-        ? { stripeConnectedAccountId: connectedAccountId.trim() }
-        : {}),
-      ...(paymentIntentId?.trim()
-        ? { stripePaymentIntentId: paymentIntentId.trim() }
-        : {}),
-      ...(shouldMarkPaid
-        ? {
-            status: FunnelPaymentStatus.PAID,
-            paidAt: payment.paidAt ?? new Date(),
-          }
-        : {}),
+      stripePaymentIntentId: paymentIntentId?.trim() || null,
+      stripeConnectedAccountId: connectedAccountId?.trim() || null,
     });
 
     logStripePayment({
       phase: 'checkout_session_completed',
-      outcome: session.payment_status === 'paid' ? 'marked_paid' : 'ids_stored',
+      outcome: wasAlreadyPaid ? 'already_paid' : 'marked_paid',
       paymentId: payment.id,
       checkoutSessionId: session.id,
       paymentIntentId: paymentIntentId ?? null,
+      syncSource: 'webhook',
+      webhookEventId: webhookEventId ?? null,
     });
-
-
-    if (session.payment_status === 'paid' && !wasAlreadyPaid) {
-      await this.ensureOrderForPaidPayment(payment.id);
-      await this.activityService.logPrepaidForOffer({
-        paymentId: payment.id,
-        occurredAt: new Date(),
-      });
-    }
   }
 
   private async handlePaymentIntentSucceeded(
     paymentIntent: PaymentIntentPayload,
     connectedAccountId?: string,
     chargeReceiptUrl?: string,
+    webhookEventId?: string,
   ) {
     const payment = await this.resolvePaymentFromMetadata(
       paymentIntent.metadata,
@@ -254,6 +252,7 @@ export class PaymentWebhookHandler {
         outcome: 'payment_not_found',
         paymentIntentId: paymentIntent.id,
         eventId: null,
+        syncSource: 'webhook',
       });
       return;
     }
@@ -264,8 +263,6 @@ export class PaymentWebhookHandler {
       return;
     }
 
-    const wasAlreadyPaid = payment.status === FunnelPaymentStatus.PAID;
-
     const paymentMethodId = this.paymentMethodIdFromIntent(paymentIntent);
     const receiptUrl = await this.resolveReceiptUrl(
       paymentIntent,
@@ -275,28 +272,17 @@ export class PaymentWebhookHandler {
     );
     const chargeId = this.chargeIdFromIntent(paymentIntent);
 
-    await this.funnelPaymentRepository.update(payment.id, {
-      status: FunnelPaymentStatus.PAID,
-      paidAt: payment.paidAt ?? new Date(),
-      paymentSource: FunnelPaymentSource.STRIPE,
-      collectionChannel: FunnelCollectionChannel.ONLINE,
+    await this.paymentFinalizeService.finalizeSuccessfulPayment({
+      paymentId: payment.id,
+      source: 'webhook',
+      webhookEventId: webhookEventId ?? null,
+      stripePaymentIntentId: paymentIntent.id,
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
-      ...(chargeId ? { stripeChargeId: chargeId } : {}),
-      ...(paymentMethodId ? { paymentMethod: paymentMethodId } : {}),
-      ...(receiptUrl ? { receiptUrl } : {}),
+      stripeChargeId: chargeId ?? null,
+      paymentMethod: paymentMethodId ?? null,
+      receiptUrl: receiptUrl ?? null,
     });
-
-    await this.ensureOrderForPaidPayment(payment.id);
-
-    if (!wasAlreadyPaid) {
-      await this.activityService.logPrepaidForOffer({
-        paymentId: payment.id,
-        occurredAt: new Date(),
-      });
-    }
-
-    await this.funnelEventService.syncPaidFunnelPaymentAutomation(payment.id);
   }
 
   private async handlePaymentIntentFailed(
@@ -416,12 +402,26 @@ export class PaymentWebhookHandler {
         ? dispute.charge
         : dispute.charge?.id;
 
+    if (eventType === 'charge.dispute.closed' && dispute.status === 'won') {
+      await this.paymentFinalizeService.finalizeSuccessfulPayment({
+        paymentId: payment.id,
+        source: 'webhook',
+        stripePaymentIntentId: paymentIntentId ?? null,
+        stripeConnectedAccountId:
+          connectedAccountId ?? payment.stripeConnectedAccountId,
+        stripeChargeId: chargeId ?? null,
+      });
+      await this.funnelPaymentRepository.update(payment.id, {
+        stripeDisputeId: dispute.id,
+        disputeStatus: dispute.status,
+      });
+      await this.couponService.syncCouponsForFunnelPayment(payment.id);
+      return;
+    }
+
     let status = payment.status;
     if (eventType === 'charge.dispute.closed') {
-      status =
-        dispute.status === 'won'
-          ? FunnelPaymentStatus.PAID
-          : FunnelPaymentStatus.REFUNDED;
+      status = FunnelPaymentStatus.REFUNDED;
     } else {
       status = FunnelPaymentStatus.DISPUTED;
     }
@@ -432,6 +432,7 @@ export class PaymentWebhookHandler {
       paymentId: payment.id,
       paymentIntentId: paymentIntentId ?? null,
       outcome: dispute.status,
+      syncSource: 'webhook',
     });
 
     await this.funnelPaymentRepository.update(payment.id, {
@@ -480,6 +481,7 @@ export class PaymentWebhookHandler {
       { id: paymentIntentId, metadata: charge.metadata } as PaymentIntentPayload,
       connectedAccountId,
       receiptFromCharge,
+      undefined,
     );
   }
 
@@ -569,57 +571,7 @@ export class PaymentWebhookHandler {
       stripeAccountId: payment.stripeConnectedAccountId,
       amount: payment.amount,
       currency: payment.currency,
-    });
-  }
-
-  private async ensureOrderForPaidPayment(paymentId: number): Promise<void> {
-    const payment = await this.funnelPaymentRepository.findOne({
-      where: { id: paymentId },
-    });
-    if (!payment) {
-      return;
-    }
-    if (payment.status !== FunnelPaymentStatus.PAID) {
-      return;
-    }
-
-    const source =
-      payment.paymentSource === FunnelPaymentSource.SCANNER
-        ? OrderSource.SCANNER
-        : payment.paymentSource === FunnelPaymentSource.MANUAL
-          ? OrderSource.MANUAL
-          : OrderSource.STRIPE;
-
-    if (payment.orderId != null) {
-      await this.orderRepository.update(payment.orderId, {
-        status: OrderStatus.PAID,
-        source,
-        totalAmount: payment.amount,
-        currency: payment.currency || 'usd',
-        paidAt: payment.paidAt ?? new Date(),
-        collectedByUserId: payment.paymentCollectedBy ?? null,
-        ...(payment.customerId != null
-          ? { customerId: payment.customerId }
-          : {}),
-      });
-      return;
-    }
-
-    const order = await this.orderRepository.save(
-      this.orderRepository.create({
-        businessId: payment.businessId,
-        customerId: payment.customerId ?? null,
-        status: OrderStatus.PAID,
-        source,
-        totalAmount: payment.amount,
-        currency: payment.currency || 'usd',
-        paidAt: payment.paidAt ?? new Date(),
-        collectedByUserId: payment.paymentCollectedBy ?? null,
-      }),
-    );
-
-    await this.funnelPaymentRepository.update(payment.id, {
-      orderId: order.id,
+      syncSource: 'webhook',
     });
   }
 

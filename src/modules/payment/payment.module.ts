@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Order } from '../../db/entities/order.entity';
@@ -15,13 +16,17 @@ import { StripeModule } from '../stripe/stripe.module';
 import { FeeService } from './fee.service';
 import { PaymentController } from './payment.controller';
 import { PaymentService } from './payment.service';
+import { PaymentFinalizeService } from './payment-finalize.service';
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { CheckoutResumeService } from './checkout-resume.service';
 import { UserSubscriptionsModule } from '../user-subscriptions/user-subscriptions.module';
+import { PAYMENT_RECOVERY_QUEUE } from './payment-recovery.constants';
+import { PaymentRecoveryScheduler } from './payment-recovery.scheduler';
 
 @Module({
   imports: [
+    BullModule.registerQueue({ name: PAYMENT_RECOVERY_QUEUE }),
     TypeOrmModule.forFeature([
       Business,
       Funnel,
@@ -44,8 +49,10 @@ import { UserSubscriptionsModule } from '../user-subscriptions/user-subscription
     FeeService,
     StripeWebhookService,
     PaymentWebhookHandler,
+    PaymentFinalizeService,
     CheckoutResumeService,
+    PaymentRecoveryScheduler,
   ],
-  exports: [PaymentService, CheckoutResumeService],
+  exports: [PaymentService, CheckoutResumeService, PaymentFinalizeService],
 })
 export class PaymentModule {}

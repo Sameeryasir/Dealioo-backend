@@ -57,12 +57,12 @@ export class CustomerVisit {
   @JoinColumn({ name: 'restaurant_id' })
   business: Business;
 
-  @Column({ name: 'coupon_id' })
-  couponId: number;
+  @Column({ name: 'coupon_id', type: 'int', nullable: true })
+  couponId: number | null;
 
-  @ManyToOne(() => Coupon, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => Coupon, { onDelete: 'RESTRICT', nullable: true })
   @JoinColumn({ name: 'coupon_id' })
-  coupon: Coupon;
+  coupon: Coupon | null;
 
   @Column({ name: 'order_id', type: 'int', nullable: true })
   orderId: number | null;

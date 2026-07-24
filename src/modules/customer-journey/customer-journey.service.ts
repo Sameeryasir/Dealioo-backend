@@ -614,6 +614,9 @@ export class CustomerJourneyService {
       if (visit.source === CustomerVisitSource.STAFF_LOOKUP) {
         continue;
       }
+      if (visit.couponId == null) {
+        continue;
+      }
       await this.recordQrRedeemed({
         businessId: params.businessId,
         customerId: params.customerId,

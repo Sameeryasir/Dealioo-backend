@@ -8,6 +8,7 @@ import { DataSource, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { getPurposeEmailDefaults } from '../automation/automation-email-catalog';
 import { PaymentConfirmationEmail } from '../../templates/automation/payment-confirmation-email';
@@ -47,6 +48,8 @@ export class SignupQrEmailService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
   ) {}
 
   handlesSignupWelcomeEmail(): boolean {
@@ -112,17 +115,21 @@ export class SignupQrEmailService {
   async sendSignupPassEmailOnPayment(
     customerId: number,
     funnelId: number,
-    funnelPaymentId?: number,
+    funnelPaymentId: number,
     options?: { skipDelivery?: boolean },
   ): Promise<void> {
     if (!this.handlesSignupWelcomeEmail()) {
       return;
     }
 
-    const coupon = await this.couponService.findByCustomerAndFunnel(
-      customerId,
-      funnelId,
-    );
+    if (
+      !Number.isFinite(funnelPaymentId) ||
+      funnelPaymentId < 1
+    ) {
+      return;
+    }
+
+    const coupon = await this.couponService.findByPaymentId(funnelPaymentId);
     if (!coupon) {
       return;
     }
@@ -260,10 +267,12 @@ export class SignupQrEmailService {
       campaignName,
     );
 
-    const passUrl =
-      params.funnelPaymentId != null
-        ? `${getFrontendBaseUrl()}/pass/${params.funnelPaymentId}`
-        : `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
+    const passUrl = await this.resolveVerifiedPassUrl({
+      coupon,
+      customerId: params.customerId,
+      funnelId: params.funnelId,
+      candidatePaymentId: params.funnelPaymentId,
+    });
 
     const qr = await this.couponService.buildQrPayload(coupon);
 
@@ -313,6 +322,44 @@ export class SignupQrEmailService {
       );
       return false;
     }
+  }
+
+  private async resolveVerifiedPassUrl(params: {
+    coupon: Coupon;
+    customerId: number;
+    funnelId: number;
+    candidatePaymentId?: number;
+  }): Promise<string> {
+    const guestUrl = `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
+
+    const candidates = [
+      params.coupon.funnelPaymentId,
+      params.candidatePaymentId,
+    ].filter(
+      (id): id is number =>
+        id != null && Number.isFinite(id) && id > 0,
+    );
+
+    const seen = new Set<number>();
+    for (const paymentId of candidates) {
+      if (seen.has(paymentId)) {
+        continue;
+      }
+      seen.add(paymentId);
+
+      const exists = await this.funnelPaymentRepository.exist({
+        where: { id: paymentId },
+      });
+      if (exists) {
+        return `${getFrontendBaseUrl()}/pass/${paymentId}`;
+      }
+
+      this.logger.warn(
+        `Pass email skipped deleted/missing payment ${paymentId} for coupon ${params.coupon.id}`,
+      );
+    }
+
+    return guestUrl;
   }
 
   private async deliverSignupPassEmail(

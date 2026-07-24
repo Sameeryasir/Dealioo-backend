@@ -57,6 +57,73 @@ export class CouponService {
     funnelId: number,
     customerId: number,
   ): Promise<Coupon | null> {
+    const openCheckout = await this.funnelPaymentRepository.findOne({
+      where: [
+        {
+          funnelId,
+          customerId,
+          status: FunnelPaymentStatus.PENDING,
+        },
+        {
+          funnelId,
+          customerId,
+          status: FunnelPaymentStatus.FAILED,
+        },
+        {
+          funnelId,
+          customerId,
+          status: FunnelPaymentStatus.CANCELLED,
+        },
+      ],
+      order: { id: 'DESC' },
+    });
+
+    if (openCheckout) {
+      const linked = await this.couponRepository.findOne({
+        where: { funnelPaymentId: openCheckout.id },
+        relations: ['customer', 'campaign', 'funnelPayment'],
+        order: { id: 'DESC' },
+      });
+      if (
+        linked &&
+        !this.isExpired(linked) &&
+        (linked.status === CouponStatus.REVOKED ||
+          linked.status === CouponStatus.ACTIVE)
+      ) {
+        if (linked.status === CouponStatus.REVOKED) {
+          await this.couponRepository.update(linked.id, {
+            status: CouponStatus.ACTIVE,
+            paymentStatus: CouponPaymentStatus.PENDING,
+          });
+          linked.status = CouponStatus.ACTIVE;
+          linked.paymentStatus = CouponPaymentStatus.PENDING;
+        }
+        return linked;
+      }
+    }
+
+    const active = await this.findActiveByCustomerAndFunnel(
+      customerId,
+      funnelId,
+    );
+    if (active?.paymentStatus === CouponPaymentStatus.PAID) {
+      return null;
+    }
+
+    const alreadyPaid = await this.funnelPaymentRepository.findOne({
+      where: [
+        {
+          funnelId,
+          customerId,
+          status: FunnelPaymentStatus.PAID,
+        },
+      ],
+      order: { id: 'DESC' },
+    });
+    if (alreadyPaid && !openCheckout) {
+      return null;
+    }
+
     const pending = await this.findActivePendingByCustomerAndFunnel(
       customerId,
       funnelId,
