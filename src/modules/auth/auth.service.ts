@@ -50,6 +50,7 @@ import {
   STAFF_ROLE,
 } from '../../utils/user-roles';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
+import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 
 const GOOGLE_SIGNUP_ROLE = ADMIN_ROLE;
 
@@ -89,12 +90,50 @@ export class AuthService {
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(BusinessMember)
     private readonly businessMemberRepository: Repository<BusinessMember>,
+    @InjectRepository(OnboardingEvent)
+    private readonly onboardingEventRepository: Repository<OnboardingEvent>,
     private readonly invitationService: InvitationService,
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly mailDelivery: MailDeliveryService,
     private readonly configService: ConfigService,
   ) {}
+
+  private async trackOnboardingEvent(input: {
+    userId: number | null;
+    eventName: string;
+    idempotencyKey: string;
+    metadata?: Record<string, unknown> | null;
+  }): Promise<void> {
+    const key = input.idempotencyKey.trim().slice(0, 191);
+    if (!key) return;
+    try {
+      const exists = await this.onboardingEventRepository.exists({
+        where: { idempotencyKey: key },
+      });
+      if (exists) return;
+      await this.onboardingEventRepository.save(
+        this.onboardingEventRepository.create({
+          userId: input.userId,
+          eventName: input.eventName.trim().slice(0, 64),
+          idempotencyKey: key,
+          metadata: input.metadata ?? null,
+        }),
+      );
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      if (code !== '23505') {
+        this.logger.warn(
+          `Onboarding event ${input.eventName} failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
 
   async registerWithInvitation(dto: RegisterWithInvitationDto): Promise<{
     message: string;
@@ -328,6 +367,13 @@ export class AuthService {
   ): Promise<{ message: string }> {
     const email = registerUserDto.email.trim().toLowerCase();
 
+    await this.trackOnboardingEvent({
+      userId: null,
+      eventName: 'signup_started',
+      idempotencyKey: `signup_started:${email}`,
+      metadata: { email },
+    });
+
     const existingByEmail = await this.userRepository
       .createQueryBuilder('user')
       .addSelect('user.passwordHash')
@@ -351,6 +397,11 @@ export class AuthService {
       existingByEmail.role = signupRole;
       const savedInvitedUser = await this.userRepository.save(existingByEmail);
       await this.sendOtpForUser(savedInvitedUser);
+      await this.trackOnboardingEvent({
+        userId: savedInvitedUser.id,
+        eventName: 'signup_completed',
+        idempotencyKey: `signup_completed:${savedInvitedUser.id}`,
+      });
       return {
         message: 'User successfully registered.',
       };
@@ -367,6 +418,12 @@ export class AuthService {
     const savedUser = await this.userRepository.save(user);
 
     await this.sendOtpForUser(savedUser);
+
+    await this.trackOnboardingEvent({
+      userId: savedUser.id,
+      eventName: 'signup_completed',
+      idempotencyKey: `signup_completed:${savedUser.id}`,
+    });
 
     return {
       message: 'User successfully registered.',
@@ -990,6 +1047,12 @@ export class AuthService {
       user.emailVerified = true;
       await this.userRepository.save(user);
     }
+
+    await this.trackOnboardingEvent({
+      userId: user.id,
+      eventName: 'otp_verified',
+      idempotencyKey: `otp_verified:${user.id}`,
+    });
 
     return {
       message: 'OTP verified successfully.',

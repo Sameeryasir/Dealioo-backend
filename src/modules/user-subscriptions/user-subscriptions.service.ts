@@ -221,6 +221,13 @@ export class UserSubscriptionsService {
       );
     }
 
+    await this.onboardingService.trackEvent({
+      userId,
+      eventName: 'checkout_started',
+      idempotencyKey: `checkout_started:${userId}:${plan.slug}:${dto.billingCycle}`,
+      metadata: { planSlug: plan.slug, billingCycle: dto.billingCycle },
+    });
+
     const checkout = await this.stripeService.createPlatformSubscriptionCheckoutSession(
       {
         userId: user.id,
@@ -381,6 +388,19 @@ export class UserSubscriptionsService {
     if (stripeCustomerId) {
       await this.userRepository.update(userId, { stripeCustomerId });
     }
+
+    await this.onboardingService.trackEvent({
+      userId,
+      eventName: 'checkout_completed',
+      idempotencyKey: `checkout_completed:${session.id}`,
+      metadata: { planSlug, billingCycle, sessionId: session.id },
+    });
+    await this.onboardingService.trackEvent({
+      userId,
+      eventName: 'subscription_activated',
+      idempotencyKey: `subscription_activated:${userId}:${stripeSubscriptionId}`,
+      metadata: { planSlug, billingCycle, subscriptionId: saved.id },
+    });
 
     return saved;
   }

@@ -60,7 +60,6 @@ export class StripeService {
     });
   }
 
-
   async validateConnectedAccount(
     stripeAccountId: string,
   ): Promise<ValidatedConnectAccount> {
@@ -297,7 +296,6 @@ export class StripeService {
     );
   }
 
-
   async createCheckoutSessionOnConnectedAccount(opts: {
     stripeAccountId: string;
     stripePriceId: string;
@@ -322,7 +320,6 @@ export class StripeService {
     const stripeForConnectedAccount = this.clientForConnectedAccount(
       opts.stripeAccountId,
     );
-
 
     const paymentMethodTypes: Array<'card'> = ['card'];
 
@@ -412,7 +409,6 @@ export class StripeService {
     });
   }
 
-
   async expireCheckoutSessionOnConnectedAccount(
     stripeAccountId: string,
     checkoutSessionId: string,
@@ -421,7 +417,6 @@ export class StripeService {
       stripeAccountId,
     ).checkout.sessions.expire(checkoutSessionId.trim());
   }
-
 
   async createProductAndPriceOnConnectedAccount(opts: {
     stripeAccountId: string;
@@ -447,7 +442,6 @@ export class StripeService {
     const stripeForConnectedAccount = this.clientForConnectedAccount(
       opts.stripeAccountId,
     );
-
 
     const images = this.stripeProductImages(opts.imageUrl);
     const productUrl = this.stripeProductUrl(opts.websiteUrl);
@@ -523,13 +517,11 @@ export class StripeService {
     );
   }
 
-
   private stripeProductImages(imageUrl?: string | null): string[] {
     const url = imageUrl?.trim();
     if (!url || !/^https:\/\//i.test(url)) return [];
     return [url.slice(0, 2048)];
   }
-
 
   private stripeProductUrl(websiteUrl?: string | null): string | undefined {
     const url = websiteUrl?.trim();
@@ -576,28 +568,33 @@ export class StripeService {
       stripeCustomerId = customer.id;
     }
 
-    const session = await this.stripe.checkout.sessions.create({
-      mode: 'subscription',
-      customer: stripeCustomerId,
-      line_items: [{ price: opts.priceId, quantity: 1 }],
-      success_url: `${frontendBase}/auth/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${frontendBase}/auth/select-plan?cancelled=1`,
-      client_reference_id: String(opts.userId),
-      metadata: {
-        userId: String(opts.userId),
-        planSlug: opts.planSlug,
-        billingCycle: opts.billingCycle,
-        purpose: 'platform_subscription',
-      },
-      subscription_data: {
+    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}`;
+
+    const session = await this.stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: stripeCustomerId,
+        line_items: [{ price: opts.priceId, quantity: 1 }],
+        success_url: `${frontendBase}/auth/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendBase}/auth/select-plan?cancelled=1`,
+        client_reference_id: String(opts.userId),
         metadata: {
           userId: String(opts.userId),
           planSlug: opts.planSlug,
           billingCycle: opts.billingCycle,
           purpose: 'platform_subscription',
         },
+        subscription_data: {
+          metadata: {
+            userId: String(opts.userId),
+            planSlug: opts.planSlug,
+            billingCycle: opts.billingCycle,
+            purpose: 'platform_subscription',
+          },
+        },
       },
-    });
+      { idempotencyKey },
+    );
 
     if (!session.url) {
       throw new InternalServerErrorException(

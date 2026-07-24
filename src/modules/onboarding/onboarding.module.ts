@@ -1,6 +1,11 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
+import { BusinessInvitation } from '../../db/entities/business-invitation.entity';
+import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
+import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { PlanFitAssessment } from '../../db/entities/plan-fit-assessment.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
@@ -16,6 +21,11 @@ import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation
       Business,
       PlanFitAssessment,
       SubscriptionPlan,
+      BusinessOnboardingDraft,
+      OnboardingEvent,
+      BusinessInvitation,
+      Campaign,
+      BusinessCustomer,
     ]),
     forwardRef(() => UserSubscriptionsModule),
   ],

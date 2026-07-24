@@ -106,6 +106,24 @@ export class User {
   })
   planFitRecommendationAccepted: boolean | null;
 
+  @Column({
+    name: 'onboarding_version',
+    type: 'varchar',
+    length: 32,
+    default: '2026-v1',
+  })
+  onboardingVersion: string;
+
+  @Column({ name: 'plan_fit_draft_answers', type: 'jsonb', nullable: true })
+  planFitDraftAnswers: Record<string, string> | null;
+
+  @Column({
+    name: 'plan_fit_draft_question_index',
+    type: 'int',
+    nullable: true,
+  })
+  planFitDraftQuestionIndex: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

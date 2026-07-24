@@ -3,14 +3,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository } from 'typeorm';
+import { Queue } from 'bullmq';
+import { Brackets, MoreThan, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -32,9 +35,14 @@ import {
   sanitizeBusinessListItem,
   type PublicBusinessListItem,
 } from './sanitize-business-list-item';
+import {
+  BUSINESS_ONBOARDING_QUEUE,
+  type BusinessOnboardingPostCreateJob,
+} from './business-onboarding-queue.constants';
 
 const STARTER_PLAN_SLUG = 'starter';
 const STARTER_MAX_BUSINESSES = 1;
+const IDEMPOTENT_CREATE_WINDOW_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class BusinessService {
@@ -45,9 +53,13 @@ export class BusinessService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserSubscription)
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
+    @InjectRepository(BusinessOnboardingDraft)
+    private readonly draftRepository: Repository<BusinessOnboardingDraft>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
+    @InjectQueue(BUSINESS_ONBOARDING_QUEUE)
+    private readonly businessOnboardingQueue: Queue<BusinessOnboardingPostCreateJob>,
   ) {}
 
   async findByUserId(userId: number): Promise<Business | null> {
@@ -82,6 +94,7 @@ export class BusinessService {
       'You do not have permission to create a business.',
     );
 
+    await this.assertActiveSubscription(user.id);
     await this.assertStarterBusinessLimit(user.id);
 
     const {
@@ -102,6 +115,18 @@ export class BusinessService {
     const owner = await this.userRepository.findOne({ where: { id: user.id } });
     if (!owner) {
       throw new NotFoundException('Owner not found');
+    }
+
+    const recentDuplicate = await this.businessRepository.findOne({
+      where: {
+        owner: { id: user.id },
+        name: name.trim(),
+        createdAt: MoreThan(new Date(Date.now() - IDEMPOTENT_CREATE_WINDOW_MS)),
+      },
+      order: { id: 'DESC' },
+    });
+    if (recentDuplicate) {
+      return recentDuplicate;
     }
 
     const logoUrl = file
@@ -142,7 +167,40 @@ export class BusinessService {
       actorUserId: user.id,
     });
 
+    await this.draftRepository.delete({ userId: user.id });
+
+    await this.businessOnboardingQueue.add(
+      'post_create_provisioning',
+      {
+        businessId: business.id,
+        ownerUserId: user.id,
+        businessName: business.name,
+      },
+      {
+        jobId: `business-post-create:${business.id}`,
+        removeOnComplete: true,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+      },
+    );
+
     return business;
+  }
+
+  private async assertActiveSubscription(userId: number): Promise<void> {
+    const hasSub = await this.userSubscriptionRepository
+      .createQueryBuilder('sub')
+      .where('sub.user_id = :userId', { userId })
+      .andWhere('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing'],
+      })
+      .getExists();
+
+    if (!hasSub) {
+      throw new ForbiddenException(
+        'An active subscription is required before creating a business.',
+      );
+    }
   }
 
   private async assertStarterBusinessLimit(userId: number): Promise<void> {

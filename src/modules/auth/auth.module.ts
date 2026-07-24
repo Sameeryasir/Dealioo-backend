@@ -8,6 +8,7 @@ import { GoogleOAuthService } from './google-oauth.service';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { BusinessInvitation } from '../../db/entities/business-invitation.entity';
+import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { InvitationModule } from '../invitation/invitation.module';
@@ -29,6 +30,7 @@ import { UserSubscription } from '../../db/entities/user-subscription.entity';
       BusinessMember,
       BusinessMemberPermission,
       BusinessInvitation,
+      OnboardingEvent,
     ]),
     InvitationModule,
     JwtModule.registerAsync({
