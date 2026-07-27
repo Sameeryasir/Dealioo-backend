@@ -19,6 +19,7 @@ import { Coupon } from '../../db/entities/coupon.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import {
   FunnelEvent,
@@ -54,6 +55,8 @@ export class CampaignService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(FunnelVersion)
+    private readonly funnelVersionRepository: Repository<FunnelVersion>,
     private readonly dataSource: DataSource,
     private readonly spacesService: SpacesService,
     private readonly stripeCatalogService: StripeCatalogService,
@@ -143,9 +146,18 @@ export class CampaignService {
       campaignId: savedCampaign.id,
       pages: {},
       published: true,
-      version: 1,
     });
-    await this.funnelRepository.save(funnel);
+    const savedFunnel = await this.funnelRepository.save(funnel);
+    await this.funnelVersionRepository.save(
+      this.funnelVersionRepository.create({
+        funnelId: savedFunnel.id,
+        businessId: business.id,
+        versionNumber: 1,
+        schema: {},
+        operationId: null,
+        createdById: user.id,
+      }),
+    );
 
     // Don't block create on Stripe / history — return the campaign immediately.
     void this.stripeCatalogService
@@ -198,7 +210,7 @@ export class CampaignService {
 
     const qb = this.campaignRepository
       .createQueryBuilder('campaign')
-      .where('campaign.restaurant_id = :businessId', { businessId });
+      .where('campaign.business_id = :businessId', { businessId });
 
     if (trimmedSearch) {
       const escaped = trimmedSearch.replace(/[%_\\]/g, '\\$&');

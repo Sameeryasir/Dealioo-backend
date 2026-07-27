@@ -7,6 +7,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -22,6 +23,8 @@ export class FunnelService {
   constructor(
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(FunnelVersion)
+    private readonly funnelVersionRepository: Repository<FunnelVersion>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(Business)
@@ -59,19 +62,32 @@ export class FunnelService {
         campaignId: campaign.id,
         pages: dto.pages ?? {},
         published: false,
-        version: 1,
         updatedBy: { id: user.id } as User,
       });
 
       const saved = await this.funnelRepository.save(funnel);
+      await this.appendFunnelVersion({
+        funnelId: saved.id,
+        businessId: campaign.businessId,
+        schema: saved.pages ?? {},
+        versionNumber: 1,
+        createdById: user.id,
+      });
       return saved;
     }
 
     funnel.pages = dto.pages ?? funnel.pages;
-    funnel.version += 1;
     funnel.updatedBy = { id: user.id } as User;
 
     const saved = await this.funnelRepository.save(funnel);
+    const nextVersion = (await this.getLatestVersionNumber(saved.id)) + 1;
+    await this.appendFunnelVersion({
+      funnelId: saved.id,
+      businessId: campaign.businessId,
+      schema: saved.pages ?? {},
+      versionNumber: nextVersion,
+      createdById: user.id,
+    });
 
     await this.businessHistoryService.logFunnelUpdated({
       businessId: campaign.businessId,
@@ -133,7 +149,7 @@ export class FunnelService {
   ): Promise<{ id: number; version: number } | null> {
     const qb = this.funnelRepository
       .createQueryBuilder('funnel')
-      .select(['funnel.id', 'funnel.version'])
+      .select(['funnel.id'])
       .where('funnel.campaignId = :campaignId', { campaignId });
 
     if (isBusinessOwnerScopedUser(user)) {
@@ -143,7 +159,12 @@ export class FunnelService {
     }
 
     const funnel = await qb.getOne();
-    return funnel ? { id: funnel.id, version: funnel.version } : null;
+    if (!funnel) {
+      return null;
+    }
+
+    const version = await this.getLatestVersionNumber(funnel.id);
+    return { id: funnel.id, version };
   }
 
   async getFunnelByCampaignId(
@@ -201,7 +222,8 @@ export class FunnelService {
       throw new NotFoundException('Funnel not found');
     }
 
-    if (dto.expectedVersion !== funnel.version) {
+    const currentVersion = await this.getLatestVersionNumber(funnel.id);
+    if (dto.expectedVersion !== currentVersion) {
       throw new ConflictException(
         'This funnel was changed elsewhere. Reload the latest version and try again.',
       );
@@ -213,10 +235,16 @@ export class FunnelService {
     if (dto.published !== undefined) {
       funnel.published = dto.published;
     }
-    funnel.version = funnel.version + 1;
     funnel.updatedBy = { id: user.id } as User;
 
     const saved = await this.funnelRepository.save(funnel);
+    await this.appendFunnelVersion({
+      funnelId: saved.id,
+      businessId: funnel.campaign.businessId,
+      schema: saved.pages ?? {},
+      versionNumber: currentVersion + 1,
+      createdById: user.id,
+    });
 
     await this.businessHistoryService.logFunnelUpdated({
       businessId: funnel.campaign.businessId,
@@ -250,5 +278,35 @@ export class FunnelService {
     });
 
     await this.funnelRepository.delete({ id });
+  }
+
+  private async getLatestVersionNumber(funnelId: number): Promise<number> {
+    const result = await this.funnelVersionRepository
+      .createQueryBuilder('version')
+      .select('MAX(version.versionNumber)', 'max')
+      .where('version.funnelId = :funnelId', { funnelId })
+      .getRawOne<{ max: string | null }>();
+
+    const max = result?.max != null ? Number(result.max) : 0;
+    return Number.isFinite(max) ? max : 0;
+  }
+
+  private async appendFunnelVersion(input: {
+    funnelId: number;
+    businessId: number | null;
+    schema: Record<string, unknown>;
+    versionNumber: number;
+    createdById?: number | null;
+    operationId?: string | null;
+  }): Promise<FunnelVersion> {
+    const row = this.funnelVersionRepository.create({
+      funnelId: input.funnelId,
+      businessId: input.businessId,
+      versionNumber: input.versionNumber,
+      schema: structuredClone(input.schema),
+      operationId: input.operationId ?? null,
+      createdById: input.createdById ?? null,
+    });
+    return this.funnelVersionRepository.save(row);
   }
 }

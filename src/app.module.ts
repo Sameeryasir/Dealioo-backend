@@ -36,6 +36,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { SmsModule } from './modules/sms/sms.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { UploadModule } from './modules/upload/upload.module';
+import { AiModule } from './modules/ai/ai.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { UploadModule } from './modules/upload/upload.module';
     SmsModule,
     PusherModule,
     BusinessAccessModule,
+    AiModule,
     ThrottlerModule.forRoot({
       throttlers: [{ name: 'default', ttl: 60_000, limit: 200 }],
       errorMessage:

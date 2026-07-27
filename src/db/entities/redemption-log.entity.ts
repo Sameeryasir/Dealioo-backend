@@ -49,11 +49,11 @@ export class RedemptionLog {
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign | null;
 
-  @Column({ name: 'restaurant_id', type: 'int' })
+  @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'scanned_by', type: 'int', nullable: true })

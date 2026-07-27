@@ -14,7 +14,7 @@ export class MetaCampaignMedia {
   @Column({ name: 'draft_id', type: 'uuid', nullable: true })
   draftId: string | null;
 
-  @Column({ name: 'restaurant_id', type: 'int' })
+  @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
   @Column({ name: 'user_id', type: 'int' })

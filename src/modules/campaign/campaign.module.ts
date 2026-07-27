@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
@@ -12,7 +13,7 @@ import { CampaignService } from './campaign.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Campaign, Business, Funnel]),
+    TypeOrmModule.forFeature([Campaign, Business, Funnel, FunnelVersion]),
     AuthModule,
     StripeModule,
     BusinessHistoryModule,

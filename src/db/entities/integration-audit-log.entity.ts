@@ -10,7 +10,7 @@ export class IntegrationAuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'restaurant_id', type: 'int' })
+  @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
   @Column({ type: 'varchar', length: 64, default: 'facebook' })

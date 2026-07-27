@@ -127,23 +127,23 @@ export class ActivityService {
         `customer.id IN (
           SELECT activity.customer_id
           FROM activity_event activity
-          WHERE activity.restaurant_id = :businessId
+          WHERE activity.business_id = :businessId
             AND activity.customer_id IS NOT NULL
           UNION
           SELECT conversation.customer_id
           FROM conversation conversation
-          WHERE conversation.restaurant_id = :businessId
+          WHERE conversation.business_id = :businessId
             AND conversation.customer_id IS NOT NULL
           UNION
           SELECT visit.customer_id
           FROM customer_visits visit
-          WHERE visit.restaurant_id = :businessId
+          WHERE visit.business_id = :businessId
           UNION
           SELECT paid_customer.id
           FROM customers paid_customer
           INNER JOIN funnel_payment payment
             ON LOWER(payment.customer_email) = LOWER(paid_customer.email)
-          WHERE payment.restaurant_id = :businessId
+          WHERE payment.business_id = :businessId
             AND payment.status = :paid
         )`,
         { businessId, paid: FunnelPaymentStatus.PAID },

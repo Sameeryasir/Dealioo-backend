@@ -1509,7 +1509,7 @@ export class RedemptionService {
     // Only open online checkouts — do not recreate passes from signup history alone.
     const qb = this.funnelPaymentRepository
       .createQueryBuilder('fp')
-      .where('fp.restaurant_id = :businessId', { businessId })
+      .where('fp.business_id = :businessId', { businessId })
       .andWhere('fp.status IN (:...statuses)', {
         statuses: [
           FunnelPaymentStatus.PENDING,

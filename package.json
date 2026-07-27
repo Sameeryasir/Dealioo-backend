@@ -28,6 +28,7 @@
     "@aws-sdk/client-s3": "^3.1083.0",
     "@aws-sdk/s3-request-presigner": "^3.1095.0",
     "@getbrevo/brevo": "^5.0.4",
+    "@google/generative-ai": "^0.24.1",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
@@ -63,7 +64,8 @@
     "speakeasy": "^2.0.0",
     "stripe": "^22.1.1",
     "twilio": "^6.0.2",
-    "typeorm": "^0.3.28"
+    "typeorm": "^0.3.28",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

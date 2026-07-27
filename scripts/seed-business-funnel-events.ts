@@ -75,7 +75,7 @@ async function main() {
         SELECT f.id AS funnel_id, f.campaign_id, c.campaign_name
         FROM funnels f
         INNER JOIN campaigns c ON c.id = f.campaign_id
-        WHERE c.restaurant_id = $1
+        WHERE c.business_id = $1
         ORDER BY f.id ASC
       `,
       [BUSINESS_ID],
@@ -83,7 +83,7 @@ async function main() {
 
     if (!funnels.length) {
       const campaigns = await qr.manager.query(
-        `SELECT id, campaign_name FROM campaigns WHERE restaurant_id = $1 ORDER BY id ASC LIMIT 1`,
+        `SELECT id, campaign_name FROM campaigns WHERE business_id = $1 ORDER BY id ASC LIMIT 1`,
         [BUSINESS_ID],
       );
       if (!campaigns.length) {
@@ -189,7 +189,7 @@ async function main() {
         FROM funnel_event fe
         INNER JOIN funnels f ON f.id = fe.funnel_id
         INNER JOIN campaigns c ON c.id = f.campaign_id
-        WHERE c.restaurant_id = $1
+        WHERE c.business_id = $1
       `,
       [BUSINESS_ID],
     );

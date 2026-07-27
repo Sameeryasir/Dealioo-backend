@@ -11,6 +11,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { FunnelPayment } from './funnel-payment.entity';
+import { FunnelVersion } from './funnel-version.entity';
 import { Campaign } from './campaign.entity';
 import { User } from './user.entity';
 
@@ -31,9 +32,6 @@ export class Funnel {
   @Column({ type: 'jsonb', default: () => "'{}'" })
   pages: Record<string, unknown>;
 
-  @Column({ type: 'int', default: 1 })
-  version: number;
-
   @Column({ type: 'boolean', default: false })
   published: boolean;
 
@@ -43,6 +41,9 @@ export class Funnel {
 
   @OneToMany(() => FunnelPayment, (payment) => payment.funnel)
   payments: FunnelPayment[];
+
+  @OneToMany(() => FunnelVersion, (version) => version.funnel)
+  versions: FunnelVersion[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

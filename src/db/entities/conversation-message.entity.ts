@@ -67,11 +67,11 @@ export class ConversationMessage {
   })
   direction!: ConversationMessageDirection;
 
-  @Column({ name: 'sent_by_restaurant_id', type: 'int', nullable: true })
+  @Column({ name: 'sent_by_business_id', type: 'int', nullable: true })
   sentByBusinessId!: number | null;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
-  @JoinColumn({ name: 'sent_by_restaurant_id' })
+  @JoinColumn({ name: 'sent_by_business_id' })
   sentByBusiness!: Business | null;
 
   @Column({ name: 'sent_by_customer_id', type: 'int', nullable: true })
@@ -81,11 +81,11 @@ export class ConversationMessage {
   @JoinColumn({ name: 'sent_by_customer_id' })
   sentByCustomer!: Customer | null;
 
-  @Column({ name: 'sent_to_restaurant_id', type: 'int', nullable: true })
+  @Column({ name: 'sent_to_business_id', type: 'int', nullable: true })
   sentToBusinessId!: number | null;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
-  @JoinColumn({ name: 'sent_to_restaurant_id' })
+  @JoinColumn({ name: 'sent_to_business_id' })
   sentToBusiness!: Business | null;
 
   @Column({ name: 'sent_to_customer_id', type: 'int', nullable: true })

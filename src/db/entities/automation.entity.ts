@@ -32,11 +32,11 @@ export class Automation {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'restaurant_id' })
+  @Column({ name: 'business_id' })
   businessId: number;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ type: 'varchar', length: 255 })

@@ -74,7 +74,7 @@ export class CustomerService {
           SELECT COUNT(visit.id)
           FROM customer_visits visit
           WHERE visit.customer_id = "link"."customer_id"
-            AND visit.restaurant_id = "link"."business_id"
+            AND visit.business_id = "link"."business_id"
         ), 0)`,
         'visitCount',
       )

@@ -13,7 +13,7 @@ export class MetaPublishAttempt {
   @Column({ name: 'draft_id', type: 'uuid' })
   draftId: string;
 
-  @Column({ name: 'restaurant_id', type: 'int' })
+  @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
   @Column({ name: 'user_id', type: 'int' })

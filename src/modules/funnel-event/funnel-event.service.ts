@@ -1394,7 +1394,7 @@ export class FunnelEventService {
     const funnelCount = await this.funnelRepository
       .createQueryBuilder('funnel')
       .innerJoin('funnel.campaign', 'campaign')
-      .where('campaign.restaurant_id = :businessId', { businessId })
+      .where('campaign.business_id = :businessId', { businessId })
       .getCount();
 
     await this.backfillPendingOrdersForOpenCheckouts(businessId);
@@ -1402,7 +1402,7 @@ export class FunnelEventService {
     // Unfiltered order count (same source as this table), not funnel_event rows.
     const allEventsTotal = await this.orderRepository
       .createQueryBuilder('ord')
-      .where('ord.restaurant_id = :businessId', { businessId })
+      .where('ord.business_id = :businessId', { businessId })
       .andWhere('ord.deleted_at IS NULL')
       .getCount();
 
@@ -1494,7 +1494,7 @@ export class FunnelEventService {
   private async loadBusinessOrders(businessId: number): Promise<Order[]> {
     return this.orderRepository
       .createQueryBuilder('ord')
-      .where('ord.restaurant_id = :businessId', { businessId })
+      .where('ord.business_id = :businessId', { businessId })
       .andWhere('ord.deleted_at IS NULL')
       .getMany();
   }
@@ -1695,7 +1695,7 @@ export class FunnelEventService {
         .createQueryBuilder('payment')
         .withDeleted()
         .leftJoinAndSelect('payment.funnel', 'funnel')
-        .where('payment.restaurant_id = :businessId', { businessId })
+        .where('payment.business_id = :businessId', { businessId })
         .andWhere('payment.deleted_at IS NULL')
         .andWhere('payment.order_id IN (:...orderIds)', { orderIds })
         .getMany(),

@@ -14,7 +14,7 @@ export class MetaCampaignDraft {
   @Column({ name: 'user_id', type: 'int' })
   userId: number;
 
-  @Column({ name: 'restaurant_id', type: 'int' })
+  @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
   @Column({ name: 'current_step', type: 'int', default: 1 })

@@ -15,7 +15,7 @@ export class Location {
   id: number;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: false })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ type: 'varchar' })

@@ -103,7 +103,7 @@ export class FunnelController {
       throw new NotFoundException('No funnel found for this campaign.');
     }
 
-    return funnel;
+    return Object.assign(funnel, { version: meta.version });
   }
 
   @UseGuards(AuthGuard('jwt'))

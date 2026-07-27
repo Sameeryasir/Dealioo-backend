@@ -27,11 +27,11 @@ export class BusinessUserChatReadState {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ name: 'restaurant_id' })
+  @Column({ name: 'business_id' })
   businessId: number;
 
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'chats_last_viewed_at', type: 'timestamptz' })

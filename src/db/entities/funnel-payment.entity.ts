@@ -56,13 +56,13 @@ export class FunnelPayment {
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
-  @Column({ name: 'restaurant_id' })
+  @Column({ name: 'business_id' })
   businessId!: number;
 
   @ManyToOne(() => Business, {
     onDelete: 'RESTRICT',
   })
-  @JoinColumn({ name: 'restaurant_id' })
+  @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'campaign_id', type: 'int', nullable: true })
