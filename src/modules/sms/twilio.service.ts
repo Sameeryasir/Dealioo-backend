@@ -37,6 +37,43 @@ export class TwilioService implements OnModuleInit {
     return this.client != null && this.fromPhoneNumber != null;
   }
 
+  async listIncomingPhoneNumbers(credentials?: {
+    accountSid?: string | null;
+    authToken?: string | null;
+  }): Promise<
+    Array<{ sid: string; phoneNumber: string; friendlyName: string | null }>
+  > {
+    const accountSid =
+      credentials?.accountSid?.trim() || resolveAccountSid() || null;
+    const authToken =
+      credentials?.authToken?.trim() || envTrim('TWILIO_AUTH_TOKEN') || null;
+
+    if (!accountSid || !authToken) {
+      throw new ServiceUnavailableException(
+        'Twilio is not configured. Add Twilio credentials for this business or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in .env.',
+      );
+    }
+
+    try {
+      const client = Twilio(accountSid, authToken);
+      const numbers = await client.incomingPhoneNumbers.list({ limit: 100 });
+      return numbers
+        .map((n) => ({
+          sid: n.sid,
+          phoneNumber: n.phoneNumber,
+          friendlyName: n.friendlyName?.trim() || null,
+        }))
+        .filter((n) => Boolean(n.sid && n.phoneNumber));
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(`Twilio list phone numbers failed → ${detail}`);
+      throw new BadRequestException(
+        `Could not load Twilio phone numbers: ${detail}`,
+      );
+    }
+  }
+
   async sendSms(to: string, body: string): Promise<{ sid: string }> {
     if (!this.client || !this.fromPhoneNumber) {
       throw new ServiceUnavailableException(

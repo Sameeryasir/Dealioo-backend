@@ -134,6 +134,25 @@ export class Business {
   @Column({ name: 'google_oauth_scopes', type: 'text', nullable: true })
   googleOauthScopes: string | null;
 
+  @Column({
+    name: 'twilio_phone_number',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  twilioPhoneNumber: string | null;
+
+  @Column({
+    name: 'twilio_phone_sid',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  twilioPhoneSid: string | null;
+
+  @Column({ name: 'twilio_connected_at', type: 'timestamptz', nullable: true })
+  twilioConnectedAt: Date | null;
+
   @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;

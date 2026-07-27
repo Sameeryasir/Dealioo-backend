@@ -27,6 +27,7 @@ import {
   BUSINESSES_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
 import type { Request } from 'express';
+import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-phone-number.dto';
 import { User } from '../../db/entities/user.entity';
 
 @Controller('business')
@@ -70,6 +71,26 @@ export class BusinessController {
     const user = req.user;
     return this.businessService.getAllBusinesses(user, page, limit, search);
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get(':id/twilio/phone-numbers')
+  async listTwilioPhoneNumbers(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.listTwilioPhoneNumbers(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/twilio/phone-number')
+  async associateTwilioPhoneNumber(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AssociateTwilioPhoneNumberDto,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.associateTwilioPhoneNumber(id, dto, req.user);
+  }
+
   @UseGuards(AuthGuard('jwt'))
   @Get(':id')
   async getBusinessById(

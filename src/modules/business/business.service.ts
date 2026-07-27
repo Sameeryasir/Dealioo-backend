@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -20,6 +21,7 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { isSuperAdmin } from '../../utils/user-roles';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
+import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-phone-number.dto';
 import {
   BUSINESSES_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
@@ -27,6 +29,10 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import {
+  normalizePhoneNumber,
+  TwilioService,
+} from '../sms/twilio.service';
 import {
   isValidBusinessSlug,
   slugifyBusinessName,
@@ -58,6 +64,7 @@ export class BusinessService {
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly twilioService: TwilioService,
     @InjectQueue(BUSINESS_ONBOARDING_QUEUE)
     private readonly businessOnboardingQueue: Queue<BusinessOnboardingPostCreateJob>,
   ) {}
@@ -414,5 +421,101 @@ export class BusinessService {
     await this.businessRepository.delete(businessId);
     return business;
   }
-  
+
+  async listTwilioPhoneNumbers(
+    businessId: number,
+    user: User,
+  ): Promise<{
+    numbers: Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+    }>;
+    selectedPhoneSid: string | null;
+    selectedPhoneNumber: string | null;
+  }> {
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      'campaigns',
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const numbers = await this.twilioService.listIncomingPhoneNumbers();
+
+    return {
+      numbers,
+      selectedPhoneSid: business.twilioPhoneSid?.trim() || null,
+      selectedPhoneNumber: business.twilioPhoneNumber?.trim() || null,
+    };
+  }
+
+  async associateTwilioPhoneNumber(
+    businessId: number,
+    dto: AssociateTwilioPhoneNumberDto,
+    user: User,
+  ): Promise<{
+    twilioPhoneSid: string;
+    twilioPhoneNumber: string;
+    twilioConnectedAt: Date;
+  }> {
+    await this.businessAccessService.assertPermission(
+      user,
+      businessId,
+      'campaigns',
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const phoneSid = dto.phoneSid.trim();
+    const normalized =
+      normalizePhoneNumber(dto.phoneNumber.trim()) ?? dto.phoneNumber.trim();
+    if (!phoneSid || !normalized) {
+      throw new BadRequestException('A valid Twilio phone number is required.');
+    }
+
+    const available = await this.twilioService.listIncomingPhoneNumbers();
+    const match = available.find(
+      (n) =>
+        n.sid === phoneSid ||
+        n.phoneNumber === normalized ||
+        n.phoneNumber === dto.phoneNumber.trim(),
+    );
+    if (!match) {
+      throw new BadRequestException(
+        'That phone number was not found on the Twilio account.',
+      );
+    }
+
+    const connectedAt = new Date();
+    business.twilioPhoneSid = match.sid;
+    business.twilioPhoneNumber = match.phoneNumber;
+    business.twilioConnectedAt = connectedAt;
+    await this.businessRepository.save(business);
+
+    return {
+      twilioPhoneSid: match.sid,
+      twilioPhoneNumber: match.phoneNumber,
+      twilioConnectedAt: connectedAt,
+    };
+  }
 }
