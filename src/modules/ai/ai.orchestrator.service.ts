@@ -123,7 +123,7 @@ export class AiOrchestratorService {
       const message =
         typeof validated.message === 'string' && validated.message.trim()
           ? validated.message.trim()
-          : `Updated ${Object.keys(fieldPatch).join(', ')} on ${targetPageId}.`;
+          : this.buildChatSummaryMessage(fieldPatch, targetPageId);
 
       await this.versionService.createVersion({
         businessId: dto.businessId,
@@ -157,6 +157,50 @@ export class AiOrchestratorService {
         `AI edit-UI orchestration failed (operationId=${operationId}): ${message}`,
       );
     }
+  }
+
+  private buildChatSummaryMessage(
+    fieldPatch: Record<string, unknown>,
+    pageId: string,
+  ): string {
+    const friendlyNames: Record<string, string> = {
+      headline: 'headline',
+      subheadline: 'subheading',
+      body: 'body',
+      ctaLabel: 'button text',
+      ctaBackgroundColor: 'button colour',
+      ctaTextColor: 'button text colour',
+      backgroundColor: 'background colour',
+      headlineColor: 'headline colour',
+      subheadlineColor: 'subheading colour',
+      bodyColor: 'body colour',
+      layoutType: 'layout',
+    };
+
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(fieldPatch)) {
+      const label = friendlyNames[key] ?? key;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) continue;
+        const preview =
+          trimmed.length > 120 ? `${trimmed.slice(0, 117).trimEnd()}…` : trimmed;
+        parts.push(`${label}: "${preview}"`);
+      } else if (value != null && value !== '') {
+        parts.push(`${label}`);
+      }
+    }
+
+    if (parts.length === 0) {
+      return `Updated the ${pageId} page.`;
+    }
+
+    if (parts.length === 1) {
+      return `Done — I updated the ${pageId} ${parts[0]}.`;
+    }
+
+    const listed = parts.join('; ');
+    return `Done — I updated the ${pageId} page (${listed}).`;
   }
 
   private buildPromptContext(

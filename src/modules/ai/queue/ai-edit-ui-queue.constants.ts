@@ -9,11 +9,7 @@ export enum AiEditUiJobName {
 export type AiEditUiJobPayload = EditUiDto;
 
 export const AI_EDIT_UI_JOB_OPTIONS = {
-  attempts: 2,
-  backoff: {
-    type: 'exponential' as const,
-    delay: 2_000,
-  },
+  attempts: 1,
   removeOnComplete: {
     age: 60 * 60,
     count: 200,

@@ -24,6 +24,7 @@ export class GeminiProvider implements AiProvider {
     options?: AiProviderCompleteOptions,
   ): Promise<string> {
     const modelName = options?.model?.trim() || this.getConfiguredModel();
+    console.log('[GeminiProvider] using model:', modelName);
 
     try {
       const model = this.getClient().getGenerativeModel({
