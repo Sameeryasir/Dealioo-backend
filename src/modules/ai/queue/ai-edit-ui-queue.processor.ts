@@ -1,8 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
 import { AiOrchestratorService } from '../ai.orchestrator.service';
 import type { AiResponseDto } from '../dto/ai-response.dto';
+import { toAiUserFacingErrorMessage } from '../utils/ai-user-facing-error';
 import {
   AI_EDIT_UI_QUEUE,
   AiEditUiJobName,
@@ -46,9 +47,9 @@ export class AiEditUiQueueProcessor extends WorkerHost {
       });
       return result;
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'AI edit-ui job failed.';
-      this.logger.error(`AI edit-ui job ${jobId} failed: ${message}`);
+      const rawMessage = this.extractErrorMessage(error);
+      this.logger.error(`AI edit-ui job ${jobId} failed: ${rawMessage}`);
+      const userMessage = toAiUserFacingErrorMessage(rawMessage);
       const maxAttempts = job.opts.attempts ?? 1;
       const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
       if (isFinalAttempt) {
@@ -56,10 +57,37 @@ export class AiEditUiQueueProcessor extends WorkerHost {
           businessId,
           jobId,
           status: 'failed',
-          error: message,
+          error: userMessage,
         });
       }
       throw error;
     }
+  }
+
+  private extractErrorMessage(error: unknown): string {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (typeof response === 'string') {
+        return response;
+      }
+      if (
+        typeof response === 'object' &&
+        response !== null &&
+        'message' in response
+      ) {
+        const message = (response as { message?: unknown }).message;
+        if (typeof message === 'string') {
+          return message;
+        }
+        if (Array.isArray(message)) {
+          return message.filter((part) => typeof part === 'string').join(' ');
+        }
+      }
+      return error.message;
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return 'AI edit-ui job failed.';
   }
 }

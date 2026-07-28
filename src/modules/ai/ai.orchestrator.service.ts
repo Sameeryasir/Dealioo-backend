@@ -21,6 +21,10 @@ import type { PromptContext } from './interfaces/prompt-context.interface';
 import { PromptBuilderService } from './prompt-builder/prompt-builder.service';
 import { SchemaEngineService } from './schema-engine/schema-engine.service';
 import { AiValidatorService } from './validator/ai-validator.service';
+import {
+  isAiColorFieldKey,
+  normalizeAiPaintColor,
+} from './utils/ai-paint-color';
 import { VersionService } from './version/version.service';
 
 @Injectable()
@@ -235,15 +239,16 @@ export class AiOrchestratorService {
   ): Record<string, unknown> {
     const allowed = new Set(Object.keys(editableFields));
     const filtered: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(patch)) {
+    for (const [rawKey, value] of Object.entries(patch)) {
       if (
-        key === 'message' ||
-        key === 'updates' ||
-        key === 'schema' ||
-        key === 'success'
+        rawKey === 'message' ||
+        rawKey === 'updates' ||
+        rawKey === 'schema' ||
+        rawKey === 'success'
       ) {
         continue;
       }
+      const key = this.normalizeEditableFieldKey(rawKey);
       if (allowed.size === 0 || allowed.has(key)) {
         const constrained = fieldConstraints?.[key];
         if (constrained != null && constrained.length > 0) {
@@ -251,10 +256,43 @@ export class AiOrchestratorService {
             continue;
           }
         }
+        if (isAiColorFieldKey(key)) {
+          const normalized = normalizeAiPaintColor(value);
+          if (normalized == null) {
+            continue;
+          }
+          filtered[key] = normalized;
+          continue;
+        }
         filtered[key] = value;
       }
     }
     return filtered;
+  }
+
+  private normalizeEditableFieldKey(key: string): string {
+    switch (key) {
+      case 'buttonTextColor':
+      case 'ctaLabelColor':
+        return 'ctaTextColor';
+      case 'buttonBackgroundColor':
+      case 'buttonColor':
+        return 'ctaBackgroundColor';
+      case 'headingColor':
+        return 'headlineColor';
+      case 'subheadingColor':
+        return 'subheadlineColor';
+      case 'buttonText':
+        return 'ctaLabel';
+      case 'heading':
+        return 'headline';
+      case 'subheading':
+        return 'subheadline';
+      case 'label':
+        return 'pageTitle';
+      default:
+        return key;
+    }
   }
 
   private fallbackEditableFields(
@@ -266,11 +304,30 @@ export class AiOrchestratorService {
       'subheadline',
       'body',
       'ctaLabel',
+      'headlineColor',
+      'subheadlineColor',
+      'bodyColor',
+      'ctaTextColor',
+      'ctaBackgroundColor',
+      'backgroundColor',
     ] as const;
     const out: Record<string, unknown> = {};
     for (const key of keys) {
       if (key in page) {
         out[key] = page[key];
+        continue;
+      }
+      if (key === 'ctaTextColor' && 'buttonTextColor' in page) {
+        out.ctaTextColor = page.buttonTextColor;
+      } else if (
+        key === 'ctaBackgroundColor' &&
+        'buttonBackgroundColor' in page
+      ) {
+        out.ctaBackgroundColor = page.buttonBackgroundColor;
+      } else if (key === 'headlineColor' && 'headingColor' in page) {
+        out.headlineColor = page.headingColor;
+      } else if (key === 'subheadlineColor' && 'subheadingColor' in page) {
+        out.subheadlineColor = page.subheadingColor;
       }
     }
     return out;

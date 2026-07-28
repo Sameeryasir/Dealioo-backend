@@ -9,6 +9,7 @@ import type {
   AiProvider,
   AiProviderCompleteOptions,
 } from '../interfaces/ai-provider.interface';
+import { toAiUserFacingErrorMessage } from '../utils/ai-user-facing-error';
 
 @Injectable()
 export class GeminiProvider implements AiProvider {
@@ -57,12 +58,11 @@ export class GeminiProvider implements AiProvider {
         throw error;
       }
 
-      const message =
+      const raw =
         error instanceof Error ? error.message : 'Unknown Gemini API error';
+      console.error('[GeminiProvider] request failed:', raw);
 
-      throw new ServiceUnavailableException(
-        `Gemini API request failed: ${message}`,
-      );
+      throw new ServiceUnavailableException(toAiUserFacingErrorMessage(raw));
     }
   }
 
