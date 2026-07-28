@@ -1,6 +1,6 @@
 import {
-  Column,
   CreateDateColumn,
+  Column,
   DeleteDateColumn,
   Entity,
   JoinColumn,
@@ -10,6 +10,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Business } from './business.entity';
+import { FunnelPage } from './funnel-page.entity';
 import { FunnelPayment } from './funnel-payment.entity';
 import { FunnelVersion } from './funnel-version.entity';
 import { Campaign } from './campaign.entity';
@@ -29,11 +31,20 @@ export class Funnel {
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
-  @Column({ type: 'jsonb', default: () => "'{}'" })
-  pages: Record<string, unknown>;
+  @Column({ name: 'business_id', type: 'int', nullable: true })
+  businessId: number | null;
+
+  @ManyToOne(() => Business, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'business_id' })
+  business: Business | null;
+
+  pages?: Record<string, unknown>;
 
   @Column({ type: 'boolean', default: false })
   published: boolean;
+
+  @Column({ name: 'content_revision', type: 'int', default: 0 })
+  contentRevision: number;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'updated_by' })
@@ -44,6 +55,9 @@ export class Funnel {
 
   @OneToMany(() => FunnelVersion, (version) => version.funnel)
   versions: FunnelVersion[];
+
+  @OneToMany(() => FunnelPage, (page) => page.funnel)
+  pageRows: FunnelPage[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

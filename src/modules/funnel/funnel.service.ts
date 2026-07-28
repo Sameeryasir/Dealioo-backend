@@ -13,6 +13,7 @@ import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isBusinessOwnerScopedUser } from '../../utils/business-access';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { FunnelPagesService } from '../funnel-pages/funnel-pages.service';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
 import { BusinessFunnelSummary } from './funnelDto/business-funnel-summary.dto';
@@ -31,6 +32,7 @@ export class FunnelService {
     private readonly businessRepository: Repository<Business>,
     private readonly redemptionService: RedemptionService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly funnelPagesService: FunnelPagesService,
   ) {}
 
   async createOrUpdateFunnel(
@@ -60,43 +62,70 @@ export class FunnelService {
       funnel = this.funnelRepository.create({
         campaign,
         campaignId: campaign.id,
-        pages: dto.pages ?? {},
+        businessId: campaign.businessId,
         published: false,
+        contentRevision: 0,
         updatedBy: { id: user.id } as User,
       });
 
       const saved = await this.funnelRepository.save(funnel);
+      const { assembledPages } = await this.funnelPagesService.syncPages({
+        funnelId: saved.id,
+        businessId: campaign.businessId,
+        pages: dto.pages ?? {
+          landing: {},
+          signup: {},
+          payment: {},
+          confirmation: {},
+        },
+        createdById: user.id,
+        bumpRevision: true,
+      });
       await this.appendFunnelVersion({
         funnelId: saved.id,
         businessId: campaign.businessId,
-        schema: saved.pages ?? {},
+        schema: assembledPages,
         versionNumber: 1,
         createdById: user.id,
       });
-      return saved;
+      return this.getFunnelById(saved.id);
     }
 
-    funnel.pages = dto.pages ?? funnel.pages;
+    funnel.businessId = campaign.businessId;
     funnel.updatedBy = { id: user.id } as User;
 
     const saved = await this.funnelRepository.save(funnel);
-    const nextVersion = (await this.getLatestVersionNumber(saved.id)) + 1;
-    await this.appendFunnelVersion({
-      funnelId: saved.id,
-      businessId: campaign.businessId,
-      schema: saved.pages ?? {},
-      versionNumber: nextVersion,
-      createdById: user.id,
-    });
+    const pagesPayload =
+      dto.pages ??
+      (await this.funnelPagesService.loadAssembledPages(saved.id));
+    const { assembledPages, changedTypes } =
+      await this.funnelPagesService.syncPages({
+        funnelId: saved.id,
+        businessId: campaign.businessId,
+        pages: pagesPayload,
+        createdById: user.id,
+        bumpRevision: true,
+      });
+
+    const latest = await this.getFunnelById(saved.id);
+    if (changedTypes.length > 0) {
+      await this.appendFunnelVersion({
+        funnelId: latest.id,
+        businessId: campaign.businessId,
+        schema: assembledPages,
+        versionNumber: latest.contentRevision,
+        createdById: user.id,
+      });
+    }
 
     await this.businessHistoryService.logFunnelUpdated({
       businessId: campaign.businessId,
-      funnelId: saved.id,
+      funnelId: latest.id,
       funnelName: campaign.campaignName,
       actorUserId: user.id,
     });
 
-    return saved;
+    return latest;
   }
 
   async getFunnelById(id: number): Promise<Funnel> {
@@ -107,6 +136,7 @@ export class FunnelService {
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
+    funnel.pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
     return funnel;
   }
 
@@ -149,7 +179,7 @@ export class FunnelService {
   ): Promise<{ id: number; version: number } | null> {
     const qb = this.funnelRepository
       .createQueryBuilder('funnel')
-      .select(['funnel.id'])
+      .select(['funnel.id', 'funnel.contentRevision'])
       .where('funnel.campaignId = :campaignId', { campaignId });
 
     if (isBusinessOwnerScopedUser(user)) {
@@ -163,7 +193,10 @@ export class FunnelService {
       return null;
     }
 
-    const version = await this.getLatestVersionNumber(funnel.id);
+    const version =
+      funnel.contentRevision > 0
+        ? funnel.contentRevision
+        : await this.getLatestLegacyVersionNumber(funnel.id);
     return { id: funnel.id, version };
   }
 
@@ -179,10 +212,15 @@ export class FunnelService {
     return this.getFunnelBodyByCampaignId(campaignId);
   }
 
-  getFunnelBodyByCampaignId(campaignId: number): Promise<Funnel | null> {
-    return this.funnelRepository.findOne({
+  async getFunnelBodyByCampaignId(campaignId: number): Promise<Funnel | null> {
+    const funnel = await this.funnelRepository.findOne({
       where: { campaignId },
     });
+    if (!funnel) {
+      return null;
+    }
+    funnel.pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+    return funnel;
   }
 
   async getFunnelSummaryByCampaignId(
@@ -222,29 +260,49 @@ export class FunnelService {
       throw new NotFoundException('Funnel not found');
     }
 
-    const currentVersion = await this.getLatestVersionNumber(funnel.id);
+    const currentVersion =
+      funnel.contentRevision > 0
+        ? funnel.contentRevision
+        : await this.getLatestLegacyVersionNumber(funnel.id);
     if (dto.expectedVersion !== currentVersion) {
       throw new ConflictException(
         'This funnel was changed elsewhere. Reload the latest version and try again.',
       );
     }
 
-    if (dto.pages !== undefined) {
-      funnel.pages = dto.pages;
-    }
     if (dto.published !== undefined) {
       funnel.published = dto.published;
     }
     funnel.updatedBy = { id: user.id } as User;
+    funnel.businessId = funnel.campaign.businessId;
 
     const saved = await this.funnelRepository.save(funnel);
-    await this.appendFunnelVersion({
-      funnelId: saved.id,
-      businessId: funnel.campaign.businessId,
-      schema: saved.pages ?? {},
-      versionNumber: currentVersion + 1,
-      createdById: user.id,
-    });
+
+    if (dto.pages !== undefined) {
+      const { assembledPages, changedTypes } =
+        await this.funnelPagesService.syncPages({
+          funnelId: saved.id,
+          businessId: funnel.campaign.businessId,
+          pages: dto.pages,
+          createdById: user.id,
+          bumpRevision: true,
+        });
+      if (changedTypes.length > 0) {
+        const latest = await this.funnelRepository.findOne({
+          where: { id: saved.id },
+        });
+        await this.appendFunnelVersion({
+          funnelId: saved.id,
+          businessId: funnel.campaign.businessId,
+          schema: assembledPages,
+          versionNumber: latest?.contentRevision ?? currentVersion + 1,
+          createdById: user.id,
+        });
+      }
+    } else {
+      saved.contentRevision = currentVersion + 1;
+      await this.funnelRepository.save(saved);
+    }
 
     await this.businessHistoryService.logFunnelUpdated({
       businessId: funnel.campaign.businessId,
@@ -253,7 +311,7 @@ export class FunnelService {
       actorUserId: user.id,
     });
 
-    return saved;
+    return this.getFunnelById(saved.id);
   }
 
   async deleteFunnel(id: number, user: User): Promise<void> {
@@ -280,7 +338,7 @@ export class FunnelService {
     await this.funnelRepository.delete({ id });
   }
 
-  private async getLatestVersionNumber(funnelId: number): Promise<number> {
+  private async getLatestLegacyVersionNumber(funnelId: number): Promise<number> {
     const result = await this.funnelVersionRepository
       .createQueryBuilder('version')
       .select('MAX(version.versionNumber)', 'max')

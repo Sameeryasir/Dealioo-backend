@@ -10,25 +10,19 @@ import type {
   AiProviderCompleteOptions,
 } from '../interfaces/ai-provider.interface';
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
-
 @Injectable()
 export class GeminiProvider implements AiProvider {
   readonly name = 'gemini';
 
   private client: GoogleGenerativeAI | null = null;
-  private readonly defaultModel: string;
 
-  constructor(private readonly config: ConfigService) {
-    this.defaultModel =
-      this.config.get<string>('GEMINI_MODEL')?.trim() || DEFAULT_GEMINI_MODEL;
-  }
+  constructor(private readonly config: ConfigService) {}
 
   async complete(
     prompt: string,
     options?: AiProviderCompleteOptions,
   ): Promise<string> {
-    const modelName = options?.model?.trim() || this.defaultModel;
+    const modelName = options?.model?.trim() || this.getConfiguredModel();
 
     try {
       const model = this.getClient().getGenerativeModel({
@@ -45,6 +39,8 @@ export class GeminiProvider implements AiProvider {
 
       const result = await model.generateContent(prompt);
       const text = result.response.text()?.trim() ?? '';
+
+      console.log('[GeminiProvider] raw Gemini reply:', text);
 
       if (!text) {
         throw new InternalServerErrorException(
@@ -65,9 +61,19 @@ export class GeminiProvider implements AiProvider {
         error instanceof Error ? error.message : 'Unknown Gemini API error';
 
       throw new ServiceUnavailableException(
-        `Gemini API request failed (model=${modelName}): ${message}`,
+        `Gemini API request failed: ${message}`,
       );
     }
+  }
+
+  private getConfiguredModel(): string {
+    const model = this.config.get<string>('GEMINI_MODEL')?.trim();
+    if (!model) {
+      throw new ServiceUnavailableException(
+        'GEMINI_MODEL is not configured. Set it in the environment to use the AI Funnel Editor.',
+      );
+    }
+    return model;
   }
 
   private getClient(): GoogleGenerativeAI {

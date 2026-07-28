@@ -1,16 +1,27 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { AiOrchestratorService } from './ai.orchestrator.service';
-import { AiResponseDto } from './dto/ai-response.dto';
 import { EditUiDto } from './dto/edit-ui.dto';
+import {
+  AiEditUiQueueService,
+  type AiEditUiJobStatusResponse,
+  type EnqueueAiEditUiResponse,
+} from './queue/ai-edit-ui-queue.service';
 
 @Controller('ai')
 export class AiController {
-  constructor(private readonly aiOrchestrator: AiOrchestratorService) {}
+  constructor(private readonly aiEditUiQueueService: AiEditUiQueueService) {}
 
   @UseGuards(AuthGuard('jwt'))
   @Post('edit-ui')
-  async editUi(@Body() dto: EditUiDto): Promise<AiResponseDto> {
-    return this.aiOrchestrator.editUi(dto);
+  async editUi(@Body() dto: EditUiDto): Promise<EnqueueAiEditUiResponse> {
+    return this.aiEditUiQueueService.enqueue(dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('edit-ui/jobs/:jobId')
+  async getEditUiJobStatus(
+    @Param('jobId') jobId: string,
+  ): Promise<AiEditUiJobStatusResponse> {
+    return this.aiEditUiQueueService.getJobStatus(jobId);
   }
 }

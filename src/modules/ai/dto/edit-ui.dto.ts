@@ -11,7 +11,7 @@ import {
 export class EditUiDto {
   @IsInt()
   @IsPositive()
-  businessId: number;
+  businessId!: number;
 
   @IsOptional()
   @IsInt()
@@ -31,7 +31,15 @@ export class EditUiDto {
   @IsString()
   @MinLength(1)
   @MaxLength(4000)
-  userInstruction: string;
+  userInstruction!: string;
+
+  @IsOptional()
+  @IsObject()
+  editableFields?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsObject()
+  fieldConstraints?: Record<string, string[]>;
 
   @IsOptional()
   @IsObject()

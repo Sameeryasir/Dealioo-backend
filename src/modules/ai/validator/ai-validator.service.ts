@@ -9,12 +9,13 @@ import {
 export class AiValidatorService {
   validateRawResponse(raw: string): Record<string, unknown> {
     const parsed = this.parseJson(raw);
-    const validated = this.validateWithZod(parsed);
+    const normalized = this.normalizeShape(parsed);
+    const validated = this.validateWithZod(normalized);
     return this.toNormalizedRecord(validated);
   }
 
   private parseJson(raw: string): unknown {
-    const trimmed = raw?.trim();
+    const trimmed = this.stripCodeFences(raw?.trim() ?? '');
     if (!trimmed) {
       throw new BadRequestException('AI response is empty; expected JSON.');
     }
@@ -26,6 +27,51 @@ export class AiValidatorService {
         'AI response is not valid JSON. Expected a JSON object with no markdown or code fences.',
       );
     }
+  }
+
+  private stripCodeFences(raw: string): string {
+    const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return fenced?.[1]?.trim() || raw;
+  }
+
+  private normalizeShape(parsed: unknown): unknown {
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return parsed;
+    }
+
+    const obj = parsed as Record<string, unknown>;
+
+    if ('schema' in obj) {
+      return obj;
+    }
+
+    if (
+      'updates' in obj &&
+      typeof obj.updates === 'object' &&
+      obj.updates !== null &&
+      !Array.isArray(obj.updates)
+    ) {
+      return {
+        schema: obj.updates,
+        ...(typeof obj.success === 'boolean' ? { success: obj.success } : {}),
+        ...(typeof obj.message === 'string' ? { message: obj.message } : {}),
+      };
+    }
+
+    if (typeof obj.message === 'string' || typeof obj.success === 'boolean') {
+      const { message, success, ...fields } = obj;
+      return {
+        schema: fields,
+        ...(typeof success === 'boolean' ? { success } : {}),
+        ...(typeof message === 'string' ? { message } : {}),
+      };
+    }
+
+    return { schema: obj };
   }
 
   private validateWithZod(parsed: unknown): AiEditUiResponse {
@@ -43,7 +89,7 @@ export class AiValidatorService {
         throw new BadRequestException(
           `AI response failed schema validation: ${details}`,
         );
-      }
+      } 
 
       throw new BadRequestException(
         'AI response failed schema validation for an unknown reason.',
@@ -56,6 +102,8 @@ export class AiValidatorService {
   ): Record<string, unknown> {
     return {
       schema: validated.schema,
+      ...(validated.success != null ? { success: validated.success } : {}),
+      ...(validated.message != null ? { message: validated.message } : {}),
     };
   }
 }

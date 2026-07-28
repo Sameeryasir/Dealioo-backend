@@ -20,6 +20,7 @@ import { Customer } from '../../db/entities/customer.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelVersion } from '../../db/entities/funnel-version.entity';
+import { FunnelPagesService } from '../funnel-pages/funnel-pages.service';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import {
   FunnelEvent,
@@ -63,6 +64,7 @@ export class CampaignService {
     private readonly businessAccessService: BusinessAccessService,
     private readonly automationService: AutomationService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly funnelPagesService: FunnelPagesService,
   ) {}
 
   async uploadCampaignImage(
@@ -144,10 +146,16 @@ export class CampaignService {
     const funnel = this.funnelRepository.create({
       campaign: savedCampaign,
       campaignId: savedCampaign.id,
-      pages: {},
+      businessId: business.id,
       published: true,
+      contentRevision: 0,
     });
     const savedFunnel = await this.funnelRepository.save(funnel);
+    await this.funnelPagesService.initializeEmptyPages({
+      funnelId: savedFunnel.id,
+      businessId: business.id,
+      createdById: user.id,
+    });
     await this.funnelVersionRepository.save(
       this.funnelVersionRepository.create({
         funnelId: savedFunnel.id,

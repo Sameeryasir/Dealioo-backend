@@ -7,6 +7,7 @@ import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
+import { FunnelPagesModule } from '../funnel-pages/funnel-pages.module';
 import { StripeModule } from '../stripe/stripe.module';
 import { CampaignController } from './campaign.controller';
 import { CampaignService } from './campaign.service';
@@ -17,6 +18,7 @@ import { CampaignService } from './campaign.service';
     AuthModule,
     StripeModule,
     BusinessHistoryModule,
+    FunnelPagesModule,
     forwardRef(() => AutomationModule),
   ],
   controllers: [CampaignController],

@@ -7,6 +7,7 @@ import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
+import { FunnelPagesModule } from '../funnel-pages/funnel-pages.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { FunnelController } from './funnel.controller';
 import { FunnelService } from './funnel.service';
@@ -23,8 +24,10 @@ import { FunnelService } from './funnel.service';
     AuthModule,
     BusinessHistoryModule,
     RedemptionModule,
+    FunnelPagesModule,
   ],
   controllers: [FunnelController],
   providers: [FunnelService],
+  exports: [FunnelService],
 })
 export class FunnelModule {}

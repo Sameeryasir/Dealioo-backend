@@ -4,69 +4,91 @@ import type { PromptContext } from '../interfaces/prompt-context.interface';
 @Injectable()
 export class PromptBuilderService {
   buildPrompt(context: PromptContext): string {
+    const pageId = context.pageId?.trim() || 'unknown';
+    const editableFields = context.editableFields ?? {};
+    const fieldConstraints = context.fieldConstraints ?? {};
+
     const sections = [
-      this.buildSystemRoleSection(),
-      this.buildFunnelContextSection(context),
-      this.buildCurrentSchemaSection(context.currentSchema),
-      this.buildUserInstructionSection(context.userInstruction),
-      this.buildOutputRulesSection(),
+      'You are an AI Funnel Editor.',
+      '',
+      'Update only the editable fields provided by the backend.',
+      '',
+      'Rules',
+      '',
+      '- Modify only the fields in Editable Fields.',
+      '- Never create, remove, rename, or modify any other field.',
+      '- Preserve field names, nesting, and data types exactly.',
+      '- Do not guess or invent missing values or fields.',
+      '- Do not make unrelated improvements.',
+      '- Return exactly one valid JSON object.',
+      '- Never return markdown, explanations, or extra text.',
+      '',
+      'Context',
+      '',
+      'Page',
+      '',
+      pageId,
+      '',
+      'Editable Fields',
+      '',
+      JSON.stringify(editableFields, null, 2),
+      '',
+      'User Instruction',
+      '',
+      context.userInstruction,
     ];
 
-    return sections.join('\n\n');
-  }
+    if (Object.keys(fieldConstraints).length > 0) {
+      sections.push(
+        '',
+        'Allowed Values',
+        '',
+        'For constrained fields, choose ONLY from these exact values:',
+        '',
+        JSON.stringify(fieldConstraints, null, 2),
+      );
 
-  private buildSystemRoleSection(): string {
-    return [
-      '## System role',
-      'You are an expert UI Funnel Editor.',
-      'You may modify only the supplied funnel schema.',
-      'You must never invent missing data.',
-      'You must return JSON only.',
-    ].join('\n');
-  }
-
-  private buildFunnelContextSection(context: PromptContext): string {
-    const lines = [
-      '## Funnel context',
-      `businessId: ${context.businessId}`,
-    ];
-
-    if (context.campaignId != null) {
-      lines.push(`campaignId: ${context.campaignId}`);
-    }
-    if (context.funnelId != null) {
-      lines.push(`funnelId: ${context.funnelId}`);
-    }
-    if (context.pageId != null && context.pageId !== '') {
-      lines.push(`pageId: ${context.pageId}`);
+      if (Array.isArray(fieldConstraints.layoutType)) {
+        sections.push(
+          '',
+          'Layout synonyms (map user phrases to an Allowed Value):',
+          '',
+          '- "left aligned" / "align left" / "right aligned" → stacked',
+          '- "center aligned" / "centre aligned" / "middle aligned" → centered',
+          '- "split" → split',
+          '- "narrow" → narrow',
+          '- "wide" → wide',
+          '- "stacked" → stacked',
+          '- "centered" → centered',
+        );
+      }
     }
 
-    return lines.join('\n');
-  }
+    sections.push(
+      '',
+      'Response Format',
+      '',
+      '{',
+      '  "success": true,',
+      '  "updates": {}',
+      '}',
+      '',
+      'Requirements',
+      '',
+      '- success is true only if at least one field was updated.',
+      '- success is false if the request cannot be completed.',
+      '- updates must contain ONLY modified fields.',
+      '- Use the exact property names from Editable Fields.',
+      '- Do not include unchanged fields.',
+      '',
+      'If no valid update is possible, return:',
+      '',
+      '{',
+      '  "success": false,',
+      '  "updates": {}',
+      '}',
+    );
 
-  private buildCurrentSchemaSection(
-    currentSchema: PromptContext['currentSchema'],
-  ): string {
-    const header = '## Current schema';
-
-    if (currentSchema == null) {
-      return `${header}\nNo current schema exists.`;
-    }
-
-    return `${header}\n${JSON.stringify(currentSchema, null, 2)}`;
-  }
-
-  private buildUserInstructionSection(userInstruction: string): string {
-    return ['## User instruction', userInstruction].join('\n');
-  }
-
-  private buildOutputRulesSection(): string {
-    return [
-      '## Output rules',
-      'Return valid JSON only.',
-      'No markdown.',
-      'No explanations.',
-      'No code fences.',
-    ].join('\n');
+    return sections.join('\n');
   }
 }
