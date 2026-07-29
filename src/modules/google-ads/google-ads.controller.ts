@@ -51,7 +51,7 @@ export class GoogleAdsController {
     private readonly businessService: BusinessService,
   ) {}
 
-  @Get('callback/oauth')
+ @Get('callback/oauth')
   async oauthCallback(
     @Query('code') code: string,
     @Query('state') state: string,
@@ -88,7 +88,7 @@ export class GoogleAdsController {
         `${frontendBase}/google/select-customer?${params.toString()}`,
       );
     }
-  }
+  } 
 
   @UseGuards(AuthGuard('jwt'))
   @Post('connect/:businessId')

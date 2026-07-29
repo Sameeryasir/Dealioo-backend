@@ -166,7 +166,7 @@ export class AiOrchestratorService {
     const friendlyNames: Record<string, string> = {
       headline: 'headline',
       subheadline: 'subheading',
-      body: 'body',
+      body: pageId === 'signup' ? 'intro text' : 'body',
       ctaLabel: 'button text',
       ctaBackgroundColor: 'button colour',
       ctaTextColor: 'button text colour',
@@ -175,6 +175,10 @@ export class AiOrchestratorService {
       subheadlineColor: 'subheading colour',
       bodyColor: 'body colour',
       layoutType: 'layout',
+      signupFormDesign: 'form design',
+      formFieldIds: 'form fields',
+      navBackLabel: 'back button text',
+      navNextLabel: 'next button text',
     };
 
     const parts: string[] = [];
@@ -292,7 +296,10 @@ export class AiOrchestratorService {
       ) {
         continue;
       }
-      const key = this.normalizeEditableFieldKey(rawKey);
+      const key = this.resolveEditableFieldKey(
+        rawKey,
+        allowed,
+      );
       if (allowed.size === 0 || allowed.has(key)) {
         const constrained = fieldConstraints?.[key];
         if (constrained != null && constrained.length > 0) {
@@ -312,6 +319,18 @@ export class AiOrchestratorService {
       }
     }
     return filtered;
+  }
+
+  private resolveEditableFieldKey(
+    rawKey: string,
+    allowed: Set<string>,
+  ): string {
+    const key = this.normalizeEditableFieldKey(rawKey);
+    if (key === 'formDesign' || rawKey === 'formDesign') {
+      if (allowed.has('signupFormDesign')) return 'signupFormDesign';
+      if (allowed.has('paymentFormDesign')) return 'paymentFormDesign';
+    }
+    return key;
   }
 
   private normalizeEditableFieldKey(key: string): string {
@@ -334,6 +353,9 @@ export class AiOrchestratorService {
         return 'subheadline';
       case 'label':
         return 'pageTitle';
+      case 'introText':
+      case 'intro':
+        return 'body';
       default:
         return key;
     }

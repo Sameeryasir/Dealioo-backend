@@ -38,6 +38,18 @@ export class PromptBuilderService {
       context.userInstruction,
     ];
 
+    if (pageId === 'signup') {
+      sections.push(
+        '',
+        'Signup field notes',
+        '',
+        '- body = Intro text in the Content panel (main signup copy).',
+        '- signupFormDesign = Form design preset (e.g. stacked_input_form, two_column_form).',
+        '- formFieldIds = which fields to collect; use only: first_name, last_name, email, phone.',
+        '- navBackLabel / navNextLabel = Back / Next button text.',
+      );
+    }
+
     if (Object.keys(fieldConstraints).length > 0) {
       sections.push(
         '',

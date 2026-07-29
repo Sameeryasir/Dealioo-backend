@@ -198,6 +198,10 @@ export class GoogleAdsService {
     const clientSecret = this.tokenService.getClientSecret();
     const redirectUri = this.getRedirectUri();
 
+    this.logger.log(
+      `Google OAuth connect URL business=${businessId} redirectUri=${redirectUri} requestedScopes=${GOOGLE_OAUTH_SCOPES}`,
+    );
+
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -251,10 +255,17 @@ export class GoogleAdsService {
       const clientSecret = this.tokenService.getClientSecret();
       businessId = parseGoogleOAuthState(state, clientSecret);
 
+      // Debug: what scopes Google returned on the OAuth callback query string.
+      this.logger.log(
+        `Google OAuth grantedScope (callback query) business=${businessId}: ${grantedScope ?? '(empty)'}`,
+      );
+
       const callbackScopes = this.parseScopeList(grantedScope);
-      if (callbackScopes.length > 0) {
-        this.tokenService.assertGoogleScopes(callbackScopes);
-      }
+      this.logger.log(
+        `Google OAuth parsed callbackScopes business=${businessId}: ${JSON.stringify(callbackScopes)}`,
+      );
+      // Do not fail here yet — exchange the code so we can log token scopes from Google.
+      // Final assertGoogleScopes() after token exchange is the real gate.
 
       await this.auditService.log(businessId, 'oauth_callback_received', {
         status: GoogleAdsConnectionStatus.AUTHENTICATED,
@@ -298,6 +309,9 @@ export class GoogleAdsService {
       const grantedScopes = this.mergeScopeLists(
         callbackScopes,
         this.parseScopeList(tokenJson.scope),
+      );
+      this.logger.log(
+        `Google OAuth scopes after token exchange business=${businessId}: callback=${JSON.stringify(callbackScopes)} token=${JSON.stringify(this.parseScopeList(tokenJson.scope))} merged=${JSON.stringify(grantedScopes)}`,
       );
       this.tokenService.assertGoogleScopes(grantedScopes);
 
@@ -1060,7 +1074,14 @@ export class GoogleAdsService {
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
 
-    return (await res.json()) as GoogleTokenResponse;
+    const tokenJson = (await res.json()) as GoogleTokenResponse;
+
+    // Debug token exchange (do not log full secrets).
+    this.logger.log(
+      `Google token exchange status=${res.status} hasAccessToken=${Boolean(tokenJson.access_token)} hasRefreshToken=${Boolean(tokenJson.refresh_token)} expiresIn=${tokenJson.expires_in ?? 'n/a'} scope=${tokenJson.scope ?? '(empty)'} error=${tokenJson.error ?? 'none'} errorDescription=${tokenJson.error_description ?? 'none'}`,
+    );
+
+    return tokenJson;
   }
 
   private async fetchGoogleUser(

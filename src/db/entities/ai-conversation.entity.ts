@@ -13,11 +13,17 @@ import { Business } from './business.entity';
 import { Funnel } from './funnel.entity';
 import { User } from './user.entity';
 import { AiMessage } from './ai-message.entity';
+import { AiConversationStatus } from './ai-conversation-status';
 
 @Entity('ai_conversations')
-@Index('uq_ai_conversations_funnel_id', ['funnelId'], { unique: true })
+@Index('IDX_ai_conversations_funnel_id', ['funnelId'])
 @Index('IDX_ai_conversations_business_id', ['businessId'])
 @Index('IDX_ai_conversations_created_by', ['createdById'])
+@Index('IDX_ai_conversations_recent', [
+  'businessId',
+  'funnelId',
+  'lastMessageAt',
+])
 export class AiConversation {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -42,6 +48,28 @@ export class AiConversation {
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'created_by' })
   createdBy!: User | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    default: 'New chat',
+  })
+  title!: string;
+
+  @Column({
+    type: 'enum',
+    enum: AiConversationStatus,
+    enumName: 'ai_conversation_status',
+    default: AiConversationStatus.ACTIVE,
+  })
+  status!: AiConversationStatus;
+
+  @Column({
+    name: 'last_message_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  lastMessageAt!: Date | null;
 
   @OneToMany(() => AiMessage, (message) => message.conversation)
   messages!: AiMessage[];

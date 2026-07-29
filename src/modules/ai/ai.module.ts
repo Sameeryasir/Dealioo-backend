@@ -1,9 +1,15 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AiConversation } from '../../db/entities/ai-conversation.entity';
+import { AiMessage } from '../../db/entities/ai-message.entity';
+import { Business } from '../../db/entities/business.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { FunnelPagesModule } from '../funnel-pages/funnel-pages.module';
+import { AiConversationController } from './ai-conversation.controller';
+import { AiConversationService } from './ai-conversation.service';
+import { AiMessageService } from './ai-message.service';
 import { AiController } from './ai.controller';
 import { AiOrchestratorService } from './ai.orchestrator.service';
 import { AuditService } from './audit/audit.service';
@@ -24,11 +30,17 @@ import { VersionService } from './version/version.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Funnel, FunnelVersion]),
+    TypeOrmModule.forFeature([
+      Funnel,
+      FunnelVersion,
+      AiConversation,
+      AiMessage,
+      Business,
+    ]),
     FunnelPagesModule,
     BullModule.registerQueue({ name: AI_EDIT_UI_QUEUE }),
   ],
-  controllers: [AiController],
+  controllers: [AiController, AiConversationController],
   providers: [
     OpenAiProvider,
     ClaudeProvider,
@@ -51,6 +63,8 @@ import { VersionService } from './version/version.service';
     AiEditUiQueueService,
     AiEditUiRealtimeService,
     AiEditUiQueueProcessor,
+    AiConversationService,
+    AiMessageService,
   ],
   exports: [
     AiOrchestratorService,
@@ -64,6 +78,8 @@ import { VersionService } from './version/version.service';
     GeminiProvider,
     AI_PROVIDER,
     AiEditUiQueueService,
+    AiConversationService,
+    AiMessageService,
   ],
 })
 export class AiModule {}
