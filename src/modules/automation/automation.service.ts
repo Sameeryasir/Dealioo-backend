@@ -2875,12 +2875,11 @@ export class AutomationService {
     return null;
   }
 
+  // --- Create/update purpose guard ---
+  // FUNNEL_SIGNUP is allowed again for the Signup automation import template.
+  // Keep MANUAL blocked (not a product create path).
   private assertCreatablePurpose(purpose: AutomationPurpose): void {
-    const blocked = new Set<AutomationPurpose>([
-      AutomationPurpose.MANUAL,
-      AutomationPurpose.FUNNEL_SIGNUP,
-    ]);
-    if (blocked.has(purpose)) {
+    if (purpose === AutomationPurpose.MANUAL) {
       throw new BadRequestException(
         'This automation purpose is no longer available.',
       );

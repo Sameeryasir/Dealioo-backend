@@ -18,6 +18,11 @@ export enum CampaignPublicationStatus {
   UNPUBLISHED = 'unpublished',
 }
 
+export enum CampaignType {
+  PREPAID = 'prepaid',
+  POSTPAID = 'postpaid',
+}
+
 @Entity('campaigns')
 export class Campaign {
   @PrimaryGeneratedColumn()
@@ -44,6 +49,14 @@ export class Campaign {
 
   @Column({ name: 'campaign_name', type: 'varchar', length: 255 })
   campaignName!: string;
+
+  @Column({
+    name: 'campaign_type',
+    type: 'enum',
+    enum: CampaignType,
+    default: CampaignType.PREPAID,
+  })
+  campaignType!: CampaignType;
 
   @Column({ name: 'website_url', type: 'varchar', length: 2048 })
   websiteUrl!: string;

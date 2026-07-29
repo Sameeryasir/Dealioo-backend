@@ -13,10 +13,14 @@ import {
 import { AutomationPurpose } from '../../../db/entities/automation-purpose.enum';
 import { AutomationTrigger } from '../../../db/entities/automation.entity';
 
+// --- Allowed purposes on create ---
+// Include funnel_signup so Signup automation template can be imported.
+// (Enum already has FUNNEL_SIGNUP; create DTO whitelist was missing it.)
 const CREATABLE_AUTOMATION_PURPOSES = [
   AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
   AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
   AutomationPurpose.FUNNEL_PAYMENT,
+  AutomationPurpose.FUNNEL_SIGNUP,
 ] as const;
 
 export class CreateAutomationDto {

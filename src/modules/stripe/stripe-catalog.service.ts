@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Campaign } from '../../db/entities/campaign.entity';
+import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
 import { campaignPriceToStripeAmount } from '../../utils/campaign-price-to-stripe-amount';
 import { warnStripePayment } from '../payment/payment-logger';
 import { StripeService } from './stripe.service';
@@ -33,6 +33,11 @@ export class StripeCatalogService {
     currency?: string;
   }): Promise<CampaignStripeCatalog> {
     const campaign = opts.campaign;
+    if (campaign.campaignType === CampaignType.POSTPAID) {
+      throw new BadRequestException(
+        'Postpaid campaigns do not use Stripe products. Guests pay in store.',
+      );
+    }
     const stripeAccountId = opts.stripeAccountId.trim();
     const currency = (opts.currency?.trim() || 'usd').toLowerCase();
     const description = this.buildProductName(campaign);
@@ -126,6 +131,10 @@ export class StripeCatalogService {
     campaign: Campaign;
     stripeAccountId?: string | null;
   }): Promise<void> {
+    if (opts.campaign.campaignType === CampaignType.POSTPAID) {
+      return;
+    }
+
     const stripeAccountId = opts.stripeAccountId?.trim();
     if (!stripeAccountId) return;
 

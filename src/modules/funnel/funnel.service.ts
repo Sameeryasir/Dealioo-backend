@@ -5,11 +5,15 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Campaign } from '../../db/entities/campaign.entity';
+import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
+import {
+  FUNNEL_PAGE_TYPES,
+  FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
+} from '../../db/entities/funnel-page-type';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isBusinessOwnerScopedUser } from '../../utils/business-access';
 import { BusinessHistoryService } from '../business-history/business-history.service';
@@ -58,6 +62,19 @@ export class FunnelService {
       },
     });
 
+    const isPostpaid = campaign.campaignType === CampaignType.POSTPAID;
+    const ensurePageTypes = isPostpaid
+      ? FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
+      : FUNNEL_PAGE_TYPES;
+
+    const stripPaymentPage = (
+      pages: Record<string, unknown>,
+    ): Record<string, unknown> => {
+      if (!isPostpaid || !('payment' in pages)) return pages;
+      const { payment: _payment, ...rest } = pages;
+      return rest;
+    };
+
     if (!funnel) {
       funnel = this.funnelRepository.create({
         campaign,
@@ -69,17 +86,25 @@ export class FunnelService {
       });
 
       const saved = await this.funnelRepository.save(funnel);
+      const defaultPages = isPostpaid
+        ? {
+            landing: {},
+            signup: {},
+            confirmation: {},
+          }
+        : {
+            landing: {},
+            signup: {},
+            payment: {},
+            confirmation: {},
+          };
       const { assembledPages } = await this.funnelPagesService.syncPages({
         funnelId: saved.id,
         businessId: campaign.businessId,
-        pages: dto.pages ?? {
-          landing: {},
-          signup: {},
-          payment: {},
-          confirmation: {},
-        },
+        pages: stripPaymentPage(dto.pages ?? defaultPages),
         createdById: user.id,
         bumpRevision: true,
+        ensurePageTypes,
       });
       await this.appendFunnelVersion({
         funnelId: saved.id,
@@ -95,9 +120,10 @@ export class FunnelService {
     funnel.updatedBy = { id: user.id } as User;
 
     const saved = await this.funnelRepository.save(funnel);
-    const pagesPayload =
+    const pagesPayload = stripPaymentPage(
       dto.pages ??
-      (await this.funnelPagesService.loadAssembledPages(saved.id));
+        (await this.funnelPagesService.loadAssembledPages(saved.id)),
+    );
     const { assembledPages, changedTypes } =
       await this.funnelPagesService.syncPages({
         funnelId: saved.id,
@@ -105,6 +131,7 @@ export class FunnelService {
         pages: pagesPayload,
         createdById: user.id,
         bumpRevision: true,
+        ensurePageTypes,
       });
 
     const latest = await this.getFunnelById(saved.id);

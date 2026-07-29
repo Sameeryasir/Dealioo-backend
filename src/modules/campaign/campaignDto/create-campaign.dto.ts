@@ -11,7 +11,10 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { CampaignPublicationStatus } from '../../../db/entities/campaign.entity';
+import {
+  CampaignPublicationStatus,
+  CampaignType,
+} from '../../../db/entities/campaign.entity';
 
 export class CreateCampaignDto {
   @Type(() => Number)
@@ -23,6 +26,9 @@ export class CreateCampaignDto {
   @IsNotEmpty()
   @MaxLength(255)
   campaignName!: string;
+
+  @IsEnum(CampaignType)
+  campaignType!: CampaignType;
 
   @IsString()
   @IsNotEmpty()
@@ -57,11 +63,18 @@ export class CreateCampaignDto {
   @MaxLength(255)
   offer!: string;
 
-  @Type(() => Number)
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === null || value === undefined) {
+      return undefined;
+    }
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : value;
+  })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(99_999_999.99)
-  price!: number;
+  price?: number;
 
   @IsOptional()
   @IsEnum(CampaignPublicationStatus)

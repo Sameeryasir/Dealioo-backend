@@ -5,6 +5,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPage } from '../../db/entities/funnel-page.entity';
 import {
   FUNNEL_PAGE_TYPES,
+  FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
   FunnelPageType,
   isFunnelPageType,
 } from '../../db/entities/funnel-page-type';
@@ -15,6 +16,7 @@ export type SyncFunnelPagesInput = {
   businessId: number | null;
   pages: Record<string, unknown>;
   onlyTypes?: FunnelPageType[];
+  ensurePageTypes?: readonly FunnelPageType[];
   createdById?: number | null;
   operationId?: string | null;
   bumpRevision?: boolean;
@@ -34,9 +36,6 @@ export class FunnelPagesService {
 
   assembleFromRows(rows: FunnelPage[]): Record<string, unknown> {
     const pages: Record<string, unknown> = {};
-    for (const type of FUNNEL_PAGE_TYPES) {
-      pages[type] = {};
-    }
     for (const row of rows) {
       pages[row.pageType] = structuredClone(row.schema ?? {});
     }
@@ -192,7 +191,7 @@ export class FunnelPagesService {
         changedTypes.push(pageType);
       }
 
-      for (const pageType of FUNNEL_PAGE_TYPES) {
+      for (const pageType of input.ensurePageTypes ?? FUNNEL_PAGE_TYPES) {
         const exists = await pageRepo.exist({
           where: { funnelId: input.funnelId, pageType },
         });
@@ -244,18 +243,31 @@ export class FunnelPagesService {
     funnelId: number;
     businessId: number | null;
     createdById?: number | null;
+    includePaymentPage?: boolean;
   }): Promise<void> {
+    const includePaymentPage = input.includePaymentPage !== false;
+    const pages: Record<string, unknown> = includePaymentPage
+      ? {
+          landing: {},
+          signup: {},
+          payment: {},
+          confirmation: {},
+        }
+      : {
+          landing: {},
+          signup: {},
+          confirmation: {},
+        };
+
     await this.syncPages({
       funnelId: input.funnelId,
       businessId: input.businessId,
-      pages: {
-        landing: {},
-        signup: {},
-        payment: {},
-        confirmation: {},
-      },
+      pages,
       createdById: input.createdById ?? null,
       bumpRevision: true,
+      ensurePageTypes: includePaymentPage
+        ? FUNNEL_PAGE_TYPES
+        : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
     });
   }
 

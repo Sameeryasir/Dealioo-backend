@@ -13,6 +13,7 @@ import {
 import {
   Campaign,
   CampaignPublicationStatus,
+  CampaignType,
 } from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
@@ -96,6 +97,7 @@ export class CampaignService {
     const {
       businessId,
       campaignName,
+      campaignType,
       websiteUrl,
       imageUrl: dtoImageUrl,
       offer,
@@ -135,10 +137,11 @@ export class CampaignService {
       businessId: business.id,
       createdByUserId: user.id,
       campaignName,
+      campaignType,
       websiteUrl,
       imageUrl,
       offer: offer.trim(),
-      price,
+      price: price ?? null,
       status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
     const savedCampaign = await this.campaignRepository.save(campaign);
@@ -155,6 +158,7 @@ export class CampaignService {
       funnelId: savedFunnel.id,
       businessId: business.id,
       createdById: user.id,
+      includePaymentPage: campaignType !== CampaignType.POSTPAID,
     });
     await this.funnelVersionRepository.save(
       this.funnelVersionRepository.create({
