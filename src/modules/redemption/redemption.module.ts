@@ -16,6 +16,7 @@ import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
 import { AutomationModule } from '../automation/automation.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
+import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
@@ -45,6 +46,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     forwardRef(() => ActivityModule),
     forwardRef(() => AutomationModule),
     BusinessHistoryModule,
+    CustomerActivityModule,
     CustomerJourneyModule,
   ],
   controllers: [RedemptionController],

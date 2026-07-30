@@ -44,6 +44,7 @@ import { Business } from '../../db/entities/business.entity';
 import { AutomationService } from '../automation/automation.service';
 import { ActivityService } from '../activity/activity.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import { CustomerService } from '../customer/customer.service';
 import { CouponService } from '../redemption/coupon.service';
@@ -120,6 +121,7 @@ export class FunnelEventService {
     private readonly couponService: CouponService,
     private readonly signupQrEmailService: SignupQrEmailService,
     private readonly activityService: ActivityService,
+    private readonly customerActivityService: CustomerActivityService,
     private readonly customerJourneyService: CustomerJourneyService,
     private readonly customerService: CustomerService,
     private readonly businessHistoryService: BusinessHistoryService,
@@ -465,6 +467,15 @@ export class FunnelEventService {
       fromUnpaidOnlineCheckout: boolean;
     };
 
+    type OrderActivityDraft = {
+      orderId: number;
+      amountCents: number;
+      currency: string;
+      paymentIds: number[];
+      funnelIds: number[];
+      campaignIds: number[];
+    };
+
     const purchaseBatch = await this.dataSource.transaction(async (manager) => {
       await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
         businessId,
@@ -493,8 +504,28 @@ export class FunnelEventService {
         funnel: Funnel & { campaign: Campaign };
         amountCents: number;
       }> = [];
+      const orderActivityById = new Map<number, OrderActivityDraft>();
 
       const guestEmail = customer.email.trim().toLowerCase();
+
+      const trackOrderActivity = (draft: OrderActivityDraft) => {
+        const existing = orderActivityById.get(draft.orderId);
+        if (!existing) {
+          orderActivityById.set(draft.orderId, draft);
+          return;
+        }
+        existing.amountCents = draft.amountCents;
+        existing.currency = draft.currency;
+        existing.paymentIds = [
+          ...new Set([...existing.paymentIds, ...draft.paymentIds]),
+        ];
+        existing.funnelIds = [
+          ...new Set([...existing.funnelIds, ...draft.funnelIds]),
+        ];
+        existing.campaignIds = [
+          ...new Set([...existing.campaignIds, ...draft.campaignIds]),
+        ];
+      };
 
       for (const funnel of funnelsForPurchase) {
         const amountCents = dollarsToCents(Number(funnel.campaign.price));
@@ -538,12 +569,13 @@ export class FunnelEventService {
           });
 
           let orderId = pending.orderId;
+          const orderCurrency = pending.currency || 'usd';
           if (orderId != null) {
             await manager.update(Order, orderId, {
               status: OrderStatus.PAID,
               source: OrderSource.SCANNER,
               totalAmount: amountCents,
-              currency: pending.currency || 'usd',
+              currency: orderCurrency,
               paidAt: collectedAt,
             });
           } else {
@@ -553,13 +585,22 @@ export class FunnelEventService {
                 status: OrderStatus.PAID,
                 source: OrderSource.SCANNER,
                 totalAmount: amountCents,
-                currency: pending.currency || 'usd',
+                currency: orderCurrency,
                 paidAt: collectedAt,
               }),
             );
             orderId = settledOrder.id;
             await manager.update(FunnelPayment, pending.id, { orderId });
           }
+
+          trackOrderActivity({
+            orderId,
+            amountCents,
+            currency: orderCurrency,
+            paymentIds: [pending.id],
+            funnelIds: [funnel.id],
+            campaignIds: [funnel.campaign.id],
+          });
 
           created.push({
             funnel,
@@ -586,6 +627,7 @@ export class FunnelEventService {
           }),
         );
 
+        const batchPaymentIds: number[] = [];
         for (const row of newOrderPayments) {
           const payment = manager.create(FunnelPayment, {
             funnelId: row.funnel.id,
@@ -609,6 +651,7 @@ export class FunnelEventService {
             paidAt: collectedAt,
           });
           const savedPayment = await manager.save(payment);
+          batchPaymentIds.push(savedPayment.id);
           created.push({
             funnel: row.funnel,
             paymentId: savedPayment.id,
@@ -616,10 +659,35 @@ export class FunnelEventService {
             fromUnpaidOnlineCheckout: false,
           });
         }
+
+        trackOrderActivity({
+          orderId: order.id,
+          amountCents: newOrderTotalCents,
+          currency: 'usd',
+          paymentIds: batchPaymentIds,
+          funnelIds: newOrderPayments.map((row) => row.funnel.id),
+          campaignIds: newOrderPayments.map((row) => row.funnel.campaign.id),
+        });
       }
 
       if (created.length === 0) {
         throw new BadRequestException('Select at least one deal.');
+      }
+
+      for (const draft of orderActivityById.values()) {
+        await this.customerActivityService.recordInStorePurchase({
+          businessId,
+          customerId,
+          orderId: draft.orderId,
+          amountCents: draft.amountCents,
+          currency: draft.currency,
+          funnelPaymentIds: draft.paymentIds,
+          funnelIds: draft.funnelIds,
+          campaignIds: draft.campaignIds,
+          staffUserId,
+          occurredAt: collectedAt,
+          manager,
+        });
       }
 
       const primaryOrderId =
@@ -642,7 +710,11 @@ export class FunnelEventService {
         );
       }
 
-      return { orderId: primaryOrderId, deals: created };
+      return {
+        orderId: primaryOrderId,
+        deals: created,
+        orderActivities: [...orderActivityById.values()],
+      };
     });
 
     if (purchaseBatch == null && idempotencyKey) {
@@ -813,6 +885,24 @@ export class FunnelEventService {
           'Failed to write scanner purchase business history',
           historyError instanceof Error ? historyError.stack : historyError,
         );
+      }
+
+      for (const deal of deals) {
+        try {
+          await this.activityService.logPrepaidForOffer({
+            paymentId: deal.paymentId,
+            customerId,
+            occurredAt: collectedAt,
+          });
+        } catch (activityError) {
+          this.logger.warn(
+            `Scanner purchase activity_event log failed payment=${deal.paymentId}: ${
+              activityError instanceof Error
+                ? activityError.message
+                : String(activityError)
+            }`,
+          );
+        }
       }
 
       return purchased;
@@ -1027,6 +1117,17 @@ export class FunnelEventService {
         occurredAt: event.createdAt,
         source: 'funnel_track',
         funnelEventId: event.id,
+      });
+    }
+
+    if (event.eventType === FunnelEventType.SIGNUP) {
+      await this.customerActivityService.recordOnlineSignup({
+        businessId: campaign.businessId,
+        customerId: event.customerId,
+        funnelId: funnel.id,
+        campaignId: campaign.id,
+        funnelEventId: event.id,
+        occurredAt: event.createdAt,
       });
     }
 

@@ -15,6 +15,7 @@ import { Business } from '../../db/entities/business.entity';
 import { ActivityModule } from '../activity/activity.module';
 import { AutomationModule } from '../automation/automation.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
+import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CustomerModule } from '../customer/customer.module';
 import { RedemptionModule } from '../redemption/redemption.module';
@@ -42,6 +43,7 @@ import { FunnelEventService } from './funnel-event.service';
     forwardRef(() => RedemptionModule),
     ActivityModule,
     BusinessHistoryModule,
+    CustomerActivityModule,
     CustomerJourneyModule,
     CustomerModule,
   ],

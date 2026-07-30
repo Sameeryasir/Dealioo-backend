@@ -14,6 +14,7 @@ import {
 } from '../../db/entities/order.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { ActivityService } from '../activity/activity.service';
+import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { FunnelEventService } from '../funnel-event/funnel-event.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 
@@ -56,6 +57,7 @@ export class PaymentFinalizeService {
     private readonly orderRepository: Repository<Order>,
     private readonly dataSource: DataSource,
     private readonly activityService: ActivityService,
+    private readonly customerActivityService: CustomerActivityService,
     @Inject(forwardRef(() => FunnelEventService))
     private readonly funnelEventService: FunnelEventService,
   ) {}
@@ -302,6 +304,39 @@ export class PaymentFinalizeService {
           error: message,
         });
       }
+    }
+
+    try {
+      const payment = await this.funnelPaymentRepository.findOne({
+        where: { id: paymentId },
+      });
+      if (
+        payment &&
+        payment.customerId != null &&
+        payment.orderId != null &&
+        payment.paymentSource !== FunnelPaymentSource.SCANNER
+      ) {
+        await this.customerActivityService.recordOnlinePurchase({
+          businessId: payment.businessId,
+          customerId: payment.customerId,
+          orderId: payment.orderId,
+          amountCents: payment.amount,
+          currency: payment.currency || 'usd',
+          funnelPaymentId: payment.id,
+          funnelId: payment.funnelId,
+          campaignId: payment.campaignId,
+          occurredAt: payment.paidAt ?? new Date(),
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      warnStripePayment({
+        phase: 'finalize_successful_payment',
+        outcome: 'customer_activity_log_failed',
+        paymentId,
+        syncSource: source,
+        error: message,
+      });
     }
 
     try {

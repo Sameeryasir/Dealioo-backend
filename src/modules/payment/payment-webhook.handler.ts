@@ -6,6 +6,7 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 import { CouponService } from '../redemption/coupon.service';
+import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { StripeService } from '../stripe/stripe.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 import { PaymentFinalizeService } from './payment-finalize.service';
@@ -66,6 +67,7 @@ export class PaymentWebhookHandler {
     private readonly stripeService: StripeService,
     private readonly couponService: CouponService,
     private readonly paymentFinalizeService: PaymentFinalizeService,
+    private readonly customerActivityService: CustomerActivityService,
   ) {}
 
   async routeEvent(
@@ -370,6 +372,27 @@ export class PaymentWebhookHandler {
     });
 
     await this.couponService.syncCouponsForFunnelPayment(payment.id);
+
+    if (payment.customerId != null && refundedAmount > 0) {
+      try {
+        await this.customerActivityService.recordRefund({
+          businessId: payment.businessId,
+          customerId: payment.customerId,
+          orderId: payment.orderId,
+          funnelPaymentId: payment.id,
+          amountCents: refundedAmount,
+          currency: payment.currency || 'usd',
+          occurredAt: new Date(),
+        });
+      } catch (error) {
+        warnStripePayment({
+          phase: 'charge_refunded',
+          outcome: 'customer_activity_log_failed',
+          paymentId: payment.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private async handleDisputeEvent(

@@ -6,6 +6,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Business } from '../../db/entities/business.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { AuthModule } from '../auth/auth.module';
+import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { ActivityController } from './activity.controller';
 import { ActivityService } from './activity.service';
@@ -20,6 +21,7 @@ import { ActivityService } from './activity.service';
       FunnelPayment,
     ]),
     AuthModule,
+    CustomerActivityModule,
     forwardRef(() => RedemptionModule),
   ],
   controllers: [ActivityController],

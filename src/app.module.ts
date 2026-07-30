@@ -22,6 +22,7 @@ import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
+import { CustomerActivityModule } from './modules/customer-activity/customer-activity.module';
 import { BusinessHistoryModule } from './modules/business-history/business-history.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
@@ -87,6 +88,7 @@ import { AiModule } from './modules/ai/ai.module';
     AutomationModule,
     RedemptionModule,
     ActivityModule,
+    CustomerActivityModule,
     BusinessHistoryModule,
     ChatModule,
     MemberModule,

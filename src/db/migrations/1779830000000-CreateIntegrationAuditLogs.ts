@@ -31,6 +31,14 @@ export class CreateIntegrationAuditLogs1779830000000
     `);
 
     if (await queryRunner.hasTable('businesses')) {
+      // Drop orphan audit rows so the FK can be added (e.g. business_id=9 missing).
+      await queryRunner.query(`
+        DELETE FROM "integration_audit_logs" ial
+        WHERE NOT EXISTS (
+          SELECT 1 FROM "businesses" b WHERE b."id" = ial."business_id"
+        )
+      `);
+
       await queryRunner.query(`
         DO $$
         BEGIN

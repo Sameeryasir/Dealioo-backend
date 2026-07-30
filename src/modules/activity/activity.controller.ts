@@ -11,6 +11,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { RedemptionService } from '../redemption/redemption.service';
+import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { ActivityService } from './activity.service';
 import {
   GetBusinessActivityEventsQueryDto,
@@ -42,8 +43,44 @@ function parseActivityQueryDates(query: GetBusinessActivityQueryDto): {
 export class ActivityController {
   constructor(
     private readonly activityService: ActivityService,
+    private readonly customerActivityService: CustomerActivityService,
     private readonly redemptionService: RedemptionService,
   ) {}
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/customers/:customerId/timeline')
+  async getCustomerTimeline(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('customerId', ParseIntPipe) customerId: number,
+    @Query('campaignId') campaignIdRaw: string | undefined,
+    @Req() req?: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req!.user.id,
+      req!.user.role.name,
+    );
+
+    const campaignId =
+      campaignIdRaw != null && campaignIdRaw.trim() !== ''
+        ? Number.parseInt(campaignIdRaw, 10)
+        : null;
+
+    const timeline = await this.customerActivityService.listForCustomer({
+      businessId,
+      customerId,
+      campaignId:
+        campaignId != null && Number.isFinite(campaignId) && campaignId > 0
+          ? campaignId
+          : null,
+    });
+
+    return {
+      customerId,
+      businessId,
+      timeline,
+    };
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/events')

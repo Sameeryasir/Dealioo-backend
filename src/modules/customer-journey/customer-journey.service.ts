@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, In, Repository } from 'typeorm';
 import {
+  CustomerActivity,
+  CustomerActivityType,
+} from '../../db/entities/customer-activity.entity';
+import {
   CustomerJourneyEvent,
   CustomerJourneyStep,
 } from '../../db/entities/customer-journey-event.entity';
@@ -44,12 +48,25 @@ export type JourneyStepView = {
   source: string | null;
 };
 
+export type CustomerJourneyTimelineItem = {
+  id: string;
+  activityType: CustomerActivityType;
+  label: string;
+  source: string;
+  amount: number | null;
+  currency: string | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  createdAt: string;
+};
+
 export type CustomerJourneyView = {
   customerId: number;
   campaignId: number;
   funnelId: number | null;
   funnelPaymentId: number | null;
   steps: JourneyStepView[];
+  timeline: CustomerJourneyTimelineItem[];
   lastUpdatedAt: string | null;
 };
 
@@ -75,6 +92,8 @@ export class CustomerJourneyService {
   constructor(
     @InjectRepository(CustomerJourneyEvent)
     private readonly journeyRepository: Repository<CustomerJourneyEvent>,
+    @InjectRepository(CustomerActivity)
+    private readonly customerActivityRepository: Repository<CustomerActivity>,
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(CustomerVisit)
@@ -213,9 +232,11 @@ export class CustomerJourneyService {
     funnelId?: number | null;
     funnelPaymentId?: number | null;
   }): Promise<CustomerJourneyView> {
-    await this.ensureBackfilled(params);
-    if (params.funnelPaymentId != null) {
-      await this.ensurePaymentScopedBackfill(params);
+    const activities = await this.loadCampaignActivities(params);
+    const timeline = activities.map((row) => this.toTimelineItem(row));
+
+    if (activities.length > 0) {
+      return this.buildJourneyFromActivities(params, activities, timeline);
     }
 
     const events = await this.journeyRepository.find({
@@ -230,20 +251,172 @@ export class CustomerJourneyService {
 
     const signup = this.pickSignupStep(events);
     const payment = this.pickPaymentStep(events, params.funnelPaymentId);
-    const qr = await this.pickQrStep(events, params.funnelPaymentId);
-    const includeQrStep = await this.shouldIncludeQrJourneyStep({
-      funnelPaymentId: params.funnelPaymentId,
+    const qr = this.pickQrStepFromEventsOnly(events, params.funnelPaymentId);
+    const includeQrStep = qr.occurredAt != null || payment.source === 'funnel_track';
+
+    return this.buildJourneyView({
+      params,
+      signup,
       payment,
       qr,
+      includeQrStep,
+      funnelIdFallback: events[0]?.funnelId ?? null,
+      timeline: [],
     });
+  }
 
+  private async loadCampaignActivities(params: {
+    businessId: number;
+    customerId: number;
+    campaignId: number;
+    funnelPaymentId?: number | null;
+  }): Promise<CustomerActivity[]> {
+    const rows = await this.customerActivityRepository
+      .createQueryBuilder('activity')
+      .where('activity.business_id = :businessId', {
+        businessId: params.businessId,
+      })
+      .andWhere('activity.customer_id = :customerId', {
+        customerId: params.customerId,
+      })
+      .andWhere(
+        `(
+          (activity.metadata->>'campaignId')::int = :campaignId
+          OR activity.metadata @> :campaignIdsJson
+        )`,
+        {
+          campaignId: params.campaignId,
+          campaignIdsJson: JSON.stringify({
+            campaignIds: [params.campaignId],
+          }),
+        },
+      )
+      .orderBy('activity.created_at', 'ASC')
+      .getMany();
+
+    if (params.funnelPaymentId == null) {
+      return rows;
+    }
+
+    return rows.filter((row) => {
+      if (row.activityType === CustomerActivityType.ONLINE_SIGNUP) {
+        return true;
+      }
+      const metaPaymentId = Number(row.metadata?.funnelPaymentId);
+      const metaPaymentIds = Array.isArray(row.metadata?.funnelPaymentIds)
+        ? (row.metadata!.funnelPaymentIds as unknown[]).map(Number)
+        : [];
+      if (
+        metaPaymentId === params.funnelPaymentId ||
+        metaPaymentIds.includes(params.funnelPaymentId!)
+      ) {
+        return true;
+      }
+      return row.activityType === CustomerActivityType.REDEMPTION;
+    });
+  }
+
+  private buildJourneyFromActivities(
+    params: {
+      businessId: number;
+      customerId: number;
+      campaignId: number;
+      funnelId?: number | null;
+      funnelPaymentId?: number | null;
+    },
+    activities: CustomerActivity[],
+    timeline: CustomerJourneyTimelineItem[],
+  ): CustomerJourneyView {
+    const signupRow =
+      activities.find(
+        (row) => row.activityType === CustomerActivityType.ONLINE_SIGNUP,
+      ) ?? null;
+
+    const purchaseRow =
+      activities.find((row) => {
+        if (
+          row.activityType !== CustomerActivityType.ONLINE_PURCHASE &&
+          row.activityType !== CustomerActivityType.IN_STORE_PURCHASE
+        ) {
+          return false;
+        }
+        if (params.funnelPaymentId == null) {
+          return true;
+        }
+        const metaPaymentId = Number(row.metadata?.funnelPaymentId);
+        const metaPaymentIds = Array.isArray(row.metadata?.funnelPaymentIds)
+          ? (row.metadata!.funnelPaymentIds as unknown[]).map(Number)
+          : [];
+        return (
+          metaPaymentId === params.funnelPaymentId ||
+          metaPaymentIds.includes(params.funnelPaymentId!)
+        );
+      }) ?? null;
+
+    const redemptionRow =
+      activities.find(
+        (row) => row.activityType === CustomerActivityType.REDEMPTION,
+      ) ?? null;
+
+    const signup: ResolvedStep = {
+      event: null,
+      occurredAt: signupRow?.createdAt ?? null,
+      source: signupRow?.source ?? null,
+    };
+    const payment: ResolvedStep = {
+      event: null,
+      occurredAt: purchaseRow?.createdAt ?? null,
+      source: purchaseRow?.source ?? null,
+    };
+    const qr: ResolvedStep = {
+      event: null,
+      occurredAt: redemptionRow?.createdAt ?? null,
+      source: redemptionRow?.source ?? null,
+    };
+
+    const includeQrStep =
+      qr.occurredAt != null ||
+      purchaseRow?.activityType === CustomerActivityType.ONLINE_PURCHASE ||
+      signupRow != null;
+
+    const funnelIdFromMeta =
+      activities
+        .map((row) => Number(row.metadata?.funnelId))
+        .find((id) => Number.isFinite(id) && id > 0) ?? null;
+
+    return this.buildJourneyView({
+      params,
+      signup,
+      payment,
+      qr,
+      includeQrStep,
+      funnelIdFallback: funnelIdFromMeta,
+      timeline,
+    });
+  }
+
+  private buildJourneyView(input: {
+    params: {
+      customerId: number;
+      campaignId: number;
+      funnelId?: number | null;
+      funnelPaymentId?: number | null;
+    };
+    signup: ResolvedStep;
+    payment: ResolvedStep;
+    qr: ResolvedStep;
+    includeQrStep: boolean;
+    funnelIdFallback: number | null;
+    timeline: CustomerJourneyTimelineItem[];
+  }): CustomerJourneyView {
+    const { signup, payment, qr } = input;
     const resolved: Record<CustomerJourneyStep, ResolvedStep> = {
       [CustomerJourneyStep.SIGNUP]: signup,
       [CustomerJourneyStep.PAYMENT]: payment,
       [CustomerJourneyStep.QR_REDEEMED]: qr,
     };
 
-    const stepsToShow = includeQrStep
+    const stepsToShow = input.includeQrStep
       ? JOURNEY_STEPS
       : JOURNEY_STEPS.filter(
           (item) => item.step !== CustomerJourneyStep.QR_REDEEMED,
@@ -256,7 +429,11 @@ export class CustomerJourneyService {
         return {
           step: item.step,
           label:
-            item.step === CustomerJourneyStep.PAYMENT ? 'Paid' : item.label,
+            item.step === CustomerJourneyStep.PAYMENT
+              ? match.source === 'SCANNER' || match.source === 'scanner'
+                ? 'Paid in store'
+                : 'Paid'
+              : item.label,
           state: 'complete' as const,
           occurredAt: match.occurredAt.toISOString(),
           source: match.source,
@@ -289,7 +466,7 @@ export class CustomerJourneyService {
     const completedAt = [
       signup.occurredAt,
       payment.occurredAt,
-      ...(includeQrStep ? [qr.occurredAt] : []),
+      ...(input.includeQrStep ? [qr.occurredAt] : []),
     ].filter((value): value is Date => value != null);
 
     const lastUpdatedAt =
@@ -300,12 +477,69 @@ export class CustomerJourneyService {
         : null;
 
     return {
-      customerId: params.customerId,
-      campaignId: params.campaignId,
-      funnelId: params.funnelId ?? events[0]?.funnelId ?? null,
-      funnelPaymentId: params.funnelPaymentId ?? null,
+      customerId: input.params.customerId,
+      campaignId: input.params.campaignId,
+      funnelId: input.params.funnelId ?? input.funnelIdFallback,
+      funnelPaymentId: input.params.funnelPaymentId ?? null,
       steps,
+      timeline: input.timeline,
       lastUpdatedAt: lastUpdatedAt?.toISOString() ?? null,
+    };
+  }
+
+  private toTimelineItem(row: CustomerActivity): CustomerJourneyTimelineItem {
+    const metaLabel =
+      typeof row.metadata?.label === 'string' ? row.metadata.label : null;
+    return {
+      id: row.id,
+      activityType: row.activityType,
+      label: metaLabel ?? row.activityType,
+      source: row.source,
+      amount: row.amount,
+      currency: row.currency,
+      referenceType: row.referenceType,
+      referenceId: row.referenceId,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  private pickQrStepFromEventsOnly(
+    events: CustomerJourneyEvent[],
+    funnelPaymentId?: number | null,
+  ): ResolvedStep {
+    const isNonQrSource = (source: string | null | undefined) =>
+      source === 'scanner_purchase' ||
+      source === 'staff_lookup' ||
+      source === 'backfill_payment_scope' ||
+      source === 'backfill_customer_visit';
+
+    if (funnelPaymentId == null) {
+      const event =
+        events.find(
+          (row) =>
+            row.step === CustomerJourneyStep.QR_REDEEMED &&
+            !isNonQrSource(row.source),
+        ) ?? null;
+      return {
+        event,
+        occurredAt: event?.occurredAt ?? null,
+        source: event?.source ?? null,
+      };
+    }
+
+    const event =
+      events.find(
+        (row) =>
+          row.step === CustomerJourneyStep.QR_REDEEMED &&
+          !isNonQrSource(row.source) &&
+          (row.refType === 'coupon' ||
+            Number(row.metadata?.funnelPaymentId) === funnelPaymentId),
+      ) ?? null;
+
+    return {
+      event,
+      occurredAt: event?.occurredAt ?? null,
+      source: event?.source ?? null,
     };
   }
 

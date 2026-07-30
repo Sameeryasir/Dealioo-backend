@@ -10,6 +10,7 @@ import { Customer } from '../../db/entities/customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { AuthModule } from '../auth/auth.module';
 import { ActivityModule } from '../activity/activity.module';
+import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { FunnelEventModule } from '../funnel-event/funnel-event.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { StripeModule } from '../stripe/stripe.module';
@@ -42,6 +43,7 @@ import { PaymentRecoveryScheduler } from './payment-recovery.scheduler';
     forwardRef(() => RedemptionModule),
     forwardRef(() => FunnelEventModule),
     ActivityModule,
+    CustomerActivityModule,
   ],
   controllers: [PaymentController],
   providers: [

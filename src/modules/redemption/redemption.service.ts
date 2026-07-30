@@ -44,6 +44,7 @@ import { ActivityService } from '../activity/activity.service';
 import { AutomationService } from '../automation/automation.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import {
   centsToDollars,
@@ -199,6 +200,7 @@ export class RedemptionService {
     @Inject(forwardRef(() => AutomationService))
     private readonly automationService: AutomationService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly customerActivityService: CustomerActivityService,
     private readonly customerJourneyService: CustomerJourneyService,
     private readonly businessHistoryService: BusinessHistoryService,
   ) {}
@@ -812,6 +814,20 @@ export class RedemptionService {
               occurredAt: redeemedAt,
               manager,
             });
+            await this.customerActivityService.recordInStorePurchase({
+              businessId,
+              customerId: coupon.customerId,
+              orderId: settled.orderId,
+              amountCents: settled.amountCents,
+              currency: settled.currency,
+              funnelPaymentIds: [settled.paymentId],
+              funnelIds:
+                coupon.funnelId != null ? [coupon.funnelId] : [],
+              campaignIds: [coupon.campaignId],
+              staffUserId: audit.scannedBy,
+              occurredAt: redeemedAt,
+              manager,
+            });
           }
         }
 
@@ -829,6 +845,26 @@ export class RedemptionService {
           customerId: coupon.customerId,
           coupon,
           businessName,
+          occurredAt: redeemedAt,
+          manager,
+        });
+
+        const offerCents =
+          coupon.campaign?.price != null
+            ? dollarsToCents(Number(coupon.campaign.price))
+            : null;
+        await this.customerActivityService.recordRedemption({
+          businessId,
+          customerId: coupon.customerId,
+          couponId: coupon.id,
+          campaignId: coupon.campaignId,
+          funnelId: coupon.funnelId ?? null,
+          funnelPaymentId: coupon.funnelPaymentId ?? null,
+          amountCents:
+            offerCents != null && Number.isFinite(offerCents)
+              ? offerCents
+              : null,
+          currency: 'usd',
           occurredAt: redeemedAt,
           manager,
         });
@@ -933,7 +969,12 @@ export class RedemptionService {
       staffUserId: number | null;
       paidAt: Date;
     },
-  ): Promise<{ orderId: number; paymentId: number } | null> {
+  ): Promise<{
+    orderId: number;
+    paymentId: number;
+    amountCents: number;
+    currency: string;
+  } | null> {
     const { coupon, businessId, staffUserId, paidAt } = params;
 
     let payment: FunnelPayment | null = null;
@@ -1012,7 +1053,12 @@ export class RedemptionService {
       await manager.update(Coupon, coupon.id, {
         funnelPaymentId: payment.id,
       });
-      return { orderId: order.id, paymentId: payment.id };
+      return {
+        orderId: order.id,
+        paymentId: payment.id,
+        amountCents,
+        currency: 'usd',
+      };
     }
 
     await manager.update(FunnelPayment, payment.id, {
@@ -1074,7 +1120,12 @@ export class RedemptionService {
       },
     );
 
-    return { orderId, paymentId: payment.id };
+    return {
+      orderId,
+      paymentId: payment.id,
+      amountCents: payment.amount,
+      currency: payment.currency || 'usd',
+    };
   }
 
   private async recordVisitFromQrScan(params: {
