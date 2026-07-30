@@ -37,16 +37,16 @@ import { SaveAdSetStepDto } from './dto/save-adset-step.dto';
 import { SaveCampaignStepDto } from './dto/save-campaign-step.dto';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
-import { MetaCampaignMediaService } from './meta-campaign-media.service';
-import { MetaPublishService } from './meta-publish.service';
+import { MediaService } from './media.service';
+import { AdPublishService } from './ad-publish.service';
 
 @Controller('facebook-campaigns')
 export class FacebookCampaignController {
   constructor(
     private readonly facebookCampaignService: FacebookCampaignService,
     private readonly metaCampaignDraftService: MetaCampaignDraftService,
-    private readonly metaPublishService: MetaPublishService,
-    private readonly metaCampaignMediaService: MetaCampaignMediaService,
+    private readonly adPublishService: AdPublishService,
+    private readonly mediaService: MediaService,
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
@@ -137,7 +137,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('draftId') draftId: string,
   ): Promise<MetaPublishStatusDto> {
-    return this.metaPublishService.getPublishStatus(
+    return this.adPublishService.getPublishStatus(
       req.user,
       businessId,
       draftId,
@@ -152,7 +152,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('draftId') draftId: string,
   ): Promise<EnqueueMetaPublishResponseDto> {
-    return this.metaPublishService.enqueuePublish(
+    return this.adPublishService.enqueuePublish(
       req.user,
       businessId,
       draftId,
@@ -166,7 +166,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: PresignMediaDto,
   ): Promise<PresignMediaResponseDto> {
-    return this.metaCampaignMediaService.createPresignedUpload(
+    return this.mediaService.createPresignedUpload(
       req.user,
       businessId,
       body,
@@ -180,7 +180,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('mediaId') mediaId: string,
   ): Promise<MetaCampaignMedia> {
-    return this.metaCampaignMediaService.completeUpload(
+    return this.mediaService.completeUpload(
       req.user,
       businessId,
       mediaId,
@@ -203,7 +203,7 @@ export class FacebookCampaignController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
     @UploadedFile() file: Express.Multer.File,
-  ): Promise<{ imageUrl: string; imageHash: string }> {
+  ): Promise<{ imageUrl: string }> {
     return this.facebookCampaignService.uploadAdImageForBusiness(
       req.user,
       businessId,

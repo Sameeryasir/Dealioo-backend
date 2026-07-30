@@ -167,6 +167,33 @@ export class FunnelService {
     return funnel;
   }
 
+  async getPublicFunnelById(id: number): Promise<{
+    id: number;
+    campaignId: number;
+    businessId: number | null;
+    pages: Record<string, unknown>;
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id },
+      select: {
+        id: true,
+        campaignId: true,
+        businessId: true,
+      },
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+    return {
+      id: funnel.id,
+      campaignId: funnel.campaignId,
+      businessId: funnel.businessId,
+      pages,
+    };
+  }
+
   async getFunnelsByBusinessId(
     businessId: number,
   ): Promise<BusinessFunnelSummary[]> {

@@ -1,4 +1,3 @@
-import { readFileSync } from 'fs';
 import {
   BadRequestException,
   Injectable,
@@ -23,7 +22,7 @@ import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.servic
 import { FacebookService } from '../facebook/facebook.service';
 import { CreateFacebookCampaignDto } from './dto/create-facebook-campaign.dto';
 import { CreateFacebookCampaignResponseDto } from './dto/create-facebook-campaign-response.dto';
-import { MetaCampaignMediaService } from './meta-campaign-media.service';
+import { MediaService } from './media.service';
 import {
   adsManagerCampaignsUrl,
   assertAgeRange,
@@ -50,7 +49,6 @@ import {
   sdkCreateAdCreative,
   sdkCreateAdSet,
   sdkCreateCampaign,
-  sdkUploadAdImageBytes,
   sdkUploadAdImageHash,
   sdkUploadAdVideoId,
 } from './meta-business-sdk';
@@ -84,16 +82,15 @@ export class FacebookCampaignService {
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly facebookService: FacebookService,
     private readonly spacesService: SpacesService,
-    private readonly metaCampaignMediaService: MetaCampaignMediaService,
+    private readonly metaCampaignMediaService: MediaService,
   ) {}
 
   async uploadAdImageForBusiness(
     user: User,
     businessId: number,
     file: Express.Multer.File,
-  ): Promise<{ imageUrl: string; imageHash: string }> {
-
-    const business = await this.loadOwnedBusiness(user, businessId);
+  ): Promise<{ imageUrl: string }> {
+    await this.loadOwnedBusiness(user, businessId);
 
     if (!file) {
       throw new BadRequestException('Image file is required.');
@@ -108,28 +105,9 @@ export class FacebookCampaignService {
 
     if (!imageUrl?.startsWith('https://')) {
       throw new BadRequestException(
-        'PUBLIC_BASE_URL must use HTTPS (set your ngrok URL in .env) so Meta can download the ad image.',
+        'PUBLIC_BASE_URL must use HTTPS so Meta can download the ad image on publish.',
       );
     }
-
-    const { accessToken, adAccountId } =
-      await this.metaTokenService.assertBusinessMetaCredentials(business);
-    if (!adAccountId?.trim()) {
-      throw new BadRequestException(
-        'No Facebook ad account selected. Choose an ad account in Settings → Integrations.',
-      );
-    }
-
-    let bytesBase64: string | null = null;
-    if (file.buffer?.length) {
-      bytesBase64 = file.buffer.toString('base64');
-    } else if (file.path?.trim()) {
-      bytesBase64 = readFileSync(file.path).toString('base64');
-    }
-
-    const imageHash = bytesBase64
-      ? await sdkUploadAdImageBytes(accessToken, adAccountId, bytesBase64)
-      : await sdkUploadAdImageHash(accessToken, adAccountId, imageUrl);
 
     await this.metaCampaignMediaService.recordServerUpload({
       userId: user.id,
@@ -140,10 +118,9 @@ export class FacebookCampaignService {
       mimeType: file.mimetype || 'image/jpeg',
       sizeBytes: file.size ?? file.buffer?.length ?? 0,
       storageUrl: imageUrl,
-      metaImageHash: imageHash,
     });
 
-    return { imageUrl, imageHash };
+    return { imageUrl };
   }
 
   async uploadAdVideoForBusiness(

@@ -268,6 +268,8 @@ type CreativeBuildInput = {
   instagramActorId?: string;
   imageHash?: string;
   videoId?: string;
+  videoThumbnailHash?: string;
+  videoThumbnailUrl?: string;
   destinationUrl: string;
   primaryText: string;
   headline: string;
@@ -291,13 +293,21 @@ export function buildCreativePayload(input: CreativeBuildInput) {
   }
 
   if (input.videoId) {
-    objectStorySpec.video_data = {
+    const videoData: Record<string, unknown> = {
       video_id: input.videoId,
       message: input.primaryText,
       title: input.headline,
       link_description: input.description?.trim() || undefined,
       call_to_action: callToAction,
     };
+
+    if (input.videoThumbnailHash?.trim()) {
+      videoData.image_hash = input.videoThumbnailHash.trim();
+    } else if (input.videoThumbnailUrl?.trim()) {
+      videoData.image_url = input.videoThumbnailUrl.trim();
+    }
+
+    objectStorySpec.video_data = videoData;
   } else {
     objectStorySpec.link_data = {
       image_hash: input.imageHash,

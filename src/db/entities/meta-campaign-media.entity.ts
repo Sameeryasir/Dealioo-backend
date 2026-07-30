@@ -42,7 +42,7 @@ export class MetaCampaignMedia {
     name: 'upload_status',
     type: 'varchar',
     length: 32,
-    default: 'uploading',
+    default: 'UPLOADING',
   })
   uploadStatus: string;
 

@@ -23,6 +23,17 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
         throw new BadRequestException('Video is required for single video ads.');
       }
       assertDirectMetaVideoUrl(String(normalizeMetaHttpsUrl(dto.videoUrl)));
+      if (!dto.thumbnailUrl?.trim()) {
+        throw new BadRequestException(
+          'A thumbnail image is required for video ads (Meta needs image_hash or image_url).',
+        );
+      }
+      {
+        const thumb =
+          normalizeCampaignImageUrlForMeta(dto.thumbnailUrl) ??
+          dto.thumbnailUrl.trim();
+        assertDirectMetaImageUrl(thumb);
+      }
       break;
     case MetaCreativeFormat.CAROUSEL:
       if (!dto.carouselCards?.length || dto.carouselCards.length < 2) {

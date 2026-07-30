@@ -8,6 +8,7 @@ import { mapMetaMarketingApiError } from '../facebook/facebook-meta-token.servic
 import {
   assertDirectMetaImageUrl,
   assertDirectMetaVideoUrl,
+  graphPostWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
 } from './facebook-campaign-meta';
@@ -304,13 +305,28 @@ export async function sdkCreateAdCreative(
   adAccountId: string,
   payload: Record<string, unknown>,
 ): Promise<string> {
-  const account = createAdAccount(accessToken, adAccountId);
-  return runSdkCreate(
+  const normalized = JSON.parse(JSON.stringify(payload)) as Record<
+    string,
+    unknown
+  >;
+  const path = `/${normalizeAdAccountId(adAccountId)}/adcreatives`;
+  const created = await graphPostWithToken<{ id?: string }>(
+    path,
+    accessToken,
+    normalized,
     'creative',
-    `/${normalizeAdAccountId(adAccountId)}/adcreatives`,
-    payload,
-    () => account.createAdCreative([], payload),
   );
+  const id = created.id?.trim();
+  if (!id) {
+    throw new MetaApiStepError(
+      'creative',
+      null,
+      'Facebook did not return an id for this step.',
+      JSON.stringify(created),
+      'Facebook did not return an id for this step.',
+    );
+  }
+  return id;
 }
 
 export async function sdkCreateAd(

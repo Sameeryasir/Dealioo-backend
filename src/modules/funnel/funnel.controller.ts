@@ -106,6 +106,11 @@ export class FunnelController {
     return Object.assign(funnel, { version: meta.version });
   }
 
+  @Get('public/:id')
+  getPublicFunnelById(@Param('id', ParseIntPipe) id: number) {
+    return this.funnelService.getPublicFunnelById(id);
+  }
+
   @UseGuards(AuthGuard('jwt'))
   @Get(':id')
   getFunnelById(@Param('id', ParseIntPipe) id: number): Promise<Funnel> {

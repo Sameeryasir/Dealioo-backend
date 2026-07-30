@@ -370,6 +370,7 @@ export function buildCreativePayloadFromDraft(
   media: {
     imageHash?: string;
     videoId?: string;
+    videoThumbnailHash?: string;
     carouselHashes?: string[];
   },
   destinationUrl: string,
@@ -412,11 +413,20 @@ export function buildCreativePayloadFromDraft(
     };
   }
 
+  const thumbnailUrl = creative.thumbnailUrl?.trim();
+  if (media.videoId && !media.videoThumbnailHash && !thumbnailUrl) {
+    throw new BadRequestException(
+      'Video ads require a thumbnail image. Upload a thumbnail on the Creative step, then publish again.',
+    );
+  }
+
   return buildCreativePayload({
     pageId: creative.facebookPageId,
     instagramActorId: creative.instagramActorId,
     imageHash: media.imageHash,
     videoId: media.videoId,
+    videoThumbnailHash: media.videoThumbnailHash,
+    videoThumbnailUrl: thumbnailUrl,
     destinationUrl,
     primaryText: creative.primaryText,
     headline: creative.headline ?? creative.name,

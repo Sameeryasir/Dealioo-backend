@@ -15,10 +15,6 @@ import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entit
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
-import {
-  normalizeCampaignImageUrlForMeta,
-  toAbsoluteAssetUrlIfRelative,
-} from '../../utils/disk-file-upload-multer';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { FacebookService } from '../facebook/facebook.service';
@@ -32,7 +28,6 @@ import {
 } from './dto/meta-publish-status.dto';
 import {
   adsManagerCampaignsUrl,
-  assertDirectMetaVideoUrl,
   graphGetWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
@@ -47,8 +42,6 @@ import {
   sdkCreateAdCreative,
   sdkCreateAdSet,
   sdkCreateCampaign,
-  sdkUploadAdImageHash,
-  sdkUploadAdVideoId,
 } from './meta-business-sdk';
 import { MetaCreativeFormat, MetaCreationStep } from './meta-campaign.constants';
 import {
@@ -65,7 +58,7 @@ import {
   metaPublishProgressPercent,
   type MetaPublishJobPayload,
 } from './meta-publish-queue.constants';
-import { MetaCampaignMediaService } from './meta-campaign-media.service';
+import { MetaAdsService } from './meta-ads.service';
 import { MetaPublishRealtimeService } from './meta-publish-realtime.service';
 import { logMetaPublishStep } from './meta-publish-trace';
 
@@ -108,7 +101,7 @@ export class MetaPublishService {
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly facebookService: FacebookService,
-    private readonly mediaService: MetaCampaignMediaService,
+    private readonly metaAdsService: MetaAdsService,
     private readonly realtimeService: MetaPublishRealtimeService,
   ) {}
 
@@ -601,21 +594,12 @@ export class MetaPublishService {
     accessToken: string,
     imageUrl: string,
   ): Promise<string> {
-    const forMeta =
-      normalizeCampaignImageUrlForMeta(imageUrl) ?? imageUrl.trim();
-
-    const existing = await this.mediaService.findReadyMetaRefsByUrl(forMeta);
-    if (existing?.metaImageHash) {
-      return existing.metaImageHash;
-    }
-
-    const imageHash = await sdkUploadAdImageHash(
-      accessToken,
+    const result = await this.metaAdsService.uploadImageToMeta({
       adAccountId,
-      forMeta,
-    );
-    await this.mediaService.markMetaRefs(forMeta, { imageHash });
-    return imageHash;
+      accessToken,
+      storageUrl: this.metaAdsService.assertMediaExists(imageUrl, 'image'),
+    });
+    return result.imageHash;
   }
 
   async uploadVideo(
@@ -623,27 +607,18 @@ export class MetaPublishService {
     accessToken: string,
     videoUrl: string,
   ): Promise<string> {
-    const resolved =
-      toAbsoluteAssetUrlIfRelative(videoUrl.trim()) ?? videoUrl.trim();
-    assertDirectMetaVideoUrl(resolved);
-
-    const existing = await this.mediaService.findReadyMetaRefsByUrl(resolved);
-    if (existing?.metaVideoId) {
-      return existing.metaVideoId;
-    }
-
-    const videoId = await sdkUploadAdVideoId(
-      accessToken,
+    const result = await this.metaAdsService.uploadVideoToMeta({
       adAccountId,
-      resolved,
-    );
-    await this.mediaService.markMetaRefs(resolved, { videoId });
-    return videoId;
+      accessToken,
+      storageUrl: this.metaAdsService.assertMediaExists(videoUrl, 'video'),
+    });
+    return result.videoId;
   }
 
   private async uploadCreativeMedia(ctx: PublishContext): Promise<{
     imageHash?: string;
     videoId?: string;
+    videoThumbnailHash?: string;
     carouselHashes?: string[];
   }> {
     this.logger.log('Publishing step: media');
@@ -664,7 +639,18 @@ export class MetaPublishService {
           accessToken,
           creative.videoUrl!,
         );
-        return { videoId };
+
+        let videoThumbnailHash: string | undefined;
+        const thumbnailUrl = creative.thumbnailUrl?.trim();
+        if (thumbnailUrl) {
+          videoThumbnailHash = await this.uploadImage(
+            adAccountId,
+            accessToken,
+            thumbnailUrl,
+          );
+        }
+
+        return { videoId, videoThumbnailHash };
       }
       case MetaCreativeFormat.CAROUSEL: {
         const carouselHashes: string[] = [];
@@ -691,6 +677,7 @@ export class MetaPublishService {
     media: {
       imageHash?: string;
       videoId?: string;
+      videoThumbnailHash?: string;
       carouselHashes?: string[];
     },
   ): Promise<string> {
@@ -707,10 +694,56 @@ export class MetaPublishService {
       throw new BadRequestException('Landing page URL is required.');
     }
 
+    const payload = buildCreativePayloadFromDraft(
+      ctx.creative,
+      media,
+      destinationUrl,
+    );
+
+    if (media.videoId) {
+      const storySpec =
+        payload.object_story_spec &&
+        typeof payload.object_story_spec === 'object'
+          ? (payload.object_story_spec as Record<string, unknown>)
+          : {};
+      const videoData: Record<string, unknown> =
+        storySpec.video_data && typeof storySpec.video_data === 'object'
+          ? { ...(storySpec.video_data as Record<string, unknown>) }
+          : { video_id: media.videoId };
+
+      const thumbnailHash = media.videoThumbnailHash?.trim();
+      const thumbnailUrl = ctx.creative.thumbnailUrl?.trim();
+      if (thumbnailHash) {
+        videoData.image_hash = thumbnailHash;
+        delete videoData.image_url;
+      } else if (thumbnailUrl) {
+        videoData.image_url = thumbnailUrl;
+      } else {
+        throw new BadRequestException(
+          'Video ads require a thumbnail image. Upload a thumbnail on the Creative step, then publish again.',
+        );
+      }
+
+      if (!videoData.image_hash && !videoData.image_url) {
+        throw new BadRequestException(
+          'Video ads require image_hash or image_url on video_data. Upload a thumbnail and publish again.',
+        );
+      }
+
+      payload.object_story_spec = {
+        ...storySpec,
+        video_data: videoData,
+      };
+
+      this.logger.log(
+        `Creative video_data thumbnail keys: hash=${Boolean(videoData.image_hash)} url=${Boolean(videoData.image_url)}`,
+      );
+    }
+
     return sdkCreateAdCreative(
       ctx.accessToken,
       ctx.adAccountId,
-      buildCreativePayloadFromDraft(ctx.creative, media, destinationUrl),
+      payload,
     );
   }
 

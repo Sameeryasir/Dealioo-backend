@@ -14,7 +14,9 @@ import { FacebookModule } from '../facebook/facebook.module';
 import { FacebookCampaignController } from './facebook-campaign.controller';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
-import { MetaCampaignMediaService } from './meta-campaign-media.service';
+import { MediaService } from './media.service';
+import { MetaAdsService } from './meta-ads.service';
+import { AdPublishService } from './ad-publish.service';
 import { META_PUBLISH_QUEUE } from './meta-publish-queue.constants';
 import { MetaPublishQueueProcessor } from './meta-publish-queue.processor';
 import { MetaPublishRealtimeService } from './meta-publish-realtime.service';
@@ -39,12 +41,20 @@ import { MetaPublishService } from './meta-publish.service';
   providers: [
     FacebookCampaignService,
     MetaCampaignDraftService,
-    MetaCampaignMediaService,
+    MediaService,
+    MetaAdsService,
     MetaPublishService,
+    AdPublishService,
     MetaPublishQueueProcessor,
     MetaPublishRealtimeService,
     FacebookIntegrationAuditService,
   ],
-  exports: [FacebookCampaignService, MetaPublishService],
+  exports: [
+    FacebookCampaignService,
+    MetaPublishService,
+    AdPublishService,
+    MediaService,
+    MetaAdsService,
+  ],
 })
 export class FacebookCampaignModule {}
