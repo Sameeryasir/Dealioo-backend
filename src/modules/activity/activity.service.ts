@@ -303,8 +303,11 @@ export class ActivityService {
     await this.logInTransaction(this.activityRepository.manager, payload);
   }
 
-  async logPrepaidForOffer(params: LogPrepaidForOfferDto): Promise<void> {
-    const payment = await this.funnelPaymentRepository.findOne({
+  async logPrepaidForOffer(
+    params: LogPrepaidForOfferDto & { manager?: EntityManager },
+  ): Promise<void> {
+    const manager = params.manager ?? this.activityRepository.manager;
+    const payment = await manager.findOne(FunnelPayment, {
       where: { id: params.paymentId },
       relations: ['funnel', 'funnel.campaign', 'business'],
     });
@@ -318,7 +321,7 @@ export class ActivityService {
 
     let customerId = params.customerId ?? null;
     if (customerId == null && payment.customerEmail?.trim()) {
-      const customer = await this.customerRepository.findOne({
+      const customer = await manager.findOne(Customer, {
         where: { email: payment.customerEmail.trim() },
         select: ['id'],
       });
@@ -328,7 +331,7 @@ export class ActivityService {
     let campaignName =
       payment.funnel?.campaign?.campaignName?.trim() || null;
     if (!campaignName && payment.campaignId) {
-      const campaign = await this.campaignRepository.findOne({
+      const campaign = await manager.findOne(Campaign, {
         where: { id: payment.campaignId },
         select: ['id', 'campaignName'],
       });
@@ -365,7 +368,7 @@ export class ActivityService {
       },
     };
 
-    await this.logInTransaction(this.activityRepository.manager, payload);
+    await this.logInTransaction(manager, payload);
   }
 
   async logMessageSent(params: LogMessageSentDto): Promise<void> {

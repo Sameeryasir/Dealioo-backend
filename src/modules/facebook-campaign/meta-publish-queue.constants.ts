@@ -11,7 +11,8 @@ export type MetaPublishJobPayload = {
 };
 
 export function metaPublishJobId(businessId: number, draftId: string): string {
-  return `meta-publish:${businessId}:${draftId}`;
+  // BullMQ custom job IDs cannot contain ':'.
+  return `meta-publish-${businessId}-${draftId}`;
 }
 
 export const META_PUBLISH_STEPS = [

@@ -74,6 +74,8 @@ export class FunnelEventController {
       businessId,
       customerId,
       funnelIds: dto.funnelIds,
+      // Business rule: staff must say if this was in-person, redeemed, or scanned.
+      purchaseMeans: dto.purchaseMeans,
       orderSubtotal: dto.orderSubtotal,
       extraItemsAmount: dto.extraItemsAmount ?? 0,
       staffUserId: req.user.id,

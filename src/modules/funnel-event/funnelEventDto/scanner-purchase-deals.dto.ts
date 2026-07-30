@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -11,6 +12,18 @@ import {
   MinLength,
 } from 'class-validator';
 
+/**
+ * How staff recorded the deal purchase at the scanner.
+ * IN_PERSON = paid/collected at the counter
+ * REDEEMED = deal was redeemed (pass used) rather than a fresh counter sale
+ * SCANNED = deal was recorded via QR / code scan
+ */
+export enum ScannerPurchaseMeans {
+  IN_PERSON = 'IN_PERSON',
+  REDEEMED = 'REDEEMED',
+  SCANNED = 'SCANNED',
+}
+
 export class ScannerPurchaseDealsDto {
   @IsArray()
   @ArrayMinSize(1)
@@ -18,6 +31,11 @@ export class ScannerPurchaseDealsDto {
   @IsInt({ each: true })
   @Min(1, { each: true })
   funnelIds: number[];
+
+  // --- Purchase means (required) ---
+  // Caller must say whether this attach-deals action was in-person, redeemed, or scanned.
+  @IsEnum(ScannerPurchaseMeans)
+  purchaseMeans: ScannerPurchaseMeans;
 
   @IsOptional()
   @Type(() => Number)

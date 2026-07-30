@@ -78,11 +78,17 @@ import {
   type BusinessFunnelEventDateFilter,
   type BusinessFunnelEventStatusFilter,
 } from './funnelEventDto/get-business-funnel-events-query.dto';
+import {
+  ScannerPurchaseMeans,
+} from './funnelEventDto/scanner-purchase-deals.dto';
 
+// --- Scanner purchase response ---
+// purchaseMeans echoes what the caller sent (IN_PERSON | REDEEMED | SCANNED).
 type ScannerPurchasedDeal = {
   funnelId: number;
   campaignName: string;
   couponId: number | null;
+  purchaseMeans: ScannerPurchaseMeans;
 };
 @Injectable()
 export class FunnelEventService {
@@ -304,16 +310,34 @@ export class FunnelEventService {
     });
   }
 
+  /**
+   * Changed: accept purchaseMeans (IN_PERSON | REDEEMED | SCANNED) from the scanner payload.
+   * Why: callers must say how the deal was recorded — in person, redeemed, or scanned.
+   * Related: ScannerPurchaseDealsDto, purchase-scanner-deals.ts (frontend).
+   */
   async purchaseDealsAtScanner(params: {
     businessId: number;
     customerId: number;
     funnelIds: number[];
+    purchaseMeans: ScannerPurchaseMeans;
     orderSubtotal?: number;
     extraItemsAmount?: number;
     staffUserId: number;
     idempotencyKey?: string;
   }): Promise<ScannerPurchasedDeal[]> {
     const { businessId, customerId, staffUserId } = params;
+    // --- Validate purchase means ---
+    const purchaseMeans = params.purchaseMeans;
+    if (
+      purchaseMeans !== ScannerPurchaseMeans.IN_PERSON &&
+      purchaseMeans !== ScannerPurchaseMeans.REDEEMED &&
+      purchaseMeans !== ScannerPurchaseMeans.SCANNED
+    ) {
+      throw new BadRequestException(
+        'purchaseMeans must be IN_PERSON, REDEEMED, or SCANNED.',
+      );
+    }
+
     const uniqueFunnelIds = [...new Set(params.funnelIds)].sort((a, b) => a - b);
     if (uniqueFunnelIds.length === 0) {
       throw new BadRequestException('Select at least one deal.');
@@ -333,12 +357,14 @@ export class FunnelEventService {
     }
 
     const idempotencyKey = params.idempotencyKey?.trim() || null;
+    // Include purchaseMeans so replay with a different means is treated as a different request.
     const requestHash = createHash('sha256')
       .update(
         JSON.stringify({
           customerId,
           funnelIds: uniqueFunnelIds,
           extraItemsCents,
+          purchaseMeans,
         }),
       )
       .digest('hex');
@@ -701,6 +727,7 @@ export class FunnelEventService {
             funnelId,
             campaignName: funnel.campaign.campaignName,
             couponId: coupon.id,
+            purchaseMeans,
           });
           continue;
         }
@@ -709,6 +736,7 @@ export class FunnelEventService {
           funnelId,
           campaignName: funnel.campaign.campaignName,
           couponId: null,
+          purchaseMeans,
         });
       }
 

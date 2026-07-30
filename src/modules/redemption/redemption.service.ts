@@ -795,7 +795,7 @@ export class RedemptionService {
         }
 
         if (walkInPayment) {
-          const settledOrderId = await this.settleUnpaidFunnelCheckoutAtCounter(
+          const settled = await this.settleUnpaidFunnelCheckoutAtCounter(
             manager,
             {
               coupon,
@@ -804,8 +804,14 @@ export class RedemptionService {
               paidAt: redeemedAt,
             },
           );
-          if (settledOrderId != null) {
-            settledOrderIdByCouponId.set(coupon.id, settledOrderId);
+          if (settled != null) {
+            settledOrderIdByCouponId.set(coupon.id, settled.orderId);
+            await this.activityService.logPrepaidForOffer({
+              paymentId: settled.paymentId,
+              customerId: coupon.customerId,
+              occurredAt: redeemedAt,
+              manager,
+            });
           }
         }
 
@@ -927,7 +933,7 @@ export class RedemptionService {
       staffUserId: number | null;
       paidAt: Date;
     },
-  ): Promise<number | null> {
+  ): Promise<{ orderId: number; paymentId: number } | null> {
     const { coupon, businessId, staffUserId, paidAt } = params;
 
     let payment: FunnelPayment | null = null;
@@ -957,8 +963,56 @@ export class RedemptionService {
       }
     }
 
+    // No pending/online checkout — still record paid scanner payment + order for walk-in.
     if (!payment) {
-      return null;
+      const priceDollars =
+        coupon.campaign?.price != null ? Number(coupon.campaign.price) : NaN;
+      if (!Number.isFinite(priceDollars) || priceDollars < 0) {
+        return null;
+      }
+
+      const customer = await manager.findOne(Customer, {
+        where: { id: coupon.customerId },
+        select: ['id', 'email'],
+      });
+      const amountCents = dollarsToCents(priceDollars);
+      const order = await manager.save(
+        manager.create(Order, {
+          businessId,
+          status: OrderStatus.PAID,
+          source: OrderSource.SCANNER,
+          totalAmount: amountCents,
+          currency: 'usd',
+          paidAt,
+        }),
+      );
+      payment = await manager.save(
+        manager.create(FunnelPayment, {
+          funnelId: coupon.funnelId ?? null,
+          businessId,
+          campaignId: coupon.campaignId,
+          customerId: coupon.customerId,
+          orderId: order.id,
+          amount: amountCents,
+          currency: 'usd',
+          status: FunnelPaymentStatus.PAID,
+          customerEmail: customer?.email?.trim().toLowerCase() || '',
+          platformFeeAmount: 0,
+          refundedAmount: 0,
+          stripePaymentIntentId: null,
+          stripeConnectedAccountId: null,
+          paymentSource: FunnelPaymentSource.SCANNER,
+          collectionChannel: FunnelCollectionChannel.IN_STORE,
+          paymentMethod: FunnelPaymentMethod.OTHER,
+          paymentCollectedBy: staffUserId,
+          paymentCollectedAt: paidAt,
+          paidAt,
+        }),
+      );
+      await manager.update(Coupon, coupon.id, {
+        funnelPaymentId: payment.id,
+      });
+      return { orderId: order.id, paymentId: payment.id };
     }
 
     await manager.update(FunnelPayment, payment.id, {
@@ -975,6 +1029,8 @@ export class RedemptionService {
     payment.paidAt = payment.paidAt ?? paidAt;
     payment.customerId = coupon.customerId ?? payment.customerId ?? null;
     payment.paymentCollectedBy = staffUserId;
+    payment.paymentSource = FunnelPaymentSource.SCANNER;
+    payment.collectionChannel = FunnelCollectionChannel.IN_STORE;
 
     if (coupon.funnelPaymentId !== payment.id) {
       await manager.update(Coupon, coupon.id, {
@@ -1018,7 +1074,7 @@ export class RedemptionService {
       },
     );
 
-    return orderId;
+    return { orderId, paymentId: payment.id };
   }
 
   private async recordVisitFromQrScan(params: {

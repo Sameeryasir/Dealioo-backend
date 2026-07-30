@@ -184,7 +184,8 @@ export class BusinessService {
         businessName: business.name,
       },
       {
-        jobId: `business-post-create:${business.id}`,
+        // BullMQ custom job IDs cannot contain ':'.
+        jobId: `business-post-create-${business.id}`,
         removeOnComplete: true,
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 },
