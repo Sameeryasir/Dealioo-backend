@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import { refreshGoogleAccessToken } from './google-oauth.client';
 
 export const GOOGLE_ADS_REQUIRED_SCOPE =
   'https://www.googleapis.com/auth/adwords';
@@ -12,14 +13,6 @@ export type GoogleBusinessCredentials = {
   googleUserId: string;
   customerId: string | null;
   loginCustomerId: string;
-};
-
-type TokenRefreshResponse = {
-  access_token?: string;
-  expires_in?: number;
-  scope?: string;
-  error?: string;
-  error_description?: string;
 };
 
 @Injectable()
@@ -156,37 +149,35 @@ export class GoogleAdsTokenService {
     expiresIn: number | null;
     scopes: string[];
   }> {
-    const clientId = this.getClientId();
-    const clientSecret = this.getClientSecret();
-
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
-
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      signal: AbortSignal.timeout(20_000),
-    });
-
-    const json = (await res.json()) as TokenRefreshResponse;
-    if (!res.ok || !json.access_token) {
-      throw new BadRequestException(
-        json.error_description ??
-          json.error ??
+    try {
+      const credentials = await refreshGoogleAccessToken(refreshToken);
+      if (!credentials.access_token) {
+        throw new BadRequestException(
           'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
+        );
+      }
+
+      const expiresIn =
+        credentials.expiry_date != null
+          ? Math.max(
+              0,
+              Math.floor((credentials.expiry_date - Date.now()) / 1000),
+            )
+          : null;
+
+      return {
+        accessToken: credentials.access_token,
+        expiresIn,
+        scopes: (credentials.scope ?? '').split(' ').filter(Boolean),
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
       );
     }
-
-    return {
-      accessToken: json.access_token,
-      expiresIn: json.expires_in ?? null,
-      scopes: (json.scope ?? '').split(' ').filter(Boolean),
-    };
   }
 
   getClientId(): string {

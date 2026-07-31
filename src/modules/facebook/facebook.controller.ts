@@ -17,6 +17,7 @@ import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
+import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
 import { SetFacebookAdAccountDto } from './dto/set-facebook-ad-account.dto';
@@ -162,6 +163,15 @@ export class FacebookController {
       req.user,
       businessId,
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('ad-pixels/:businessId')
+  async listAdPixels(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<FacebookAdPixelDto[]> {
+    return this.facebookService.listAdPixelsForBusiness(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))

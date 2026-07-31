@@ -13,6 +13,7 @@ import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util'
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
+import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
@@ -588,6 +589,154 @@ export class FacebookService {
         id: row.id!.trim(),
         name: row.name?.trim() ?? null,
       }));
+  }
+
+  async listAdPixelsForBusiness(
+    user: User,
+    businessId: number,
+  ): Promise<FacebookAdPixelDto[]> {
+    console.log('[listAdPixelsForBusiness] called', {
+      businessId,
+      userId: user?.id,
+    });
+
+    const business = await this.requireMetaBusiness(user, businessId);
+
+    if (!business.metaAdAccountId?.trim()) {
+      console.warn(
+        '[listAdPixelsForBusiness] no metaAdAccountId for business',
+        businessId,
+      );
+      throw new BadRequestException(
+        'Select a Meta ad account before loading pixels.',
+      );
+    }
+
+    const { accessToken } =
+      await this.metaTokenService.assertBusinessMetaToken(business);
+
+    const adAccountId = this.normalizeAdAccountId(business.metaAdAccountId);
+    console.log('[listAdPixelsForBusiness] fetching pixels', {
+      businessId,
+      adAccountId,
+    });
+    const byId = new Map<string, FacebookAdPixelDto>();
+    const sourceCounts: Record<string, number> = {};
+
+    const addRows = (
+      source: string,
+      rows: Array<{ id?: string | number; name?: string }> | undefined,
+    ) => {
+      let added = 0;
+      for (const row of rows ?? []) {
+        const id = String(row.id ?? '').trim();
+        if (!id || byId.has(id)) continue;
+        byId.set(id, {
+          id,
+          name: row.name?.trim() || null,
+        });
+        added += 1;
+      }
+      sourceCounts[source] = (sourceCounts[source] ?? 0) + (rows?.length ?? 0);
+      console.log(`[listAdPixelsForBusiness] ${source}`, {
+        returned: rows?.length ?? 0,
+        newlyAdded: added,
+      });
+    };
+
+    const fetchPixelEdge = async (path: string, source: string) => {
+      try {
+        const response = await this.graphGetWithToken<{
+          data?: Array<{ id?: string | number; name?: string }>;
+        }>(path, accessToken, {
+          fields: 'id,name',
+          limit: '100',
+        });
+        addRows(source, response.data);
+      } catch (err) {
+        console.warn(`[listAdPixelsForBusiness] ${source} failed`, {
+          path,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        this.logger.warn(
+          `${source} failed (${path}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    };
+
+    // 1) Pixels on the selected ad account
+    await fetchPixelEdge(`/${adAccountId}/adspixels`, 'ad_account.adspixels');
+
+    // Collect Business Manager IDs from the ad account + /me/businesses
+    const bmIds = new Set<string>();
+
+    try {
+      const accountMeta = await this.graphGetWithToken<{
+        business?: { id?: string | number; name?: string };
+      }>(`/${adAccountId}`, accessToken, { fields: 'business{id,name}' });
+      const ownerBmId = String(accountMeta.business?.id ?? '').trim();
+      console.log('[listAdPixelsForBusiness] ad account business', {
+        ownerBmId: ownerBmId || null,
+        name: accountMeta.business?.name ?? null,
+      });
+      if (ownerBmId) bmIds.add(ownerBmId);
+    } catch (err) {
+      console.warn('[listAdPixelsForBusiness] ad account business lookup failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const businesses = await this.graphGetWithToken<{
+        data?: Array<{ id?: string | number; name?: string }>;
+      }>('/me/businesses', accessToken, {
+        fields: 'id,name',
+        limit: '50',
+      });
+      for (const bm of businesses.data ?? []) {
+        const id = String(bm.id ?? '').trim();
+        if (id) bmIds.add(id);
+      }
+      console.log('[listAdPixelsForBusiness] me/businesses', {
+        count: businesses.data?.length ?? 0,
+        ids: [...bmIds],
+      });
+    } catch (err) {
+      console.warn('[listAdPixelsForBusiness] me/businesses failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // 2) Per Business Manager: owned, client, and accessible pixels
+    for (const bmId of bmIds) {
+      await fetchPixelEdge(`/${bmId}/owned_pixels`, `bm:${bmId}.owned_pixels`);
+      await fetchPixelEdge(`/${bmId}/client_pixels`, `bm:${bmId}.client_pixels`);
+      await fetchPixelEdge(`/${bmId}/adspixels`, `bm:${bmId}.adspixels`);
+    }
+
+    const pixels = [...byId.values()].sort((a, b) =>
+      (a.name ?? a.id).localeCompare(b.name ?? b.id),
+    );
+
+    console.log('[listAdPixelsForBusiness] result', {
+      businessId,
+      adAccountId,
+      count: pixels.length,
+      sourceCounts,
+      pixels,
+    });
+    this.logger.log(
+      `Business ${businessId} Meta pixels: ${pixels.length} (adAccount=${adAccountId})`,
+    );
+
+    await this.auditService.log(businessId, 'ad_pixels_fetched', {
+      status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
+      metadata: { count: pixels.length, adAccountId, sourceCounts },
+    });
+
+    return pixels;
   }
 
   async setBusinessAdAccount(

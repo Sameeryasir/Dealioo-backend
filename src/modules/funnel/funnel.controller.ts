@@ -10,6 +10,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -107,8 +108,19 @@ export class FunnelController {
   }
 
   @Get('public/:id')
-  getPublicFunnelById(@Param('id', ParseIntPipe) id: number) {
-    return this.funnelService.getPublicFunnelById(id);
+  getPublicFunnelById(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('businessId') businessIdRaw?: string,
+    @Query('step') step?: string,
+  ) {
+    const parsed = Number.parseInt(businessIdRaw ?? '', 10);
+    const trackingBusinessId =
+      Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return this.funnelService.getPublicFunnelById(
+      id,
+      trackingBusinessId,
+      step,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

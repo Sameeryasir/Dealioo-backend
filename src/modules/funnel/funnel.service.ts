@@ -11,12 +11,15 @@ import { FunnelVersion } from '../../db/entities/funnel-version.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import {
+  FunnelPageType,
   FUNNEL_PAGE_TYPES,
   FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
+  isFunnelPageType,
 } from '../../db/entities/funnel-page-type';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isBusinessOwnerScopedUser } from '../../utils/business-access';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { BusinessTrackingService } from '../business-tracking/business-tracking.service';
 import { FunnelPagesService } from '../funnel-pages/funnel-pages.service';
 import { RedemptionService } from '../redemption/redemption.service';
 import { CreateFunnelDto } from './funnelDto/create-funnel.dto';
@@ -36,6 +39,7 @@ export class FunnelService {
     private readonly businessRepository: Repository<Business>,
     private readonly redemptionService: RedemptionService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly businessTrackingService: BusinessTrackingService,
     private readonly funnelPagesService: FunnelPagesService,
   ) {}
 
@@ -167,10 +171,25 @@ export class FunnelService {
     return funnel;
   }
 
-  async getPublicFunnelById(id: number): Promise<{
+  private publicPagesForStep(step?: string | null): FunnelPageType[] {
+    const normalized = step?.trim().toLowerCase() ?? '';
+    if (normalized && isFunnelPageType(normalized)) {
+      return [normalized];
+    }
+    return [FunnelPageType.LANDING];
+  }
+
+  async getPublicFunnelById(
+    id: number,
+    trackingBusinessId?: number | null,
+    step?: string | null,
+  ): Promise<{
     id: number;
     campaignId: number;
     businessId: number | null;
+    pixelId: string | null;
+    googleTagManagerId: string | null;
+    step: string;
     pages: Record<string, unknown>;
   }> {
     const funnel = await this.funnelRepository.findOne({
@@ -185,11 +204,41 @@ export class FunnelService {
       throw new NotFoundException('Funnel not found');
     }
 
-    const pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+    let businessId =
+      trackingBusinessId && trackingBusinessId > 0
+        ? trackingBusinessId
+        : funnel.businessId;
+
+    if (businessId == null) {
+      const campaign = await this.campaignRepository.findOne({
+        where: { id: funnel.campaignId },
+        select: { id: true, businessId: true },
+      });
+      businessId = campaign?.businessId ?? null;
+    }
+
+    const tracking =
+      businessId != null
+        ? await this.businessTrackingService.getActivePublicIdsForBusiness(
+            businessId,
+          )
+        : { pixelId: null, googleTagManagerId: null };
+
+    const pageTypes = this.publicPagesForStep(step);
+    const resolvedStep = pageTypes[0] ?? FunnelPageType.LANDING;
+
+    const pages = await this.funnelPagesService.loadSubsetPages(
+      funnel.id,
+      pageTypes,
+    );
+
     return {
       id: funnel.id,
       campaignId: funnel.campaignId,
-      businessId: funnel.businessId,
+      businessId,
+      pixelId: tracking.pixelId,
+      googleTagManagerId: tracking.googleTagManagerId,
+      step: resolvedStep,
       pages,
     };
   }

@@ -28,10 +28,13 @@ import {
   GOOGLE_ADS_REQUIRED_SCOPE,
   GoogleAdsTokenService,
 } from './google-ads-token.service';
+import {
+  buildGoogleOAuthConnectUrl,
+  exchangeGoogleAuthCode,
+  fetchGoogleOAuthUserInfo,
+  GOOGLE_OAUTH_SCOPES,
+} from './google-oauth.client';
 
-const GOOGLE_OAUTH_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_OAUTH_TOKEN = 'https://oauth2.googleapis.com/token';
-const GOOGLE_USERINFO = 'https://www.googleapis.com/oauth2/v2/userinfo';
 const DEFAULT_GOOGLE_ADS_API_VERSION = 'v22';
 
 function googleAdsApiBaseUrl(): string {
@@ -57,29 +60,8 @@ type GoogleAdsFailureDetail = {
     message?: string;
   }>;
 };
-const GOOGLE_OAUTH_SCOPES = [
-  GOOGLE_ADS_REQUIRED_SCOPE,
-  'openid',
-  'email',
-  'profile',
-].join(' ');
 const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
 const API_TIMEOUT_MS = 25_000;
-
-type GoogleTokenResponse = {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-  error?: string;
-  error_description?: string;
-};
-
-type GoogleUserInfo = {
-  id?: string;
-  email?: string;
-  error?: { message?: string };
-};
 
 type GoogleAdsSearchRow = {
   campaign?: {
@@ -194,25 +176,26 @@ export class GoogleAdsService {
   }
 
   createOAuthConnectUrl(businessId: number): { url: string } {
-    const clientId = this.tokenService.getClientId();
     const clientSecret = this.tokenService.getClientSecret();
     const redirectUri = this.getRedirectUri();
 
     this.logger.log(
-      `Google OAuth connect URL business=${businessId} redirectUri=${redirectUri} requestedScopes=${GOOGLE_OAUTH_SCOPES}`,
+      `Google OAuth connect URL business=${businessId} redirectUri=${redirectUri} requestedScopes=${GOOGLE_OAUTH_SCOPES.join(' ')}`,
     );
 
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      scope: GOOGLE_OAUTH_SCOPES,
-      state: createGoogleOAuthState(businessId, clientSecret),
-      access_type: 'offline',
-      prompt: 'consent select_account',
-    });
-
-    return { url: `${GOOGLE_OAUTH_AUTH}?${params.toString()}` };
+    try {
+      const url = buildGoogleOAuthConnectUrl({
+        redirectUri,
+        state: createGoogleOAuthState(businessId, clientSecret),
+      });
+      return { url };
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET is not configured.',
+      );
+    }
   }
 
   parseBusinessIdFromOAuthState(state: string | undefined): number | null {
@@ -286,9 +269,7 @@ export class GoogleAdsService {
 
       if (!tokenJson.access_token) {
         throw new BadRequestException(
-          tokenJson.error_description ??
-            tokenJson.error ??
-            'Google did not return an access token. Try connecting again.',
+          'Google did not return an access token. Try connecting again.',
         );
       }
 
@@ -308,16 +289,16 @@ export class GoogleAdsService {
 
       const grantedScopes = this.mergeScopeLists(
         callbackScopes,
-        this.parseScopeList(tokenJson.scope),
+        this.parseScopeList(tokenJson.scope ?? undefined),
       );
       this.logger.log(
-        `Google OAuth scopes after token exchange business=${businessId}: callback=${JSON.stringify(callbackScopes)} token=${JSON.stringify(this.parseScopeList(tokenJson.scope))} merged=${JSON.stringify(grantedScopes)}`,
+        `Google OAuth scopes after token exchange business=${businessId}: callback=${JSON.stringify(callbackScopes)} token=${JSON.stringify(this.parseScopeList(tokenJson.scope ?? undefined))} merged=${JSON.stringify(grantedScopes)}`,
       );
       this.tokenService.assertGoogleScopes(grantedScopes);
 
       const tokenExpiresAt =
-        tokenJson.expires_in != null
-          ? new Date(Date.now() + tokenJson.expires_in * 1000)
+        tokenJson.expiry_date != null
+          ? new Date(tokenJson.expiry_date)
           : null;
 
       await this.businessRepository.update(businessId, {
@@ -1058,50 +1039,42 @@ export class GoogleAdsService {
   private async exchangeCodeForTokens(
     code: string,
     redirectUri: string,
-  ): Promise<GoogleTokenResponse> {
-    const body = new URLSearchParams({
-      code,
-      client_id: this.tokenService.getClientId(),
-      client_secret: this.tokenService.getClientSecret(),
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code',
-    });
-
-    const res = await fetch(GOOGLE_OAUTH_TOKEN, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
-
-    const tokenJson = (await res.json()) as GoogleTokenResponse;
-
-    // Debug token exchange (do not log full secrets).
-    this.logger.log(
-      `Google token exchange status=${res.status} hasAccessToken=${Boolean(tokenJson.access_token)} hasRefreshToken=${Boolean(tokenJson.refresh_token)} expiresIn=${tokenJson.expires_in ?? 'n/a'} scope=${tokenJson.scope ?? '(empty)'} error=${tokenJson.error ?? 'none'} errorDescription=${tokenJson.error_description ?? 'none'}`,
-    );
-
-    return tokenJson;
+  ): Promise<{
+    access_token?: string | null;
+    refresh_token?: string | null;
+    expiry_date?: number | null;
+    scope?: string | null;
+  }> {
+    try {
+      const tokens = await exchangeGoogleAuthCode({ code, redirectUri });
+      this.logger.log(
+        `Google token exchange (googleapis SDK) hasAccessToken=${Boolean(tokens.access_token)} hasRefreshToken=${Boolean(tokens.refresh_token)} expiryDate=${tokens.expiry_date ?? 'n/a'} scope=${tokens.scope ?? '(empty)'}`,
+      );
+      return tokens;
+    } catch (err) {
+      this.logger.error(
+        `Google token exchange failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Google did not return an access token. Try connecting again.',
+      );
+    }
   }
 
   private async fetchGoogleUser(
     accessToken: string,
   ): Promise<{ id: string | null; email: string | null }> {
-    const url = new URL(GOOGLE_USERINFO);
-    url.searchParams.set('access_token', accessToken);
-
-    const res = await fetch(url.toString(), {
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
-
-    const me = (await res.json()) as GoogleUserInfo;
-    if (!res.ok) {
+    try {
+      return await fetchGoogleOAuthUserInfo(accessToken);
+    } catch (err) {
       throw new BadRequestException(
-        me.error?.message ?? 'Could not read your Google profile.',
+        err instanceof Error
+          ? err.message
+          : 'Could not read your Google profile.',
       );
     }
-
-    return { id: me.id ?? null, email: me.email ?? null };
   }
 
   private normalizeCustomerId(raw: string): string {

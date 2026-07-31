@@ -24,6 +24,7 @@ import { RedemptionModule } from './modules/redemption/redemption.module';
 import { ActivityModule } from './modules/activity/activity.module';
 import { CustomerActivityModule } from './modules/customer-activity/customer-activity.module';
 import { BusinessHistoryModule } from './modules/business-history/business-history.module';
+import { BusinessTrackingModule } from './modules/business-tracking/business-tracking.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
@@ -90,6 +91,7 @@ import { AiModule } from './modules/ai/ai.module';
     ActivityModule,
     CustomerActivityModule,
     BusinessHistoryModule,
+    BusinessTrackingModule,
     ChatModule,
     MemberModule,
     InvitationModule,
