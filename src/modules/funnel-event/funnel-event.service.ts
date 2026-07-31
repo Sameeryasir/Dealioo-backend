@@ -1182,6 +1182,7 @@ export class FunnelEventService {
       if (visitorId) {
         existing.visitorId = visitorId;
       }
+      existing.updatedAt = new Date();
       return {
         event: await this.funnelEventRepository.save(existing),
         shouldRunAutomation: false,
@@ -1639,27 +1640,6 @@ export class FunnelEventService {
   }): Promise<void> {
     const email = input.customerEmail.trim().toLowerCase();
 
-    const alreadyPaid = await this.funnelPaymentRepository.findOne({
-      where: [
-        {
-          funnelId: input.funnelId,
-          businessId: input.businessId,
-          customerId: input.customerId,
-          status: FunnelPaymentStatus.PAID,
-        },
-        {
-          funnelId: input.funnelId,
-          businessId: input.businessId,
-          customerEmail: email,
-          status: FunnelPaymentStatus.PAID,
-        },
-      ],
-      order: { createdAt: 'DESC' },
-    });
-    if (alreadyPaid) {
-      return;
-    }
-
     let payment = await this.funnelPaymentRepository.findOne({
       where: {
         funnelId: input.funnelId,
@@ -1670,38 +1650,66 @@ export class FunnelEventService {
       order: { createdAt: 'DESC' },
     });
 
-    if (!payment) {
-      payment = await this.funnelPaymentRepository.save(
-        this.funnelPaymentRepository.create({
-          funnelId: input.funnelId,
-          businessId: input.businessId,
-          campaignId: input.campaignId,
-          customerId: input.customerId,
-          customerEmail: email,
-          amount: input.amountCents,
-          currency: input.currency || 'usd',
-          platformFeeAmount: 0,
-          status: FunnelPaymentStatus.PENDING,
-          paymentSource: FunnelPaymentSource.STRIPE,
-          collectionChannel: FunnelCollectionChannel.ONLINE,
-          paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
-          stripePaymentIntentId: null,
-          stripeCheckoutSessionId: null,
-          refundedAmount: 0,
-          orderId: null,
-        }),
-      );
-    } else if (payment.customerId == null) {
+    const now = new Date();
+    const amountCents =
+      input.amountCents > 0 ? input.amountCents : (payment?.amount ?? 0);
+
+    if (payment) {
       await this.funnelPaymentRepository.update(payment.id, {
         customerId: input.customerId,
         campaignId: payment.campaignId ?? input.campaignId,
+        amount: amountCents > 0 ? amountCents : payment.amount,
+        updatedAt: now,
       });
       payment.customerId = input.customerId;
-    }
+      payment.updatedAt = now;
+      if (amountCents > 0) {
+        payment.amount = amountCents;
+      }
 
-    if (payment.orderId != null) {
+      if (payment.orderId != null) {
+        await this.orderRepository.update(payment.orderId, {
+          ...(amountCents > 0 ? { totalAmount: amountCents } : {}),
+          updatedAt: now,
+        });
+      } else {
+        const order = await this.orderRepository.save(
+          this.orderRepository.create({
+            businessId: input.businessId,
+            status: OrderStatus.PENDING,
+            source: OrderSource.STRIPE,
+            totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
+            currency: payment.currency || input.currency || 'usd',
+            paidAt: null,
+          }),
+        );
+        await this.funnelPaymentRepository.update(payment.id, {
+          orderId: order.id,
+        });
+      }
       return;
     }
+
+    payment = await this.funnelPaymentRepository.save(
+      this.funnelPaymentRepository.create({
+        funnelId: input.funnelId,
+        businessId: input.businessId,
+        campaignId: input.campaignId,
+        customerId: input.customerId,
+        customerEmail: email,
+        amount: input.amountCents,
+        currency: input.currency || 'usd',
+        platformFeeAmount: 0,
+        status: FunnelPaymentStatus.PENDING,
+        paymentSource: FunnelPaymentSource.STRIPE,
+        collectionChannel: FunnelCollectionChannel.ONLINE,
+        paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
+        stripePaymentIntentId: null,
+        stripeCheckoutSessionId: null,
+        refundedAmount: 0,
+        orderId: null,
+      }),
+    );
 
     const order = await this.orderRepository.save(
       this.orderRepository.create({
@@ -1992,6 +2000,13 @@ export class FunnelEventService {
     const paidAt = anyPaid
       ? (order.paidAt ?? primary?.paidAt ?? order.createdAt)
       : null;
+    const unpaidActivityAt = !anyPaid
+      ? this.latestTimestamp(
+          order.updatedAt,
+          primary?.updatedAt ?? null,
+          order.createdAt,
+        )
+      : null;
     const onlineAmountCents =
       order.totalAmount > 0
         ? order.totalAmount
@@ -2017,7 +2032,7 @@ export class FunnelEventService {
       id: order.id,
       rowKey: `order:${order.id}`,
       eventType: FunnelEventType.PAYMENT,
-      createdAt: paidAt ?? order.createdAt,
+      createdAt: paidAt ?? unpaidActivityAt ?? order.createdAt,
       funnelId: primary?.funnelId ?? primary?.funnel?.id ?? 0,
       campaignId:
         primary?.campaignId ??
@@ -2062,6 +2077,28 @@ export class FunnelEventService {
       orderId: order.id,
       paymentSource: primary?.paymentSource ?? null,
     };
+  }
+
+  private latestTimestamp(
+    ...values: Array<Date | string | null | undefined>
+  ): Date | null {
+    let bestMs = NaN;
+    let best: Date | null = null;
+    for (const value of values) {
+      if (value == null) {
+        continue;
+      }
+      const asDate = value instanceof Date ? value : new Date(value);
+      const ms = asDate.getTime();
+      if (!Number.isFinite(ms)) {
+        continue;
+      }
+      if (!Number.isFinite(bestMs) || ms >= bestMs) {
+        bestMs = ms;
+        best = asDate;
+      }
+    }
+    return best;
   }
 
   private async resolveCustomerIdsForPayments(
