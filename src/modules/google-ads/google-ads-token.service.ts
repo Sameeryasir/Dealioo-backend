@@ -10,6 +10,7 @@ export const GOOGLE_ADS_REQUIRED_SCOPE =
 
 export type GoogleBusinessCredentials = {
   accessToken: string;
+  refreshToken: string;
   googleUserId: string;
   customerId: string | null;
   loginCustomerId: string;
@@ -52,7 +53,11 @@ export class GoogleAdsTokenService {
 
   async assertBusinessGoogleToken(
     business: Business,
-  ): Promise<{ accessToken: string; googleUserId: string }> {
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    googleUserId: string;
+  }> {
     const googleUserId = business.googleUserId?.trim();
     const refreshToken = this.decryptRefreshToken(business);
 
@@ -63,13 +68,13 @@ export class GoogleAdsTokenService {
     }
 
     const accessToken = await this.getValidAccessToken(business, refreshToken);
-    return { accessToken, googleUserId };
+    return { accessToken, refreshToken, googleUserId };
   }
 
   async assertBusinessGoogleCredentials(
     business: Business,
   ): Promise<GoogleBusinessCredentials> {
-    const { accessToken, googleUserId } =
+    const { accessToken, refreshToken, googleUserId } =
       await this.assertBusinessGoogleToken(business);
 
     if (!business.googleCustomerId?.trim()) {
@@ -86,6 +91,7 @@ export class GoogleAdsTokenService {
 
     return {
       accessToken,
+      refreshToken,
       googleUserId,
       customerId: business.googleCustomerId.trim(),
       loginCustomerId:

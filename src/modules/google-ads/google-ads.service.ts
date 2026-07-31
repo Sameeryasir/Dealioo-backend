@@ -34,46 +34,28 @@ import {
   fetchGoogleOAuthUserInfo,
   GOOGLE_OAUTH_SCOPES,
 } from './google-oauth.client';
+import {
+  createGoogleAdsApiClient,
+  createGoogleAdsCustomer,
+  formatGoogleAdsSdkError,
+  fromMicros,
+} from './google-ads-sdk.client';
 
-const DEFAULT_GOOGLE_ADS_API_VERSION = 'v22';
-
-function googleAdsApiBaseUrl(): string {
-  const version =
-    process.env.GOOGLE_ADS_API_VERSION?.trim() || DEFAULT_GOOGLE_ADS_API_VERSION;
-  return `https://googleads.googleapis.com/${version}`;
-}
-
-type GoogleAdsApiErrorBody = {
-  error?: {
-    message?: string;
-    status?: string;
-    code?: number;
-    details?: GoogleAdsFailureDetail[];
-  };
-  details?: GoogleAdsFailureDetail[];
-};
-
-type GoogleAdsFailureDetail = {
-  '@type'?: string;
-  errors?: Array<{
-    errorCode?: Record<string, string>;
-    message?: string;
-  }>;
-};
 const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
-const API_TIMEOUT_MS = 25_000;
+const GOOGLE_ADS_SDK_TIMEOUT_MS = 12_000;
 
 type GoogleAdsSearchRow = {
   campaign?: {
-    id?: string;
+    id?: string | number;
     name?: string;
-    status?: string;
+    status?: string | number;
   };
   metrics?: {
-    costMicros?: string;
-    impressions?: string;
-    clicks?: string;
-    conversions?: string;
+    costMicros?: string | number;
+    cost_micros?: string | number;
+    impressions?: string | number;
+    clicks?: string | number;
+    conversions?: string | number;
   };
   customer?: {
     descriptiveName?: string;
@@ -86,14 +68,24 @@ type GoogleAdsSearchRow = {
 
 type GoogleAdsCustomerClientRow = {
   customerClient?: {
-    id?: string;
+    id?: string | number;
     descriptiveName?: string;
     descriptive_name?: string;
     currencyCode?: string;
     currency_code?: string;
     manager?: boolean;
     level?: string | number;
-    status?: string;
+    status?: string | number;
+  };
+  customer_client?: {
+    id?: string | number;
+    descriptiveName?: string;
+    descriptive_name?: string;
+    currencyCode?: string;
+    currency_code?: string;
+    manager?: boolean;
+    level?: string | number;
+    status?: string | number;
   };
 };
 
@@ -421,7 +413,7 @@ export class GoogleAdsService {
     );
 
     const business = await this.loadOwnedBusiness(user, businessId);
-    const { accessToken } =
+    const { refreshToken } =
       await this.tokenService.assertBusinessGoogleToken(business);
 
     const scopes = (business.googleOauthScopes ?? '')
@@ -430,7 +422,7 @@ export class GoogleAdsService {
       .filter(Boolean);
     this.tokenService.assertGoogleScopes(scopes);
 
-    const customers = await this.listAccessibleCustomers(accessToken);
+    const customers = await this.listAccessibleCustomers(refreshToken);
 
     await this.auditService.log(businessId, 'customers_fetched', {
       status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
@@ -452,22 +444,28 @@ export class GoogleAdsService {
     );
 
     const business = await this.loadOwnedBusiness(user, businessId);
-    const { accessToken } =
+    const { refreshToken } =
       await this.tokenService.assertBusinessGoogleToken(business);
 
     const normalizedId = this.normalizeCustomerId(customerId);
-    const customers = await this.listAccessibleCustomers(accessToken);
-    const match = customers.find((c) => c.id === normalizedId);
+    const loginCustomerId = managerCustomerId?.trim()
+      ? this.normalizeCustomerId(managerCustomerId)
+      : normalizedId;
 
-    if (!match) {
+    try {
+      await this.fetchCustomerMeta(
+        refreshToken,
+        normalizedId,
+        loginCustomerId,
+      );
+    } catch (err) {
       throw new BadRequestException(
-        'That Google Ads account is not available for this Google login. Pick one from the list.',
+        formatGoogleAdsSdkError(
+          err,
+          'That Google Ads account is not available for this Google login. Pick one from the list.',
+        ),
       );
     }
-
-    const loginCustomerId = match.managerCustomerId?.trim()
-      ? this.normalizeCustomerId(match.managerCustomerId)
-      : normalizedId;
 
     await this.businessRepository.update(businessId, {
       googleCustomerId: normalizedId,
@@ -480,7 +478,6 @@ export class GoogleAdsService {
       metadata: {
         customerId: normalizedId,
         loginCustomerId,
-        isManager: match.isManager,
       },
     });
 
@@ -543,19 +540,13 @@ export class GoogleAdsService {
   async getAdCampaignStats(
     business: Business,
   ): Promise<GoogleAdsCampaignStatsDto> {
-    const { accessToken, customerId, loginCustomerId } =
+    const { refreshToken, customerId, loginCustomerId } =
       await this.tokenService.assertBusinessGoogleCredentials(business);
 
-    const customerMeta = await this.fetchCustomerMeta(
-      accessToken,
-      customerId!,
-      loginCustomerId,
-    );
-    const campaigns = await this.fetchCampaignStats(
-      accessToken,
-      customerId!,
-      loginCustomerId,
-    );
+    const [customerMeta, campaigns] = await Promise.all([
+      this.fetchCustomerMeta(refreshToken, customerId!, loginCustomerId),
+      this.fetchCampaignStats(refreshToken, customerId!, loginCustomerId),
+    ]);
 
     return {
       customerId,
@@ -567,7 +558,7 @@ export class GoogleAdsService {
   }
 
   private async fetchCampaignStats(
-    accessToken: string,
+    refreshToken: string,
     customerId: string,
     loginCustomerId: string = customerId,
   ): Promise<GoogleAdsCampaignStatsDto['campaigns']> {
@@ -586,7 +577,7 @@ export class GoogleAdsService {
     `.trim();
 
     const rows = await this.googleAdsSearch<GoogleAdsSearchRow>(
-      accessToken,
+      refreshToken,
       customerId,
       query,
       loginCustomerId,
@@ -606,25 +597,25 @@ export class GoogleAdsService {
     >();
 
     for (const row of rows) {
-      const id = row.campaign?.id?.trim();
+      const id = String(row.campaign?.id ?? '').replace(/\D/g, '');
       if (!id) continue;
 
       const existing = aggregated.get(id) ?? {
         id,
         name: row.campaign?.name?.trim() || 'Unnamed campaign',
-        status: row.campaign?.status ?? null,
+        status: this.normalizeEnumValue(row.campaign?.status),
         costMicros: 0,
         impressions: 0,
         clicks: 0,
         conversions: 0,
       };
 
-      existing.costMicros += Number.parseInt(row.metrics?.costMicros ?? '0', 10) || 0;
-      existing.impressions +=
-        Number.parseInt(row.metrics?.impressions ?? '0', 10) || 0;
-      existing.clicks += Number.parseInt(row.metrics?.clicks ?? '0', 10) || 0;
-      existing.conversions +=
-        Number.parseFloat(row.metrics?.conversions ?? '0') || 0;
+      existing.costMicros += this.toNumber(
+        row.metrics?.costMicros ?? row.metrics?.cost_micros,
+      );
+      existing.impressions += this.toNumber(row.metrics?.impressions);
+      existing.clicks += this.toNumber(row.metrics?.clicks);
+      existing.conversions += this.toNumber(row.metrics?.conversions);
 
       aggregated.set(id, existing);
     }
@@ -636,7 +627,7 @@ export class GoogleAdsService {
       effectiveStatus: row.status,
       dailyBudget: null,
       insights: {
-        spend: String(row.costMicros / 1_000_000),
+        spend: String(fromMicros(row.costMicros)),
         impressions: String(row.impressions),
         clicks: String(row.clicks),
         conversions: String(row.conversions),
@@ -645,7 +636,7 @@ export class GoogleAdsService {
   }
 
   private async fetchCustomerMeta(
-    accessToken: string,
+    refreshToken: string,
     customerId: string,
     loginCustomerId: string = customerId,
   ): Promise<{
@@ -657,7 +648,7 @@ export class GoogleAdsService {
       'SELECT customer.descriptive_name, customer.currency_code, customer.manager FROM customer LIMIT 1';
 
     const rows = await this.googleAdsSearch<GoogleAdsSearchRow>(
-      accessToken,
+      refreshToken,
       customerId,
       query,
       loginCustomerId,
@@ -690,30 +681,44 @@ export class GoogleAdsService {
   }
 
   private async tryFetchCustomerMeta(
-    accessToken: string,
+    refreshToken: string,
     customerId: string,
     loginCustomerId: string,
   ): Promise<{
     name: string | null;
     currency: string | null;
     isManager: boolean;
+    inaccessible?: boolean;
   } | null> {
     try {
       return await this.fetchCustomerMeta(
-        accessToken,
+        refreshToken,
         customerId,
         loginCustomerId,
       );
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.logger.debug(
-        `Google Ads customer meta lookup failed (customer=${customerId}, login=${loginCustomerId}): ${err instanceof Error ? err.message : String(err)}`,
+        `Google Ads customer meta lookup failed (customer=${customerId}, login=${loginCustomerId}): ${message}`,
       );
+      if (
+        message.includes('not yet enabled') ||
+        message.includes('has been deactivated') ||
+        message.includes('timed out')
+      ) {
+        return {
+          name: null,
+          currency: null,
+          isManager: false,
+          inaccessible: true,
+        };
+      }
       return null;
     }
   }
 
   private async enrichAccessibleCustomers(
-    accessToken: string,
+    refreshToken: string,
     ids: string[],
   ): Promise<GoogleAdsCustomerDto[]> {
     if (ids.length === 0) {
@@ -724,40 +729,65 @@ export class GoogleAdsService {
       string,
       { name: string | null; currency: string | null; isManager: boolean }
     >();
+    const inaccessibleIds = new Set<string>();
 
-    for (const id of ids) {
-      const meta = await this.tryFetchCustomerMeta(accessToken, id, id);
-      if (meta) {
-        metaById.set(id, meta);
+    const firstPass = await Promise.all(
+      ids.map(async (id) => {
+        const meta = await this.tryFetchCustomerMeta(refreshToken, id, id);
+        return { id, meta };
+      }),
+    );
+
+    for (const { id, meta } of firstPass) {
+      if (!meta) {
+        continue;
       }
+      if (meta.inaccessible) {
+        inaccessibleIds.add(id);
+      }
+      metaById.set(id, {
+        name: meta.name,
+        currency: meta.currency,
+        isManager: meta.isManager,
+      });
     }
 
     const managerIds = ids.filter((id) => metaById.get(id)?.isManager);
 
-    for (const id of ids) {
+    const needsLoginRetry = ids.filter((id) => {
+      if (inaccessibleIds.has(id)) {
+        return false;
+      }
       const existing = metaById.get(id);
-      if (existing?.name) {
-        continue;
-      }
+      return !existing?.name;
+    });
 
-      const loginCandidates = [
-        ...managerIds.filter((managerId) => managerId !== id),
-        ...ids.filter((otherId) => otherId !== id),
-      ];
+    if (needsLoginRetry.length > 0 && managerIds.length > 0) {
+      await Promise.all(
+        needsLoginRetry.map(async (id) => {
+          const existing = metaById.get(id);
+          for (const loginId of managerIds) {
+            if (loginId === id) {
+              continue;
+            }
+            const meta = await this.tryFetchCustomerMeta(
+              refreshToken,
+              id,
+              loginId,
+            );
+            if (!meta?.name) {
+              continue;
+            }
 
-      for (const loginId of loginCandidates) {
-        const meta = await this.tryFetchCustomerMeta(accessToken, id, loginId);
-        if (!meta?.name) {
-          continue;
-        }
-
-        metaById.set(id, {
-          name: meta.name,
-          currency: meta.currency ?? existing?.currency ?? null,
-          isManager: meta.isManager || existing?.isManager || false,
-        });
-        break;
-      }
+            metaById.set(id, {
+              name: meta.name,
+              currency: meta.currency ?? existing?.currency ?? null,
+              isManager: meta.isManager || existing?.isManager || false,
+            });
+            break;
+          }
+        }),
+      );
     }
 
     return ids.map((id) => {
@@ -774,7 +804,7 @@ export class GoogleAdsService {
   }
 
   private async fetchDirectClientAccounts(
-    accessToken: string,
+    refreshToken: string,
     managerCustomerId: string,
   ): Promise<GoogleAdsCustomerDto[]> {
     const query = `
@@ -790,7 +820,7 @@ export class GoogleAdsService {
 
     try {
       const rows = await this.googleAdsSearch<GoogleAdsCustomerClientRow>(
-        accessToken,
+        refreshToken,
         managerCustomerId,
         query,
         managerCustomerId,
@@ -799,7 +829,7 @@ export class GoogleAdsService {
       const clients: GoogleAdsCustomerDto[] = [];
 
       for (const row of rows) {
-        const client = row.customerClient;
+        const client = row.customerClient ?? row.customer_client;
         const id = String(client?.id ?? '').replace(/\D/g, '');
         if (!id || id === managerCustomerId.replace(/\D/g, '')) {
           continue;
@@ -817,7 +847,7 @@ export class GoogleAdsService {
             null,
           isManager: client?.manager === true,
           managerCustomerId,
-          status: client?.status?.trim() ?? null,
+          status: this.normalizeEnumValue(client?.status),
         });
       }
 
@@ -831,14 +861,21 @@ export class GoogleAdsService {
   }
 
   private async buildFullCustomerList(
-    accessToken: string,
+    refreshToken: string,
     rootIds: string[],
   ): Promise<GoogleAdsCustomerDto[]> {
-    const enriched = await this.enrichAccessibleCustomers(accessToken, rootIds);
+    const enriched = await this.enrichAccessibleCustomers(refreshToken, rootIds);
     const byId = new Map(enriched.map((customer) => [customer.id, customer]));
 
-    for (const id of rootIds) {
-      const children = await this.fetchDirectClientAccounts(accessToken, id);
+    const managerIds = enriched
+      .filter((customer) => customer.isManager)
+      .map((customer) => customer.id);
+
+    const childrenLists = await Promise.all(
+      managerIds.map((id) => this.fetchDirectClientAccounts(refreshToken, id)),
+    );
+
+    for (const children of childrenLists) {
       for (const child of children) {
         if (!byId.has(child.id)) {
           byId.set(child.id, child);
@@ -855,185 +892,116 @@ export class GoogleAdsService {
   }
 
   private async listAccessibleCustomers(
-    accessToken: string,
+    refreshToken: string,
   ): Promise<GoogleAdsCustomerDto[]> {
-    const developerToken = this.tokenService.getDeveloperToken();
-    const url = `${googleAdsApiBaseUrl()}/customers:listAccessibleCustomers`;
+    const client = this.getGoogleAdsApiClient();
 
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: this.googleAdsReadHeaders(accessToken, developerToken),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
-    });
+    try {
+      const response = await this.withSdkTimeout(
+        client.listAccessibleCustomers(refreshToken),
+        'listAccessibleCustomers',
+      );
+      const resourceNames = response.resource_names ?? [];
+      const ids = resourceNames
+        .map((name) => name.replace(/^customers\//, '').trim())
+        .filter(Boolean);
 
-    const body = await this.readGoogleAdsJson<{
-      resourceNames?: string[];
-    }>(res, 'listAccessibleCustomers');
-
-    if (!res.ok) {
+      return this.buildFullCustomerList(refreshToken, ids);
+    } catch (err) {
       throw new BadRequestException(
-        this.googleAdsErrorMessage(
-          body,
+        formatGoogleAdsSdkError(
+          err,
           'Could not list Google Ads accounts. Check your developer token, enable Google Ads API in Google Cloud Console, and reconnect.',
         ),
       );
     }
-
-    const ids = (body.resourceNames ?? [])
-      .map((name) => name.replace(/^customers\//, '').trim())
-      .filter(Boolean);
-
-    return this.buildFullCustomerList(accessToken, ids);
   }
 
   private async googleAdsSearch<T>(
-    accessToken: string,
+    refreshToken: string,
     customerId: string,
     query: string,
     loginCustomerId?: string,
   ): Promise<T[]> {
-    const developerToken = this.tokenService.getDeveloperToken();
     const normalizedCustomerId = this.normalizeCustomerId(customerId);
     const normalizedLoginCustomerId = loginCustomerId
       ? this.normalizeCustomerId(loginCustomerId)
       : normalizedCustomerId;
-    const url = `${googleAdsApiBaseUrl()}/customers/${normalizedCustomerId}/googleAds:search`;
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: this.googleAdsWriteHeaders(
-        accessToken,
-        developerToken,
-        normalizedLoginCustomerId,
-      ),
-      body: JSON.stringify({ query }),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    const client = this.getGoogleAdsApiClient();
+    const customer = createGoogleAdsCustomer(client, {
+      customerId: normalizedCustomerId,
+      refreshToken,
+      loginCustomerId: normalizedLoginCustomerId,
     });
 
-    const body = await this.readGoogleAdsJson<{ results?: T[] }>(
-      res,
-      'googleAds:search',
-    );
-
-    if (!res.ok) {
+    try {
+      const rows = await this.withSdkTimeout(
+        customer.query<T[]>(query),
+        'googleAds:search',
+      );
+      return rows ?? [];
+    } catch (err) {
       throw new BadRequestException(
-        this.googleAdsErrorMessage(
-          body,
+        formatGoogleAdsSdkError(
+          err,
           'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
         ),
       );
     }
-
-    return body.results ?? [];
   }
 
-  private googleAdsReadHeaders(
-    accessToken: string,
-    developerToken: string,
-  ): Record<string, string> {
-    return {
-      Authorization: `Bearer ${accessToken}`,
-      'developer-token': developerToken,
-    };
-  }
-
-  private googleAdsWriteHeaders(
-    accessToken: string,
-    developerToken: string,
-    loginCustomerId: string,
-  ): Record<string, string> {
-    return {
-      Authorization: `Bearer ${accessToken}`,
-      'developer-token': developerToken,
-      'login-customer-id': loginCustomerId,
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    };
-  }
-
-  private async readGoogleAdsJson<T>(
-    res: Response,
+  private async withSdkTimeout<T>(
+    promise: Promise<T>,
     context: string,
-  ): Promise<T & GoogleAdsApiErrorBody> {
-    const raw = await res.text();
-    const trimmed = raw.trim();
-
-    if (!trimmed || trimmed.startsWith('<')) {
-      this.logger.error(
-        `Google Ads API non-JSON response (${context}) status=${res.status} url=${res.url} body=${trimmed.slice(0, 400)}`,
-      );
-      throw new BadRequestException(
-        res.status === 404
-          ? 'Google Ads API endpoint was not found. Enable Google Ads API in Google Cloud Console (Dealioo project) and verify GOOGLE_ADS_DEVELOPER_TOKEN.'
-          : `Google Ads API returned an unexpected HTML response (HTTP ${res.status}). Enable Google Ads API in Google Cloud Console and verify your developer token.`,
-      );
-    }
-
+  ): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      return JSON.parse(trimmed) as T & GoogleAdsApiErrorBody;
-    } catch {
-      this.logger.error(
-        `Google Ads API invalid JSON (${context}) status=${res.status} body=${trimmed.slice(0, 400)}`,
-      );
-      throw new BadRequestException(
-        `Google Ads API returned invalid data (HTTP ${res.status}). Check developer token and Google Ads API setup.`,
-      );
-    }
-  }
-
-  private googleAdsErrorMessage(
-    body: GoogleAdsApiErrorBody,
-    fallback: string,
-  ): string {
-    const failureMessage = this.extractGoogleAdsFailureMessage(body);
-    const message = failureMessage ?? body.error?.message?.trim();
-    if (!message) {
-      return fallback;
-    }
-
-    if (
-      message.includes('DEVELOPER_TOKEN_PROHIBITED') ||
-      message.includes('not allowed with project')
-    ) {
-      return `${message} Your developer token is tied to a different Google Cloud project. Use matching OAuth credentials or request a new developer token for this project.`;
-    }
-
-    if (body.error?.status === 'PERMISSION_DENIED') {
-      return `${message} Ensure Google Ads API is enabled and your developer token is approved.`;
-    }
-
-    if (body.error?.status === 'INVALID_ARGUMENT' && message === 'Request contains an invalid argument.') {
-      const specific = this.extractGoogleAdsFailureMessage(body, true);
-      if (specific && specific !== message) {
-        return specific;
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `Google Ads SDK request timed out (${context}). Please try again.`,
+              ),
+            );
+          }, GOOGLE_ADS_SDK_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
     }
-
-    return message;
   }
 
-  private extractGoogleAdsFailureMessage(
-    body: GoogleAdsApiErrorBody,
-    preferSpecific = false,
+  private getGoogleAdsApiClient() {
+    return createGoogleAdsApiClient({
+      clientId: this.tokenService.getClientId(),
+      clientSecret: this.tokenService.getClientSecret(),
+      developerToken: this.tokenService.getDeveloperToken(),
+    });
+  }
+
+  private toNumber(value: string | number | null | undefined): number {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : 0;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  }
+
+  private normalizeEnumValue(
+    value: string | number | null | undefined,
   ): string | null {
-    const details = body.error?.details ?? body.details ?? [];
-    const messages: string[] = [];
-
-    for (const detail of details) {
-      for (const err of detail.errors ?? []) {
-        const codeKey = err.errorCode ? Object.keys(err.errorCode)[0] : null;
-        const codeValue = codeKey ? err.errorCode?.[codeKey] : null;
-        const text = err.message?.trim();
-        if (codeValue === 'DEVELOPER_TOKEN_PROHIBITED') {
-          return `Developer token is not allowed with this Google Cloud project (${codeValue}).`;
-        }
-        if (text) {
-          messages.push(preferSpecific && codeValue ? `${text} (${codeValue})` : text);
-        }
-      }
+    if (value == null) {
+      return null;
     }
-
-    return messages.length > 0 ? messages.join(' ') : null;
+    return String(value).trim() || null;
   }
 
   private async exchangeCodeForTokens(
