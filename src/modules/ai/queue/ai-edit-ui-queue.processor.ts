@@ -36,6 +36,10 @@ export class AiEditUiQueueProcessor extends WorkerHost {
     this.logger.log(
       `AI edit-ui job ${jobId}: business=${businessId} attempt=${job.attemptsMade + 1}`,
     );
+    console.log(
+      `[AI edit-ui] job ${jobId} input:`,
+      JSON.stringify(job.data, null, 2),
+    );
 
     try {
       const result = await this.aiOrchestrator.editUi(job.data);

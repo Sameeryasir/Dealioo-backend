@@ -3,7 +3,6 @@ import { Business } from '../../db/entities/business.entity';
 import { decryptSecret } from '../../utils/token-encryption.util';
 import { getConfiguredFacebookRequiredScopes } from './facebook-oauth-scopes.util';
 
-// Changed: Graph API v24.0 for token/permission checks (same version as OAuth).
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 
 export type MetaBusinessCredentials = {
@@ -36,13 +35,22 @@ type MePermissionsResponse = {
   error?: { message?: string; code?: number };
 };
 
-export function assertMetaPermissions(scopes: string[]): void {
-  const required = getConfiguredFacebookRequiredScopes();
+export function assertMetaPermissions(
+  scopes: string[],
+  requiredScopes?: string[],
+): void {
+  const required =
+    requiredScopes && requiredScopes.length > 0
+      ? requiredScopes
+      : getConfiguredFacebookRequiredScopes();
   const missing = required.filter((scope) => !scopes.includes(scope));
 
   if (missing.length > 0) {
+    const first = missing[0];
     throw new BadRequestException(
-      `Meta permissions missing: ${missing.join(', ')}. Force reconnect required.`,
+      missing.length === 1
+        ? `Meta Ads connection failed because required permission ${first} was not granted.`
+        : `Meta Ads connection failed because required permissions ${missing.join(', ')} were not granted.`,
     );
   }
 }
@@ -64,13 +72,10 @@ export class FacebookMetaTokenService {
     }
   }
 
-  /**
-   * Validates a fresh OAuth token via debug_token before persisting to the database.
-   * Never store a token unless this passes.
-   */
   async validateAccessTokenForStorage(
     accessToken: string,
     metaUserId: string,
+    requiredScopes?: string[],
   ): Promise<{ grantedScopes: string[] }> {
     const debug = await this.debugUserAccessToken(accessToken);
 
@@ -120,14 +125,11 @@ export class FacebookMetaTokenService {
       `[permissions check] final granted scopes=${grantedScopes.join(',') || '(none)'}`,
     );
 
-    assertMetaPermissions(grantedScopes);
+    assertMetaPermissions(grantedScopes, requiredScopes);
 
     return { grantedScopes };
   }
 
-  /**
-   * Validates stored user token via debug_token before any Meta Marketing API call.
-   */
   async assertBusinessMetaCredentials(
     business: Business,
   ): Promise<MetaBusinessCredentials> {
@@ -175,7 +177,10 @@ export class FacebookMetaTokenService {
       }
     }
 
-    assertMetaPermissions(debug.scopes ?? []);
+    assertMetaPermissions(
+      debug.scopes ?? [],
+      this.requiredScopesForBusiness(business),
+    );
 
     return {
       accessToken,
@@ -184,7 +189,6 @@ export class FacebookMetaTokenService {
     };
   }
 
-  /** Validates token + scopes before listing ad accounts (no ad account selected yet). */
   async assertBusinessMetaToken(
     business: Business,
   ): Promise<{ accessToken: string; metaUserId: string }> {
@@ -211,9 +215,27 @@ export class FacebookMetaTokenService {
       );
     }
 
-    assertMetaPermissions(debug.scopes ?? []);
+    assertMetaPermissions(
+      debug.scopes ?? [],
+      this.requiredScopesForBusiness(business),
+    );
 
     return { accessToken, metaUserId };
+  }
+
+  private requiredScopesForBusiness(business: Business): string[] {
+    const stored = (business.metaOauthScopes ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    if (stored.length > 0) {
+      return stored;
+    }
+    try {
+      return getConfiguredFacebookRequiredScopes();
+    } catch {
+      return [];
+    }
   }
 
   async debugUserAccessToken(accessToken: string): Promise<DebugTokenData | undefined> {

@@ -7,6 +7,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -19,8 +20,40 @@ import { BusinessService } from '../business/business.service';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
+import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
 import { SetGoogleAdsCustomerDto } from './dto/set-google-ads-customer.dto';
+import {
+  GoogleCampaignDraftResumeResponseDto,
+  SaveGoogleCampaignInfoStepResponseDto,
+  SaveGoogleGoalDetailsStepResponseDto,
+  SaveGoogleGoalStepResponseDto,
+} from './dto/google-campaign-draft-response.dto';
+import { SaveGoogleCampaignInfoStepDto } from './dto/save-google-campaign-info-step.dto';
+import { SaveGoogleGoalDetailsStepDto } from './dto/save-google-goal-details-step.dto';
+import { SaveGoogleGoalStepDto } from './dto/save-google-goal-step.dto';
+import {
+  GoogleCampaignStepSaveResponseDto,
+  SaveGoogleAdsStepDto,
+  SaveGoogleAudienceStepDto,
+  SaveGoogleBudgetStepDto,
+  SaveGoogleExtrasStepDto,
+  SaveGoogleKeywordsStepDto,
+  SaveGoogleLanguagesStepDto,
+  SaveGoogleLocationsStepDto,
+} from './dto/save-google-remaining-steps.dto';
+import { PublishGoogleCampaignDraftDto } from './dto/publish-google-campaign-draft.dto';
+import { UpdateGoogleDraftProgressDto } from './dto/update-google-draft-progress.dto';
 import { GoogleAdsService } from './google-ads.service';
+import { GoogleCampaignDraftService } from './google-campaign-draft.service';
+
+function readIdempotencyKey(req: { headers?: Record<string, unknown> }): string | undefined {
+  const raw = req.headers?.['idempotency-key'] ?? req.headers?.['Idempotency-Key'];
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (Array.isArray(raw) && typeof raw[0] === 'string' && raw[0].trim()) {
+    return raw[0].trim();
+  }
+  return undefined;
+}
 
 function readHttpErrorMessage(err: unknown): string {
   if (err instanceof HttpException) {
@@ -49,7 +82,213 @@ export class GoogleAdsController {
   constructor(
     private readonly googleAdsService: GoogleAdsService,
     private readonly businessService: BusinessService,
+    private readonly googleCampaignDraftService: GoogleCampaignDraftService,
   ) {}
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/goal-step')
+  async saveGoalStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleGoalStepDto,
+  ): Promise<SaveGoogleGoalStepResponseDto> {
+    return this.googleCampaignDraftService.saveGoalStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/goal-details-step')
+  async saveGoalDetailsStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleGoalDetailsStepDto,
+  ): Promise<SaveGoogleGoalDetailsStepResponseDto> {
+    return this.googleCampaignDraftService.saveGoalDetailsStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/campaign-info-step')
+  async saveCampaignInfoStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleCampaignInfoStepDto,
+  ): Promise<SaveGoogleCampaignInfoStepResponseDto> {
+    return this.googleCampaignDraftService.saveCampaignInfoStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/budget-step')
+  async saveBudgetStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleBudgetStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveBudgetStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/locations-step')
+  async saveLocationsStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleLocationsStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveLocationsStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/languages-step')
+  async saveLanguagesStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleLanguagesStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveLanguagesStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/audience-step')
+  async saveAudienceStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleAudienceStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveAudienceStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/keywords-step')
+  async saveKeywordsStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleKeywordsStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveKeywordsStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/ads-step')
+  async saveAdsStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleAdsStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveAdsStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/extras-step')
+  async saveExtrasStep(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: SaveGoogleExtrasStepDto,
+  ): Promise<GoogleCampaignStepSaveResponseDto> {
+    return this.googleCampaignDraftService.saveExtrasStep(
+      req.user,
+      businessId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/publish')
+  async publishDraft(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: PublishGoogleCampaignDraftDto,
+  ): Promise<{
+    draftId: string;
+    status: string;
+    version: number;
+    message: string;
+  }> {
+    return this.googleCampaignDraftService.publishDraft(
+      req.user,
+      businessId,
+      body,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/drafts/:draftId')
+  async getDraft(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<GoogleCampaignDraftResumeResponseDto> {
+    return this.googleCampaignDraftService.getDraft(
+      req.user,
+      businessId,
+      draftId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Put('business/:businessId/drafts/:draftId/progress')
+  async updateDraftProgress(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+    @Body() body: UpdateGoogleDraftProgressDto,
+  ): Promise<{
+    id: string;
+    currentStep: number;
+    lastSavedAt: Date | null;
+    version: number;
+  }> {
+    return this.googleCampaignDraftService.updateDraftProgress(
+      req.user,
+      businessId,
+      draftId,
+      body,
+      readIdempotencyKey(req),
+    );
+  }
 
  @Get('callback/oauth')
   async oauthCallback(
@@ -155,6 +394,18 @@ export class GoogleAdsController {
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsCustomerDto[]> {
     return this.googleAdsService.listCustomersForBusiness(
+      req.user,
+      businessId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('gtm-containers/:businessId')
+  async listGtmContainers(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<GoogleTagManagerContainerDto[]> {
+    return this.googleAdsService.listGtmContainersForBusiness(
       req.user,
       businessId,
     );

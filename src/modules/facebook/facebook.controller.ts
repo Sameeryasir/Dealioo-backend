@@ -15,6 +15,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
+import { ConnectFacebookDto } from './dto/connect-facebook.dto';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
@@ -67,8 +68,12 @@ export class FacebookController {
         errorDescription,
       );
 
+      const granted = (result.grantedScopes ?? []).join(',');
+      const grantedParam = granted
+        ? `&granted=${encodeURIComponent(granted)}`
+        : '';
       return res.redirect(
-        `${frontend}/facebook/select-ad-account?businessId=${result.businessId}`,
+        `${frontend}/facebook/connected?businessId=${result.businessId}${grantedParam}`,
       );
     } catch (err) {
       const message =
@@ -86,8 +91,9 @@ export class FacebookController {
   async connect(
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
-  ): Promise<{ url: string }> {
-    return this.facebookService.connect(req.user, businessId);
+    @Body() body: ConnectFacebookDto,
+  ): Promise<{ url: string; scopes: string[] }> {
+    return this.facebookService.connect(req.user, businessId, body.scopes);
   }
 
   @UseGuards(AuthGuard('jwt'))

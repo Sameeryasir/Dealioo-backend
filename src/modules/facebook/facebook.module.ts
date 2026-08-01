@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
+import { MetaOAuthSession } from '../../db/entities/meta-oauth-session.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessModule } from '../business/business.module';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
@@ -11,7 +12,7 @@ import { FacebookService } from './facebook.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Business, IntegrationAuditLog]),
+    TypeOrmModule.forFeature([Business, IntegrationAuditLog, MetaOAuthSession]),
     BusinessModule,
   ],
   controllers: [FacebookController, FacebookWebhookController],

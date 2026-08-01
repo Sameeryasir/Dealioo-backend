@@ -8,6 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import {
+  MetaOAuthSession,
+  MetaOAuthSessionStatus,
+} from '../../db/entities/meta-oauth-session.entity';
 import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { BusinessAccessService } from '../business-access/business-access.service';
@@ -25,9 +29,15 @@ import {
   parseFacebookOAuthState,
 } from './facebook-oauth-state';
 import {
-  getConfiguredFacebookOAuthScopes,
-  getConfiguredFacebookRequiredScopes,
+  toFacebookOAuthScopeParam,
 } from './facebook-oauth-scopes.util';
+import {
+  buildMetaOAuthDialogScopes,
+  filterGrantedSelectableScopes,
+  findMissingRequestedScopes,
+  assertRequestedMetaScopesSelected,
+  normalizeSelectableMetaScopes,
+} from './meta-oauth-selectable-scopes';
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
 
@@ -103,6 +113,8 @@ export class FacebookService {
   constructor(
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectRepository(MetaOAuthSession)
+    private readonly metaOAuthSessionRepository: Repository<MetaOAuthSession>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly businessAccessService: BusinessAccessService,
@@ -134,22 +146,38 @@ export class FacebookService {
   async connect(
     user: User,
     businessId: number,
+    selectedScopes: string[],
   ): Promise<{ url: string; scopes: string[] }> {
     const business = await this.requireMetaBusiness(user, businessId);
 
+    const requestedScopes = (() => {
+      try {
+        return assertRequestedMetaScopesSelected(selectedScopes);
+      } catch (err) {
+        throw new BadRequestException(
+          err instanceof Error
+            ? err.message
+            : 'Select at least one Meta Ads permission before connecting.',
+        );
+      }
+    })();
+
     await this.businessRepository.update(businessId, {
       metaConnectionStatus: FacebookConnectionStatus.INITIATED,
+      metaRequestedScopes: requestedScopes.join(','),
     });
 
     await this.auditService.log(businessId, 'oauth_started', {
       status: FacebookConnectionStatus.INITIATED,
+      metadata: { requestedScopes },
     });
 
-    return this.createOAuthConnectUrl(businessId);
+    return this.createOAuthConnectUrl(business.id, requestedScopes);
   }
 
   async createOAuthConnectUrl(
     businessId: number,
+    selectedScopes: string[],
   ): Promise<{ url: string; scopes: string[] }> {
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
@@ -180,28 +208,41 @@ export class FacebookService {
       );
     }
 
-    const configId = process.env.FACEBOOK_CONFIG_ID?.trim();
-    if (!configId) {
-      throw new InternalServerErrorException(
-        'Set FACEBOOK_CONFIG_ID for Facebook Login OAuth (Meta login configuration).',
+    let requestedScopes: string[];
+    try {
+      requestedScopes = assertRequestedMetaScopesSelected(selectedScopes);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Select at least one Meta Ads permission before connecting.',
       );
     }
 
-    const scopes = getConfiguredFacebookOAuthScopes();
+    const dialogScopes = buildMetaOAuthDialogScopes(requestedScopes);
     const state = createFacebookOAuthState(businessId, stateSecret);
+
+    await this.metaOAuthSessionRepository.save(
+      this.metaOAuthSessionRepository.create({
+        businessId,
+        requestedScopes,
+        oauthState: state,
+        status: MetaOAuthSessionStatus.INITIATED,
+      }),
+    );
 
     const params = new URLSearchParams({
       client_id: appId,
       redirect_uri: redirectUri,
-      config_id: configId,
       state,
       response_type: 'code',
       auth_type: 'rerequest',
+      scope: toFacebookOAuthScopeParam(dialogScopes),
     });
 
     return {
       url: `${FACEBOOK_OAUTH_DIALOG}?${params.toString()}`,
-      scopes,
+      scopes: requestedScopes,
     };
   }
 
@@ -212,6 +253,7 @@ export class FacebookService {
     oauthErrorDescription: string | undefined,
   ): Promise<FacebookOAuthCallbackResultDto> {
     let businessId: number | null = null;
+    let oauthSession: MetaOAuthSession | null = null;
 
     try {
       if (oauthError) {
@@ -239,8 +281,24 @@ export class FacebookService {
 
       businessId = parseFacebookOAuthState(state, stateSecret);
 
+      oauthSession = await this.metaOAuthSessionRepository.findOne({
+        where: {
+          oauthState: state.trim(),
+          businessId,
+          status: MetaOAuthSessionStatus.INITIATED,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      if (!oauthSession) {
+        throw new BadRequestException(
+          'Meta OAuth session expired or was not found. Select permissions and try connecting again.',
+        );
+      }
+
       await this.auditService.log(businessId, 'oauth_callback_received', {
         status: FacebookConnectionStatus.AUTHENTICATED,
+        metadata: { requestedScopes: oauthSession.requestedScopes },
       });
 
       const business = await this.businessRepository.findOne({
@@ -276,8 +334,23 @@ export class FacebookService {
         );
       }
 
-      return await this.persistExchangedUserToken(businessId, shortLivedToken);
+      const result = await this.persistExchangedUserToken(
+        businessId,
+        shortLivedToken,
+        oauthSession.requestedScopes,
+      );
+
+      await this.metaOAuthSessionRepository.update(oauthSession.id, {
+        status: MetaOAuthSessionStatus.COMPLETED,
+      });
+
+      return result;
     } catch (err) {
+      if (oauthSession) {
+        await this.metaOAuthSessionRepository.update(oauthSession.id, {
+          status: MetaOAuthSessionStatus.FAILED,
+        });
+      }
       if (businessId != null) {
         await this.businessRepository.update(businessId, {
           metaUserId: null,
@@ -512,12 +585,21 @@ export class FacebookService {
       .map((scope) => scope.trim())
       .filter(Boolean);
 
-    let requiredScopes: string[] = [];
-    try {
-      requiredScopes = getConfiguredFacebookRequiredScopes();
-    } catch {
-      requiredScopes = [];
+    const storedRequested = (business.metaRequestedScopes ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+
+    let requestedScopes =
+      storedRequested.length > 0
+        ? normalizeSelectableMetaScopes(storedRequested)
+        : [...grantedScopes];
+
+    if (requestedScopes.length === 0) {
+      requestedScopes = [...grantedScopes];
     }
+
+    const requiredScopes = [...requestedScopes];
 
     const missingRequiredScopes = requiredScopes.filter(
       (scope) => !grantedScopes.includes(scope),
@@ -529,13 +611,6 @@ export class FacebookService {
         business.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
         missingRequiredScopes.length === 0,
     );
-
-    let requestedScopes: string[] = [];
-    try {
-      requestedScopes = getConfiguredFacebookOAuthScopes();
-    } catch {
-      requestedScopes = [...grantedScopes];
-    }
 
     return {
       connected,
@@ -805,6 +880,7 @@ export class FacebookService {
       metaConnectionStatus: null,
       metaTokenExpiresAt: null,
       metaOauthScopes: null,
+      metaRequestedScopes: null,
     });
 
     await this.auditService.log(businessId, 'meta_disconnected', {
@@ -934,6 +1010,7 @@ export class FacebookService {
   private async persistExchangedUserToken(
     businessId: number,
     shortLivedAccessToken: string,
+    requestedSelectableScopes: string[],
   ): Promise<FacebookOAuthCallbackResultDto> {
     const appId = this.getAppId();
     const appSecret = this.getAppSecret();
@@ -958,11 +1035,30 @@ export class FacebookService {
       );
     }
 
-    const { grantedScopes } =
+    const requestedScopes = normalizeSelectableMetaScopes(
+      requestedSelectableScopes,
+    );
+
+    const { grantedScopes: rawGranted } =
       await this.metaTokenService.validateAccessTokenForStorage(
         accessToken,
         me.id.trim(),
+        requestedScopes,
       );
+
+    const missing = findMissingRequestedScopes(rawGranted, requestedScopes);
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        missing.length === 1
+          ? `Meta Ads connection failed because required permission ${missing[0]} was not granted.`
+          : `Meta Ads connection failed because required permissions ${missing.join(', ')} were not granted.`,
+      );
+    }
+
+    const grantedScopes = filterGrantedSelectableScopes(
+      rawGranted,
+      requestedScopes,
+    );
 
     const tokenExpiresAt =
       longLived.expiresIn != null
@@ -977,18 +1073,23 @@ export class FacebookService {
       metaConnectionStatus: FacebookConnectionStatus.TOKEN_EXCHANGED,
       metaTokenExpiresAt: tokenExpiresAt,
       metaOauthScopes: grantedScopes.join(','),
+      metaRequestedScopes: requestedScopes.join(','),
     });
 
     await this.auditService.log(businessId, 'token_exchanged', {
       status: FacebookConnectionStatus.TOKEN_EXCHANGED,
-      metadata: { metaUserId: me.id, grantedScopes },
+      metadata: {
+        metaUserId: me.id,
+        requestedScopes,
+        grantedScopes,
+      },
     });
 
     this.logger.log(
-      `Facebook connected for business ${businessId} (user ${me.id})`,
+      `Facebook connected for business ${businessId} (user ${me.id}) granted=${grantedScopes.join(',')}`,
     );
 
-    return { connected: true, businessId };
+    return { connected: true, businessId, grantedScopes };
   }
 
   private async exchangeCodeForAccessToken(

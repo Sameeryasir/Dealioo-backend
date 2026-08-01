@@ -14,6 +14,7 @@ export class AiController {
   @UseGuards(AuthGuard('jwt'))
   @Post('edit-ui')
   async editUi(@Body() dto: EditUiDto): Promise<EnqueueAiEditUiResponse> {
+    console.log('[AI edit-ui] incoming payload:', JSON.stringify(dto, null, 2));
     return this.aiEditUiQueueService.enqueue(dto);
   }
 

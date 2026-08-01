@@ -97,6 +97,9 @@ export class Business {
   @Column({ name: 'meta_oauth_scopes', type: 'text', nullable: true })
   metaOauthScopes: string | null;
 
+  @Column({ name: 'meta_requested_scopes', type: 'text', nullable: true })
+  metaRequestedScopes: string | null;
+
   @Column({ name: 'google_user_id', type: 'varchar', length: 128, nullable: true })
   googleUserId: string | null;
 

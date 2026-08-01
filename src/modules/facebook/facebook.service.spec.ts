@@ -1,8 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
+import { MetaOAuthSession } from '../../db/entities/meta-oauth-session.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
+import { FacebookMetaTokenService } from './facebook-meta-token.service';
 import { FacebookService } from './facebook.service';
 
 describe('FacebookService', () => {
@@ -21,9 +24,33 @@ describe('FacebookService', () => {
           },
         },
         {
+          provide: getRepositoryToken(MetaOAuthSession),
+          useValue: {
+            findOne: jest.fn(),
+            save: jest.fn(),
+            create: jest.fn((row) => row),
+            update: jest.fn(),
+          },
+        },
+        {
           provide: getRepositoryToken(IntegrationAuditLog),
           useValue: {
             save: jest.fn(),
+          },
+        },
+        {
+          provide: FacebookMetaTokenService,
+          useValue: {
+            validateAccessTokenForStorage: jest.fn(),
+            assertBusinessMetaCredentials: jest.fn(),
+            assertBusinessMetaToken: jest.fn(),
+          },
+        },
+        {
+          provide: BusinessAccessService,
+          useValue: {
+            assertPermission: jest.fn(),
+            findAccessibleBusiness: jest.fn(),
           },
         },
       ],

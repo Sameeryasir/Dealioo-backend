@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { google } from 'googleapis';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
@@ -16,6 +17,7 @@ import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
+import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
 import { GoogleOAuthCallbackResultDto } from './dto/google-oauth-callback-result.dto';
 import { GoogleAdsConnectionStatus } from './google-ads-connection-status';
 import type { GoogleAdsConnectionStatusValue } from './google-ads-connection-status';
@@ -30,6 +32,7 @@ import {
 } from './google-ads-token.service';
 import {
   buildGoogleOAuthConnectUrl,
+  createGoogleOAuth2Client,
   exchangeGoogleAuthCode,
   fetchGoogleOAuthUserInfo,
   GOOGLE_OAUTH_SCOPES,
@@ -430,6 +433,35 @@ export class GoogleAdsService {
     });
 
     return customers;
+  }
+
+  async listGtmContainersForBusiness(
+    user: User,
+    businessId: number,
+  ): Promise<GoogleTagManagerContainerDto[]> {
+    requireAdminRole(
+      user,
+      'You do not have permission to list Google Tag Manager containers.',
+    );
+
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const { accessToken } =
+      await this.tokenService.assertBusinessGoogleToken(business);
+
+    const scopes = (business.googleOauthScopes ?? '')
+      .split(',')
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    this.tokenService.assertTagManagerScope(scopes);
+
+    const containers = await this.fetchGtmContainers(accessToken);
+
+    await this.auditService.log(businessId, 'gtm_containers_fetched', {
+      status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
+      metadata: { count: containers.length },
+    });
+
+    return containers;
   }
 
   async setBusinessCustomer(
@@ -913,6 +945,62 @@ export class GoogleAdsService {
           err,
           'Could not list Google Ads accounts. Check your developer token, enable Google Ads API in Google Cloud Console, and reconnect.',
         ),
+      );
+    }
+  }
+
+  private async fetchGtmContainers(
+    accessToken: string,
+  ): Promise<GoogleTagManagerContainerDto[]> {
+    const auth = createGoogleOAuth2Client();
+    auth.setCredentials({ access_token: accessToken });
+    const tagmanager = google.tagmanager({ version: 'v2', auth });
+
+    try {
+      const accountsRes = await tagmanager.accounts.list();
+      const accounts = accountsRes.data.account ?? [];
+      const byPublicId = new Map<string, GoogleTagManagerContainerDto>();
+
+      for (const account of accounts) {
+        const accountId = String(account.accountId ?? '').trim();
+        if (!accountId) continue;
+
+        const containersRes = await tagmanager.accounts.containers.list({
+          parent: `accounts/${accountId}`,
+        });
+
+        for (const container of containersRes.data.container ?? []) {
+          const publicId = container.publicId?.trim();
+          if (!publicId) continue;
+
+          byPublicId.set(publicId, {
+            id: publicId,
+            name: container.name?.trim() || null,
+            accountId,
+            containerId: container.containerId
+              ? String(container.containerId)
+              : null,
+          });
+        }
+      }
+
+      return [...byPublicId.values()].sort((a, b) =>
+        (a.name ?? a.id).localeCompare(b.name ?? b.id),
+      );
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`GTM containers list failed: ${message}`);
+
+      if (/insufficient|ACCESS_TOKEN_SCOPE|403|PERMISSION/i.test(message)) {
+        throw new BadRequestException(
+          'Could not list Google Tag Manager containers. Reconnect Google Ads and approve Tag Manager access, and enable Tag Manager API in Google Cloud Console.',
+        );
+      }
+
+      throw new BadRequestException(
+        'Could not list Google Tag Manager containers. Enable Tag Manager API in Google Cloud Console, then reconnect Google Ads.',
       );
     }
   }

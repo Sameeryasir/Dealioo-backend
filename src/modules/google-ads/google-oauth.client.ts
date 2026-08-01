@@ -3,10 +3,14 @@ import type { Credentials } from 'google-auth-library';
 
 export const GOOGLE_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/adwords',
+  'https://www.googleapis.com/auth/tagmanager.readonly',
   'openid',
   'email',
   'profile',
 ] as const;
+
+export const GOOGLE_TAG_MANAGER_READONLY_SCOPE =
+  'https://www.googleapis.com/auth/tagmanager.readonly';
 
 export function createGoogleOAuth2Client(redirectUri?: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();

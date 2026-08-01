@@ -10,12 +10,6 @@ export type AiEditUiJobPayload = EditUiDto;
 
 export const AI_EDIT_UI_JOB_OPTIONS = {
   attempts: 1,
-  removeOnComplete: {
-    age: 60 * 60,
-    count: 200,
-  },
-  removeOnFail: {
-    age: 24 * 60 * 60,
-    count: 200,
-  },
+  removeOnComplete: true,
+  removeOnFail: true,
 };

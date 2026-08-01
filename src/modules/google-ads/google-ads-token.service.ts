@@ -3,7 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
-import { refreshGoogleAccessToken } from './google-oauth.client';
+import {
+  GOOGLE_TAG_MANAGER_READONLY_SCOPE,
+  refreshGoogleAccessToken,
+} from './google-oauth.client';
 
 export const GOOGLE_ADS_REQUIRED_SCOPE =
   'https://www.googleapis.com/auth/adwords';
@@ -47,6 +50,20 @@ export class GoogleAdsTokenService {
     if (!hasAdsScope) {
       throw new BadRequestException(
         'Google Ads permission was not granted. Choose the Google account that owns your ads, approve Google Ads on the consent screen, then try again. If needed, remove this app at https://myaccount.google.com/permissions and reconnect.',
+      );
+    }
+  }
+
+  assertTagManagerScope(scopes: string[]): void {
+    const hasGtmScope = scopes.some(
+      (scope) =>
+        scope === GOOGLE_TAG_MANAGER_READONLY_SCOPE ||
+        scope.includes('auth/tagmanager.readonly') ||
+        scope.includes('auth/tagmanager.edit.containers'),
+    );
+    if (!hasGtmScope) {
+      throw new BadRequestException(
+        'Google Tag Manager permission was not granted. Disconnect and reconnect Google Ads in Settings → Integrations, and approve Tag Manager access on the consent screen.',
       );
     }
   }
