@@ -41,7 +41,6 @@ export class CreateBusinessDto {
   @IsEmail()
   email?: string;
 
-  /** Any contact number format (no country-specific validation on create). */
   @IsString()
   @IsNotEmpty()
   phoneNumber: string;
@@ -75,4 +74,14 @@ export class CreateBusinessDto {
   @IsInt()
   @Min(0)
   branchCount?: number;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  twilioPhoneSid: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(32)
+  twilioPhoneNumber: string;
 }

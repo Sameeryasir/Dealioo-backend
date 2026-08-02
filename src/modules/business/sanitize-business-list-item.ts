@@ -20,6 +20,8 @@ export type PublicBusinessListItem = {
   updatedAt: Date;
   stripeConnected: boolean;
   metaConnected: boolean;
+  twilioConnected: boolean;
+  twilioPhoneNumber: string | null;
 };
 
 export function sanitizeBusinessListItem(
@@ -30,6 +32,10 @@ export function sanitizeBusinessListItem(
     business.metaUserId?.trim() ||
       business.metaAccessToken?.trim() ||
       business.metaConnectionStatus?.trim() === 'ACTIVE',
+  );
+  const twilioPhoneNumber = business.twilioPhoneNumber?.trim() || null;
+  const twilioConnected = Boolean(
+    business.twilioPhoneSid?.trim() || twilioPhoneNumber,
   );
 
   return {
@@ -52,5 +58,7 @@ export function sanitizeBusinessListItem(
     updatedAt: business.updatedAt,
     stripeConnected,
     metaConnected,
+    twilioConnected,
+    twilioPhoneNumber,
   };
 }

@@ -12,10 +12,11 @@ export type OnboardingChecklistItem = {
 export type OnboardingStatusResponse = {
   businessId: number | null;
   twoFactorCompleted: boolean;
-  /** @deprecated Prefer subscriptionCompleted */
+  
   subscriptionSelected: boolean;
   subscriptionCompleted: boolean;
   businessCreated: boolean;
+  twilioConnected: boolean;
   metaConnected: boolean;
   stripeConnected: boolean;
   teamInvited: boolean;

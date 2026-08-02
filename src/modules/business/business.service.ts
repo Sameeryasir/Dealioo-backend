@@ -13,8 +13,11 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { Automation } from '../../db/entities/automation.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
@@ -37,6 +40,10 @@ import {
   isValidBusinessSlug,
   slugifyBusinessName,
 } from '../../utils/business-slug';
+import {
+  toBusinessDetailResponse,
+  type BusinessDetailResponse,
+} from './business-detail-response';
 import {
   sanitizeBusinessListItem,
   type PublicBusinessListItem,
@@ -61,6 +68,12 @@ export class BusinessService {
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(BusinessOnboardingDraft)
     private readonly draftRepository: Repository<BusinessOnboardingDraft>,
+    @InjectRepository(Campaign)
+    private readonly campaignRepository: Repository<Campaign>,
+    @InjectRepository(Automation)
+    private readonly automationRepository: Repository<Automation>,
+    @InjectRepository(BusinessCustomer)
+    private readonly businessCustomerRepository: Repository<BusinessCustomer>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
@@ -117,7 +130,14 @@ export class BusinessService {
       country,
       postalCode,
       branchCount,
+      twilioPhoneSid,
+      twilioPhoneNumber,
     } = createBusinessDto;
+
+    const twilioMatch = await this.requireAvailableTwilioNumber(
+      twilioPhoneSid,
+      twilioPhoneNumber,
+    );
 
     const owner = await this.userRepository.findOne({ where: { id: user.id } });
     if (!owner) {
@@ -133,6 +153,15 @@ export class BusinessService {
       order: { id: 'DESC' },
     });
     if (recentDuplicate) {
+      if (
+        !recentDuplicate.twilioPhoneSid?.trim() ||
+        !recentDuplicate.twilioPhoneNumber?.trim()
+      ) {
+        recentDuplicate.twilioPhoneSid = twilioMatch.sid;
+        recentDuplicate.twilioPhoneNumber = twilioMatch.phoneNumber;
+        recentDuplicate.twilioConnectedAt = new Date();
+        await this.businessRepository.save(recentDuplicate);
+      }
       return recentDuplicate;
     }
 
@@ -148,6 +177,7 @@ export class BusinessService {
       slugInput?.trim() || name,
     );
 
+    const connectedAt = new Date();
     const business = this.businessRepository.create({
       name,
       slug,
@@ -162,8 +192,11 @@ export class BusinessService {
       postalCode,
       branchCount,
       owner,
+      twilioPhoneSid: twilioMatch.sid,
+      twilioPhoneNumber: twilioMatch.phoneNumber,
+      twilioConnectedAt: connectedAt,
       onboardingCompleted: true,
-      onboardingCompletedAt: new Date(),
+      onboardingCompletedAt: connectedAt,
     });
 
     await this.businessRepository.save(business);
@@ -315,10 +348,14 @@ export class BusinessService {
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
+  /**
+   * Business rule: detail payload includes summary counts for the Settings profile card.
+   * Counts run in parallel after access check.
+   */
   async getBusinessById(
     businessId: number,
     user: User,
-  ): Promise<Business> {
+  ): Promise<BusinessDetailResponse> {
     const business = await this.businessAccessService.findAccessibleBusiness(
       user,
       businessId,
@@ -328,7 +365,26 @@ export class BusinessService {
         'Business not found or you do not have access to this business.',
       );
     }
-    return business;
+
+    // Count locally (no ActivityModule) to avoid Nest circular module imports.
+    const [totalCampaigns, totalCustomers, activeAutomations] =
+      await Promise.all([
+        this.campaignRepository.count({ where: { businessId } }),
+        this.businessCustomerRepository.count({ where: { businessId } }),
+        this.automationRepository
+          .createQueryBuilder('automation')
+          .where('automation.businessId = :businessId', { businessId })
+          .andWhere(
+            '(automation.isActive = true OR automation.published = true)',
+          )
+          .getCount(),
+      ]);
+
+    return toBusinessDetailResponse(business, {
+      totalCampaigns,
+      totalCustomers,
+      activeAutomations,
+    });
   }
   async updateBusiness(
     businessId: number,
@@ -421,6 +477,56 @@ export class BusinessService {
 
     await this.businessRepository.delete(businessId);
     return business;
+  }
+
+  async listAvailableTwilioPhoneNumbers(user: User): Promise<{
+    numbers: Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+    }>;
+    selectedPhoneSid: string | null;
+    selectedPhoneNumber: string | null;
+  }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to list Twilio numbers.',
+    );
+    await this.assertActiveSubscription(user.id);
+    const numbers = await this.twilioService.listIncomingPhoneNumbers();
+    return {
+      numbers,
+      selectedPhoneSid: null,
+      selectedPhoneNumber: null,
+    };
+  }
+
+  private async requireAvailableTwilioNumber(
+    phoneSid: string,
+    phoneNumber: string,
+  ): Promise<{ sid: string; phoneNumber: string; friendlyName: string | null }> {
+    const sid = phoneSid?.trim() ?? '';
+    const normalized =
+      normalizePhoneNumber(phoneNumber?.trim() ?? '') ?? phoneNumber?.trim() ?? '';
+    if (!sid || !normalized) {
+      throw new BadRequestException(
+        'A Twilio phone number is required before creating a business.',
+      );
+    }
+
+    const available = await this.twilioService.listIncomingPhoneNumbers();
+    const match = available.find(
+      (n) =>
+        n.sid === sid ||
+        n.phoneNumber === normalized ||
+        n.phoneNumber === phoneNumber.trim(),
+    );
+    if (!match) {
+      throw new BadRequestException(
+        'That phone number was not found on the Twilio account.',
+      );
+    }
+    return match;
   }
 
   async listTwilioPhoneNumbers(

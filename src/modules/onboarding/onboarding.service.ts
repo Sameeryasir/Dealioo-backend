@@ -560,6 +560,8 @@ export class OnboardingService {
         metaConnectedAt: true,
         metaAccessToken: true,
         metaConnectionStatus: true,
+        twilioPhoneSid: true,
+        twilioPhoneNumber: true,
       },
     });
 
@@ -588,6 +590,11 @@ export class OnboardingService {
       (await this.draftRepository.exists({ where: { userId } }));
 
     const businessIds = ownedBusinesses.map((b) => b.id);
+    const twilioConnected = ownedBusinesses.some(
+      (b) =>
+        Boolean(b.twilioPhoneSid?.trim()) ||
+        Boolean(b.twilioPhoneNumber?.trim()),
+    );
     const metaConnected = ownedBusinesses.some(
       (b) =>
         Boolean(b.metaConnectedAt) ||
@@ -634,6 +641,7 @@ export class OnboardingService {
     const checklist = this.buildChecklist({
       subscriptionCompleted,
       businessCreated,
+      twilioConnected,
       metaConnected,
       stripeConnected,
       teamInvited,
@@ -645,6 +653,7 @@ export class OnboardingService {
       twoFactorCompleted,
       subscriptionCompleted,
       businessCreated,
+      twilioConnected,
       metaConnected,
       stripeConnected,
       teamInvited,
@@ -686,6 +695,7 @@ export class OnboardingService {
       subscriptionSelected: subscriptionCompleted,
       subscriptionCompleted,
       businessCreated,
+      twilioConnected,
       metaConnected,
       stripeConnected,
       teamInvited,
@@ -717,6 +727,7 @@ export class OnboardingService {
       subscriptionSelected: true,
       subscriptionCompleted: true,
       businessCreated,
+      twilioConnected: true,
       metaConnected: true,
       stripeConnected: true,
       teamInvited: true,
@@ -731,6 +742,7 @@ export class OnboardingService {
       checklist: this.buildChecklist({
         subscriptionCompleted: true,
         businessCreated,
+        twilioConnected: true,
         metaConnected: true,
         stripeConnected: true,
         teamInvited: true,
@@ -743,6 +755,7 @@ export class OnboardingService {
   private buildChecklist(flags: {
     subscriptionCompleted: boolean;
     businessCreated: boolean;
+    twilioConnected: boolean;
     metaConnected: boolean;
     stripeConnected: boolean;
     teamInvited: boolean;
@@ -760,6 +773,12 @@ export class OnboardingService {
         id: 'business',
         label: 'Business',
         completed: flags.businessCreated,
+        required: true,
+      },
+      {
+        id: 'twilio',
+        label: 'Choose Twilio Number',
+        completed: flags.twilioConnected,
         required: true,
       },
       {
@@ -799,14 +818,16 @@ export class OnboardingService {
     twoFactorCompleted: boolean;
     subscriptionCompleted: boolean;
     businessCreated: boolean;
+    twilioConnected: boolean;
     metaConnected: boolean;
     stripeConnected: boolean;
     teamInvited: boolean;
   }): number {
     let progress = 0;
-    if (flags.twoFactorCompleted) progress += 15;
-    if (flags.subscriptionCompleted) progress += 25;
-    if (flags.businessCreated) progress += 25;
+    if (flags.twoFactorCompleted) progress += 10;
+    if (flags.subscriptionCompleted) progress += 20;
+    if (flags.businessCreated) progress += 20;
+    if (flags.twilioConnected) progress += 15;
     if (flags.metaConnected) progress += 12;
     if (flags.stripeConnected) progress += 12;
     if (flags.teamInvited) progress += 11;

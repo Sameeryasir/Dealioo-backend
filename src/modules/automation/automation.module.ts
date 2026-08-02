@@ -80,7 +80,8 @@ import { AutomationService } from './automation.service';
       Customer,
       CustomerVisit,
     ]),
-    ActivityModule,
+    // forwardRef breaks Activity ↔ Redemption ↔ Automation circular load order
+    forwardRef(() => ActivityModule),
     BusinessHistoryModule,
     ChatModule,
     AuthModule,

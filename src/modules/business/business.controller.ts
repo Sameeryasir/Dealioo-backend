@@ -73,6 +73,14 @@ export class BusinessController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('available-twilio-numbers')
+  async listAvailableTwilioPhoneNumbers(
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.listAvailableTwilioPhoneNumbers(req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get(':id/twilio/phone-numbers')
   async listTwilioPhoneNumbers(
     @Param('id', ParseIntPipe) id: number,
@@ -93,10 +101,7 @@ export class BusinessController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get(':id')
-  async getBusinessById(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req,
-  ): Promise<Business> {
+  async getBusinessById(@Param('id', ParseIntPipe) id: number, @Req() req) {
     const user = req.user;
     return this.businessService.getBusinessById(id, user);
   }

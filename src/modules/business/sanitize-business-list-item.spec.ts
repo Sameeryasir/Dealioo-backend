@@ -30,6 +30,8 @@ describe('sanitizeBusinessListItem', () => {
       googleUserId: 'google-user',
       googleRefreshToken: 'refresh-secret',
       googleAccessToken: 'access-secret',
+      twilioPhoneSid: 'PN123',
+      twilioPhoneNumber: '+15551234567',
       createdAt: new Date('2026-07-14T01:06:22.408Z'),
       updatedAt: new Date('2026-07-15T16:44:22.295Z'),
     } as Business;
@@ -56,6 +58,8 @@ describe('sanitizeBusinessListItem', () => {
       updatedAt: business.updatedAt,
       stripeConnected: true,
       metaConnected: true,
+      twilioConnected: true,
+      twilioPhoneNumber: '+15551234567',
     });
     expect(publicItem).not.toHaveProperty('stripeAccountId');
     expect(publicItem).not.toHaveProperty('metaUserId');
@@ -63,6 +67,7 @@ describe('sanitizeBusinessListItem', () => {
     expect(publicItem).not.toHaveProperty('metaAdAccountId');
     expect(publicItem).not.toHaveProperty('metaOauthScopes');
     expect(publicItem).not.toHaveProperty('googleRefreshToken');
+    expect(publicItem).not.toHaveProperty('twilioPhoneSid');
   });
 
   it('returns false flags when integrations are missing', () => {
@@ -86,6 +91,8 @@ describe('sanitizeBusinessListItem', () => {
       metaUserId: null,
       metaAccessToken: null,
       metaConnectionStatus: null,
+      twilioPhoneSid: null,
+      twilioPhoneNumber: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     } as Business;
@@ -93,5 +100,7 @@ describe('sanitizeBusinessListItem', () => {
     const publicItem = sanitizeBusinessListItem(business);
     expect(publicItem.stripeConnected).toBe(false);
     expect(publicItem.metaConnected).toBe(false);
+    expect(publicItem.twilioConnected).toBe(false);
+    expect(publicItem.twilioPhoneNumber).toBeNull();
   });
 });

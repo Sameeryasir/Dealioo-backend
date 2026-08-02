@@ -76,7 +76,7 @@ export class GoogleCampaignDraftService {
     private readonly businessService: BusinessService,
   ) {}
 
-  // --- Step 1: Marketing goal ---
+  
   async saveGoalStep(
     user: User,
     businessId: number,
@@ -91,7 +91,7 @@ export class GoogleCampaignDraftService {
 
     const now = new Date();
 
-    // --- Update existing draft (OCC required) ---
+    
     if (dto.draftId?.trim()) {
       if (dto.expectedVersion == null) {
         throw new BadRequestException(
@@ -136,7 +136,7 @@ export class GoogleCampaignDraftService {
                 ? String(draftData.dailyBudget)
                 : null,
             currentStep: Math.max(existing.currentStep, 2),
-            // Backend owns completed_steps — never accept from client
+            
             completedSteps: this.mergeCompletedSteps(existing.completedSteps, [
               1,
             ]),
@@ -152,7 +152,7 @@ export class GoogleCampaignDraftService {
       });
     }
 
-    // --- Create path: no OCC, version starts at 1 ---
+    
     return this.dataSource.transaction(async (manager) => {
       const draftData = this.applyGoalToDraftData(
         createDefaultGoogleCampaignDraftData(),
@@ -189,7 +189,7 @@ export class GoogleCampaignDraftService {
       const created = await manager.save(entity);
       const response = this.toGoalStepResponse(created);
 
-      // Store idempotency cache on create when a key was provided
+      
       if (idempotencyKey?.trim()) {
         created.lastIdempotencyKey = idempotencyKey.trim();
         created.lastIdempotencyResponse = response as unknown as Record<
@@ -203,7 +203,7 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  // --- Step 2: Goal details ---
+  
   async saveGoalDetailsStep(
     user: User,
     businessId: number,
@@ -311,7 +311,7 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  // --- Step 3: Campaign info ---
+  
   async saveCampaignInfoStep(
     user: User,
     businessId: number,
@@ -432,7 +432,7 @@ export class GoogleCampaignDraftService {
     return {
       id: draft.id,
       businessId: draft.businessId,
-      // Return status as stored (uppercase DRAFT / PUBLISHING / etc.)
+      
       status: draft.status,
       currentStep: draft.currentStep,
       completedSteps: draft.completedSteps ?? [],
@@ -509,7 +509,7 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  // --- Publish (stub queue — no real Google Ads API yet) ---
+  
   async publishDraft(
     user: User,
     businessId: number,
@@ -528,14 +528,14 @@ export class GoogleCampaignDraftService {
       dto.draftId.trim(),
     );
 
-    // Full draft validation before any status change
+    
     assertPublishValidation(draft.draftData);
 
     const now = new Date();
     const publishJobId = randomUUID();
 
     return this.dataSource.transaction(async (manager) => {
-      // Mark VALIDATING under OCC, then move to PUBLISHING with a stub job id
+      
       await this.updateDraftWithOcc(manager, {
         draft,
         expectedVersion: dto.expectedVersion,
@@ -562,7 +562,7 @@ export class GoogleCampaignDraftService {
         throw new NotFoundException('Google campaign draft not found.');
       }
 
-      // NOTE: Queue stub only — real Google Ads publish job comes later
+      
       const published = await this.updateDraftWithOcc(manager, {
         draft: validating,
         expectedVersion: validating.version,
@@ -816,7 +816,7 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  // --- Shared wizard step commit (OCC + transaction + optional idempotency) ---
+  
   private async commitWizardStep<T = GoogleCampaignStepSaveResponseDto>(
     user: User,
     businessId: number,
@@ -865,7 +865,7 @@ export class GoogleCampaignDraftService {
       goal: draftData.goal ?? draft.goal,
       campaignType: draftData.campaignType,
       currentStep: Math.max(draft.currentStep, options.nextStep),
-      // Backend-owned merge: steps 1..completedStep
+      
       completedSteps: this.mergeCompletedSteps(
         draft.completedSteps,
         Array.from({ length: options.completedStep }, (_, i) => i + 1),
@@ -902,10 +902,7 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  /**
-   * Optimistic concurrency update inside an open transaction.
-   * WHERE id + version + ownership; bump version atomically.
-   */
+  
   private async updateDraftWithOcc<T>(
     manager: EntityManager,
     params: {
@@ -932,14 +929,14 @@ export class GoogleCampaignDraftService {
 
     const setPayload: Record<string, unknown> = {
       ...fields,
-      // Atomic version bump — never trust client version for the new value
+      
       version: () => '"version" + 1',
       updatedAt: now,
       updatedBy: fields.updatedBy ?? userId,
     };
 
     if (idempotencyKey?.trim()) {
-      // Placeholder; real response cached after reload below
+      
       setPayload.lastIdempotencyKey = idempotencyKey.trim();
     }
 
@@ -978,14 +975,14 @@ export class GoogleCampaignDraftService {
 
     const response = mapResponse(reloaded);
 
-    // Persist idempotent response for safe client retries
+    
     if (idempotencyKey?.trim()) {
       await manager
         .createQueryBuilder()
         .update(GoogleCampaignDraft)
         .set({
           lastIdempotencyKey: idempotencyKey.trim(),
-          // TypeORM jsonb set typing rejects Record<string, unknown> without cast
+          
           lastIdempotencyResponse: response as never,
         })
         .where('id = :id AND business_id = :businessId AND user_id = :userId', {
@@ -1137,14 +1134,14 @@ export class GoogleCampaignDraftService {
 
     const status = draft.status as GoogleCampaignDraftStatusValue;
 
-    // PUBLISHED always blocks further edits
+    
     if (status === GoogleCampaignDraftStatus.PUBLISHED) {
       throw new BadRequestException(
         'This campaign was already published. Create a new campaign to make changes.',
       );
     }
 
-    // PUBLISHING blocks only while the job is still considered active
+    
     if (status === GoogleCampaignDraftStatus.PUBLISHING) {
       const updatedAt = draft.updatedAt?.getTime?.() ?? 0;
       const staleMs = 15 * 60 * 1000;
@@ -1153,7 +1150,7 @@ export class GoogleCampaignDraftService {
           'Publish is in progress. Wait for it to finish before editing this draft.',
         );
       }
-      // Stale PUBLISHING — allow edit; save path resets status to DRAFT
+      
       return draft;
     }
 

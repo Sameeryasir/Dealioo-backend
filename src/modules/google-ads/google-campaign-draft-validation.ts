@@ -290,8 +290,8 @@ export function validateGoogleDraftForPublish(
         }
       })()
   ) {
-    // Soft consistency check — only warn-style as error when hostnames diverge badly.
-    // Keep as informational consistency rule when both are valid.
+    
+    
   }
 
   return errors;

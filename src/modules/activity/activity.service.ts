@@ -150,7 +150,11 @@ export class ActivityService {
       );
   }
 
-  private async countBusinessCustomers(businessId: number): Promise<number> {
+  /**
+   * Distinct customers linked to a business via activity, chats, visits, or paid funnels.
+   * Used by activity snapshots and business detail summary.
+   */
+  async countBusinessCustomers(businessId: number): Promise<number> {
     const result = await this.businessCustomersBaseQuery(businessId)
       .select('COUNT(DISTINCT customer.id)', 'count')
       .getRawOne<{ count: string }>();

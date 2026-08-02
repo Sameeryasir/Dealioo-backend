@@ -233,7 +233,7 @@ export class GoogleAdsService {
       const clientSecret = this.tokenService.getClientSecret();
       businessId = parseGoogleOAuthState(state, clientSecret);
 
-      // Debug: what scopes Google returned on the OAuth callback query string.
+      
       this.logger.log(
         `Google OAuth grantedScope (callback query) business=${businessId}: ${grantedScope ?? '(empty)'}`,
       );
@@ -242,8 +242,8 @@ export class GoogleAdsService {
       this.logger.log(
         `Google OAuth parsed callbackScopes business=${businessId}: ${JSON.stringify(callbackScopes)}`,
       );
-      // Do not fail here yet — exchange the code so we can log token scopes from Google.
-      // Final assertGoogleScopes() after token exchange is the real gate.
+      
+      
 
       await this.auditService.log(businessId, 'oauth_callback_received', {
         status: GoogleAdsConnectionStatus.AUTHENTICATED,

@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Automation } from '../../db/entities/automation.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
@@ -21,6 +24,9 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
       UserSubscription,
       BusinessOnboardingDraft,
       OnboardingEvent,
+      Campaign,
+      Automation,
+      BusinessCustomer,
     ]),
     AuthModule,
     BusinessHistoryModule,
