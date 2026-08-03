@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
@@ -17,7 +16,6 @@ import {
   SaveGoogleGoalDetailsStepResponseDto,
   SaveGoogleGoalStepResponseDto,
 } from './dto/google-campaign-draft-response.dto';
-import { PublishGoogleCampaignDraftDto } from './dto/publish-google-campaign-draft.dto';
 import { SaveGoogleCampaignInfoStepDto } from './dto/save-google-campaign-info-step.dto';
 import { SaveGoogleGoalDetailsStepDto } from './dto/save-google-goal-details-step.dto';
 import { SaveGoogleGoalStepDto } from './dto/save-google-goal-step.dto';
@@ -42,7 +40,6 @@ import {
   createDefaultGoogleCampaignDraftData,
   generateGoogleCampaignName,
 } from './google-campaign-draft-defaults';
-import { assertPublishValidation } from './google-campaign-draft-validation';
 
 type DraftColumnPatch = {
   draftData?: GoogleCampaignBuilderDraftData | null;
@@ -99,57 +96,66 @@ export class GoogleCampaignDraftService {
         );
       }
 
-      const existing = await this.findEditableDraft(
-        user.id,
-        businessId,
-        dto.draftId.trim(),
-      );
-
-      const cached =
-        this.getCachedIdempotentResponse<SaveGoogleGoalStepResponseDto>(
-          existing,
-          idempotencyKey,
-        );
-      if (cached) return cached;
-
-      const draftData = this.applyGoalToDraftData(
-        existing.draftData ?? createDefaultGoogleCampaignDraftData(),
-        dto.goal,
-        existing.businessName ?? existing.draftData?.businessName,
-      );
-
-      return this.dataSource.transaction(async (manager) => {
-        const saved = await this.updateDraftWithOcc(manager, {
-          draft: existing,
-          expectedVersion: dto.expectedVersion!,
-          userId: user.id,
+      const existing = await this.draftRepository.findOne({
+        where: {
+          id: dto.draftId.trim(),
           businessId,
-          now,
-          fields: {
-            draftData,
-            goal: dto.goal,
-            campaignName: draftData.campaignName,
-            campaignType: draftData.campaignType,
-            businessName: draftData.businessName || existing.businessName,
-            dailyBudget:
-              draftData.dailyBudget != null
-                ? String(draftData.dailyBudget)
-                : null,
-            currentStep: Math.max(existing.currentStep, 2),
-            
-            completedSteps: this.mergeCompletedSteps(existing.completedSteps, [
-              1,
-            ]),
-            lastSavedAt: now,
-            status: GoogleCampaignDraftStatus.DRAFT,
-            errorMessage: null,
-            updatedBy: user.id,
-          },
-          idempotencyKey,
-          mapResponse: (row) => this.toGoalStepResponse(row),
-        });
-        return saved;
+          userId: user.id,
+        },
       });
+
+      if (existing) {
+        const editable = await this.findEditableDraft(
+          user.id,
+          businessId,
+          existing.id,
+        );
+
+        const cached =
+          this.getCachedIdempotentResponse<SaveGoogleGoalStepResponseDto>(
+            editable,
+            idempotencyKey,
+          );
+        if (cached) return cached;
+
+        const draftData = this.applyGoalToDraftData(
+          editable.draftData ?? createDefaultGoogleCampaignDraftData(),
+          dto.goal,
+          editable.businessName ?? editable.draftData?.businessName,
+        );
+
+        return this.dataSource.transaction(async (manager) => {
+          const saved = await this.updateDraftWithOcc(manager, {
+            draft: editable,
+            expectedVersion: dto.expectedVersion!,
+            userId: user.id,
+            businessId,
+            now,
+            fields: {
+              draftData,
+              goal: dto.goal,
+              campaignName: draftData.campaignName,
+              campaignType: draftData.campaignType,
+              businessName: draftData.businessName || editable.businessName,
+              dailyBudget:
+                draftData.dailyBudget != null
+                  ? String(draftData.dailyBudget)
+                  : null,
+              currentStep: Math.max(editable.currentStep, 2),
+              completedSteps: this.mergeCompletedSteps(editable.completedSteps, [
+                1,
+              ]),
+              lastSavedAt: now,
+              status: GoogleCampaignDraftStatus.DRAFT,
+              errorMessage: null,
+              updatedBy: user.id,
+            },
+            idempotencyKey,
+            mapResponse: (row) => this.toGoalStepResponse(row),
+          });
+          return saved;
+        });
+      }
     }
 
     
@@ -506,87 +512,6 @@ export class GoogleCampaignDraftService {
           version: row.version ?? 1,
         }),
       });
-    });
-  }
-
-  
-  async publishDraft(
-    user: User,
-    businessId: number,
-    dto: PublishGoogleCampaignDraftDto,
-  ): Promise<{
-    draftId: string;
-    status: string;
-    version: number;
-    message: string;
-  }> {
-    await this.assertBusinessAccess(user, businessId);
-
-    const draft = await this.findEditableDraft(
-      user.id,
-      businessId,
-      dto.draftId.trim(),
-    );
-
-    
-    assertPublishValidation(draft.draftData);
-
-    const now = new Date();
-    const publishJobId = randomUUID();
-
-    return this.dataSource.transaction(async (manager) => {
-      
-      await this.updateDraftWithOcc(manager, {
-        draft,
-        expectedVersion: dto.expectedVersion,
-        userId: user.id,
-        businessId,
-        now,
-        fields: {
-          status: GoogleCampaignDraftStatus.VALIDATING,
-          updatedBy: user.id,
-          errorMessage: null,
-        },
-        mapResponse: (row) => row,
-      });
-
-      const validating = await manager.findOne(GoogleCampaignDraft, {
-        where: {
-          id: draft.id,
-          businessId,
-          userId: user.id,
-        },
-      });
-
-      if (!validating) {
-        throw new NotFoundException('Google campaign draft not found.');
-      }
-
-      
-      const published = await this.updateDraftWithOcc(manager, {
-        draft: validating,
-        expectedVersion: validating.version,
-        userId: user.id,
-        businessId,
-        now,
-        fields: {
-          status: GoogleCampaignDraftStatus.PUBLISHING,
-          publishStatus: GoogleCampaignDraftStatus.PUBLISHING,
-          publishJobId,
-          publishProgress: 0,
-          publishStep: 'queued',
-          updatedBy: user.id,
-        },
-        mapResponse: (row) => row,
-      });
-
-      return {
-        draftId: published.id,
-        status: published.status,
-        version: published.version ?? 1,
-        message:
-          'Publish job queued. Google Ads API create is not wired yet (stub).',
-      };
     });
   }
 

@@ -80,7 +80,7 @@ export class GoogleAdsTokenService {
 
     if (!googleUserId || !refreshToken) {
       throw new BadRequestException(
-        'Google Ads is not connected. Connect Google in Settings → Integrations.',
+        'Google Ads is not connected. Reconnect Google Ads in Settings → Integrations.',
       );
     }
 
@@ -96,7 +96,7 @@ export class GoogleAdsTokenService {
 
     if (!business.googleCustomerId?.trim()) {
       throw new BadRequestException(
-        'No Google Ads account selected. Choose a Google Ads customer after connecting.',
+        'No Google Ads account selected. Reconnect Google Ads in Settings → Integrations and choose a customer account.',
       );
     }
 

@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpException,
+  HttpStatus,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -41,10 +43,13 @@ import {
   SaveGoogleLanguagesStepDto,
   SaveGoogleLocationsStepDto,
 } from './dto/save-google-remaining-steps.dto';
+import { EnqueueGooglePublishResponseDto } from './dto/enqueue-google-publish-response.dto';
+import { GooglePublishStatusDto } from './dto/google-publish-status.dto';
 import { PublishGoogleCampaignDraftDto } from './dto/publish-google-campaign-draft.dto';
 import { UpdateGoogleDraftProgressDto } from './dto/update-google-draft-progress.dto';
 import { GoogleAdsService } from './google-ads.service';
 import { GoogleCampaignDraftService } from './google-campaign-draft.service';
+import { GooglePublishService } from './google-publish.service';
 
 function readIdempotencyKey(req: { headers?: Record<string, unknown> }): string | undefined {
   const raw = req.headers?.['idempotency-key'] ?? req.headers?.['Idempotency-Key'];
@@ -83,6 +88,7 @@ export class GoogleAdsController {
     private readonly googleAdsService: GoogleAdsService,
     private readonly businessService: BusinessService,
     private readonly googleCampaignDraftService: GoogleCampaignDraftService,
+    private readonly googlePublishService: GooglePublishService,
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
@@ -237,20 +243,30 @@ export class GoogleAdsController {
 
   @UseGuards(AuthGuard('jwt'))
   @Post('business/:businessId/drafts/publish')
+  @HttpCode(HttpStatus.ACCEPTED)
   async publishDraft(
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: PublishGoogleCampaignDraftDto,
-  ): Promise<{
-    draftId: string;
-    status: string;
-    version: number;
-    message: string;
-  }> {
-    return this.googleCampaignDraftService.publishDraft(
+  ): Promise<EnqueueGooglePublishResponseDto> {
+    return this.googlePublishService.enqueuePublish(
       req.user,
       businessId,
       body,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/drafts/:draftId/publish-status')
+  async getPublishStatus(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<GooglePublishStatusDto> {
+    return this.googlePublishService.getPublishStatus(
+      req.user,
+      businessId,
+      draftId,
     );
   }
 

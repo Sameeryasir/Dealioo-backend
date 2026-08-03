@@ -66,6 +66,33 @@ export class GoogleCampaignDraft {
   })
   googleCampaignId: string | null;
 
+  @Column({
+    name: 'google_budget_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  googleBudgetId: string | null;
+
+  @Column({
+    name: 'google_ad_group_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  googleAdGroupId: string | null;
+
+  @Column({
+    name: 'google_ad_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  googleAdId: string | null;
+
+  @Column({ name: 'google_keyword_ids', type: 'jsonb', nullable: true })
+  googleKeywordIds: string[] | null;
+
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
 

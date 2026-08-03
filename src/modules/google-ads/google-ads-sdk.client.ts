@@ -2,6 +2,9 @@ import {
   GoogleAdsApi,
   errors,
   fromMicros,
+  toMicros,
+  ResourceNames,
+  enums,
   type Customer,
 } from 'google-ads-api';
 
@@ -32,6 +35,10 @@ export function createGoogleAdsCustomer(
       ? { login_customer_id: input.loginCustomerId }
       : {}),
   });
+}
+
+export function normalizeGoogleCustomerId(raw: string): string {
+  return String(raw ?? '').replace(/\D/g, '');
 }
 
 export function formatGoogleAdsSdkError(
@@ -75,4 +82,4 @@ export function formatGoogleAdsSdkError(
   return fallback;
 }
 
-export { fromMicros };
+export { fromMicros, toMicros, ResourceNames, enums };
