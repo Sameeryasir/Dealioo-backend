@@ -48,7 +48,9 @@ export type GoogleResponsiveSearchAdPayload = {
 };
 
 export type GoogleGeoTargetPayload = {
-  geoTargetConstantId: string;
+  rawId: string;
+  name: string;
+  type: 'country' | 'state' | 'city' | 'postal_code';
   negative: boolean;
 };
 
@@ -116,7 +118,7 @@ function mapBidding(draft: GoogleCampaignBuilderDraftData): Record<string, unkno
     }
     case 'MAXIMIZE_CLICKS':
     default:
-      return { maximize_clicks: {} };
+      return { target_spend: {} };
   }
 }
 
@@ -266,14 +268,26 @@ export function buildGeoTargetPayloadsFromDraft(
 
   for (const location of draft.targetLocations ?? []) {
     const id = location.id?.trim();
-    if (!id) continue;
-    targets.push({ geoTargetConstantId: id, negative: false });
+    const name = location.name?.trim();
+    if (!id || !name) continue;
+    targets.push({
+      rawId: id,
+      name,
+      type: location.type,
+      negative: false,
+    });
   }
 
   for (const location of draft.excludedLocationTargets ?? []) {
     const id = location.id?.trim();
-    if (!id) continue;
-    targets.push({ geoTargetConstantId: id, negative: true });
+    const name = location.name?.trim();
+    if (!id || !name) continue;
+    targets.push({
+      rawId: id,
+      name,
+      type: location.type,
+      negative: true,
+    });
   }
 
   if (!targets.some((row) => !row.negative)) {
@@ -281,6 +295,10 @@ export function buildGeoTargetPayloadsFromDraft(
   }
 
   return targets;
+}
+
+export function isGoogleGeoCriterionId(rawId: string): boolean {
+  return /^\d+$/.test(rawId.trim());
 }
 
 export function buildLanguageCriterionIdsFromDraft(

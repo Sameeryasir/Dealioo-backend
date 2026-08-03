@@ -54,7 +54,9 @@ export function formatGoogleAdsSdkError(
         | Record<string, string | number | undefined>
         | undefined;
       const codeValues = errorCode
-        ? Object.values(errorCode).map((value) => String(value))
+        ? Object.values(errorCode)
+            .filter((value) => value != null && String(value).trim())
+            .map((value) => String(value))
         : [];
 
       if (
@@ -65,9 +67,30 @@ export function formatGoogleAdsSdkError(
         return `${text ?? 'Developer token is not allowed with this Google Cloud project'}. Your developer token is tied to a different Google Cloud project. Use matching OAuth credentials or request a new developer token for this project.`;
       }
 
-      if (text) {
-        messages.push(text);
-      }
+      const location = googleError.location as
+        | {
+            field_path_elements?: Array<{
+              field_name?: string;
+              index?: number;
+            }>;
+          }
+        | undefined;
+      const fieldPath = (location?.field_path_elements ?? [])
+        .map((part) => {
+          const name = part.field_name?.trim();
+          if (!name) return null;
+          return typeof part.index === 'number'
+            ? `${name}[${part.index}]`
+            : name;
+        })
+        .filter((part): part is string => Boolean(part))
+        .join('.');
+
+      const parts: string[] = [];
+      if (text) parts.push(text);
+      if (fieldPath) parts.push(`field=${fieldPath}`);
+      if (codeValues.length > 0) parts.push(`code=${codeValues.join(',')}`);
+      if (parts.length > 0) messages.push(parts.join(' | '));
     }
 
     if (messages.length > 0) {

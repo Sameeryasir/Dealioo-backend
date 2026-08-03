@@ -46,6 +46,7 @@ import {
   buildResponsiveSearchAdPayloadFromDraft,
   extractGoogleResourceId,
   googleAdsCampaignConsoleUrl,
+  isGoogleGeoCriterionId,
 } from './google-draft-payload-builders';
 import { isTransientGooglePublishError } from './google-publish-errors.util';
 import {
@@ -350,6 +351,9 @@ export class GooglePublishService {
     jobId: string,
   ): Promise<void> {
     await this.beginStep(draft, 'preparing');
+    this.logger.log(
+      `Google publish pipeline start draft=${draft.id} (creates run one Google Ads API call at a time)`,
+    );
     assertPublishValidation(draft.draftData, draft.completedSteps);
 
     const business = await this.businessRepository.findOne({
@@ -407,7 +411,11 @@ export class GooglePublishService {
       campaignId = await this.createCampaign(ctx, budgetId!);
       draft.googleCampaignId = campaignId;
       await this.draftRepository.save(draft);
-      await this.createCampaignCriteria(ctx, campaignId);
+    }
+
+    if (!adGroupId) {
+      await this.beginStep(draft, 'campaign');
+      await this.createCampaignCriteria(ctx, campaignId!);
       await this.completeStep(draft, 'campaign');
     }
 
@@ -456,21 +464,21 @@ export class GooglePublishService {
 
   private async createCampaignBudget(ctx: PublishContext): Promise<string> {
     const payload = buildCampaignBudgetPayloadFromDraft(ctx.draftData);
-    const response = await this.mutate(ctx, [
-      {
-        entity: 'campaign_budget',
-        operation: 'create',
-        resource: {
-          name: payload.name,
-          amount_micros: payload.amountMicros,
-          delivery_method: payload.deliveryMethod,
-          explicitly_shared: payload.explicitlyShared,
-        },
+    const response = await this.mutateOne(ctx, 'budget', 'campaign_budget', {
+      entity: 'campaign_budget',
+      operation: 'create',
+      resource: {
+        name: payload.name,
+        amount_micros: payload.amountMicros,
+        delivery_method: payload.deliveryMethod,
+        explicitly_shared: payload.explicitlyShared,
       },
-    ]);
+    });
     const id = extractGoogleResourceId(this.firstResourceName(response));
     if (!id) {
-      throw new BadRequestException('Google Ads did not return a budget id.');
+      throw new BadRequestException(
+        '[budget] Google Ads did not return a budget id.',
+      );
     }
     return id;
   }
@@ -483,11 +491,15 @@ export class GooglePublishService {
     const resource: resources.ICampaign & {
       start_date?: string;
       end_date?: string;
+      contains_eu_political_advertising?: number;
     } = {
       name: payload.name,
       status: payload.status,
       advertising_channel_type: payload.advertisingChannelType,
       campaign_budget: ResourceNames.campaignBudget(ctx.customerId, budgetId),
+      contains_eu_political_advertising:
+        enums.EuPoliticalAdvertisingStatus
+          .DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING,
       network_settings: {
         target_google_search: payload.networkSettings.targetGoogleSearch,
         target_search_network: payload.networkSettings.targetSearchNetwork,
@@ -498,16 +510,20 @@ export class GooglePublishService {
     if (payload.startDate) resource.start_date = payload.startDate;
     if (payload.endDate) resource.end_date = payload.endDate;
 
-    const response = await this.mutate(ctx, [
-      {
-        entity: 'campaign',
-        operation: 'create',
-        resource,
-      },
-    ]);
+    this.logger.log(
+      `Google campaign bidding payload draft=${JSON.stringify(payload.bidding)}`,
+    );
+
+    const response = await this.mutateOne(ctx, 'campaign', 'campaign', {
+      entity: 'campaign',
+      operation: 'create',
+      resource,
+    });
     const id = extractGoogleResourceId(this.firstResourceName(response));
     if (!id) {
-      throw new BadRequestException('Google Ads did not return a campaign id.');
+      throw new BadRequestException(
+        '[campaign] Google Ads did not return a campaign id.',
+      );
     }
     return id;
   }
@@ -517,40 +533,146 @@ export class GooglePublishService {
     campaignId: string,
   ): Promise<void> {
     const campaignResource = ResourceNames.campaign(ctx.customerId, campaignId);
-    const ops: MutateOperation<resources.ICampaignCriterion>[] = [];
 
     for (const geo of buildGeoTargetPayloadsFromDraft(ctx.draftData)) {
-      ops.push({
-        entity: 'campaign_criterion',
-        operation: 'create',
-        resource: {
-          campaign: campaignResource,
-          negative: geo.negative,
-          location: {
-            geo_target_constant: ResourceNames.geoTargetConstant(
-              geo.geoTargetConstantId,
-            ),
+      const criterionId = await this.resolveGoogleGeoCriterionId(ctx, geo);
+      const label = geo.negative
+        ? `location_exclude:${criterionId}`
+        : `location:${criterionId}`;
+      try {
+        await this.mutateOne(ctx, 'campaign', label, {
+          entity: 'campaign_criterion',
+          operation: 'create',
+          resource: {
+            campaign: campaignResource,
+            negative: geo.negative,
+            location: {
+              geo_target_constant: ResourceNames.geoTargetConstant(criterionId),
+            },
           },
-        },
-      });
+        });
+      } catch (err) {
+        if (this.isAlreadyExistsGoogleError(err)) {
+          this.logger.log(
+            `Google location already present, skipping op=${label}`,
+          );
+          continue;
+        }
+        throw err;
+      }
     }
 
     for (const languageId of buildLanguageCriterionIdsFromDraft(ctx.draftData)) {
-      ops.push({
-        entity: 'campaign_criterion',
-        operation: 'create',
-        resource: {
-          campaign: campaignResource,
-          language: {
-            language_constant: ResourceNames.languageConstant(languageId),
+      const label = `language:${languageId}`;
+      try {
+        await this.mutateOne(ctx, 'campaign', label, {
+          entity: 'campaign_criterion',
+          operation: 'create',
+          resource: {
+            campaign: campaignResource,
+            language: {
+              language_constant: ResourceNames.languageConstant(languageId),
+            },
           },
-        },
-      });
+        });
+      } catch (err) {
+        if (this.isAlreadyExistsGoogleError(err)) {
+          this.logger.log(
+            `Google language already present, skipping op=${label}`,
+          );
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  private async resolveGoogleGeoCriterionId(
+    ctx: PublishContext,
+    geo: {
+      rawId: string;
+      name: string;
+      type: 'country' | 'state' | 'city' | 'postal_code';
+    },
+  ): Promise<string> {
+    if (isGoogleGeoCriterionId(geo.rawId)) {
+      return geo.rawId.trim();
     }
 
-    if (ops.length > 0) {
-      await this.mutate(ctx, ops);
+    this.logger.log(
+      `Resolving Google geo target for name="${geo.name}" rawId=${geo.rawId} type=${geo.type}`,
+    );
+
+    let response;
+    try {
+      response = await ctx.customer.geoTargetConstants.suggestGeoTargetConstants({
+        locale: 'en',
+        location_names: { names: [geo.name] },
+      } as services.SuggestGeoTargetConstantsRequest);
+    } catch (err) {
+      throw new BadRequestException(
+        `[campaign/location:${geo.rawId}] Could not look up Google location for "${geo.name}". ${formatGoogleAdsSdkError(err, 'Geo suggest failed.')}`,
+      );
     }
+
+    const suggestions = response.geo_target_constant_suggestions ?? [];
+    if (suggestions.length === 0) {
+      throw new BadRequestException(
+        `[campaign/location:${geo.rawId}] Google Ads has no location match for "${geo.name}". Pick a country/city from the list again.`,
+      );
+    }
+
+    const preferredTypes = this.googleTargetTypesForLocationType(geo.type);
+    const ranked = [...suggestions].sort((a, b) => {
+      const aType = a.geo_target_constant?.target_type ?? '';
+      const bType = b.geo_target_constant?.target_type ?? '';
+      const aScore = preferredTypes.includes(aType) ? 0 : 1;
+      const bScore = preferredTypes.includes(bType) ? 0 : 1;
+      if (aScore !== bScore) return aScore - bScore;
+      return Number(b.reach ?? 0) - Number(a.reach ?? 0);
+    });
+
+    const best = ranked[0]?.geo_target_constant;
+    const criterionId =
+      extractGoogleResourceId(best?.resource_name) ||
+      (best?.id != null ? String(best.id) : null);
+
+    if (!criterionId || !isGoogleGeoCriterionId(criterionId)) {
+      throw new BadRequestException(
+        `[campaign/location:${geo.rawId}] Google returned an invalid location id for "${geo.name}".`,
+      );
+    }
+
+    this.logger.log(
+      `Resolved location "${geo.name}" → geoTargetConstants/${criterionId} (${best?.target_type ?? 'unknown'})`,
+    );
+    return criterionId;
+  }
+
+  private googleTargetTypesForLocationType(
+    type: 'country' | 'state' | 'city' | 'postal_code',
+  ): string[] {
+    switch (type) {
+      case 'country':
+        return ['Country'];
+      case 'state':
+        return ['State', 'Province', 'Region', 'Territory', 'Department'];
+      case 'city':
+        return ['City', 'Municipality', 'Neighborhood', 'Borough', 'County'];
+      case 'postal_code':
+        return ['Postal Code', 'Postal Code Prefix'];
+      default:
+        return [];
+    }
+  }
+
+  private isAlreadyExistsGoogleError(err: unknown): boolean {
+    const message = this.publishErrorMessage(err).toLowerCase();
+    return (
+      message.includes('already exists') ||
+      message.includes('duplicate') ||
+      message.includes('already present')
+    );
   }
 
   private async createAdGroup(
@@ -558,21 +680,21 @@ export class GooglePublishService {
     campaignId: string,
   ): Promise<string> {
     const payload = buildAdGroupPayloadFromDraft(ctx.draftData);
-    const response = await this.mutate(ctx, [
-      {
-        entity: 'ad_group',
-        operation: 'create',
-        resource: {
-          name: payload.name,
-          status: payload.status,
-          type: payload.type,
-          campaign: ResourceNames.campaign(ctx.customerId, campaignId),
-        },
+    const response = await this.mutateOne(ctx, 'ad_group', 'ad_group', {
+      entity: 'ad_group',
+      operation: 'create',
+      resource: {
+        name: payload.name,
+        status: payload.status,
+        type: payload.type,
+        campaign: ResourceNames.campaign(ctx.customerId, campaignId),
       },
-    ]);
+    });
     const id = extractGoogleResourceId(this.firstResourceName(response));
     if (!id) {
-      throw new BadRequestException('Google Ads did not return an ad group id.');
+      throw new BadRequestException(
+        '[ad_group] Google Ads did not return an ad group id.',
+      );
     }
     return id;
   }
@@ -584,44 +706,61 @@ export class GooglePublishService {
     const adGroupResource = ResourceNames.adGroup(ctx.customerId, adGroupId);
     const positives = buildKeywordPayloadsFromDraft(ctx.draftData);
     const negatives = buildNegativeKeywordPayloadsFromDraft(ctx.draftData);
+    const ids: string[] = [];
 
-    const ops: MutateOperation<resources.IAdGroupCriterion>[] = [
-      ...positives.map((keyword) => ({
-        entity: 'ad_group_criterion' as const,
-        operation: 'create' as const,
-        resource: {
-          ad_group: adGroupResource,
-          status: enums.AdGroupCriterionStatus.ENABLED,
-          keyword: {
-            text: keyword.text,
-            match_type: keyword.matchType,
+    for (const keyword of positives) {
+      const response = await this.mutateOne(
+        ctx,
+        'keywords',
+        `keyword:${keyword.text}`,
+        {
+          entity: 'ad_group_criterion',
+          operation: 'create',
+          resource: {
+            ad_group: adGroupResource,
+            status: enums.AdGroupCriterionStatus.ENABLED,
+            keyword: {
+              text: keyword.text,
+              match_type: keyword.matchType,
+            },
           },
         },
-      })),
-      ...negatives.map((keyword) => ({
-        entity: 'ad_group_criterion' as const,
-        operation: 'create' as const,
-        resource: {
-          ad_group: adGroupResource,
-          negative: true,
-          keyword: {
-            text: keyword.text,
-            match_type: keyword.matchType,
+      );
+      const id = extractGoogleResourceId(
+        response.mutate_operation_responses?.[0]?.ad_group_criterion_result
+          ?.resource_name,
+      );
+      if (id) ids.push(id);
+    }
+
+    for (const keyword of negatives) {
+      const response = await this.mutateOne(
+        ctx,
+        'keywords',
+        `negative_keyword:${keyword.text}`,
+        {
+          entity: 'ad_group_criterion',
+          operation: 'create',
+          resource: {
+            ad_group: adGroupResource,
+            negative: true,
+            keyword: {
+              text: keyword.text,
+              match_type: keyword.matchType,
+            },
           },
         },
-      })),
-    ];
-
-    const response = await this.mutate(ctx, ops);
-    const ids = (response.mutate_operation_responses ?? [])
-      .map((row) =>
-        extractGoogleResourceId(row.ad_group_criterion_result?.resource_name),
-      )
-      .filter((id): id is string => Boolean(id));
+      );
+      const id = extractGoogleResourceId(
+        response.mutate_operation_responses?.[0]?.ad_group_criterion_result
+          ?.resource_name,
+      );
+      if (id) ids.push(id);
+    }
 
     if (ids.length === 0) {
       throw new BadRequestException(
-        'Google Ads did not return keyword criterion ids.',
+        '[keywords] Google Ads did not return keyword criterion ids.',
       );
     }
 
@@ -633,48 +772,58 @@ export class GooglePublishService {
     adGroupId: string,
   ): Promise<string> {
     const payload = buildResponsiveSearchAdPayloadFromDraft(ctx.draftData);
-    const response = await this.mutate(ctx, [
-      {
-        entity: 'ad_group_ad',
-        operation: 'create',
-        resource: {
-          ad_group: ResourceNames.adGroup(ctx.customerId, adGroupId),
-          status: enums.AdGroupAdStatus.PAUSED,
-          ad: {
-            final_urls: payload.finalUrls,
-            responsive_search_ad: {
-              headlines: payload.headlines,
-              descriptions: payload.descriptions,
-              path1: payload.path1,
-              path2: payload.path2,
-            },
+    const response = await this.mutateOne(ctx, 'ads', 'responsive_search_ad', {
+      entity: 'ad_group_ad',
+      operation: 'create',
+      resource: {
+        ad_group: ResourceNames.adGroup(ctx.customerId, adGroupId),
+        status: enums.AdGroupAdStatus.PAUSED,
+        ad: {
+          final_urls: payload.finalUrls,
+          responsive_search_ad: {
+            headlines: payload.headlines,
+            descriptions: payload.descriptions,
+            path1: payload.path1,
+            path2: payload.path2,
           },
         },
       },
-    ]);
+    });
 
     const resourceName = this.firstResourceName(response);
     const id =
       extractGoogleResourceId(resourceName)?.split('~').pop() ??
       extractGoogleResourceId(resourceName);
     if (!id) {
-      throw new BadRequestException('Google Ads did not return an ad id.');
+      throw new BadRequestException(
+        '[ads] Google Ads did not return an ad id.',
+      );
     }
     return id;
   }
 
-  private async mutate<T>(
+  private async mutateOne<T>(
     ctx: PublishContext,
-    operations: MutateOperation<T>[],
+    step: GooglePublishStepName,
+    operationLabel: string,
+    operation: MutateOperation<T>,
   ): Promise<services.MutateGoogleAdsResponse> {
+    this.logger.log(
+      `Google Ads API → step=${step} op=${operationLabel} entity=${operation.entity}`,
+    );
     try {
-      return await ctx.customer.mutateResources(operations);
+      const response = await ctx.customer.mutateResources([operation]);
+      this.logger.log(
+        `Google Ads API ✓ step=${step} op=${operationLabel} entity=${operation.entity}`,
+      );
+      return response;
     } catch (err) {
+      const googleMessage = formatGoogleAdsSdkError(
+        err,
+        'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
+      );
       throw new BadRequestException(
-        formatGoogleAdsSdkError(
-          err,
-          'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
-        ),
+        `[${step}/${operationLabel}] ${googleMessage}`,
       );
     }
   }
@@ -719,14 +868,18 @@ export class GooglePublishService {
     draft: GoogleCampaignDraft,
     err: unknown,
   ): Promise<void> {
+    const step = draft.publishStep ?? 'preparing';
     const message = this.publishErrorMessage(err);
+    const withStep = message.startsWith('[')
+      ? message
+      : `[${step}] ${message}`;
     draft.status = GoogleCampaignDraftStatus.FAILED;
     draft.publishStatus = GoogleCampaignPublishStatus.FAILED;
-    draft.errorMessage = message;
-    draft.publishStep = draft.publishStep ?? 'preparing';
+    draft.errorMessage = withStep;
+    draft.publishStep = step;
     await this.draftRepository.save(draft);
     this.logger.error(
-      `Google publish failed for draft=${draft.id}: ${message}`,
+      `Google publish failed for draft=${draft.id} at step=${step}: ${withStep}`,
     );
   }
 
