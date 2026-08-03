@@ -631,8 +631,7 @@ export class OnboardingService {
       subscriptionSelected: subscriptionCompleted,
       businessCreated,
     });
-    const onboardingCompleted = subscriptionCompleted && businessCreated;
-
+    const onboardingCompleted = businessCreated;
     const redirectPath = this.buildRedirectPath(
       nextStep,
       onboardingCompleted,
@@ -970,13 +969,13 @@ export class OnboardingService {
     subscriptionSelected: boolean;
     businessCreated: boolean;
   }): OnboardingNextStep {
+    if (input.businessCreated) {
+      return null;
+    }
     if (!input.subscriptionSelected) {
       return 'plan_selection';
     }
-    if (!input.businessCreated) {
-      return 'business_creation';
-    }
-    return null;
+    return 'business_creation';
   }
 
   private buildRedirectPath(
