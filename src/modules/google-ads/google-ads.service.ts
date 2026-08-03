@@ -42,6 +42,7 @@ import {
   createGoogleAdsCustomer,
   formatGoogleAdsSdkError,
   fromMicros,
+  ResourceNames,
 } from './google-ads-sdk.client';
 
 const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
@@ -589,6 +590,62 @@ export class GoogleAdsService {
     };
   }
 
+  async deleteCampaignForBusiness(
+    user: User,
+    businessId: number,
+    googleCampaignId: string,
+  ): Promise<{ deleted: true; googleCampaignId: string }> {
+    const campaignId = String(googleCampaignId ?? '').replace(/\D/g, '');
+    if (!campaignId) {
+      throw new BadRequestException('Google campaign id is required.');
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    const normalizedCustomerId = this.normalizeCustomerId(customerId!);
+    const normalizedLoginCustomerId = loginCustomerId
+      ? this.normalizeCustomerId(loginCustomerId)
+      : normalizedCustomerId;
+
+    const client = this.getGoogleAdsApiClient();
+    const customer = createGoogleAdsCustomer(client, {
+      customerId: normalizedCustomerId,
+      refreshToken,
+      loginCustomerId: normalizedLoginCustomerId,
+    });
+
+    const resourceName = ResourceNames.campaign(
+      normalizedCustomerId,
+      campaignId,
+    );
+
+    try {
+      await this.withSdkTimeout(
+        customer.campaigns.remove([resourceName]),
+        'googleAds:deleteCampaign',
+      );
+    } catch (err) {
+      throw new BadRequestException(
+        formatGoogleAdsSdkError(
+          err,
+          'Could not delete Google Ads campaign. Try again or remove it in Google Ads.',
+        ),
+      );
+    }
+
+    await this.auditService.log(businessId, 'google_ads_campaign_deleted', {
+      metadata: { googleCampaignId: campaignId },
+    });
+
+    this.logger.log(
+      `Google Ads campaign ${campaignId} deleted for business ${businessId}`,
+    );
+
+    return { deleted: true, googleCampaignId: campaignId };
+  }
+
   private async fetchCampaignStats(
     refreshToken: string,
     customerId: string,
@@ -1089,7 +1146,34 @@ export class GoogleAdsService {
     if (value == null) {
       return null;
     }
-    return String(value).trim() || null;
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const byCode: Record<number, string> = {
+        0: 'UNSPECIFIED',
+        1: 'UNKNOWN',
+        2: 'ENABLED',
+        3: 'PAUSED',
+        4: 'REMOVED',
+      };
+      return byCode[value] ?? String(value);
+    }
+
+    const text = String(value).trim();
+    if (!text) return null;
+
+    const numeric = Number.parseInt(text, 10);
+    if (String(numeric) === text) {
+      const byCode: Record<number, string> = {
+        0: 'UNSPECIFIED',
+        1: 'UNKNOWN',
+        2: 'ENABLED',
+        3: 'PAUSED',
+        4: 'REMOVED',
+      };
+      return byCode[numeric] ?? text;
+    }
+
+    return text.toUpperCase();
   }
 
   private async exchangeCodeForTokens(

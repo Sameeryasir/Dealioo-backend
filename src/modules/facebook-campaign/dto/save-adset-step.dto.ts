@@ -248,13 +248,15 @@ export class SaveAdSetStepDto {
   @IsNotEmpty()
   startTime: string;
 
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  endDate: string;
+  endDate?: string;
 
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  endTime: string;
+  endTime?: string;
 
   @IsString()
   @IsNotEmpty()

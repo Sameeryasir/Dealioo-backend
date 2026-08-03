@@ -892,7 +892,7 @@ export class MetaPublishService {
       objective: campaign.objective,
       budget: String(adSet.dailyBudget ?? adSet.lifetimeBudget ?? 0),
       startTime: new Date(adSet.startDate),
-      endTime: new Date(adSet.endDate),
+      endTime: adSet.endDate ? new Date(adSet.endDate) : null,
       facebookPageId: creative.facebookPageId,
       instagramActorId: creative.instagramActorId?.trim() || null,
       status: 'PENDING',

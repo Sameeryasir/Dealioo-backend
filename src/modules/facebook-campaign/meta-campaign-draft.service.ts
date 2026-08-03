@@ -24,6 +24,7 @@ import { SaveCampaignStepDto, MetaBudgetStrategy } from './dto/save-campaign-ste
 import {
   MetaAdSetBudgetType,
   MetaCampaignObjective,
+  MetaOptimizationGoal,
 } from './meta-campaign.constants';
 import {
   assertAtLeastOnePlacement,
@@ -145,14 +146,22 @@ export class MetaCampaignDraftService {
       dto.startTime,
       dto.timezone,
     );
-    const endDateTime = combineDateAndTime(
-      dto.endDate,
-      dto.endTime,
-      dto.timezone,
-    );
+    const hasEndDate = Boolean(dto.endDate?.trim() && dto.endTime?.trim());
+    const endDateTime = hasEndDate
+      ? combineDateAndTime(dto.endDate!, dto.endTime!, dto.timezone)
+      : undefined;
     assertScheduleOrder(startDateTime, endDateTime);
 
     const cboEnabled = campaignData.campaignBudgetOptimization;
+    const usesLifetimeBudget =
+      (!cboEnabled && dto.budgetType === MetaAdSetBudgetType.LIFETIME) ||
+      (cboEnabled && campaignData.campaignBudgetType === 'lifetime');
+    if (usesLifetimeBudget && !hasEndDate) {
+      throw new BadRequestException(
+        'Lifetime budgets require an end date. Turn on “Set an end date” or switch to a daily budget.',
+      );
+    }
+
     let dailyBudgetMinor: string | undefined;
     let lifetimeBudgetMinor: string | undefined;
 
@@ -182,14 +191,17 @@ export class MetaCampaignDraftService {
       billingEvent: dto.billingEvent,
       startDate: dto.startDate,
       startTime: dto.startTime,
-      endDate: dto.endDate,
-      endTime: dto.endTime,
+      endDate: hasEndDate ? dto.endDate : undefined,
+      endTime: hasEndDate ? dto.endTime : undefined,
       timezone: dto.timezone,
       startDateTime,
       endDateTime,
       optimizationGoal: dto.optimizationGoal,
       destinationType: dto.destinationType,
-      promotedObject: dto.promotedObject,
+      promotedObject:
+        dto.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS
+          ? dto.promotedObject
+          : undefined,
       audience: {
         country: dto.audience.country.toUpperCase(),
         region: dto.audience.region?.trim() || undefined,

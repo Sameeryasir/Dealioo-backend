@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpException,
@@ -401,6 +402,20 @@ export class GoogleAdsController {
     }
 
     return this.googleAdsService.getAdCampaignStats(business);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Delete('ads/campaigns/:businessId/:googleCampaignId')
+  async deleteCampaign(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('googleCampaignId') googleCampaignId: string,
+  ): Promise<{ deleted: true; googleCampaignId: string }> {
+    return this.googleAdsService.deleteCampaignForBusiness(
+      req.user,
+      businessId,
+      googleCampaignId,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

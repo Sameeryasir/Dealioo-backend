@@ -47,7 +47,6 @@ export class MetaCampaignDraft {
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage: string | null;
 
-  // Manual optimistic lock — not @VersionColumn so autosave can check expectedVersion.
   @Column({ name: 'version', type: 'int', default: 1 })
   version: number;
 

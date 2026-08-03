@@ -35,7 +35,12 @@ export function combineDateAndTime(
   return `${isoCandidate} (${trimmedTz})`;
 }
 
-export function assertScheduleOrder(startDateTime: string, endDateTime: string): void {
+export function assertScheduleOrder(
+  startDateTime: string,
+  endDateTime?: string,
+): void {
+  if (!endDateTime?.trim()) return;
+
   const start = Date.parse(startDateTime.split(' (')[0]);
   const end = Date.parse(endDateTime.split(' (')[0]);
   if (!Number.isFinite(start) || !Number.isFinite(end)) {

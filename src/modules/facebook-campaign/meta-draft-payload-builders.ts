@@ -338,9 +338,12 @@ export function buildAdSetPayloadFromDraft(
     is_adset_budget_sharing_enabled: false,
     targeting,
     start_time: draftDateTimeToUnix(adSet.startDateTime),
-    end_time: draftDateTimeToUnix(adSet.endDateTime),
     status: adSet.status,
   };
+
+  if (adSet.endDateTime?.trim()) {
+    body.end_time = draftDateTimeToUnix(adSet.endDateTime);
+  }
 
   if (!cboEnabled) {
     if (adSet.dailyBudgetMinor) {
@@ -354,7 +357,10 @@ export function buildAdSetPayloadFromDraft(
     body.bid_amount = Math.round(adSet.bidAmount * 100);
   }
 
-  if (adSet.promotedObject?.pixelId) {
+  if (
+    adSet.optimizationGoal === 'OFFSITE_CONVERSIONS' &&
+    adSet.promotedObject?.pixelId
+  ) {
     body.promoted_object = {
       pixel_id: adSet.promotedObject.pixelId,
       custom_event_type: adSet.promotedObject.customEventType || undefined,
