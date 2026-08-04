@@ -40,4 +40,5 @@ export class PresignMediaResponseDto {
   publicUrl: string;
   objectKey: string;
   uploadStatus: string;
+  requiredHeaders: Record<string, string>;
 }

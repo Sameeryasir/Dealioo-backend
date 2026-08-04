@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import {
   DeleteObjectCommand,
+  PutObjectAclCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -80,6 +81,7 @@ export class SpacesService {
     uploadUrl: string;
     publicUrl: string;
     objectKey: string;
+    requiredHeaders: Record<string, string>;
   }> {
     if (!this.client || !this.bucket) {
       throw new ServiceUnavailableException(
@@ -90,13 +92,12 @@ export class SpacesService {
     const safeFolder = params.folder.replace(/^\/+|\/+$/g, '');
     const storedName = sanitizeStoredUploadFileName(params.filename);
     const objectKey = `${safeFolder}/${randomUUID()}-${storedName}`;
+    const contentType = params.contentType.trim() || 'application/octet-stream';
 
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: objectKey,
-      ACL: 'public-read',
-      ContentType: params.contentType,
-      CacheControl: 'public, max-age=31536000, immutable',
+      ContentType: contentType,
     });
 
     const uploadUrl = await getSignedUrl(this.client, command, {
@@ -107,7 +108,30 @@ export class SpacesService {
       uploadUrl,
       publicUrl: this.buildPublicUrl(objectKey),
       objectKey,
+      requiredHeaders: {
+        'Content-Type': contentType,
+      },
     };
+  }
+
+  async makeObjectPublic(objectKey: string): Promise<void> {
+    if (!this.client || !this.bucket) {
+      throw new ServiceUnavailableException(
+        'DigitalOcean Spaces is not configured.',
+      );
+    }
+
+    const key = objectKey.replace(/^\/+/, '');
+    try {
+      await this.client.send(
+        new PutObjectAclCommand({
+          Bucket: this.bucket,
+          Key: key,
+          ACL: 'public-read',
+        }),
+      );
+    } catch {
+    }
   }
 
   async uploadFile(

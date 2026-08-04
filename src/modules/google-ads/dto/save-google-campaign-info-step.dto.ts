@@ -33,4 +33,8 @@ export class SaveGoogleCampaignInfoStepDto {
   @IsOptional()
   @IsString()
   extensionBusinessName?: string;
+
+  @IsOptional()
+  @IsString()
+  businessDescription?: string;
 }

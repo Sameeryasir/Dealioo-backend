@@ -251,6 +251,11 @@ export class SaveGoogleAudienceStepDto {
   @IsArray()
   @IsString({ each: true })
   interests?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  idealCustomers?: string[];
 }
 
 export class SaveGoogleKeywordsStepDto {
@@ -283,6 +288,11 @@ export class SaveGoogleKeywordsStepDto {
   @IsOptional()
   @IsIn(['BROAD', 'PHRASE', 'EXACT'])
   keywordMatchType?: GoogleKeywordMatchType;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  productsServices?: string[];
 }
 
 export class SaveGoogleAdsStepDto {
@@ -319,6 +329,14 @@ export class SaveGoogleExtrasStepDto {
   @IsOptional()
   @IsString()
   phoneNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  businessAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  businessHours?: string;
 
   @IsOptional()
   @IsArray()

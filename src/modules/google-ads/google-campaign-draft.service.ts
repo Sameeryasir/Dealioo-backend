@@ -38,7 +38,6 @@ import {
 } from './google-campaign-draft.constants';
 import {
   createDefaultGoogleCampaignDraftData,
-  generateGoogleCampaignName,
 } from './google-campaign-draft-defaults';
 
 type DraftColumnPatch = {
@@ -276,13 +275,6 @@ export class GoogleCampaignDraftService {
       savedAt: new Date().toISOString(),
     };
 
-    if (dto.businessName?.trim()) {
-      draftData.campaignName = generateGoogleCampaignName(
-        goal,
-        dto.businessName.trim(),
-      );
-    }
-
     const now = new Date();
 
     return this.dataSource.transaction(async (manager) => {
@@ -379,6 +371,8 @@ export class GoogleCampaignDraftService {
       businessCategory,
       logoFileName,
       logoPreviewUrl,
+      businessDescription:
+        dto.businessDescription?.trim() ?? base.businessDescription ?? '',
       currentStep: Math.max(base.currentStep ?? 3, 4),
       savedAt: new Date().toISOString(),
     };
@@ -617,6 +611,7 @@ export class GoogleCampaignDraftService {
         gender: dto.gender ?? base.gender,
         householdIncome: dto.householdIncome?.trim() ?? base.householdIncome,
         interests: dto.interests ?? base.interests,
+        idealCustomers: dto.idealCustomers ?? base.idealCustomers ?? [],
       }),
       idempotencyKey,
     });
@@ -657,6 +652,8 @@ export class GoogleCampaignDraftService {
           .map((row) => row.trim())
           .filter(Boolean),
         keywordMatchType: dto.keywordMatchType ?? base.keywordMatchType,
+        productsServices:
+          dto.productsServices ?? base.productsServices ?? [],
       }),
       idempotencyKey,
     });
@@ -720,6 +717,8 @@ export class GoogleCampaignDraftService {
         extensionBusinessName:
           dto.extensionBusinessName?.trim() ?? base.extensionBusinessName,
         phoneNumber: dto.phoneNumber?.trim() ?? base.phoneNumber,
+        businessAddress: dto.businessAddress?.trim() ?? base.businessAddress,
+        businessHours: dto.businessHours?.trim() ?? base.businessHours,
         callouts: dto.callouts ?? base.callouts,
         structuredSnippetHeader:
           dto.structuredSnippetHeader?.trim() ?? base.structuredSnippetHeader,
@@ -1034,7 +1033,7 @@ export class GoogleCampaignDraftService {
       ...base,
       goal,
       goalDetailSubstep: 0,
-      campaignName: generateGoogleCampaignName(goal, name),
+      businessName: name || base.businessName,
       currentStep: Math.max(base.currentStep ?? 1, 2),
       savedAt: new Date().toISOString(),
     };

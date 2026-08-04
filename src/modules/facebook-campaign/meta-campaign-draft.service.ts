@@ -350,7 +350,8 @@ export class MetaCampaignDraftService {
     }
 
     if (dto.currentStep != null) {
-      draft.currentStep = Math.max(draft.currentStep, dto.currentStep);
+      const step = Math.min(4, Math.max(1, Math.trunc(dto.currentStep)));
+      draft.currentStep = step;
     }
 
     if (dto.completedSteps?.length) {

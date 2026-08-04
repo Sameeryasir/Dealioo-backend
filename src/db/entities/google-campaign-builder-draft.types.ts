@@ -120,6 +120,8 @@ export type GoogleCampaignBuilderDraftData = {
   businessCategory: string;
   logoPreviewUrl: string;
   logoFileName: string;
+  businessDescription?: string;
+  onboardingDone?: boolean;
   dailyBudget: number;
   startDate: string;
   endDate: string;
@@ -138,10 +140,12 @@ export type GoogleCampaignBuilderDraftData = {
   excludedLocations: string[];
   presenceOption: GooglePresenceOptionId;
   languages: string[];
+  idealCustomers?: string[];
   ageRanges: GoogleAgeRangeId[];
   gender: GoogleGenderId;
   householdIncome: string;
   interests: string[];
+  productsServices?: string[];
   businessType: string;
   suggestedKeywords: GoogleSuggestedKeywordData[];
   customKeywords: string[];

@@ -58,7 +58,7 @@ export class MediaService {
       await this.assertDraftBelongs(user.id, businessId, dto.draftId.trim());
     }
 
-    const { uploadUrl, publicUrl, objectKey } =
+    const { uploadUrl, publicUrl, objectKey, requiredHeaders } =
       await this.spacesService.createPresignedPutUrl({
         folder: CAMPAIGNS_UPLOAD_SUBDIR,
         filename: dto.filename,
@@ -90,6 +90,7 @@ export class MediaService {
       publicUrl,
       objectKey,
       uploadStatus: media.uploadStatus,
+      requiredHeaders,
     };
   }
 
@@ -117,6 +118,10 @@ export class MediaService {
       media.errorMessage = 'Media public URL is missing or not HTTPS.';
       await this.mediaRepository.save(media);
       throw new BadRequestException(media.errorMessage);
+    }
+
+    if (media.storageKey?.trim()) {
+      await this.spacesService.makeObjectPublic(media.storageKey.trim());
     }
 
     media.uploadStatus = MediaStatus.UPLOADED;

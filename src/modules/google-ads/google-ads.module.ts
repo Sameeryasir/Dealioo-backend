@@ -5,10 +5,12 @@ import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.ent
 import { Business } from '../../db/entities/business.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { BusinessModule } from '../business/business.module';
+import { AiModule } from '../ai/ai.module';
 import { GoogleAdsIntegrationAuditService } from './google-ads-integration-audit.service';
 import { GoogleAdsTokenService } from './google-ads-token.service';
 import { GoogleAdsController } from './google-ads.controller';
 import { GoogleAdsService } from './google-ads.service';
+import { GoogleCampaignAiService } from './google-campaign-ai.service';
 import { GoogleCampaignDraftService } from './google-campaign-draft.service';
 import { GOOGLE_PUBLISH_QUEUE } from './google-publish-queue.constants';
 import { GooglePublishQueueProcessor } from './google-publish-queue.processor';
@@ -23,6 +25,7 @@ import { GooglePublishService } from './google-publish.service';
     ]),
     BullModule.registerQueue({ name: GOOGLE_PUBLISH_QUEUE }),
     BusinessModule,
+    AiModule,
   ],
   controllers: [GoogleAdsController],
   providers: [
@@ -30,6 +33,7 @@ import { GooglePublishService } from './google-publish.service';
     GoogleAdsIntegrationAuditService,
     GoogleAdsTokenService,
     GoogleCampaignDraftService,
+    GoogleCampaignAiService,
     GooglePublishService,
     GooglePublishQueueProcessor,
   ],

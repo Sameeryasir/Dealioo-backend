@@ -48,7 +48,12 @@ import { EnqueueGooglePublishResponseDto } from './dto/enqueue-google-publish-re
 import { GooglePublishStatusDto } from './dto/google-publish-status.dto';
 import { PublishGoogleCampaignDraftDto } from './dto/publish-google-campaign-draft.dto';
 import { UpdateGoogleDraftProgressDto } from './dto/update-google-draft-progress.dto';
+import { GenerateGoogleKeywordsDto } from './dto/generate-google-keywords.dto';
 import { GoogleAdsService } from './google-ads.service';
+import {
+  GoogleCampaignAiService,
+  type GoogleKeywordAiResult,
+} from './google-campaign-ai.service';
 import { GoogleCampaignDraftService } from './google-campaign-draft.service';
 import { GooglePublishService } from './google-publish.service';
 
@@ -90,7 +95,25 @@ export class GoogleAdsController {
     private readonly businessService: BusinessService,
     private readonly googleCampaignDraftService: GoogleCampaignDraftService,
     private readonly googlePublishService: GooglePublishService,
+    private readonly googleCampaignAiService: GoogleCampaignAiService,
   ) {}
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/generate-keywords')
+  async generateKeywords(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() body: GenerateGoogleKeywordsDto,
+  ): Promise<GoogleKeywordAiResult> {
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException('Business not found.');
+    }
+    return this.googleCampaignAiService.generateKeywords(body);
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('business/:businessId/drafts/goal-step')
