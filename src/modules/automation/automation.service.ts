@@ -88,6 +88,7 @@ import { CreateAutomationConnectionDto } from './automationDto/create-automation
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
+import { AutomationStatusResponseDto } from './automationDto/automation-status-response.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
 import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
@@ -174,7 +175,7 @@ export class AutomationService {
     id: number,
     dto: UpdateAutomationDto,
     user: User,
-  ): Promise<Automation> {
+  ): Promise<Automation | AutomationStatusResponseDto> {
     requireAdminRole(user, 'You do not have permission to update automations.');
 
     const automation = await this.findAutomationById(id);
@@ -286,7 +287,36 @@ export class AutomationService {
       });
     }
 
+    if (this.isStatusOnlyUpdate(dto)) {
+      return this.toAutomationStatusResponse(saved);
+    }
+
     return saved;
+  }
+
+  private isStatusOnlyUpdate(dto: UpdateAutomationDto): boolean {
+    const definedKeys = (
+      Object.keys(dto) as Array<keyof UpdateAutomationDto>
+    ).filter((key) => dto[key] !== undefined);
+    if (definedKeys.length === 0) {
+      return false;
+    }
+    return definedKeys.every(
+      (key) => key === 'isActive' || key === 'published',
+    );
+  }
+
+  private toAutomationStatusResponse(
+    automation: Automation,
+  ): AutomationStatusResponseDto {
+    return {
+      id: automation.id,
+      status: automation.isActive
+        ? 'active'
+        : automation.published
+          ? 'published'
+          : 'deactivated',
+    };
   }
 
   private logPrepaidOfferActivated(
@@ -2503,9 +2533,8 @@ export class AutomationService {
         isBuiltinSignupPassEmailEnabled()
       ) {
         this.logger.log(
-          `Skipping FUNNEL_SIGNUP automation for customer ${event.customerId} — built-in signup pass email is enabled`,
+          `Starting FUNNEL_SIGNUP automation ${automation.id} for customer ${event.customerId} (built-in signup pass email also enabled)`,
         );
-        continue;
       }
 
       await this.tryStartAutomationForEvent(automation, event, funnel, options);
@@ -2647,7 +2676,7 @@ export class AutomationService {
         funnelPaymentId,
         event.funnelId,
       );
-    } else {
+    } else if (automation.purpose !== AutomationPurpose.FUNNEL_SIGNUP) {
       const hasActive = await this.executionService.hasActiveExecution(
         automation.id,
         event.customerId,
@@ -2658,6 +2687,7 @@ export class AutomationService {
     }
 
     const allowsRepeatRuns =
+      automation.purpose === AutomationPurpose.FUNNEL_SIGNUP ||
       automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
       automation.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
       automation.purpose === AutomationPurpose.FUNNEL_PAYMENT;
@@ -2875,9 +2905,6 @@ export class AutomationService {
     return null;
   }
 
-  // --- Create/update purpose guard ---
-  // FUNNEL_SIGNUP is allowed again for the Signup automation import template.
-  // Keep MANUAL blocked (not a product create path).
   private assertCreatablePurpose(purpose: AutomationPurpose): void {
     if (purpose === AutomationPurpose.MANUAL) {
       throw new BadRequestException(

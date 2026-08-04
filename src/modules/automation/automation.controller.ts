@@ -36,6 +36,7 @@ import { StartAutomationExecutionDto } from './automationDto/start-automation-ex
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
 import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.dto';
 import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
+import { AutomationStatusResponseDto } from './automationDto/automation-status-response.dto';
 
 @SkipThrottle()
 @Controller('automation')
@@ -300,7 +301,7 @@ export class AutomationController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateAutomationDto,
     @Req() req,
-  ): Promise<Automation> {
+  ): Promise<Automation | AutomationStatusResponseDto> {
     return this.automationService.updateAutomation(id, dto, req.user);
   }
 

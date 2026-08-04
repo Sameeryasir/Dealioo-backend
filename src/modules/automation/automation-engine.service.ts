@@ -33,14 +33,32 @@ import { AutomationConditionRegistry } from './automation-condition.registry';
 import { AutomationExecutionEventService } from './automation-execution-event.service';
 import { normalizeExecutionContext } from './automation-execution-context.types';
 import { AutomationMetricsService } from './automation-metrics.service';
-import { resolveWaitDelayMinutes } from './automation-wait.util';
+import { isParallelSplitConfig, resolveWaitResumeAt } from './automation-wait.util';
 import {
   hasConditionLoopRestartConfig,
   isUnpaidGuestCondition,
 } from './automation-payment-condition.util';
 import { isCustomerVisitedCondition } from './automation-visit.util';
+import { interpolateAutomationEmailMessage } from './automation-email-merge.util';
+import {
+  collectSignupFilterConditions,
+  msSince,
+  parseSignupFilterCondition,
+  signupDelayToMs,
+} from './automation-signup-filter.util';
 
 type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
+
+const ACTION_MESSAGE_GAP_MS = 3_000;
+
+function isOutboundActionNodeType(type: AutomationNodeType): boolean {
+  return (
+    type === AutomationNodeType.SMS ||
+    type === AutomationNodeType.EMAIL ||
+    type === AutomationNodeType.COUPON ||
+    type === AutomationNodeType.WHATSAPP
+  );
+}
 
 @Injectable()
 export class AutomationEngineService {
@@ -301,6 +319,8 @@ export class AutomationEngineService {
           execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT ||
           execution.automation?.purpose ===
             AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+        paceOutboundActions:
+          execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP,
       },
     );
     if (!advanced) {
@@ -329,7 +349,7 @@ export class AutomationEngineService {
     automationId: number,
     currentNodeId: number,
     customerId: number,
-    options?: { skipCycleCheck?: boolean },
+    options?: { skipCycleCheck?: boolean; paceOutboundActions?: boolean },
   ): Promise<boolean> {
     const nextNodeId = await this.executionService.getNextNodeId(
       automationId,
@@ -363,21 +383,46 @@ export class AutomationEngineService {
       }
     }
 
+    const currentNode = await this.executionService.findNodeForAutomation(
+      automationId,
+      currentNodeId,
+    );
+    const nextNode = await this.executionService.findNodeForAutomation(
+      automationId,
+      nextNodeId,
+    );
+
+    const paceMs =
+      options?.paceOutboundActions &&
+      isOutboundActionNodeType(currentNode.type) &&
+      isOutboundActionNodeType(nextNode.type)
+        ? ACTION_MESSAGE_GAP_MS
+        : 0;
+
     await this.executionService.updateCurrentNode(
       executionId,
       nextNodeId,
       AutomationExecutionStatus.RUNNING,
       null,
     );
-    const nextNode = await this.executionService.findNodeForAutomation(
-      automationId,
-      nextNodeId,
+
+    if (paceMs > 0) {
+      await this.logService.createLog({
+        executionId,
+        nodeId: currentNodeId,
+        customerId,
+        message: `Waiting ${Math.round(paceMs / 1000)}s before next action (send one by one)`,
+      });
+    }
+
+    await this.queueService.addProcessExecution(
+      {
+        executionId,
+        nodeId: nextNodeId,
+        nodeType: nextNode.type,
+      },
+      paceMs,
     );
-    await this.queueService.addProcessExecution({
-      executionId,
-      nodeId: nextNodeId,
-      nodeType: nextNode.type,
-    });
     return true;
   }
 
@@ -431,8 +476,12 @@ export class AutomationEngineService {
       }
 
       case AutomationNodeType.WAIT: {
-        const delayMinutes = resolveWaitDelayMinutes(config);
-        if (delayMinutes <= 0) {
+        if (isParallelSplitConfig(config)) {
+          return this.forkParallelBranches(execution, node);
+        }
+
+        const resumeAt = resolveWaitResumeAt(config);
+        if (!resumeAt || resumeAt.getTime() <= Date.now()) {
           await this.logService.createLog({
             executionId: execution.id,
             nodeId: node.id,
@@ -442,28 +491,33 @@ export class AutomationEngineService {
           return 'advance';
         }
 
-        const scheduledAt = new Date(Date.now() + delayMinutes * 60_000);
+        const delayMs = Math.max(resumeAt.getTime() - Date.now(), 0);
+        const delayMinutesRounded = Math.max(1, Math.round(delayMs / 60_000));
+
         await this.executionService.updateCurrentNode(
           execution.id,
           node.id,
           AutomationExecutionStatus.WAITING,
-          scheduledAt,
+          resumeAt,
         );
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: `Delay scheduled (${delayMinutes} minutes)`,
+          message: `Delay scheduled until ${resumeAt.toISOString()}`,
         });
         await this.recordExecutionEvent(
           execution,
           AutomationExecutionEventType.WAIT_SCHEDULED,
           node.id,
-          { delayMinutes, scheduledAt: scheduledAt.toISOString() },
+          {
+            delayMinutes: delayMinutesRounded,
+            scheduledAt: resumeAt.toISOString(),
+          },
         );
         await this.queueService.addResumeExecution(
           { executionId: execution.id },
-          delayMinutes * 60_000,
+          delayMs,
         );
         return 'wait';
       }
@@ -552,13 +606,7 @@ export class AutomationEngineService {
       }
 
       case AutomationNodeType.SMS:
-        await this.logService.createLog({
-          executionId: execution.id,
-          nodeId: node.id,
-          customerId: execution.customerId,
-          message: 'SMS sent',
-        });
-        return 'advance';
+        return this.runSmsNode(execution, node, config);
 
       case AutomationNodeType.WHATSAPP:
         await this.logService.createLog({
@@ -706,6 +754,30 @@ export class AutomationEngineService {
           return this.restartExecutionAtLoopNode(execution, node, loopNode);
         }
 
+        if (
+          execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP
+        ) {
+          const passes = await this.evaluateSignupBranchFilters(
+            execution,
+            config,
+          );
+          await this.recordExecutionEvent(
+            execution,
+            AutomationExecutionEventType.CONDITION_EVALUATED,
+            node.id,
+            { purpose: AutomationPurpose.FUNNEL_SIGNUP, passes },
+          );
+          await this.logService.createLog({
+            executionId: execution.id,
+            nodeId: node.id,
+            customerId: execution.customerId,
+            message: passes
+              ? 'Signup filter matched — continue to next step'
+              : 'Signup filter did not match — branch stops',
+          });
+          return passes ? 'advance' : 'complete';
+        }
+
         const stopFlow = await this.shouldStopAfterCondition(
           execution,
           conditionType,
@@ -755,6 +827,200 @@ export class AutomationEngineService {
         });
         return 'failed';
     }
+  }
+
+  private async forkParallelBranches(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+  ): Promise<NodeRunResult> {
+    const nextNodeIds = await this.executionService.getNextNodeIds(
+      execution.automationId,
+      node.id,
+    );
+
+    if (nextNodeIds.length === 0) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Parallel split has no branches — workflow stops',
+      });
+      return 'complete';
+    }
+
+    if (nextNodeIds.length === 1) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Parallel split with one branch — continuing',
+      });
+      return 'advance';
+    }
+
+    const [primaryNodeId, ...siblingNodeIds] = nextNodeIds;
+    const baseContext =
+      execution.executionContext && typeof execution.executionContext === 'object'
+        ? { ...execution.executionContext }
+        : {};
+
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: node.id,
+      customerId: execution.customerId,
+      message: `Parallel split — starting ${nextNodeIds.length} branches`,
+    });
+
+    for (const targetNodeId of siblingNodeIds) {
+      const targetNode = await this.executionService.findNodeForAutomation(
+        execution.automationId,
+        targetNodeId,
+      );
+      const child = await this.executionService.createExecution(
+        {
+          automationId: execution.automationId,
+          currentNodeId: targetNodeId,
+          purpose: execution.automation.purpose,
+        },
+        execution.customerId,
+        {
+          executionContext: {
+            ...baseContext,
+            forkedFromExecutionId: execution.id,
+            forkedFromNodeId: node.id,
+          },
+        },
+      );
+      await this.queueService.addProcessExecution({
+        executionId: child.id,
+        nodeId: targetNodeId,
+        nodeType: targetNode.type,
+      });
+    }
+
+    const primaryNode = await this.executionService.findNodeForAutomation(
+      execution.automationId,
+      primaryNodeId!,
+    );
+    await this.executionService.updateCurrentNode(
+      execution.id,
+      primaryNodeId!,
+      AutomationExecutionStatus.RUNNING,
+      null,
+    );
+    await this.queueService.addProcessExecution({
+      executionId: execution.id,
+      nodeId: primaryNodeId!,
+      nodeType: primaryNode.type,
+    });
+
+    return 'wait';
+  }
+
+  private async evaluateSignupBranchFilters(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    config: Record<string, unknown>,
+  ): Promise<boolean> {
+    const conditions = collectSignupFilterConditions(config);
+    if (conditions.length === 0) {
+      return true;
+    }
+
+    for (const condition of conditions) {
+      const parsed = parseSignupFilterCondition(condition);
+      const matched = await this.evaluateSignupFilterFact(execution, parsed);
+      const passes = parsed.negated ? !matched : matched;
+      if (!passes) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async evaluateSignupFilterFact(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    parsed: ReturnType<typeof parseSignupFilterCondition>,
+  ): Promise<boolean> {
+    const funnelId = execution.automation?.funnelId ?? null;
+
+    if (parsed.kind === 'pass_added') {
+      return this.customerHasAddedPass(execution);
+    }
+
+    if (parsed.kind === 'reward_redeemed') {
+      if (!funnelId) {
+        return false;
+      }
+      const coupon = await this.couponService.findByCustomerAndFunnel(
+        execution.customerId,
+        funnelId,
+      );
+      if (!coupon) {
+        return false;
+      }
+      return (
+        coupon.status === CouponStatus.REDEEMED || coupon.redeemedAt != null
+      );
+    }
+
+    if (parsed.kind === 'time_since_signup') {
+      if (!funnelId) {
+        return false;
+      }
+      const amount = parsed.amount ?? parsed.hours;
+      const unit = parsed.unit ?? 'hours';
+      if (amount == null || !(amount > 0)) {
+        return false;
+      }
+      const signup = await this.funnelEventRepository.findOne({
+        where: {
+          funnelId,
+          customerId: execution.customerId,
+          eventType: FunnelEventType.SIGNUP,
+        },
+        order: { createdAt: 'ASC' },
+      });
+      if (!signup?.createdAt) {
+        return false;
+      }
+      const elapsedMs = msSince(signup.createdAt);
+      const thresholdMs = signupDelayToMs(amount, unit);
+      if (parsed.comparator === 'lt') {
+        return elapsedMs < thresholdMs;
+      }
+      return elapsedMs >= thresholdMs;
+    }
+
+    if (parsed.kind === 'offer_expires_within') {
+      if (!funnelId) {
+        return false;
+      }
+      const amount = parsed.amount;
+      const unit = parsed.unit ?? 'days';
+      if (amount == null || !(amount > 0)) {
+        return false;
+      }
+      const coupon = await this.couponService.findByCustomerAndFunnel(
+        execution.customerId,
+        funnelId,
+      );
+      if (!coupon?.expiresAt) {
+        return false;
+      }
+      const msLeft = coupon.expiresAt.getTime() - Date.now();
+      return msLeft > 0 && msLeft < signupDelayToMs(amount, unit);
+    }
+
+    return true;
+  }
+
+  private async customerHasAddedPass(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+  ): Promise<boolean> {
+    const raw = execution.executionContext ?? {};
+    return raw.passAdded === true || raw.walletPassAdded === true;
   }
 
   private async shouldStopAfterCondition(
@@ -1119,6 +1385,128 @@ export class AutomationEngineService {
     return true;
   }
 
+  private async runSmsNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    config: Record<string, unknown>,
+  ): Promise<NodeRunResult> {
+    if (!(await this.ensureExecutionStillRunnable(execution.id))) {
+      return 'complete';
+    }
+
+    const rawMessage = String(config.message ?? '').trim();
+    if (!rawMessage) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Action message skipped (empty message)',
+      });
+      return 'advance';
+    }
+
+    const chatIdempotencyKey = this.resolveAutomationChatIdempotencyKey(
+      execution,
+      node.id,
+    );
+    if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
+      this.logger.log(
+        `Execution ${execution.id}: skipping duplicate action email for key ${chatIdempotencyKey}`,
+      );
+      return 'advance';
+    }
+
+    const to = execution.customer?.email?.trim() ?? '';
+    if (!to) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Action message skipped (missing customer email)',
+      });
+      return 'advance';
+    }
+
+    const purpose = execution.automation.purpose;
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
+    const passLink = (await this.resolvePassUrlForExecution(execution)) ?? '';
+    const body = interpolateAutomationEmailMessage(rawMessage, {
+      customerName: execution.customer?.name ?? '',
+      passLink,
+      paymentLink: passLink,
+    });
+    const linkLabel = String(config.linkLabel ?? '').trim() || 'View my pass';
+    const subject =
+      String(config.subject ?? '').trim() ||
+      (String(config.linkLabel ?? '').trim().toLowerCase() === 'pass link'
+        ? `Complete your signup — ${campaignName}`
+        : `Welcome — ${campaignName}`);
+
+    const emailConfig = await this.enrichPaymentEmailConfig(
+      purpose,
+      execution,
+      {
+        subject,
+        message: body,
+        ...(passLink
+          ? {
+              ctaUrl: passLink,
+              ctaLabel: linkLabel,
+            }
+          : {}),
+      },
+      node.id,
+    );
+
+    const prepared = this.automationEmailService.prepareFromEmailNode(
+      emailConfig,
+      purpose,
+      { campaignName },
+    );
+
+    const sendResult = await this.automationEmailService.sendToCustomer(
+      purpose,
+      {
+        customerId: execution.customerId,
+        email: to,
+        name: execution.customer?.name ?? '',
+      },
+      emailConfig,
+      campaignName,
+    );
+
+    if (!sendResult.sent) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: `Action email failed: ${sendResult.error ?? 'unknown error'}`,
+        error: sendResult.error,
+      });
+      return 'advance';
+    }
+
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: node.id,
+      customerId: execution.customerId,
+      message: `Action email sent to ${to}`,
+    });
+
+    await this.executionService.incrementEmailsSent(execution.id);
+    await this.recordAutomationEmailInChat(
+      execution,
+      node.id,
+      purpose,
+      prepared,
+      to,
+    );
+    return 'advance';
+  }
+
   private async recordAutomationEmailInChat(
     execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
     nodeId: number,
@@ -1239,7 +1627,10 @@ export class AutomationEngineService {
     config: Record<string, unknown>,
     nodeId: number,
   ): Promise<Record<string, unknown>> {
-    if (purpose !== AutomationPurpose.FUNNEL_PAYMENT) {
+    if (
+      purpose !== AutomationPurpose.FUNNEL_PAYMENT &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP
+    ) {
       return config;
     }
 
@@ -1248,9 +1639,11 @@ export class AutomationEngineService {
       ...withoutQr
     } = config;
 
-    const attachPassLink = await this.shouldAttachPassLink(execution, nodeId);
-    if (!attachPassLink) {
-      return withoutQr;
+    if (purpose === AutomationPurpose.FUNNEL_PAYMENT) {
+      const attachPassLink = await this.shouldAttachPassLink(execution, nodeId);
+      if (!attachPassLink) {
+        return withoutQr;
+      }
     }
 
     const passUrl = await this.resolvePassUrlForExecution(execution);
@@ -1346,7 +1739,7 @@ export class AutomationEngineService {
       return `${getFrontendBaseUrl()}/pass/${paymentId}`;
     }
 
-    return null;
+    return `${getFrontendBaseUrl()}/pass/guest/${execution.customerId}/${funnelId}`;
   }
 
   async resolvePostVisitResumeNodeId(

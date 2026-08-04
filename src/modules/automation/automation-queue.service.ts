@@ -195,13 +195,18 @@ export class AutomationQueueService {
     }
   }
 
-  async addProcessExecution(data: ProcessExecutionJob): Promise<string> {
+  async addProcessExecution(
+    data: ProcessExecutionJob,
+    delayMs = 0,
+  ): Promise<string> {
     const nodeType = data.nodeType as AutomationNodeType | undefined;
     const retry = resolveProcessExecutionRetryPolicy(nodeType);
+    const safeDelay = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0;
     const job = await this.queue.add(AutomationJobName.PROCESS_EXECUTION, data, {
       jobId: `process-execution-${data.executionId}-${data.nodeId}`,
       attempts: retry.attempts,
       ...(retry.backoff ? { backoff: retry.backoff } : {}),
+      ...(safeDelay > 0 ? { delay: safeDelay } : {}),
       ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
     return job.id ?? '';

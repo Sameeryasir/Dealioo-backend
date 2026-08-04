@@ -886,16 +886,32 @@ export class AutomationExecutionService {
     automationId: number,
     sourceNodeId: number,
   ): Promise<number | null> {
-    const connection = await this.connectionRepository.findOne({
+    const ids = await this.getNextNodeIds(automationId, sourceNodeId);
+    return ids[0] ?? null;
+  }
+
+  async getNextNodeIds(
+    automationId: number,
+    sourceNodeId: number,
+  ): Promise<number[]> {
+    const connections = await this.connectionRepository.find({
       where: { automationId, sourceNodeId },
+      order: { id: 'ASC' },
     });
-    if (!connection?.targetNodeId) {
-      return null;
+
+    const ids: number[] = [];
+    for (const connection of connections) {
+      if (!connection?.targetNodeId) {
+        continue;
+      }
+      if (connection.targetNodeId === sourceNodeId) {
+        continue;
+      }
+      if (!ids.includes(connection.targetNodeId)) {
+        ids.push(connection.targetNodeId);
+      }
     }
-    if (connection.targetNodeId === sourceNodeId) {
-      return null;
-    }
-    return connection.targetNodeId;
+    return ids;
   }
 
   async updateCurrentNode(

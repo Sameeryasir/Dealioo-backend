@@ -80,22 +80,17 @@ export class ChatService {
     userId: number,
   ): Promise<Date> {
     const viewedAt = new Date();
-    const existing = await this.chatReadStateRepository.findOne({
-      where: { businessId, userId },
-    });
 
-    if (existing) {
-      existing.chatsLastViewedAt = viewedAt;
-      await this.chatReadStateRepository.save(existing);
-      return viewedAt;
-    }
-
-    await this.chatReadStateRepository.save(
-      this.chatReadStateRepository.create({
+    await this.chatReadStateRepository.upsert(
+      {
         businessId,
         userId,
         chatsLastViewedAt: viewedAt,
-      }),
+      },
+      {
+        conflictPaths: ['userId', 'businessId'],
+        skipUpdateIfNoValuesChanged: false,
+      },
     );
 
     return viewedAt;

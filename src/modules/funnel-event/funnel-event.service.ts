@@ -1185,7 +1185,7 @@ export class FunnelEventService {
       existing.updatedAt = new Date();
       return {
         event: await this.funnelEventRepository.save(existing),
-        shouldRunAutomation: false,
+        shouldRunAutomation: true,
       };
     }
 

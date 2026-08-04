@@ -17,6 +17,7 @@ export type SyncFunnelPagesInput = {
   pages: Record<string, unknown>;
   onlyTypes?: FunnelPageType[];
   ensurePageTypes?: readonly FunnelPageType[];
+  removePageTypes?: readonly FunnelPageType[];
   createdById?: number | null;
   operationId?: string | null;
   bumpRevision?: boolean;
@@ -191,7 +192,7 @@ export class FunnelPagesService {
         changedTypes.push(pageType);
       }
 
-      for (const pageType of input.ensurePageTypes ?? FUNNEL_PAGE_TYPES) {
+      for (const pageType of input.ensurePageTypes ?? []) {
         const exists = await pageRepo.exist({
           where: { funnelId: input.funnelId, pageType },
         });
@@ -216,6 +217,23 @@ export class FunnelPagesService {
               createdById: input.createdById ?? null,
             }),
           );
+        }
+      }
+
+      const removeTypes = input.removePageTypes ?? [];
+      if (removeTypes.length > 0) {
+        const pagesToRemove = await pageRepo.find({
+          where: { funnelId: input.funnelId, pageType: In([...removeTypes]) },
+        });
+        if (pagesToRemove.length > 0) {
+          const pageIds = pagesToRemove.map((page) => page.id);
+          await versionRepo.delete({ funnelPageId: In(pageIds) });
+          await pageRepo.delete({ id: In(pageIds) });
+          for (const page of pagesToRemove) {
+            if (!changedTypes.includes(page.pageType)) {
+              changedTypes.push(page.pageType);
+            }
+          }
         }
       }
 
@@ -268,6 +286,9 @@ export class FunnelPagesService {
       ensurePageTypes: includePaymentPage
         ? FUNNEL_PAGE_TYPES
         : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
+      removePageTypes: includePaymentPage
+        ? undefined
+        : ([FunnelPageType.PAYMENT] as const),
     });
   }
 

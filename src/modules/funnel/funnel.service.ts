@@ -70,6 +70,9 @@ export class FunnelService {
     const ensurePageTypes = isPostpaid
       ? FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
       : FUNNEL_PAGE_TYPES;
+    const removePageTypes = isPostpaid
+      ? ([FunnelPageType.PAYMENT] as const)
+      : undefined;
 
     const stripPaymentPage = (
       pages: Record<string, unknown>,
@@ -109,6 +112,7 @@ export class FunnelService {
         createdById: user.id,
         bumpRevision: true,
         ensurePageTypes,
+        removePageTypes,
       });
       await this.appendFunnelVersion({
         funnelId: saved.id,
@@ -136,6 +140,7 @@ export class FunnelService {
         createdById: user.id,
         bumpRevision: true,
         ensurePageTypes,
+        removePageTypes,
       });
 
     const latest = await this.getFunnelById(saved.id);
@@ -167,7 +172,13 @@ export class FunnelService {
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
-    funnel.pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+    const pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+    if (funnel.campaign?.campaignType === CampaignType.POSTPAID) {
+      const { payment: _payment, ...rest } = pages;
+      funnel.pages = rest;
+    } else {
+      funnel.pages = pages;
+    }
     return funnel;
   }
 
@@ -380,15 +391,31 @@ export class FunnelService {
     funnel.businessId = funnel.campaign.businessId;
 
     const saved = await this.funnelRepository.save(funnel);
+    const isPostpaid = funnel.campaign.campaignType === CampaignType.POSTPAID;
 
     if (dto.pages !== undefined) {
+      const pages = isPostpaid
+        ? (() => {
+            const { payment: _payment, ...rest } = dto.pages as Record<
+              string,
+              unknown
+            >;
+            return rest;
+          })()
+        : dto.pages;
       const { assembledPages, changedTypes } =
         await this.funnelPagesService.syncPages({
           funnelId: saved.id,
           businessId: funnel.campaign.businessId,
-          pages: dto.pages,
+          pages,
           createdById: user.id,
           bumpRevision: true,
+          ensurePageTypes: isPostpaid
+            ? FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
+            : FUNNEL_PAGE_TYPES,
+          removePageTypes: isPostpaid
+            ? ([FunnelPageType.PAYMENT] as const)
+            : undefined,
         });
       if (changedTypes.length > 0) {
         const latest = await this.funnelRepository.findOne({

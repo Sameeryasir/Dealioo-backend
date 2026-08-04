@@ -217,6 +217,7 @@ export class AutomationEmailService {
 
   private purposeUsesDirectEmailBody(purpose: AutomationPurpose): boolean {
     return (
+      purpose === AutomationPurpose.FUNNEL_SIGNUP ||
       purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
       purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||
       purpose === AutomationPurpose.FUNNEL_PAYMENT

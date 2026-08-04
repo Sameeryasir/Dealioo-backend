@@ -32,13 +32,14 @@ export function interpolateAutomationEmailMessage(
   },
 ): string {
   const fullName = resolveAutomationFullName(options.customerName);
+  const firstName = resolveAutomationFirstName(options.customerName);
   const lastName = resolveAutomationLastName(options.customerName);
   const paymentLink = options.paymentLink?.trim() ?? '';
   const passLink = options.passLink?.trim() ?? '';
 
   return message
     .replace(/\[Full Name\]/gi, fullName)
-    .replace(/\[First Name\]/gi, fullName)
+    .replace(/\[First Name\]/gi, firstName)
     .replace(/\[Last Name\]/gi, lastName || fullName)
     .replace(/\[Payment Link\]/gi, paymentLink)
     .replace(/\[Pass Link\]/gi, passLink);
