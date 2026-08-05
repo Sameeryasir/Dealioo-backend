@@ -22,7 +22,10 @@ import {
   RedemptionLog,
 } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
-import { Campaign } from '../../db/entities/campaign.entity';
+import {
+  Campaign,
+  CampaignType,
+} from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import {
   FunnelEvent,
@@ -1552,11 +1555,17 @@ export class RedemptionService {
       }
 
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
+      // Postpaid funnel signups are real unpaid guest deals even if payment link heal lagged.
+      const isPostpaidCampaign =
+        coupon.campaign.campaignType === CampaignType.POSTPAID;
 
-      // Unpaid guest deals only when tied to a real open checkout — not signup-only orphans.
+      // Unpaid guest deals: open online checkout, or postpaid campaign pending pass.
       if (!isPrepaid) {
+        if (coupon.paymentStatus !== CouponPaymentStatus.PENDING) {
+          continue;
+        }
         if (
-          coupon.paymentStatus !== CouponPaymentStatus.PENDING ||
+          !isPostpaidCampaign &&
           !this.isOpenOnlineCheckoutPayment(coupon.funnelPayment)
         ) {
           continue;

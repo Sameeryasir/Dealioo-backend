@@ -184,15 +184,25 @@ export class FunnelEventService {
             Number.isFinite(priceDollars) && priceDollars >= 0
               ? dollarsToCents(priceDollars)
               : 0;
-          await this.ensurePendingOrderForUnpaidFunnelSignup({
-            funnelId: dto.funnelId,
-            businessId,
-            campaignId: funnel.campaign.id,
-            customerId: tracked.event.customerId,
-            customerEmail: email,
-            amountCents,
-            currency: 'usd',
-          });
+          // --- Pending order for unpaid / postpaid signup ---
+          // Link the signup coupon so Guest deals can show this pass (not only Business deals).
+          const pendingPaymentId =
+            await this.ensurePendingOrderForUnpaidFunnelSignup({
+              funnelId: dto.funnelId,
+              businessId,
+              campaignId: funnel.campaign.id,
+              customerId: tracked.event.customerId,
+              customerEmail: email,
+              amountCents,
+              currency: 'usd',
+            });
+          if (pendingPaymentId != null && pendingPaymentId > 0) {
+            await this.couponService.linkSignupCouponToPayment(
+              tracked.event.customerId,
+              dto.funnelId,
+              pendingPaymentId,
+            );
+          }
         }
       }
     }
@@ -1629,6 +1639,11 @@ export class FunnelEventService {
       .getMany();
   }
 
+  /**
+   * Changed: returns the pending payment id so signup can link the guest coupon.
+   * Why: Guest deals requires coupon.funnel_payment_id for unpaid / postpaid passes.
+   * Related: coupon.service linkSignupCouponToPayment, track() signup path.
+   */
   private async ensurePendingOrderForUnpaidFunnelSignup(input: {
     funnelId: number;
     businessId: number;
@@ -1637,7 +1652,7 @@ export class FunnelEventService {
     customerEmail: string;
     amountCents: number;
     currency: string;
-  }): Promise<void> {
+  }): Promise<number | null> {
     const email = input.customerEmail.trim().toLowerCase();
 
     let payment = await this.funnelPaymentRepository.findOne({
@@ -1687,7 +1702,7 @@ export class FunnelEventService {
           orderId: order.id,
         });
       }
-      return;
+      return payment.id;
     }
 
     payment = await this.funnelPaymentRepository.save(
@@ -1725,6 +1740,7 @@ export class FunnelEventService {
     await this.funnelPaymentRepository.update(payment.id, {
       orderId: order.id,
     });
+    return payment.id;
   }
 
   private async backfillPendingOrdersForOpenCheckouts(

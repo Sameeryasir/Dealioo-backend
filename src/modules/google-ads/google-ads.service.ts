@@ -986,10 +986,10 @@ export class GoogleAdsService {
     const client = this.getGoogleAdsApiClient();
 
     try {
-      const response = await this.withSdkTimeout(
+      const response = (await this.withSdkTimeout(
         client.listAccessibleCustomers(refreshToken),
         'listAccessibleCustomers',
-      );
+      )) as { resource_names?: string[] | null };
       const resourceNames = response.resource_names ?? [];
       const ids = resourceNames
         .map((name) => name.replace(/^customers\//, '').trim())
@@ -1082,10 +1082,10 @@ export class GoogleAdsService {
 
     try {
       const rows = await this.withSdkTimeout(
-        customer.query<T[]>(query),
+        customer.query(query) as Promise<T[]>,
         'googleAds:search',
       );
-      return rows ?? [];
+      return Array.isArray(rows) ? rows : [];
     } catch (err) {
       throw new BadRequestException(
         formatGoogleAdsSdkError(

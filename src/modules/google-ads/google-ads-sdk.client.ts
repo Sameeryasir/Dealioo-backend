@@ -45,10 +45,30 @@ export function formatGoogleAdsSdkError(
   err: unknown,
   fallback: string,
 ): string {
-  if (err instanceof errors.GoogleAdsFailure) {
+  const failure =
+    err instanceof errors.GoogleAdsFailure
+      ? err
+      : typeof err === 'object' &&
+          err !== null &&
+          Array.isArray((err as { errors?: unknown }).errors)
+        ? (err as {
+            errors?: Array<{
+              message?: string;
+              error_code?: Record<string, string | number | undefined>;
+              location?: {
+                field_path_elements?: Array<{
+                  field_name?: string;
+                  index?: number;
+                }>;
+              };
+            }>;
+          })
+        : null;
+
+  if (failure) {
     const messages: string[] = [];
 
-    for (const googleError of err.errors ?? []) {
+    for (const googleError of failure.errors ?? []) {
       const text = googleError.message?.trim();
       const errorCode = googleError.error_code as
         | Record<string, string | number | undefined>

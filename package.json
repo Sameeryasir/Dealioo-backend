@@ -49,6 +49,7 @@
     "express-session": "^1.19.0",
     "facebook-nodejs-business-sdk": "^24.0.1",
     "google-ads-api": "^24.1.0",
+    "google-auth-library": "^10.9.1",
     "googleapis": "^173.0.0",
     "ioredis": "^5.10.1",
     "multer": "^2.1.1",

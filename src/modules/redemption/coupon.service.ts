@@ -53,6 +53,12 @@ export class CouponService {
     return this.createPendingSignupCoupon(funnelId, customerId);
   }
 
+  /**
+   * Changed: link orphan pending signup coupons to the open unpaid payment.
+   * Why: postpaid signup creates coupon + pending payment separately; Guest deals
+   * only shows unpaid passes when funnel_payment_id is set.
+   * Related: redemption.service getGuestActiveDeals, funnel-event signup track.
+   */
   async ensurePendingCouponForUnpaidFunnel(
     funnelId: number,
     customerId: number,
@@ -124,14 +130,43 @@ export class CouponService {
       return null;
     }
 
+    // --- Heal existing postpaid/unpaid signup pass ---
+    // Signup often left funnel_payment_id null; attach open checkout so Guest deals can show it.
     const pending = await this.findActivePendingByCustomerAndFunnel(
       customerId,
       funnelId,
     );
     if (pending) {
+      if (
+        openCheckout &&
+        (pending.funnelPaymentId == null ||
+          pending.funnelPaymentId === openCheckout.id)
+      ) {
+        return (
+          (await this.linkSignupCouponToPayment(
+            customerId,
+            funnelId,
+            openCheckout.id,
+          )) ?? pending
+        );
+      }
       return pending;
     }
+
     const issued = await this.createPendingSignupCoupon(funnelId, customerId);
+    if (
+      issued.coupon &&
+      openCheckout &&
+      issued.coupon.funnelPaymentId == null
+    ) {
+      return (
+        (await this.linkSignupCouponToPayment(
+          customerId,
+          funnelId,
+          openCheckout.id,
+        )) ?? issued.coupon
+      );
+    }
     return issued.coupon;
   }
 
