@@ -14,7 +14,10 @@ import {
   UserSubscription,
   type UserSubscriptionBillingCycle,
 } from '../../db/entities/user-subscription.entity';
-import { OnboardingService } from '../onboarding/onboarding.service';
+// --- SWC circular import fix ---
+// Value import of OnboardingService causes TDZ under SWC live export bindings;
+// import type + require() inside forwardRef keeps Nest DI working (MCP Context 7).
+import type { OnboardingService } from '../onboarding/onboarding.service';
 import { StripeService } from '../stripe/stripe.service';
 import { SelectUserPlanDto, CancelSubscriptionDto } from './user-subscriptions.dto';
 
@@ -83,7 +86,13 @@ export class UserSubscriptionsService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly stripeService: StripeService,
-    @Inject(forwardRef(() => OnboardingService))
+    @Inject(
+      forwardRef(
+        () =>
+          require('../onboarding/onboarding.service')
+            .OnboardingService as typeof OnboardingService,
+      ),
+    )
     private readonly onboardingService: OnboardingService,
   ) {}
 

@@ -8,11 +8,10 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Funnel } from './funnel.entity';
-import { Business } from './business.entity';
-import { Order } from './order.entity';
-import { Customer } from './customer.entity';
-
+import type { Funnel } from './funnel.entity';
+import type { Business } from './business.entity';
+import type { Order } from './order.entity';
+import type { Customer } from './customer.entity';
 export enum FunnelPaymentStatus {
   PENDING = 'pending',
   PAID = 'paid',
@@ -49,7 +48,7 @@ export class FunnelPayment {
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => Funnel, (funnel) => funnel.payments, {
+  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.payments, {
     onDelete: 'SET NULL',
     nullable: true,
   })
@@ -59,7 +58,7 @@ export class FunnelPayment {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => Business, {
+  @ManyToOne(() => require('./business.entity').Business, {
     onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'business_id' })
@@ -71,14 +70,14 @@ export class FunnelPayment {
   @Column({ name: 'customer_id', type: 'int', nullable: true })
   customerId!: number | null;
 
-  @ManyToOne(() => Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer | null;
 
   @Column({ name: 'order_id', type: 'int', nullable: true })
   orderId!: number | null;
 
-  @ManyToOne(() => Order, (order) => order.payments, {
+  @ManyToOne(() => require('./order.entity').Order, (order) => order.payments, {
     onDelete: 'SET NULL',
     nullable: true,
   })

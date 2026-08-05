@@ -7,10 +7,9 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Funnel } from './funnel.entity';
-import { Business } from './business.entity';
-import { User } from './user.entity';
-
+import type { Funnel } from './funnel.entity';
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 @Entity('funnel_versions')
 @Index('IDX_funnel_versions_funnel_version', ['funnelId', 'versionNumber'], {
   unique: true,
@@ -23,7 +22,7 @@ export class FunnelVersion {
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId: number;
 
-  @ManyToOne(() => Funnel, (funnel) => funnel.versions, {
+  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.versions, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'funnel_id' })
@@ -32,7 +31,7 @@ export class FunnelVersion {
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -48,7 +47,7 @@ export class FunnelVersion {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'created_by' })
   createdBy: User | null;
 

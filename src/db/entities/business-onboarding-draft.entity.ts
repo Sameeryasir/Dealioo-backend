@@ -7,8 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-
+import type { User } from './user.entity';
 @Entity('business_onboarding_drafts')
 export class BusinessOnboardingDraft {
   @PrimaryGeneratedColumn()
@@ -17,7 +16,7 @@ export class BusinessOnboardingDraft {
   @Column({ name: 'user_id', type: 'int', unique: true })
   userId!: number;
 
-  @OneToOne(() => User, { onDelete: 'CASCADE' })
+  @OneToOne(() => require('./user.entity').User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user!: User;
 

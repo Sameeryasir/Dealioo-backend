@@ -8,10 +8,10 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { AutomationLog } from './automation-log.entity';
-import { Automation } from './automation.entity';
-import { AutomationNode } from './automation-node.entity';
-import { Customer } from './customer.entity';
+import type { AutomationLog } from './automation-log.entity';
+import type { Automation } from './automation.entity';
+import type { AutomationNode } from './automation-node.entity';
+import type { Customer } from './customer.entity';
 import { AutomationPurpose } from './automation-purpose.enum';
 
 export enum AutomationExecutionStatus {
@@ -35,21 +35,21 @@ export class AutomationExecution {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 
   @Column({ name: 'customer_id', nullable: false })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'current_node_id' })
   currentNodeId: number;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'current_node_id' })
   currentNode: AutomationNode;
 
@@ -140,7 +140,7 @@ export class AutomationExecution {
   })
   purpose: AutomationPurpose;
 
-  @OneToMany(() => AutomationLog, (log) => log.execution)
+  @OneToMany(() => require('./automation-log.entity').AutomationLog, (log) => log.execution)
   logs: AutomationLog[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -8,10 +8,9 @@ import {
   OneToMany,
   JoinColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-import { Campaign } from './campaign.entity';
-import { BusinessCustomer } from './business-customer.entity';
-
+import type { User } from './user.entity';
+import type { Campaign } from './campaign.entity';
+import type { BusinessCustomer } from './business-customer.entity';
 @Entity('businesses')
 export class Business {
   @PrimaryGeneratedColumn()
@@ -156,15 +155,15 @@ export class Business {
   @Column({ name: 'twilio_connected_at', type: 'timestamptz', nullable: true })
   twilioConnectedAt: Date | null;
 
-  @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_id' })
   owner: User;
 
-  @OneToMany(() => Campaign, (campaign) => campaign.business)
+  @OneToMany(() => require('./campaign.entity').Campaign, (campaign) => campaign.business)
   campaigns: Campaign[];
 
   @OneToMany(
-    () => BusinessCustomer,
+    () => require('./business-customer.entity').BusinessCustomer,
     (businessCustomer) => businessCustomer.business,
   )
   businessCustomers: BusinessCustomer[];

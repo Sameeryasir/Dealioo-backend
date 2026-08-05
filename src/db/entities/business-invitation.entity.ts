@@ -12,9 +12,8 @@ import type {
   BusinessMemberPermission,
   BusinessMemberRole,
 } from '../../modules/member/member.constants';
-import { Business } from './business.entity';
-import { User } from './user.entity';
-
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 export enum BusinessInvitationStatus {
   PENDING = 'PENDING',
   ACCEPTED = 'ACCEPTED',
@@ -33,7 +32,7 @@ export class BusinessInvitation {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => Business, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
@@ -56,7 +55,7 @@ export class BusinessInvitation {
   })
   status!: BusinessInvitationStatus;
 
-  @ManyToOne(() => User, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'invited_by' })
   invitedBy!: User;
 

@@ -9,13 +9,12 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Campaign } from './campaign.entity';
-import { Customer } from './customer.entity';
-import { Funnel } from './funnel.entity';
-import { FunnelPayment } from './funnel-payment.entity';
-import { Business } from './business.entity';
-import { User } from './user.entity';
-
+import type { Campaign } from './campaign.entity';
+import type { Customer } from './customer.entity';
+import type { Funnel } from './funnel.entity';
+import type { FunnelPayment } from './funnel-payment.entity';
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 export enum CouponStatus {
   ACTIVE = 'ACTIVE',
   REDEEMED = 'REDEEMED',
@@ -41,35 +40,35 @@ export class Coupon {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'funnel_payment_id', type: 'int', nullable: true })
   funnelPaymentId: number | null;
 
-  @ManyToOne(() => FunnelPayment, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_payment_id' })
   funnelPayment: FunnelPayment | null;
 
@@ -100,7 +99,7 @@ export class Coupon {
   @Column({ name: 'redeemed_by_user_id', type: 'int', nullable: true })
   redeemedByUserId: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'redeemed_by_user_id' })
   redeemedByUser: User | null;
 

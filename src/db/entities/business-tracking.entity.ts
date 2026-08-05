@@ -8,8 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-
+import type { Business } from './business.entity';
 @Entity('business_tracking')
 @Index('IDX_business_tracking_business_id', ['businessId'], {
   unique: true,
@@ -21,7 +20,7 @@ export class BusinessTracking {
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

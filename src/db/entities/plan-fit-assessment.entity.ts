@@ -7,8 +7,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-
+import type { User } from './user.entity';
 @Entity('plan_fit_assessments')
 export class PlanFitAssessment {
   @PrimaryGeneratedColumn()
@@ -18,7 +17,7 @@ export class PlanFitAssessment {
   @Column({ name: 'user_id', type: 'int' })
   userId!: number;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user!: User;
 

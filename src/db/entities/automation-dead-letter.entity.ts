@@ -6,8 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { AutomationExecution } from './automation-execution.entity';
-
+import type { AutomationExecution } from './automation-execution.entity';
 export enum AutomationDeadLetterStatus {
   PENDING = 'pending',
   RETRIED = 'retried',
@@ -22,7 +21,7 @@ export class AutomationDeadLetter {
   @Column({ name: 'execution_id', type: 'int', nullable: true })
   executionId: number | null;
 
-  @ManyToOne(() => AutomationExecution, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'execution_id' })
   execution: AutomationExecution | null;
 

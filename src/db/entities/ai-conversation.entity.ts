@@ -9,10 +9,10 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { Funnel } from './funnel.entity';
-import { User } from './user.entity';
-import { AiMessage } from './ai-message.entity';
+import type { Business } from './business.entity';
+import type { Funnel } from './funnel.entity';
+import type { User } from './user.entity';
+import type { AiMessage } from './ai-message.entity';
 import { AiConversationStatus } from './ai-conversation-status';
 
 @Entity('ai_conversations')
@@ -31,21 +31,21 @@ export class AiConversation {
   @Column({ name: 'business_id', type: 'int' })
   businessId!: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId!: number;
 
-  @ManyToOne(() => Funnel, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById!: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'created_by' })
   createdBy!: User | null;
 
@@ -71,7 +71,7 @@ export class AiConversation {
   })
   lastMessageAt!: Date | null;
 
-  @OneToMany(() => AiMessage, (message) => message.conversation)
+  @OneToMany(() => require('./ai-message.entity').AiMessage, (message) => message.conversation)
   messages!: AiMessage[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

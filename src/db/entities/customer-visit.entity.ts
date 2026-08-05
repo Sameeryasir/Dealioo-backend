@@ -9,14 +9,13 @@ import {
   OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Campaign } from './campaign.entity';
-import { Coupon } from './coupon.entity';
-import { Customer } from './customer.entity';
-import { Business } from './business.entity';
-import { CustomerVisitCampaign } from './customer-visit-campaign.entity';
-import { Order } from './order.entity';
-import { User } from './user.entity';
-
+import type { Campaign } from './campaign.entity';
+import type { Coupon } from './coupon.entity';
+import type { Customer } from './customer.entity';
+import type { Business } from './business.entity';
+import type { CustomerVisitCampaign } from './customer-visit-campaign.entity';
+import type { Order } from './order.entity';
+import type { User } from './user.entity';
 export enum CustomerVisitSource {
   QR_REDEMPTION = 'QR_REDEMPTION',
   STAFF_LOOKUP = 'STAFF_LOOKUP',
@@ -34,18 +33,18 @@ export class CustomerVisit {
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
-  @OneToMany(() => CustomerVisitCampaign, (row) => row.customerVisit, {
+  @OneToMany(() => require('./customer-visit-campaign.entity').CustomerVisitCampaign, (row) => row.customerVisit, {
     cascade: true,
   })
   visitCampaigns: CustomerVisitCampaign[];
@@ -53,28 +52,28 @@ export class CustomerVisit {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'coupon_id', type: 'int', nullable: true })
   couponId: number | null;
 
-  @ManyToOne(() => Coupon, { onDelete: 'RESTRICT', nullable: true })
+  @ManyToOne(() => require('./coupon.entity').Coupon, { onDelete: 'RESTRICT', nullable: true })
   @JoinColumn({ name: 'coupon_id' })
   coupon: Coupon | null;
 
   @Column({ name: 'order_id', type: 'int', nullable: true })
   orderId: number | null;
 
-  @ManyToOne(() => Order, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./order.entity').Order, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'order_id' })
   order: Order | null;
 
   @Column({ name: 'staff_user_id', type: 'int', nullable: true })
   staffUserId: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'staff_user_id' })
   staffUser: User | null;
 

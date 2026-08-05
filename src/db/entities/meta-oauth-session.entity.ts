@@ -8,8 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-
+import type { Business } from './business.entity';
 export enum MetaOAuthSessionStatus {
   INITIATED = 'INITIATED',
   COMPLETED = 'COMPLETED',
@@ -25,7 +24,7 @@ export class MetaOAuthSession {
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

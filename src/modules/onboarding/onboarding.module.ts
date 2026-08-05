@@ -9,7 +9,8 @@ import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { PlanFitAssessment } from '../../db/entities/plan-fit-assessment.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
-import { UserSubscriptionsModule } from '../user-subscriptions/user-subscriptions.module';
+// --- SWC circular import fix ---
+// Avoid value-importing UserSubscriptionsModule (live binding TDZ); resolve via require in forwardRef.
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
 import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation.service';
@@ -27,7 +28,11 @@ import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation
       Campaign,
       BusinessCustomer,
     ]),
-    forwardRef(() => UserSubscriptionsModule),
+    forwardRef(
+      () =>
+        require('../user-subscriptions/user-subscriptions.module')
+          .UserSubscriptionsModule,
+    ),
   ],
   controllers: [OnboardingController],
   providers: [OnboardingService, PlanFitRecommendationService],

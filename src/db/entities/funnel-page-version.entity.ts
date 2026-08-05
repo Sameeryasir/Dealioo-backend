@@ -7,12 +7,11 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Funnel } from './funnel.entity';
-import { FunnelPage } from './funnel-page.entity';
+import type { Funnel } from './funnel.entity';
+import type { FunnelPage } from './funnel-page.entity';
 import { FunnelPageType } from './funnel-page-type';
-import { Business } from './business.entity';
-import { User } from './user.entity';
-
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 @Entity('funnel_page_versions')
 @Index('uq_funnel_page_versions_page_version', ['funnelPageId', 'versionNumber'], {
   unique: true,
@@ -31,7 +30,7 @@ export class FunnelPageVersion {
   @Column({ name: 'funnel_page_id', type: 'uuid' })
   funnelPageId: string;
 
-  @ManyToOne(() => FunnelPage, (page) => page.versions, {
+  @ManyToOne(() => require('./funnel-page.entity').FunnelPage, (page) => page.versions, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'funnel_page_id' })
@@ -40,7 +39,7 @@ export class FunnelPageVersion {
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId: number;
 
-  @ManyToOne(() => Funnel, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel;
 
@@ -55,7 +54,7 @@ export class FunnelPageVersion {
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -71,7 +70,7 @@ export class FunnelPageVersion {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'created_by' })
   createdBy: User | null;
 

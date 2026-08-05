@@ -5,9 +5,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Automation } from './automation.entity';
-import { AutomationNode } from './automation-node.entity';
-
+import type { Automation } from './automation.entity';
+import type { AutomationNode } from './automation-node.entity';
 @Entity('automation_connection')
 export class AutomationConnection {
   @PrimaryGeneratedColumn()
@@ -16,21 +15,21 @@ export class AutomationConnection {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 
   @Column({ name: 'source_node_id' })
   sourceNodeId: number;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'source_node_id' })
   sourceNode: AutomationNode;
 
   @Column({ name: 'target_node_id' })
   targetNodeId: number;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'target_node_id' })
   targetNode: AutomationNode;
 }

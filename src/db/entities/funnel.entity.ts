@@ -10,13 +10,12 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { FunnelPage } from './funnel-page.entity';
-import { FunnelPayment } from './funnel-payment.entity';
-import { FunnelVersion } from './funnel-version.entity';
-import { Campaign } from './campaign.entity';
-import { User } from './user.entity';
-
+import type { Business } from './business.entity';
+import type { FunnelPage } from './funnel-page.entity';
+import type { FunnelPayment } from './funnel-payment.entity';
+import type { FunnelVersion } from './funnel-version.entity';
+import type { Campaign } from './campaign.entity';
+import type { User } from './user.entity';
 @Entity('funnels')
 export class Funnel {
   @PrimaryGeneratedColumn()
@@ -25,7 +24,7 @@ export class Funnel {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @OneToOne(() => Campaign, (campaign) => campaign.funnel, {
+  @OneToOne(() => require('./campaign.entity').Campaign, (campaign) => campaign.funnel, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'campaign_id' })
@@ -34,7 +33,7 @@ export class Funnel {
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -46,17 +45,17 @@ export class Funnel {
   @Column({ name: 'content_revision', type: 'int', default: 0 })
   contentRevision: number;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'updated_by' })
   updatedBy: User | null;
 
-  @OneToMany(() => FunnelPayment, (payment) => payment.funnel)
+  @OneToMany(() => require('./funnel-payment.entity').FunnelPayment, (payment) => payment.funnel)
   payments: FunnelPayment[];
 
-  @OneToMany(() => FunnelVersion, (version) => version.funnel)
+  @OneToMany(() => require('./funnel-version.entity').FunnelVersion, (version) => version.funnel)
   versions: FunnelVersion[];
 
-  @OneToMany(() => FunnelPage, (page) => page.funnel)
+  @OneToMany(() => require('./funnel-page.entity').FunnelPage, (page) => page.funnel)
   pageRows: FunnelPage[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

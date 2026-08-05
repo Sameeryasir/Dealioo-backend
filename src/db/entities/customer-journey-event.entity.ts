@@ -7,11 +7,10 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Campaign } from './campaign.entity';
-import { Customer } from './customer.entity';
-import { Funnel } from './funnel.entity';
-import { Business } from './business.entity';
-
+import type { Campaign } from './campaign.entity';
+import type { Customer } from './customer.entity';
+import type { Funnel } from './funnel.entity';
+import type { Business } from './business.entity';
 export enum CustomerJourneyStep {
   SIGNUP = 'signup',
   PAYMENT = 'payment',
@@ -33,28 +32,28 @@ export class CustomerJourneyEvent {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => Campaign, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId: number | null;
 
-  @ManyToOne(() => Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel | null;
 

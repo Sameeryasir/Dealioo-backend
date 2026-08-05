@@ -8,9 +8,8 @@ import {
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm';
-import { Campaign } from './campaign.entity';
-import { CustomerVisit } from './customer-visit.entity';
-
+import type { Campaign } from './campaign.entity';
+import type { CustomerVisit } from './customer-visit.entity';
 @Entity('customer_visit_campaigns')
 @Unique('UQ_customer_visit_campaigns_visit_campaign', [
   'customerVisitId',
@@ -24,7 +23,7 @@ export class CustomerVisitCampaign {
   @Column({ name: 'customer_visit_id' })
   customerVisitId: number;
 
-  @ManyToOne(() => CustomerVisit, (visit) => visit.visitCampaigns, {
+  @ManyToOne(() => require('./customer-visit.entity').CustomerVisit, (visit) => visit.visitCampaigns, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'customer_visit_id' })
@@ -33,7 +32,7 @@ export class CustomerVisitCampaign {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 

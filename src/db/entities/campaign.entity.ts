@@ -9,10 +9,9 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { Funnel } from './funnel.entity';
-import { User } from './user.entity';
-
+import type { Business } from './business.entity';
+import type { Funnel } from './funnel.entity';
+import type { User } from './user.entity';
 export enum CampaignPublicationStatus {
   PUBLISHED = 'published',
   UNPUBLISHED = 'unpublished',
@@ -31,7 +30,7 @@ export class Campaign {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => Business, (business) => business.campaigns, {
+  @ManyToOne(() => require('./business.entity').Business, (business) => business.campaigns, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'business_id' })
@@ -40,11 +39,11 @@ export class Campaign {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdByUserId!: number | null;
 
-  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => require('./user.entity').User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'created_by' })
   createdByUser!: User | null;
 
-  @OneToOne(() => Funnel, (funnel) => funnel.campaign, { nullable: true })
+  @OneToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.campaign, { nullable: true })
   funnel!: Funnel | null;
 
   @Column({ name: 'campaign_name', type: 'varchar', length: 255 })

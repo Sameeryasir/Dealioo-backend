@@ -8,9 +8,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-import { FacebookPage } from './facebook-page.entity';
-
+import type { User } from './user.entity';
+import type { FacebookPage } from './facebook-page.entity';
 @Entity('facebook_connections')
 export class FacebookConnection {
   @PrimaryGeneratedColumn()
@@ -19,7 +18,7 @@ export class FacebookConnection {
   @Column({ name: 'user_id', type: 'int', unique: true })
   userId: number;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 
@@ -49,6 +48,6 @@ export class FacebookConnection {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @OneToMany(() => FacebookPage, (page) => page.connection)
+  @OneToMany(() => require('./facebook-page.entity').FacebookPage, (page) => page.connection)
   pages: FacebookPage[];
 }

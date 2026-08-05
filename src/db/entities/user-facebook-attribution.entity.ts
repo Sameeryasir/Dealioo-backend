@@ -8,8 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-
+import type { User } from './user.entity';
 @Entity('user_facebook_attributions')
 @Index('UQ_user_facebook_attributions_user_id', ['userId'], { unique: true })
 export class UserFacebookAttribution {
@@ -19,7 +18,7 @@ export class UserFacebookAttribution {
   @Column({ name: 'user_id', type: 'int' })
   userId!: number;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user!: User;
 

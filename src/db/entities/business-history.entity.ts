@@ -7,9 +7,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { User } from './user.entity';
-
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 export enum BusinessHistoryEventType {
   CAMPAIGN_CREATED = 'campaign_created',
   CAMPAIGN_UPDATED = 'campaign_updated',
@@ -38,7 +37,7 @@ export class BusinessHistory {
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId!: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'business_id' })
   business!: Business | null;
 
@@ -51,7 +50,7 @@ export class BusinessHistory {
   @Column({ name: 'actor_user_id', type: 'int', nullable: true })
   actorUserId!: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'actor_user_id' })
   actorUser!: User | null;
 

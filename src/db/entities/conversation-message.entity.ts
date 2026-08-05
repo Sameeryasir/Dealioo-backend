@@ -6,13 +6,12 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Automation } from './automation.entity';
-import { AutomationExecution } from './automation-execution.entity';
-import { AutomationNode } from './automation-node.entity';
-import { Conversation } from './conversation.entity';
-import { Customer } from './customer.entity';
-import { Business } from './business.entity';
-
+import type { Automation } from './automation.entity';
+import type { AutomationExecution } from './automation-execution.entity';
+import type { AutomationNode } from './automation-node.entity';
+import type { Conversation } from './conversation.entity';
+import type { Customer } from './customer.entity';
+import type { Business } from './business.entity';
 export enum ConversationMessageChannel {
   EMAIL = 'email',
   SMS = 'sms',
@@ -32,28 +31,28 @@ export class ConversationMessage {
   @Column({ name: 'conversation_id' })
   conversationId!: number;
 
-  @ManyToOne(() => Conversation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./conversation.entity').Conversation, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'conversation_id' })
   conversation!: Conversation;
 
   @Column({ name: 'automation_id', type: 'int', nullable: true })
   automationId!: number | null;
 
-  @ManyToOne(() => Automation, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'automation_id' })
   automation!: Automation | null;
 
   @Column({ name: 'execution_id', type: 'int', nullable: true })
   executionId!: number | null;
 
-  @ManyToOne(() => AutomationExecution, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'execution_id' })
   execution!: AutomationExecution | null;
 
   @Column({ name: 'node_id', type: 'int', nullable: true })
   nodeId!: number | null;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'node_id' })
   node!: AutomationNode | null;
 
@@ -70,28 +69,28 @@ export class ConversationMessage {
   @Column({ name: 'sent_by_business_id', type: 'int', nullable: true })
   sentByBusinessId!: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_by_business_id' })
   sentByBusiness!: Business | null;
 
   @Column({ name: 'sent_by_customer_id', type: 'int', nullable: true })
   sentByCustomerId!: number | null;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_by_customer_id' })
   sentByCustomer!: Customer | null;
 
   @Column({ name: 'sent_to_business_id', type: 'int', nullable: true })
   sentToBusinessId!: number | null;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_to_business_id' })
   sentToBusiness!: Business | null;
 
   @Column({ name: 'sent_to_customer_id', type: 'int', nullable: true })
   sentToCustomerId!: number | null;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'sent_to_customer_id' })
   sentToCustomer!: Customer | null;
 

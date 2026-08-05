@@ -10,9 +10,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Customer } from './customer.entity';
-import { Business } from './business.entity';
-
+import type { Customer } from './customer.entity';
+import type { Business } from './business.entity';
 export enum ActivityEventType {
   VISITED = 'visited',
   REDEEMED_REWARD = 'redeemed_reward',
@@ -30,14 +29,14 @@ export class ActivityEvent {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'customer_id', type: 'int', nullable: true })
   customerId!: number | null;
 
-  @ManyToOne(() => Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer | null;
 

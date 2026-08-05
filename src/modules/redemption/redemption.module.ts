@@ -12,9 +12,7 @@ import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Order } from '../../db/entities/order.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
-import { ActivityModule } from '../activity/activity.module';
 import { AuthModule } from '../auth/auth.module';
-import { AutomationModule } from '../automation/automation.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
@@ -43,8 +41,9 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Order,
     ]),
     AuthModule,
-    forwardRef(() => ActivityModule),
-    forwardRef(() => AutomationModule),
+    // --- SWC circular import fix ---
+    forwardRef(() => require('../activity/activity.module').ActivityModule),
+    forwardRef(() => require('../automation/automation.module').AutomationModule),
     BusinessHistoryModule,
     CustomerActivityModule,
     CustomerJourneyModule,

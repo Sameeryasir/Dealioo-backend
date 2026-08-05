@@ -19,11 +19,9 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
-import { ActivityModule } from '../activity/activity.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
-import { RedemptionModule } from '../redemption/redemption.module';
 import { PaymentModule } from '../payment/payment.module';
 import { AutomationConditionRegistry } from './automation-condition.registry';
 import { CustomerVisitedConditionEvaluator } from './conditions/customer-visited.condition';
@@ -80,12 +78,13 @@ import { AutomationService } from './automation.service';
       Customer,
       CustomerVisit,
     ]),
-    // forwardRef breaks Activity ↔ Redemption ↔ Automation circular load order
-    forwardRef(() => ActivityModule),
+    // --- SWC circular import fix ---
+    // Lazy-require modules so Activity ↔ Redemption ↔ Automation does not TDZ under SWC.
+    forwardRef(() => require('../activity/activity.module').ActivityModule),
     BusinessHistoryModule,
     ChatModule,
     AuthModule,
-    forwardRef(() => RedemptionModule),
+    forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
     forwardRef(() => PaymentModule),
   ],
   controllers: [AutomationController],

@@ -6,8 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { UserSubscription } from './user-subscription.entity';
-
+import type { UserSubscription } from './user-subscription.entity';
 export type SubscriptionPlanFeatureGroup = {
   label: string;
   items: string[];
@@ -77,6 +76,6 @@ export class SubscriptionPlan {
   @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
-  @OneToMany(() => UserSubscription, (subscription) => subscription.plan)
+  @OneToMany(() => require('./user-subscription.entity').UserSubscription, (subscription) => subscription.plan)
   userSubscriptions: UserSubscription[];
 }

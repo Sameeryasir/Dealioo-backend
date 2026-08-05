@@ -7,8 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Automation } from './automation.entity';
-
+import type { Automation } from './automation.entity';
 export enum AutomationNodeType {
   TRIGGER = 'trigger',
   WAIT = 'wait',
@@ -28,7 +27,7 @@ export class AutomationNode {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 

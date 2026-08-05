@@ -8,13 +8,13 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { AutomationConnection } from './automation-connection.entity';
-import { AutomationExecution } from './automation-execution.entity';
-import { AutomationNode } from './automation-node.entity';
-import { Campaign } from './campaign.entity';
-import { Funnel } from './funnel.entity';
-import { Business } from './business.entity';
-import { User } from './user.entity';
+import type { AutomationConnection } from './automation-connection.entity';
+import type { AutomationExecution } from './automation-execution.entity';
+import type { AutomationNode } from './automation-node.entity';
+import type { Campaign } from './campaign.entity';
+import type { Funnel } from './funnel.entity';
+import type { Business } from './business.entity';
+import type { User } from './user.entity';
 import { AutomationPurpose } from './automation-purpose.enum';
 
 export enum AutomationTrigger {
@@ -35,7 +35,7 @@ export class Automation {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
@@ -61,21 +61,21 @@ export class Automation {
   @Column({ name: 'campaign_id', nullable: true })
   campaignId: number | null;
 
-  @ManyToOne(() => Campaign, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign | null;
 
   @Column({ name: 'funnel_id', nullable: true })
   funnelId: number | null;
 
-  @ManyToOne(() => Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel | null;
 
   @Column({ name: 'created_by' })
   createdBy: number;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'created_by' })
   creator: User;
 
@@ -92,13 +92,13 @@ export class Automation {
   @Column({ type: 'int', default: 1 })
   version: number;
 
-  @OneToMany(() => AutomationNode, (node) => node.automation)
+  @OneToMany(() => require('./automation-node.entity').AutomationNode, (node) => node.automation)
   nodes: AutomationNode[];
 
-  @OneToMany(() => AutomationConnection, (connection) => connection.automation)
+  @OneToMany(() => require('./automation-connection.entity').AutomationConnection, (connection) => connection.automation)
   connections: AutomationConnection[];
 
-  @OneToMany(() => AutomationExecution, (execution) => execution.automation)
+  @OneToMany(() => require('./automation-execution.entity').AutomationExecution, (execution) => execution.automation)
   executions: AutomationExecution[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -7,8 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { BusinessCustomer } from './business-customer.entity';
-
+import type { BusinessCustomer } from './business-customer.entity';
 @Entity('customers')
 export class Customer {
   @PrimaryGeneratedColumn()
@@ -24,7 +23,7 @@ export class Customer {
   phone: string | null;
 
   @OneToMany(
-    () => BusinessCustomer,
+    () => require('./business-customer.entity').BusinessCustomer,
     (businessCustomer) => businessCustomer.customer,
   )
   businessCustomers: BusinessCustomer[];

@@ -6,9 +6,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { AutomationExecution } from './automation-execution.entity';
-import { AutomationNode } from './automation-node.entity';
-
+import type { AutomationExecution } from './automation-execution.entity';
+import type { AutomationNode } from './automation-node.entity';
 export enum AutomationExecutionEventType {
   EXECUTION_CREATED = 'execution_created',
   EXECUTION_STARTED = 'execution_started',
@@ -40,7 +39,7 @@ export class AutomationExecutionEvent {
   @Column({ name: 'execution_id' })
   executionId: number;
 
-  @ManyToOne(() => AutomationExecution, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'execution_id' })
   execution: AutomationExecution;
 
@@ -50,7 +49,7 @@ export class AutomationExecutionEvent {
   @Column({ name: 'node_id', type: 'int', nullable: true })
   nodeId: number | null;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'node_id' })
   node: AutomationNode | null;
 

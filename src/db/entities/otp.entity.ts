@@ -6,8 +6,7 @@ import {
   JoinColumn,
   CreateDateColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-
+import type { User } from './user.entity';
 @Entity('otps')
 export class Otp {
   @PrimaryGeneratedColumn()
@@ -25,7 +24,7 @@ export class Otp {
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date;
 
-  @ManyToOne(() => User, (user) => user.otps, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, (user) => user.otps, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 }

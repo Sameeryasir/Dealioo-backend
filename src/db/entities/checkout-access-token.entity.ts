@@ -8,9 +8,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Customer } from './customer.entity';
-import { FunnelPayment } from './funnel-payment.entity';
-
+import type { Customer } from './customer.entity';
+import type { FunnelPayment } from './funnel-payment.entity';
 @Entity('checkout_access_token')
 @Index('IDX_checkout_access_token_customer_funnel', ['customerId', 'funnelId'])
 export class CheckoutAccessToken {
@@ -23,7 +22,7 @@ export class CheckoutAccessToken {
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
@@ -39,7 +38,7 @@ export class CheckoutAccessToken {
   @Column({ name: 'funnel_payment_id', type: 'int', nullable: true })
   funnelPaymentId: number | null;
 
-  @ManyToOne(() => FunnelPayment, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_payment_id' })
   funnelPayment: FunnelPayment | null;
 

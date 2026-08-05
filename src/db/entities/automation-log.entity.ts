@@ -6,10 +6,9 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { AutomationExecution } from './automation-execution.entity';
-import { AutomationNode } from './automation-node.entity';
-import { Customer } from './customer.entity';
-
+import type { AutomationExecution } from './automation-execution.entity';
+import type { AutomationNode } from './automation-node.entity';
+import type { Customer } from './customer.entity';
 @Entity('automation_log')
 export class AutomationLog {
   @PrimaryGeneratedColumn()
@@ -18,21 +17,21 @@ export class AutomationLog {
   @Column({ name: 'execution_id' })
   executionId: number;
 
-  @ManyToOne(() => AutomationExecution, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'execution_id' })
   execution: AutomationExecution;
 
   @Column({ name: 'node_id' })
   nodeId: number;
 
-  @ManyToOne(() => AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'node_id' })
   node: AutomationNode;
 
   @Column({ name: 'customer_id', nullable: false })
   customerId: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 

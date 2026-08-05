@@ -7,9 +7,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-import { SubscriptionPlan } from './subscription-plan.entity';
-
+import type { User } from './user.entity';
+import type { SubscriptionPlan } from './subscription-plan.entity';
 export type UserSubscriptionBillingCycle = 'monthly' | 'annual';
 export type UserSubscriptionStatus =
   | 'active'
@@ -22,7 +21,7 @@ export class UserSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => User, (user) => user.subscriptions, {
+  @ManyToOne(() => require('./user.entity').User, (user) => user.subscriptions, {
     nullable: false,
     onDelete: 'CASCADE',
   })
@@ -32,7 +31,7 @@ export class UserSubscription {
   @Column({ name: 'user_id', type: 'int' })
   userId: number;
 
-  @ManyToOne(() => SubscriptionPlan, (plan) => plan.userSubscriptions, {
+  @ManyToOne(() => require('./subscription-plan.entity').SubscriptionPlan, (plan) => plan.userSubscriptions, {
     nullable: false,
     onDelete: 'RESTRICT',
   })

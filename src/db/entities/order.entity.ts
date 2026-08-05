@@ -10,9 +10,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { FunnelPayment } from './funnel-payment.entity';
-
+import type { Business } from './business.entity';
+import type { FunnelPayment } from './funnel-payment.entity';
 export enum OrderStatus {
   PENDING = 'pending',
   PAID = 'paid',
@@ -35,7 +34,7 @@ export class Order {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
@@ -64,7 +63,7 @@ export class Order {
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt!: Date | null;
 
-  @OneToMany(() => FunnelPayment, (payment) => payment.order)
+  @OneToMany(() => require('./funnel-payment.entity').FunnelPayment, (payment) => payment.order)
   payments!: FunnelPayment[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

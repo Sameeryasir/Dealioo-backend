@@ -18,7 +18,9 @@ import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { PlanFitAssessment } from '../../db/entities/plan-fit-assessment.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
-import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
+// --- SWC circular import fix ---
+// Value import of UserSubscriptionsService causes TDZ under SWC; lazy require in forwardRef.
+import type { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import {
   BusinessOnboardingDraftPayload,
@@ -106,7 +108,13 @@ export class OnboardingService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(BusinessCustomer)
     private readonly businessCustomerRepository: Repository<BusinessCustomer>,
-    @Inject(forwardRef(() => UserSubscriptionsService))
+    @Inject(
+      forwardRef(
+        () =>
+          require('../user-subscriptions/user-subscriptions.service')
+            .UserSubscriptionsService as typeof UserSubscriptionsService,
+      ),
+    )
     private readonly userSubscriptionsService: UserSubscriptionsService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly recommendationService: PlanFitRecommendationService,

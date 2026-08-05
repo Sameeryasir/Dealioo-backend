@@ -8,9 +8,8 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Customer } from './customer.entity';
-import { Funnel } from './funnel.entity';
-
+import type { Customer } from './customer.entity';
+import type { Funnel } from './funnel.entity';
 export enum FunnelAnalyticsEventType {
   PAGE_VIEW = 'page_view',
   BUTTON_CLICK = 'button_click',
@@ -31,7 +30,7 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
@@ -41,7 +40,7 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'customer_id', nullable: true })
   customerId: number | null;
 
-  @ManyToOne(() => Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer | null;
 

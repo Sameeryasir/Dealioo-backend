@@ -43,8 +43,10 @@ import {
   OrderSource,
   OrderStatus,
 } from '../../db/entities/order.entity';
-import { ActivityService } from '../activity/activity.service';
-import { AutomationService } from '../automation/automation.service';
+// --- SWC circular import fix ---
+// Value imports of these services TDZ under SWC; import type + require in forwardRef.
+import type { ActivityService } from '../activity/activity.service';
+import type { AutomationService } from '../automation/automation.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { CustomerActivityService } from '../customer-activity/customer-activity.service';
@@ -198,9 +200,20 @@ export class RedemptionService {
     private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
-    @Inject(forwardRef(() => ActivityService))
+    @Inject(
+      forwardRef(
+        () =>
+          require('../activity/activity.service').ActivityService as typeof ActivityService,
+      ),
+    )
     private readonly activityService: ActivityService,
-    @Inject(forwardRef(() => AutomationService))
+    @Inject(
+      forwardRef(
+        () =>
+          require('../automation/automation.service')
+            .AutomationService as typeof AutomationService,
+      ),
+    )
     private readonly automationService: AutomationService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly customerActivityService: CustomerActivityService,

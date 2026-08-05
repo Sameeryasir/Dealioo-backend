@@ -9,10 +9,9 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { Role } from './role.entity';
-import { Otp } from './otp.entity';
-import { UserSubscription } from './user-subscription.entity';
-
+import type { Role } from './role.entity';
+import type { Otp } from './otp.entity';
+import type { UserSubscription } from './user-subscription.entity';
 /** Auth provider for the user account (LOCAL = email/password). */
 export type AuthProvider = 'LOCAL' | 'GOOGLE';
 
@@ -130,7 +129,7 @@ export class User {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @ManyToOne(() => Role, (role) => role.users, { nullable: false })
+  @ManyToOne(() => require('./role.entity').Role, (role) => role.users, { nullable: false })
   @JoinColumn({ name: 'role_id' })
   role: Role;
 
@@ -144,9 +143,9 @@ export class User {
   @OneToMany(() => User, (createdUser) => createdUser.createdBy)
   createdUsers: User[];
 
-  @OneToMany(() => Otp, (otp) => otp.user)
+  @OneToMany(() => require('./otp.entity').Otp, (otp) => otp.user)
   otps: Otp[];
 
-  @OneToMany(() => UserSubscription, (subscription) => subscription.user)
+  @OneToMany(() => require('./user-subscription.entity').UserSubscription, (subscription) => subscription.user)
   subscriptions: UserSubscription[];
 }

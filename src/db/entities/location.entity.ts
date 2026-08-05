@@ -7,14 +7,13 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-
+import type { Business } from './business.entity';
 @Entity('locations')
 export class Location {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE', nullable: false })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE', nullable: false })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

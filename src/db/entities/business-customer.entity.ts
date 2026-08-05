@@ -8,9 +8,8 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { Customer } from './customer.entity';
-
+import type { Business } from './business.entity';
+import type { Customer } from './customer.entity';
 @Entity('business_customers')
 @Unique('UQ_business_customers_business_customer', ['business', 'customer'])
 export class BusinessCustomer {
@@ -20,7 +19,7 @@ export class BusinessCustomer {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => Business, (business) => business.businessCustomers, {
+  @ManyToOne(() => require('./business.entity').Business, (business) => business.businessCustomers, {
     nullable: false,
     onDelete: 'CASCADE',
   })
@@ -30,7 +29,7 @@ export class BusinessCustomer {
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => Customer, (customer) => customer.businessCustomers, {
+  @ManyToOne(() => require('./customer.entity').Customer, (customer) => customer.businessCustomers, {
     nullable: false,
     onDelete: 'CASCADE',
   })

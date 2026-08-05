@@ -8,9 +8,8 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Business } from './business.entity';
-import { Customer } from './customer.entity';
-
+import type { Business } from './business.entity';
+import type { Customer } from './customer.entity';
 export enum CustomerActivityType {
   ONLINE_SIGNUP = 'ONLINE_SIGNUP',
   ONLINE_PURCHASE = 'ONLINE_PURCHASE',
@@ -50,14 +49,14 @@ export class CustomerActivity {
   @Column({ name: 'business_id', type: 'int' })
   businessId!: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'customer_id', type: 'int' })
   customerId!: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer;
 

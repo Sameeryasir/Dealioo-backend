@@ -7,7 +7,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { AiConversation } from './ai-conversation.entity';
+import type { AiConversation } from './ai-conversation.entity';
 import { AiMessageRole } from './ai-message-role';
 import { AiMessagePage } from './ai-message-page';
 import { AiMessageStatus } from './ai-message-status';
@@ -26,7 +26,7 @@ export class AiMessage {
   conversationId!: string;
 
   @ManyToOne(
-    () => AiConversation,
+    () => require('./ai-conversation.entity').AiConversation,
     (conversation) => conversation.messages,
     {
       onDelete: 'CASCADE',

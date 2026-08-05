@@ -7,8 +7,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { User } from './user.entity';
-
+import type { User } from './user.entity';
 @Entity('onboarding_events')
 @Index('IDX_onboarding_events_user_created', ['userId', 'createdAt'])
 export class OnboardingEvent {
@@ -18,7 +17,7 @@ export class OnboardingEvent {
   @Column({ name: 'user_id', type: 'int', nullable: true })
   userId!: number | null;
 
-  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'user_id' })
   user!: User | null;
 

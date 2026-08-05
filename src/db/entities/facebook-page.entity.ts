@@ -7,8 +7,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { FacebookConnection } from './facebook-connection.entity';
-
+import type { FacebookConnection } from './facebook-connection.entity';
 @Entity('facebook_pages')
 export class FacebookPage {
   @PrimaryGeneratedColumn()
@@ -20,7 +19,7 @@ export class FacebookPage {
   @Column({ name: 'connection_id', type: 'int' })
   connectionId: number;
 
-  @ManyToOne(() => FacebookConnection, (connection) => connection.pages, {
+  @ManyToOne(() => require('./facebook-connection.entity').FacebookConnection, (connection) => connection.pages, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'connection_id' })

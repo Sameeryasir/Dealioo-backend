@@ -8,10 +8,9 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Automation } from './automation.entity';
-import { Customer } from './customer.entity';
-import { Business } from './business.entity';
-
+import type { Automation } from './automation.entity';
+import type { Customer } from './customer.entity';
+import type { Business } from './business.entity';
 @Entity('conversation')
 @Unique('UQ_conversation_business_customer', ['businessId', 'customerId'])
 export class Conversation {
@@ -21,14 +20,14 @@ export class Conversation {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'customer_id' })
   customerId!: number;
 
-  @ManyToOne(() => Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer;
 
@@ -55,7 +54,7 @@ export class Conversation {
   @Column({ name: 'last_automation_id', type: 'int', nullable: true })
   lastAutomationId!: number | null;
 
-  @ManyToOne(() => Automation, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'last_automation_id' })
   lastAutomation!: Automation | null;
 

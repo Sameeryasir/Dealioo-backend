@@ -9,9 +9,9 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Funnel } from './funnel.entity';
+import type { Funnel } from './funnel.entity';
 import { FunnelPageType } from './funnel-page-type';
-import { FunnelPageVersion } from './funnel-page-version.entity';
+import type { FunnelPageVersion } from './funnel-page-version.entity';
 
 @Entity('funnel_pages')
 @Index('uq_funnel_pages_funnel_type', ['funnelId', 'pageType'], { unique: true })
@@ -23,7 +23,7 @@ export class FunnelPage {
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId: number;
 
-  @ManyToOne(() => Funnel, (funnel) => funnel.pageRows, {
+  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.pageRows, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'funnel_id' })
@@ -43,7 +43,7 @@ export class FunnelPage {
   @Column({ name: 'current_version', type: 'int', default: 1 })
   currentVersion: number;
 
-  @OneToMany(() => FunnelPageVersion, (version) => version.funnelPage)
+  @OneToMany(() => require('./funnel-page-version.entity').FunnelPageVersion, (version) => version.funnelPage)
   versions: FunnelPageVersion[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
