@@ -33,7 +33,7 @@ export class CustomerController {
   @Post('create')
   async registerCustomer(
     @Body() registerCustomer: RegisterCustomerDto,
-  ): Promise<Customer> {
+  ): Promise<Customer & { isNewCustomer: boolean }> {
     return this.customerService.registerCustomer(registerCustomer);
   }
 

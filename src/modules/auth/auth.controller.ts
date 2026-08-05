@@ -37,7 +37,7 @@ export class AuthController {
   @Post('register')
   async registerUsers(
     @Body() registerUserDto: RegisterUserDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; isNewCustomer: boolean }> {
     return await this.authService.createUser(registerUserDto);
   }
 

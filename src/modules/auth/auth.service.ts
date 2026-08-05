@@ -135,11 +135,15 @@ export class AuthService {
     }
   }
 
+  // --- Change: expose isNewCustomer on invite signup (Meta acquisition gate) ---
+  // Why: frontend must only fire CompleteRegistration when backend confirms a new account.
+  // Related: product-meta-pixel trackProductCompleteRegistration; Google isNewCustomer hash.
   async registerWithInvitation(dto: RegisterWithInvitationDto): Promise<{
     message: string;
     token: string;
     refreshToken: string;
     user: AuthUserPayload;
+    isNewCustomer: boolean;
   }> {
     const preview = await this.invitationService.findPendingInvitationByRawToken(
       dto.token,
@@ -325,9 +329,11 @@ export class AuthService {
     await this.userRepository.save(user);
 
     const session = await this.buildAuthSession(user);
+    // Business rule: invite register only succeeds for first-time credential setup → new for Meta.
     return {
       message: 'Account created successfully.',
       ...session,
+      isNewCustomer: true,
     };
   }
 
@@ -362,9 +368,12 @@ export class AuthService {
     };
   }
 
+  // --- Change: return isNewCustomer from email signup ---
+  // Why: Meta CompleteRegistration / Lead must trust backend, not frontend guesses.
+  // Conflict on existing password accounts → never returns isNewCustomer for them.
   async createUser(
     registerUserDto: RegisterUserDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ message: string; isNewCustomer: boolean }> {
     const email = registerUserDto.email.trim().toLowerCase();
 
     await this.trackOnboardingEvent({
@@ -381,6 +390,7 @@ export class AuthService {
       .where('LOWER(user.email) = :email', { email })
       .getOne();
 
+    // Existing full account → not a new customer (Meta must not count again).
     if (existingByEmail?.passwordHash) {
       throw new ConflictException('An account with this email already exists.');
     }
@@ -402,8 +412,10 @@ export class AuthService {
         eventName: 'signup_completed',
         idempotencyKey: `signup_completed:${savedInvitedUser.id}`,
       });
+      // First-time password on shell/invite row = new acquisition for Meta.
       return {
         message: 'User successfully registered.',
+        isNewCustomer: true,
       };
     }
 
@@ -427,6 +439,7 @@ export class AuthService {
 
     return {
       message: 'User successfully registered.',
+      isNewCustomer: true,
     };
   }
 
@@ -585,6 +598,8 @@ export class AuthService {
         accessToken: session.token,
         refreshToken: session.refreshToken,
         isNewUser,
+        // Same signal for Meta frontend gate (prompt name: isNewCustomer).
+        isNewCustomer: isNewUser,
         user: session.user,
       };
 
@@ -613,6 +628,8 @@ export class AuthService {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       isNewUser: result.isNewUser ? '1' : '0',
+      // Backend source of truth for Meta CompleteRegistration on Google complete.
+      isNewCustomer: (result.isNewCustomer ?? result.isNewUser) ? '1' : '0',
       user: Buffer.from(JSON.stringify(result.user), 'utf8').toString('base64url'),
     });
     return `${base}/auth/google/complete#${params.toString()}`;
@@ -1030,6 +1047,9 @@ export class AuthService {
     return { message: 'Logged out successfully.' };
   }
 
+  // --- Change: verifyOtp returns isNewCustomer ---
+  // Why: CompleteRegistration fires after OTP; only first email verification = new registration.
+  // MCP context 7: backend owns acquisition truth; frontend only mirrors the flag.
   async verifyOtp(
     verifyOtpDto: VerifyOtpDto,
   ): Promise<{
@@ -1037,13 +1057,17 @@ export class AuthService {
     token: string;
     refreshToken: string;
     user: AuthUserPayload;
+    isNewCustomer: boolean;
   }> {
     const user = await this.validateAndConsumeOtp(
       verifyOtpDto.email,
       verifyOtpDto.otp,
     );
 
-    if (!user.emailVerified) {
+    // First successful verify of an unverified email → new customer for Meta.
+    const isNewCustomer = !user.emailVerified;
+
+    if (isNewCustomer) {
       user.emailVerified = true;
       await this.userRepository.save(user);
     }
@@ -1057,6 +1081,7 @@ export class AuthService {
     return {
       message: 'OTP verified successfully.',
       ...(await this.buildAuthSession(user)),
+      isNewCustomer,
     };
   }
 

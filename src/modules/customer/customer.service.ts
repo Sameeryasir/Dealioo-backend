@@ -197,7 +197,12 @@ export class CustomerService {
     };
   }
 
-  async registerCustomer(dto: RegisterCustomerDto): Promise<Customer> {
+  // --- Change: customer create returns isNewCustomer ---
+  // Why: backend is source of truth for new vs existing guest; callers must not guess.
+  // Related: Meta acquisition should not treat returning guests as new when using this API.
+  async registerCustomer(
+    dto: RegisterCustomerDto,
+  ): Promise<Customer & { isNewCustomer: boolean }> {
     const email = dto.email.trim();
     const name = dto.name.trim();
     const phone = dto.phone?.trim() || null;
@@ -209,6 +214,7 @@ export class CustomerService {
       .getOne();
 
     let customer: Customer;
+    let isNewCustomer = false;
 
     if (existing) {
       if (dto.rejectDuplicateEmail) {
@@ -229,6 +235,7 @@ export class CustomerService {
       customer = changed
         ? await this.customerRepository.save(existing)
         : existing;
+      isNewCustomer = false;
     } else {
       customer = await this.customerRepository.save(
         this.customerRepository.create({
@@ -237,13 +244,14 @@ export class CustomerService {
           phone,
         }),
       );
+      isNewCustomer = true;
     }
 
     if (dto.businessId != null && dto.businessId > 0) {
       await this.ensureBusinessCustomerLink(dto.businessId, customer.id);
     }
 
-    return customer;
+    return Object.assign(customer, { isNewCustomer });
   }
 
   async searchCustomers(

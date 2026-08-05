@@ -41,4 +41,6 @@ export interface GoogleAuthResult {
     plan: AuthUserPlanSummary;
   };
   isNewUser: boolean;
+  /** Same as isNewUser; named for Meta acquisition gating on the frontend. */
+  isNewCustomer: boolean;
 }
