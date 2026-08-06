@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { And, DataSource, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
-import { Campaign } from '../../db/entities/campaign.entity';
+import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
@@ -186,11 +186,13 @@ export class FunnelEventService {
               : 0;
           // --- Pending order for unpaid / postpaid signup ---
           // Link the signup coupon so Guest deals can show this pass (not only Business deals).
+          // Platform/medium must match campaign type (postpaid ≠ Stripe).
           const pendingPaymentId =
             await this.ensurePendingOrderForUnpaidFunnelSignup({
               funnelId: dto.funnelId,
               businessId,
               campaignId: funnel.campaign.id,
+              campaignType: funnel.campaign.campaignType,
               customerId: tracked.event.customerId,
               customerEmail: email,
               amountCents,
@@ -1640,20 +1642,39 @@ export class FunnelEventService {
   }
 
   /**
-   * Changed: returns the pending payment id so signup can link the guest coupon.
-   * Why: Guest deals requires coupon.funnel_payment_id for unpaid / postpaid passes.
-   * Related: coupon.service linkSignupCouponToPayment, track() signup path.
+   * Changed: returns pending payment id; tags postpaid as in-store (not Stripe).
+   * Why: Guest deals needs coupon.funnel_payment_id; Orders Platform must match medium.
+   * Related: coupon.service linkSignupCouponToPayment, track() signup path, FunnelOrdersPanel.
+   * MCP Context 7: keep payment provenance accurate at create time.
    */
   private async ensurePendingOrderForUnpaidFunnelSignup(input: {
     funnelId: number;
     businessId: number;
     campaignId: number;
+    campaignType: CampaignType | string | null | undefined;
     customerId: number;
     customerEmail: string;
     amountCents: number;
     currency: string;
   }): Promise<number | null> {
     const email = input.customerEmail.trim().toLowerCase();
+    // Postpaid = pay later in store — never mark medium as Stripe until a real Stripe charge.
+    const isPostpaid =
+      String(input.campaignType ?? '').toLowerCase() === CampaignType.POSTPAID;
+
+    const provenance = isPostpaid
+      ? {
+          paymentSource: FunnelPaymentSource.MANUAL,
+          collectionChannel: FunnelCollectionChannel.IN_STORE,
+          paymentMethod: FunnelPaymentMethod.OTHER,
+          orderSource: OrderSource.MANUAL,
+        }
+      : {
+          paymentSource: FunnelPaymentSource.STRIPE,
+          collectionChannel: FunnelCollectionChannel.ONLINE,
+          paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
+          orderSource: OrderSource.STRIPE,
+        };
 
     let payment = await this.funnelPaymentRepository.findOne({
       where: {
@@ -1670,10 +1691,24 @@ export class FunnelEventService {
       input.amountCents > 0 ? input.amountCents : (payment?.amount ?? 0);
 
     if (payment) {
+      const hasStripeLink = Boolean(
+        payment.stripePaymentIntentId?.trim() ||
+          payment.stripeCheckoutSessionId?.trim(),
+      );
+      // Heal wrongly tagged postpaid pending rows that never touched Stripe.
+      const shouldHealProvenance = isPostpaid && !hasStripeLink;
+
       await this.funnelPaymentRepository.update(payment.id, {
         customerId: input.customerId,
         campaignId: payment.campaignId ?? input.campaignId,
         amount: amountCents > 0 ? amountCents : payment.amount,
+        ...(shouldHealProvenance
+          ? {
+              paymentSource: provenance.paymentSource,
+              collectionChannel: provenance.collectionChannel,
+              paymentMethod: provenance.paymentMethod,
+            }
+          : {}),
         updatedAt: now,
       });
       payment.customerId = input.customerId;
@@ -1685,6 +1720,7 @@ export class FunnelEventService {
       if (payment.orderId != null) {
         await this.orderRepository.update(payment.orderId, {
           ...(amountCents > 0 ? { totalAmount: amountCents } : {}),
+          ...(shouldHealProvenance ? { source: provenance.orderSource } : {}),
           updatedAt: now,
         });
       } else {
@@ -1692,7 +1728,7 @@ export class FunnelEventService {
           this.orderRepository.create({
             businessId: input.businessId,
             status: OrderStatus.PENDING,
-            source: OrderSource.STRIPE,
+            source: provenance.orderSource,
             totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
             currency: payment.currency || input.currency || 'usd',
             paidAt: null,
@@ -1716,9 +1752,9 @@ export class FunnelEventService {
         currency: input.currency || 'usd',
         platformFeeAmount: 0,
         status: FunnelPaymentStatus.PENDING,
-        paymentSource: FunnelPaymentSource.STRIPE,
-        collectionChannel: FunnelCollectionChannel.ONLINE,
-        paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
+        paymentSource: provenance.paymentSource,
+        collectionChannel: provenance.collectionChannel,
+        paymentMethod: provenance.paymentMethod,
         stripePaymentIntentId: null,
         stripeCheckoutSessionId: null,
         refundedAmount: 0,
@@ -1730,7 +1766,7 @@ export class FunnelEventService {
       this.orderRepository.create({
         businessId: input.businessId,
         status: OrderStatus.PENDING,
-        source: OrderSource.STRIPE,
+        source: provenance.orderSource,
         totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
         currency: payment.currency || input.currency || 'usd',
         paidAt: null,
@@ -2334,16 +2370,22 @@ export class FunnelEventService {
       phone: string | null;
       createdAt: Date;
       updatedAt: Date;
+      status: 'new' | 'returning';
+      tags: Array<'signup' | 'prepaid' | 'postpaid'>;
+      hasPayment: boolean;
+      eventCount: number;
     }>;
     meta: PaginationMeta;
   }> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
+      relations: ['campaign'],
     });
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
 
+    const campaignType = funnel.campaign?.campaignType ?? null;
     const pagination = normalizePagination(page, limit);
 
     const countRow = await this.funnelEventRepository
@@ -2371,6 +2413,15 @@ export class FunnelEventService {
       .addSelect('customer.phone', 'phone')
       .addSelect('customer.updated_at', 'updatedAt')
       .addSelect('MIN(event.created_at)', 'createdAt')
+      .addSelect('COUNT(event.id)', 'eventCount')
+      .addSelect(
+        `SUM(CASE WHEN event.event_type = 'payment' THEN 1 ELSE 0 END)`,
+        'paymentCount',
+      )
+      .addSelect(
+        `SUM(CASE WHEN event.event_type = 'signup' THEN 1 ELSE 0 END)`,
+        'signupCount',
+      )
       .where('event.funnel_id = :funnelId', { funnelId })
       .andWhere('event.customer_id IS NOT NULL')
       .groupBy('customer.id')
@@ -2388,17 +2439,41 @@ export class FunnelEventService {
         phone: string | null;
         updatedAt: Date;
         createdAt: Date;
+        eventCount: string;
+        paymentCount: string;
+        signupCount: string;
       }>();
 
     return {
-      data: rows.map((row) => ({
-        id: Number(row.id),
-        name: row.name,
-        email: row.email,
-        phone: row.phone,
-        createdAt: new Date(row.createdAt),
-        updatedAt: new Date(row.updatedAt),
-      })),
+      data: rows.map((row) => {
+        const eventCount = Number(row.eventCount ?? 0);
+        const paymentCount = Number(row.paymentCount ?? 0);
+        const signupCount = Number(row.signupCount ?? 0);
+        const hasPayment = paymentCount > 0;
+        const status: 'new' | 'returning' =
+          eventCount > 1 || hasPayment ? 'returning' : 'new';
+        const tags: Array<'signup' | 'prepaid' | 'postpaid'> = [];
+        if (signupCount > 0 || eventCount > 0) {
+          tags.push('signup');
+        }
+        if (campaignType === 'prepaid') {
+          tags.push('prepaid');
+        } else if (campaignType === 'postpaid') {
+          tags.push('postpaid');
+        }
+        return {
+          id: Number(row.id),
+          name: row.name,
+          email: row.email,
+          phone: row.phone,
+          createdAt: new Date(row.createdAt),
+          updatedAt: new Date(row.updatedAt),
+          status,
+          tags,
+          hasPayment,
+          eventCount,
+        };
+      }),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
