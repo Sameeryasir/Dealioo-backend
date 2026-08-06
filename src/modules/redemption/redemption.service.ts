@@ -174,6 +174,7 @@ export type GuestProfileResult = {
     paymentLabel: 'PREPAID' | 'UNPAID';
     paymentStatus: CouponPaymentStatus;
     campaignPrice: number | null;
+    imageUrl: string | null;
     expiresAt: string | null;
     canSelect: boolean;
     qrToken: string;
@@ -1616,6 +1617,7 @@ export class RedemptionService {
           campaignPrice != null && Number.isFinite(campaignPrice)
             ? campaignPrice
             : null,
+        imageUrl: coupon.campaign?.imageUrl?.trim() || null,
         expiresAt: coupon.expiresAt?.toISOString() ?? null,
         canSelect:
           isPrepaid || coupon.paymentStatus === CouponPaymentStatus.PENDING,
