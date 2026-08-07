@@ -11,6 +11,8 @@ import {
   buildCampaignPayload,
   buildCreativePayload,
   genderToMetaGenders,
+  pickBestMetaAdGeoMatch,
+  searchMetaAdGeoLocations,
   toMetaUnixTime,
 } from './facebook-campaign-meta';
 
@@ -23,6 +25,9 @@ type DraftLocationTarget = {
   longitude?: number;
   radius?: number;
   distanceUnit?: string;
+  useRadius?: boolean;
+  metaKey?: string;
+  metaType?: 'country' | 'region' | 'city';
 };
 
 export function draftDateTimeToUnix(dateTime: string): number {
@@ -194,9 +199,41 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   const locations = (audience.locations ?? []) as DraftLocationTarget[];
 
   const includedCountries = new Set<string>();
+  const includedRegions: Array<{ key: string }> = [];
+  const includedCities: Array<{ key: string }> = [];
   const includedCustom: CustomGeoEntry[] = [];
   const excludedCountries = new Set<string>();
+  const excludedRegions: Array<{ key: string }> = [];
+  const excludedCities: Array<{ key: string }> = [];
   const excludedCustom: CustomGeoEntry[] = [];
+  const namedResolveQueue: Array<{
+    mode: 'include' | 'exclude';
+    label: string;
+    countryCode?: string;
+    metaKey?: string;
+    metaType?: 'country' | 'region' | 'city';
+  }> = [];
+
+  const pushNamed = (
+    mode: 'include' | 'exclude',
+    metaType: 'country' | 'region' | 'city',
+    key: string,
+    countryCode?: string,
+  ) => {
+    if (metaType === 'country') {
+      const code = (countryCode ?? key).toUpperCase();
+      if (mode === 'exclude') excludedCountries.add(code);
+      else includedCountries.add(code);
+      return;
+    }
+    if (metaType === 'region') {
+      if (mode === 'exclude') excludedRegions.push({ key });
+      else includedRegions.push({ key });
+      return;
+    }
+    if (mode === 'exclude') excludedCities.push({ key });
+    else includedCities.push({ key });
+  };
 
   for (const loc of locations) {
     const mode = loc.mode === 'exclude' ? 'exclude' : 'include';
@@ -212,65 +249,206 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
 
     const latitude = toFiniteNumber(loc.latitude);
     const longitude = toFiniteNumber(loc.longitude);
-    if (latitude == null || longitude == null) continue;
-
     const radiusRaw = toFiniteNumber(loc.radius);
-    const radius = Math.min(80, Math.max(1, radiusRaw ?? 16));
-    const entry: CustomGeoEntry = {
-      latitude,
-      longitude,
-      radius,
-      distance_unit: loc.distanceUnit === 'mile' ? 'mile' : 'kilometer',
-    };
-    if (mode === 'exclude') excludedCustom.push(entry);
-    else includedCustom.push(entry);
+    // Address targets always publish as radius circles (custom_locations).
+    const wantsRadius =
+      loc.useRadius !== false && latitude != null && longitude != null;
+
+    if (wantsRadius) {
+      const radius = Math.min(80, Math.max(1, radiusRaw ?? 16));
+      const entry: CustomGeoEntry = {
+        latitude,
+        longitude,
+        radius,
+        distance_unit: loc.distanceUnit === 'mile' ? 'mile' : 'kilometer',
+      };
+      if (mode === 'exclude') excludedCustom.push(entry);
+      else includedCustom.push(entry);
+      continue;
+    }
+
+    if (loc.metaKey?.trim() && loc.metaType) {
+      pushNamed(mode, loc.metaType, loc.metaKey.trim(), countryCode);
+      continue;
+    }
+
+    const label = loc.label?.trim();
+    if (label) {
+      namedResolveQueue.push({
+        mode,
+        label,
+        countryCode,
+        metaKey: loc.metaKey,
+        metaType: loc.metaType,
+      });
+      continue;
+    }
+
+    if (countryCode) {
+      if (mode === 'exclude') excludedCountries.add(countryCode);
+      else includedCountries.add(countryCode);
+    }
   }
 
-  const uniqueIncludedCustom =
-    dedupeNearIdenticalCustomLocations(includedCustom);
-  const uniqueExcludedCustom =
-    dedupeNearIdenticalCustomLocations(excludedCustom);
+  return {
+    includedCountries,
+    includedRegions,
+    includedCities,
+    includedCustom,
+    excludedCountries,
+    excludedRegions,
+    excludedCities,
+    excludedCustom,
+    namedResolveQueue,
+  };
+}
+
+async function resolveNamedGeoTargets(
+  accessToken: string | undefined,
+  queue: Array<{
+    mode: 'include' | 'exclude';
+    label: string;
+    countryCode?: string;
+  }>,
+  buckets: {
+    includedCountries: Set<string>;
+    includedRegions: Array<{ key: string }>;
+    includedCities: Array<{ key: string }>;
+    excludedCountries: Set<string>;
+    excludedRegions: Array<{ key: string }>;
+    excludedCities: Array<{ key: string }>;
+  },
+): Promise<void> {
+  for (const item of queue) {
+    let hit =
+      accessToken != null
+        ? pickBestMetaAdGeoMatch(
+            item.label,
+            await searchMetaAdGeoLocations(
+              accessToken,
+              item.label,
+              item.countryCode,
+            ),
+            item.countryCode,
+          )
+        : null;
+
+    if (!hit && accessToken && item.countryCode) {
+      hit = pickBestMetaAdGeoMatch(
+        item.label,
+        await searchMetaAdGeoLocations(accessToken, item.label),
+        item.countryCode,
+      );
+    }
+
+    if (hit?.type === 'region' && hit.key) {
+      if (item.mode === 'exclude') buckets.excludedRegions.push({ key: hit.key });
+      else buckets.includedRegions.push({ key: hit.key });
+      continue;
+    }
+    if (hit?.type === 'city' && hit.key) {
+      if (item.mode === 'exclude') buckets.excludedCities.push({ key: hit.key });
+      else buckets.includedCities.push({ key: hit.key });
+      continue;
+    }
+    if (hit?.type === 'country') {
+      const code = (hit.country_code ?? hit.key).toUpperCase();
+      if (item.mode === 'exclude') buckets.excludedCountries.add(code);
+      else buckets.includedCountries.add(code);
+      continue;
+    }
+
+    // Fallback: country of the place so publish still works.
+    if (item.countryCode) {
+      if (item.mode === 'exclude') {
+        buckets.excludedCountries.add(item.countryCode);
+      } else {
+        buckets.includedCountries.add(item.countryCode);
+      }
+    }
+  }
+}
+
+function finalizeGeoBuckets(input: {
+  includedCountries: Set<string>;
+  includedRegions: Array<{ key: string }>;
+  includedCities: Array<{ key: string }>;
+  includedCustom: CustomGeoEntry[];
+  excludedCountries: Set<string>;
+  excludedRegions: Array<{ key: string }>;
+  excludedCities: Array<{ key: string }>;
+  excludedCustom: CustomGeoEntry[];
+  audience: AdSetStepDataDto['audience'];
+}) {
+  const uniqueIncludedCustom = dedupeNearIdenticalCustomLocations(
+    input.includedCustom,
+  );
+  const uniqueExcludedCustom = dedupeNearIdenticalCustomLocations(
+    input.excludedCustom,
+  );
 
   if (
-    !includedCountries.size &&
+    !input.includedCountries.size &&
+    !input.includedRegions.length &&
+    !input.includedCities.length &&
     !uniqueIncludedCustom.length &&
-    audience.country
+    input.audience.country
   ) {
-    includedCountries.add(audience.country.toUpperCase());
+    input.includedCountries.add(input.audience.country.toUpperCase());
   }
 
+  // Legacy audience pin → custom location only when lat/lng present and no named geos.
   if (
+    !input.includedRegions.length &&
+    !input.includedCities.length &&
     !uniqueIncludedCustom.length &&
-    toFiniteNumber(audience.latitude) != null &&
-    toFiniteNumber(audience.longitude) != null
+    toFiniteNumber(input.audience.latitude) != null &&
+    toFiniteNumber(input.audience.longitude) != null
   ) {
-    const legacyRadius = toFiniteNumber(audience.radius) ?? 16;
+    const legacyRadius = toFiniteNumber(input.audience.radius) ?? 16;
     uniqueIncludedCustom.push({
-      latitude: toFiniteNumber(audience.latitude)!,
-      longitude: toFiniteNumber(audience.longitude)!,
+      latitude: toFiniteNumber(input.audience.latitude)!,
+      longitude: toFiniteNumber(input.audience.longitude)!,
       radius: Math.min(80, Math.max(1, legacyRadius)),
       distance_unit:
-        audience.distanceUnit === 'mile' ? 'mile' : 'kilometer',
+        input.audience.distanceUnit === 'mile' ? 'mile' : 'kilometer',
     });
-    includedCountries.clear();
+    input.includedCountries.clear();
   }
 
   const geoLocations: Record<string, unknown> = {
     location_types: ['home', 'recent'],
   };
-  if (includedCountries.size) {
-    geoLocations.countries = [...includedCountries];
+  if (input.includedCountries.size) {
+    geoLocations.countries = [...input.includedCountries];
+  }
+  if (input.includedRegions.length) {
+    geoLocations.regions = input.includedRegions;
+  }
+  if (input.includedCities.length) {
+    geoLocations.cities = input.includedCities;
   }
   if (uniqueIncludedCustom.length) {
     geoLocations.custom_locations = uniqueIncludedCustom;
   }
 
   const excludedGeo: Record<string, unknown> = {};
-  if (excludedCountries.size || uniqueExcludedCustom.length) {
+  const hasExcluded =
+    input.excludedCountries.size ||
+    input.excludedRegions.length ||
+    input.excludedCities.length ||
+    uniqueExcludedCustom.length;
+  if (hasExcluded) {
     excludedGeo.location_types = ['home', 'recent'];
   }
-  if (excludedCountries.size) {
-    excludedGeo.countries = [...excludedCountries];
+  if (input.excludedCountries.size) {
+    excludedGeo.countries = [...input.excludedCountries];
+  }
+  if (input.excludedRegions.length) {
+    excludedGeo.regions = input.excludedRegions;
+  }
+  if (input.excludedCities.length) {
+    excludedGeo.cities = input.excludedCities;
   }
   if (uniqueExcludedCustom.length) {
     excludedGeo.custom_locations = uniqueExcludedCustom;
@@ -279,14 +457,27 @@ function buildGeoFromAudience(audience: AdSetStepDataDto['audience']) {
   return { geoLocations, excludedGeo };
 }
 
-export function buildAdSetPayloadFromDraft(
+export async function buildGeoFromAudienceAsync(
+  audience: AdSetStepDataDto['audience'],
+  accessToken?: string,
+) {
+  const built = buildGeoFromAudience(audience);
+  await resolveNamedGeoTargets(accessToken, built.namedResolveQueue, built);
+  return finalizeGeoBuckets({ ...built, audience });
+}
+
+export async function buildAdSetPayloadFromDraft(
   campaign: CampaignStepDataDto,
   adSet: AdSetStepDataDto,
   metaCampaignId: string,
+  accessToken?: string,
 ) {
   const cboEnabled = campaign.campaignBudgetOptimization;
   const placementSpec = buildPlacementSpecFromDraft(adSet.placements);
-  const { geoLocations, excludedGeo } = buildGeoFromAudience(adSet.audience);
+  const { geoLocations, excludedGeo } = await buildGeoFromAudienceAsync(
+    adSet.audience,
+    accessToken,
+  );
 
   const ageMin = adSet.audience.ageMin;
   const ageMax = adSet.audience.ageMax;

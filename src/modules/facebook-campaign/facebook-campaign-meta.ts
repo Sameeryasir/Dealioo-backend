@@ -682,6 +682,72 @@ export async function graphGetWithToken<T>(
   return parsed;
 }
 
+export type MetaAdGeoLocationHit = {
+  key: string;
+  name: string;
+  type: string;
+  country_code?: string;
+  region?: string;
+  region_id?: number;
+};
+
+/** Resolve a place name to Meta's named geo targeting (city/region/country). */
+export async function searchMetaAdGeoLocations(
+  accessToken: string,
+  query: string,
+  countryCode?: string,
+): Promise<MetaAdGeoLocationHit[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const params: Record<string, string> = {
+    type: 'adgeolocation',
+    q,
+    location_types: JSON.stringify(['country', 'region', 'city']),
+    limit: '8',
+  };
+  if (countryCode?.trim()) {
+    params.country_code = countryCode.trim().toUpperCase();
+  }
+
+  const response = await graphGetWithToken<{ data?: MetaAdGeoLocationHit[] }>(
+    '/search',
+    accessToken,
+    params,
+  );
+  return (response.data ?? []).filter(
+    (row) => typeof row.key === 'string' && row.key.trim() && row.type,
+  );
+}
+
+export function pickBestMetaAdGeoMatch(
+  query: string,
+  hits: MetaAdGeoLocationHit[],
+  countryCode?: string,
+): MetaAdGeoLocationHit | null {
+  if (!hits.length) return null;
+  const needle = query.trim().toLowerCase();
+  const country = countryCode?.trim().toUpperCase();
+
+  const ranked = [...hits].sort((a, b) => {
+    const score = (hit: MetaAdGeoLocationHit) => {
+      let s = 0;
+      const name = hit.name?.trim().toLowerCase() ?? '';
+      if (name === needle) s += 100;
+      else if (name.startsWith(needle) || needle.startsWith(name)) s += 40;
+      else if (name.includes(needle) || needle.includes(name)) s += 20;
+      if (hit.type === 'region') s += 15;
+      if (hit.type === 'city') s += 10;
+      if (hit.type === 'country') s += 5;
+      if (country && hit.country_code?.toUpperCase() === country) s += 25;
+      return s;
+    };
+    return score(b) - score(a);
+  });
+
+  return ranked[0] ?? null;
+}
+
 export function stepFailureUserMessage(
   step: MetaCreationStep,
   detail: string,

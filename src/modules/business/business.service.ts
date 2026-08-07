@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -13,6 +14,7 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Automation } from '../../db/entities/automation.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessCustomer } from '../../db/entities/business-customer.entity';
@@ -32,6 +34,7 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { PusherService } from '../pusher/pusher.service';
 import {
   normalizePhoneNumber,
   TwilioService,
@@ -59,6 +62,8 @@ const IDEMPOTENT_CREATE_WINDOW_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class BusinessService {
+  private readonly logger = new Logger(BusinessService.name);
+
   constructor(
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
@@ -74,13 +79,57 @@ export class BusinessService {
     private readonly automationRepository: Repository<Automation>,
     @InjectRepository(BusinessCustomer)
     private readonly businessCustomerRepository: Repository<BusinessCustomer>,
+    @InjectRepository(AdminNotification)
+    private readonly adminNotificationRepository: Repository<AdminNotification>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly twilioService: TwilioService,
+    private readonly pusherService: PusherService,
     @InjectQueue(BUSINESS_ONBOARDING_QUEUE)
     private readonly businessOnboardingQueue: Queue<BusinessOnboardingPostCreateJob>,
   ) {}
+
+  private async notifyBusinessCreated(
+    business: Business,
+    owner: User,
+  ): Promise<void> {
+    const ownerBit = owner.email?.trim() ? ` (owner: ${owner.email.trim()})` : '';
+    try {
+      const saved = await this.adminNotificationRepository.save(
+        this.adminNotificationRepository.create({
+          type: 'business',
+          eventKey: 'business_created',
+          title: 'New business registered',
+          body: `${business.name} was created${ownerBit}.`,
+          severity: 'success',
+          actionUrl: `/admin/businesses/${business.id}`,
+          resourceType: 'business',
+          resourceId: String(business.id),
+          actorUserId: owner.id,
+          idempotencyKey: `business_created:${business.id}`,
+          metadata: {
+            businessName: business.name,
+            ownerEmail: owner.email ?? null,
+          },
+          source: 'user',
+        }),
+      );
+      await this.pusherService.notifyAdminNotificationCreated(saved);
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      if (code !== '23505') {
+        this.logger.warn(
+          `Failed to write admin notification for business ${business.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
 
   async findByUserId(userId: number): Promise<Business | null> {
     return this.businessRepository.findOne({
@@ -206,6 +255,8 @@ export class BusinessService {
       businessName: business.name,
       actorUserId: user.id,
     });
+
+    await this.notifyBusinessCreated(business, user);
 
     await this.draftRepository.delete({ userId: user.id });
 

@@ -10,8 +10,10 @@ import {
   AutomationExecution,
   AutomationExecutionStatus,
 } from '../../db/entities/automation-execution.entity';
+import type { AdminNotification } from '../../db/entities/admin-notification.entity';
 import {
   PUSHER_EVENT,
+  pusherAdminNotificationsChannel,
   pusherAutomationChannel,
   pusherBusinessActivityChannel,
   pusherBusinessConversationsChannel,
@@ -221,6 +223,49 @@ export class PusherService implements OnModuleInit {
       return;
     }
     await this.client.trigger(channel, event, payload);
+  }
+
+  async notifyAdminNotificationCreated(
+    notification: AdminNotification,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    const channel = pusherAdminNotificationsChannel();
+    const payload = {
+      id: notification.id,
+      type: notification.type,
+      eventKey: notification.eventKey,
+      title: notification.title,
+      body: notification.body,
+      severity: notification.severity,
+      actionUrl: notification.actionUrl,
+      resourceType: notification.resourceType,
+      resourceId: notification.resourceId,
+      isRead: notification.isRead,
+      createdAt:
+        notification.createdAt instanceof Date
+          ? notification.createdAt.toISOString()
+          : new Date().toISOString(),
+    };
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.ADMIN_NOTIFICATION_CREATED,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.ADMIN_NOTIFICATION_CREATED} | id: ${notification.id}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher admin notification notify failed for ${notification.id}: ${message}`,
+      );
+    }
   }
 
   private async triggerExecution(

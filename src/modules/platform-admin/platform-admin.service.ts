@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, MoreThanOrEqual, Repository } from 'typeorm';
+import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { Order, OrderStatus } from '../../db/entities/order.entity';
 import { User } from '../../db/entities/user.entity';
@@ -98,6 +99,8 @@ export class PlatformAdminService {
     private readonly orderRepository: Repository<Order>,
     @InjectRepository(UserSubscription)
     private readonly subscriptionRepository: Repository<UserSubscription>,
+    @InjectRepository(AdminNotification)
+    private readonly adminNotificationRepository: Repository<AdminNotification>,
   ) {}
 
   private assertSuperAdmin(user: User): void {
@@ -106,6 +109,53 @@ export class PlatformAdminService {
         'Only Super Admin can access the platform overview.',
       );
     }
+  }
+
+  async getNotifications(actor: User): Promise<{
+    unreadCount: number;
+    items: Array<{
+      id: string;
+      type: string;
+      eventKey: string;
+      title: string;
+      body: string;
+      severity: string;
+      actionUrl: string | null;
+      resourceType: string | null;
+      resourceId: string | null;
+      isRead: boolean;
+      createdAt: Date;
+    }>;
+  }> {
+    this.assertSuperAdmin(actor);
+
+    const [items, unreadCount] = await Promise.all([
+      this.adminNotificationRepository.find({
+        where: { isArchived: false },
+        order: { createdAt: 'DESC' },
+        take: 50,
+      }),
+      this.adminNotificationRepository.count({
+        where: { isArchived: false, isRead: false },
+      }),
+    ]);
+
+    return {
+      unreadCount,
+      items: items.map((row) => ({
+        id: row.id,
+        type: row.type,
+        eventKey: row.eventKey,
+        title: row.title,
+        body: row.body,
+        severity: row.severity,
+        actionUrl: row.actionUrl,
+        resourceType: row.resourceType,
+        resourceId: row.resourceId,
+        isRead: row.isRead,
+        createdAt: row.createdAt,
+      })),
+    };
   }
 
   async getOverview(actor: User): Promise<PlatformAdminOverview> {

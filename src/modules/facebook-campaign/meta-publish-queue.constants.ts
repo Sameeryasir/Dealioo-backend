@@ -17,7 +17,6 @@ export function metaPublishJobId(businessId: number, draftId: string): string {
 
 export const META_PUBLISH_STEPS = [
   'queued',
-  'preparing',
   'campaign',
   'adset',
   'media',

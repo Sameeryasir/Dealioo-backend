@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { Order } from '../../db/entities/order.entity';
 import { User } from '../../db/entities/user.entity';
@@ -9,7 +10,13 @@ import { PlatformAdminService } from './platform-admin.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Business, Order, UserSubscription]),
+    TypeOrmModule.forFeature([
+      User,
+      Business,
+      Order,
+      UserSubscription,
+      AdminNotification,
+    ]),
   ],
   controllers: [PlatformAdminController],
   providers: [PlatformAdminService],

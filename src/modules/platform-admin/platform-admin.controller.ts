@@ -12,4 +12,10 @@ export class PlatformAdminController {
   getOverview(@Req() req: { user: User }) {
     return this.platformAdminService.getOverview(req.user);
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('notifications')
+  getNotifications(@Req() req: { user: User }) {
+    return this.platformAdminService.getNotifications(req.user);
+  }
 }

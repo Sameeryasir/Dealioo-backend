@@ -28,7 +28,6 @@ import {
 } from './dto/meta-publish-status.dto';
 import {
   adsManagerCampaignsUrl,
-  graphGetWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
   stepFailureUserMessage,
@@ -61,15 +60,6 @@ import {
 import { MetaAdsService } from './meta-ads.service';
 import { MetaPublishRealtimeService } from './meta-publish-realtime.service';
 import { logMetaPublishStep } from './meta-publish-trace';
-
-type MetaPageListResponse = {
-  data?: Array<{ id?: string; name?: string }>;
-};
-
-type MetaAdAccountResponse = {
-  account_status?: number;
-  name?: string;
-};
 
 type PublishContext = {
   accessToken: string;
@@ -305,8 +295,8 @@ export class MetaPublishService {
     draft.status = 'publishing';
     draft.publishStatus = 'PUBLISHING';
     draft.publishJobId = jobId;
-    draft.publishStep = 'preparing';
-    draft.publishProgress = metaPublishProgressPercent('preparing');
+    draft.publishStep = 'queued';
+    draft.publishProgress = metaPublishProgressPercent('queued');
     draft.errorMessage = null;
     await this.draftRepository.save(draft);
     await this.notifyDraftProgress(draft);
@@ -394,11 +384,6 @@ export class MetaPublishService {
     this.logger.log(
       `Publish started: metaUserId=${business.metaUserId} adAccountId=${adAccountId} draft=${draft.id}`,
     );
-
-    await this.beginStep(draft, jobId, 'preparing', userId, businessId);
-    await this.ensureAdAccountActive(adAccountId, accessToken);
-    await this.assertPageAccessible(creative.facebookPageId, accessToken);
-    await this.completeStep(draft, jobId, 'preparing', null);
 
     const ctx: PublishContext = {
       accessToken,
@@ -585,7 +570,12 @@ export class MetaPublishService {
     return sdkCreateAdSet(
       ctx.accessToken,
       ctx.adAccountId,
-      buildAdSetPayloadFromDraft(ctx.campaign, ctx.adSet, metaCampaignId),
+      await buildAdSetPayloadFromDraft(
+        ctx.campaign,
+        ctx.adSet,
+        metaCampaignId,
+        ctx.accessToken,
+      ),
     );
   }
 
@@ -1061,43 +1051,5 @@ export class MetaPublishService {
     }
 
     return business;
-  }
-
-  private async assertPageAccessible(
-    pageId: string,
-    accessToken: string,
-  ): Promise<void> {
-    const response = await graphGetWithToken<MetaPageListResponse>(
-      '/me/accounts',
-      accessToken,
-      { fields: 'id,name', limit: '50' },
-    );
-
-    const allowed = (response.data ?? []).some(
-      (row) => row.id?.trim() === pageId.trim(),
-    );
-
-    if (!allowed) {
-      throw new BadRequestException(
-        'Selected Facebook Page is not linked to this Meta account.',
-      );
-    }
-  }
-
-  private async ensureAdAccountActive(
-    adAccountId: string,
-    accessToken: string,
-  ): Promise<void> {
-    const account = await graphGetWithToken<MetaAdAccountResponse>(
-      `/${adAccountId}`,
-      accessToken,
-      { fields: 'account_status,name' },
-    );
-
-    if (account.account_status != null && account.account_status !== 1) {
-      throw new BadRequestException(
-        'This Meta ad account is disabled. Fix billing or status in Ads Manager, then try again.',
-      );
-    }
   }
 }

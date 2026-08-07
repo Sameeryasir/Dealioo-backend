@@ -20,10 +20,10 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "typeorm": "typeorm-ts-node-commonjs",
-    "migration:generate": "npm run typeorm -- -d src/data-source.ts migration:generate",
-    "migration:run": "npm run typeorm -- -d src/data-source.ts migration:run",
-    "migration:revert": "npm run typeorm -- -d src/data-source.ts migration:revert",
-    "migration:show": "npm run typeorm -- -d src/data-source.ts migration:show"
+    "migration:generate": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:generate",
+    "migration:run": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:run",
+    "migration:revert": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:revert",
+    "migration:show": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1083.0",

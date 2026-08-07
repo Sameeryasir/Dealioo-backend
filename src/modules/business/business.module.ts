@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Automation } from '../../db/entities/automation.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessCustomer } from '../../db/entities/business-customer.entity';
@@ -27,6 +28,7 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
       Campaign,
       Automation,
       BusinessCustomer,
+      AdminNotification,
     ]),
     AuthModule,
     BusinessHistoryModule,

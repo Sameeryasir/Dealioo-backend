@@ -10,7 +10,9 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { RedemptionService } from '../redemption/redemption.service';
+import { isSuperAdmin } from '../../utils/user-roles';
 import {
+  isAdminNotificationsChannel,
   isAuthorizedBusinessChatChannel,
   parseBusinessIdFromChatChannel,
 } from './pusher.constants';
@@ -42,6 +44,16 @@ export class PusherController {
     const trimmedChannel = channelName?.trim();
     if (!trimmedSocketId || !trimmedChannel) {
       throw new ForbiddenException('Invalid Pusher auth request.');
+    }
+
+    // Super Admin platform inbox (not business-scoped).
+    if (isAdminNotificationsChannel(trimmedChannel)) {
+      if (!isSuperAdmin(req.user)) {
+        throw new ForbiddenException(
+          'Only Super Admin can subscribe to admin notifications.',
+        );
+      }
+      return this.pusherService.authorizeChannel(trimmedSocketId, trimmedChannel);
     }
 
     const businessId = parseBusinessIdFromChatChannel(trimmedChannel);

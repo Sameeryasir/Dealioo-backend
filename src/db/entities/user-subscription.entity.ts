@@ -21,7 +21,7 @@ export class UserSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => require('./user.entity').User, (user) => user.subscriptions, {
+  @ManyToOne(() => require('./user.entity').User, (user: User) => user.subscriptions, {
     nullable: false,
     onDelete: 'CASCADE',
   })
@@ -31,7 +31,10 @@ export class UserSubscription {
   @Column({ name: 'user_id', type: 'int' })
   userId: number;
 
-  @ManyToOne(() => require('./subscription-plan.entity').SubscriptionPlan, (plan) => plan.userSubscriptions, {
+  @ManyToOne(
+    () => require('./subscription-plan.entity').SubscriptionPlan,
+    (plan: SubscriptionPlan) => plan.userSubscriptions,
+    {
     nullable: false,
     onDelete: 'RESTRICT',
   })

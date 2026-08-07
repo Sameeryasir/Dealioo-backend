@@ -24,7 +24,7 @@ export class Otp {
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date;
 
-  @ManyToOne(() => require('./user.entity').User, (user) => user.otps, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, (user: User) => user.otps, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 }

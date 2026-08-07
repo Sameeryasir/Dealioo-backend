@@ -63,7 +63,10 @@ export class Order {
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt!: Date | null;
 
-  @OneToMany(() => require('./funnel-payment.entity').FunnelPayment, (payment) => payment.order)
+  @OneToMany(
+    () => require('./funnel-payment.entity').FunnelPayment,
+    (payment: FunnelPayment) => payment.order,
+  )
   payments!: FunnelPayment[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -6,6 +6,7 @@ export const PUSHER_EVENT = {
   ACTIVITY_CAMPAIGN_UPDATED: 'activity-campaign-updated',
   META_PUBLISH_PROGRESS: 'meta-publish-progress',
   AI_EDIT_UI_RESULT: 'ai-edit-ui-result',
+  ADMIN_NOTIFICATION_CREATED: 'admin-notification-created',
 } as const;
 
 export function pusherExecutionChannel(executionId: number): string {
@@ -32,6 +33,14 @@ export function pusherBusinessMetaPublishChannel(businessId: number): string {
 
 export function pusherBusinessAiEditUiChannel(businessId: number): string {
   return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-ai-edit-ui-${businessId}`;
+}
+
+export function pusherAdminNotificationsChannel(): string {
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}admin-notifications`;
+}
+
+export function isAdminNotificationsChannel(channelName: string): boolean {
+  return channelName === pusherAdminNotificationsChannel();
 }
 
 export function pusherConversationMessagesChannel(

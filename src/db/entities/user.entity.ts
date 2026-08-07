@@ -129,7 +129,7 @@ export class User {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @ManyToOne(() => require('./role.entity').Role, (role) => role.users, { nullable: false })
+  @ManyToOne(() => require('./role.entity').Role, (role: Role) => role.users, { nullable: false })
   @JoinColumn({ name: 'role_id' })
   role: Role;
 
@@ -143,9 +143,12 @@ export class User {
   @OneToMany(() => User, (createdUser) => createdUser.createdBy)
   createdUsers: User[];
 
-  @OneToMany(() => require('./otp.entity').Otp, (otp) => otp.user)
+  @OneToMany(() => require('./otp.entity').Otp, (otp: Otp) => otp.user)
   otps: Otp[];
 
-  @OneToMany(() => require('./user-subscription.entity').UserSubscription, (subscription) => subscription.user)
+  @OneToMany(
+    () => require('./user-subscription.entity').UserSubscription,
+    (subscription: UserSubscription) => subscription.user,
+  )
   subscriptions: UserSubscription[];
 }

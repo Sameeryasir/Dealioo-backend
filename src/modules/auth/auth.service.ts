@@ -30,7 +30,9 @@ import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
+import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { InvitationService } from '../invitation/invitation.service';
+import { PusherService } from '../pusher/pusher.service';
 import { RegisterUserDto } from './authDto/register.dto';
 import { RegisterWithInvitationDto } from './authDto/register-with-invitation.dto';
 import { LoginUserDto } from './authDto/login.dto';
@@ -92,12 +94,50 @@ export class AuthService {
     private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(OnboardingEvent)
     private readonly onboardingEventRepository: Repository<OnboardingEvent>,
+    @InjectRepository(AdminNotification)
+    private readonly adminNotificationRepository: Repository<AdminNotification>,
     private readonly invitationService: InvitationService,
+    private readonly pusherService: PusherService,
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
     private readonly mailDelivery: MailDeliveryService,
     private readonly configService: ConfigService,
   ) {}
+
+  private async notifyUserRegistered(user: User): Promise<void> {
+    const display = user.name?.trim() || user.email;
+    try {
+      const saved = await this.adminNotificationRepository.save(
+        this.adminNotificationRepository.create({
+          type: 'user',
+          eventKey: 'user_registered',
+          title: 'User joined platform',
+          body: `${display} signed up.`,
+          severity: 'info',
+          actionUrl: `/admin/users/${user.id}`,
+          resourceType: 'user',
+          resourceId: String(user.id),
+          actorUserId: user.id,
+          idempotencyKey: `user_registered:${user.id}`,
+          metadata: { email: user.email, name: user.name ?? null },
+          source: 'user',
+        }),
+      );
+      await this.pusherService.notifyAdminNotificationCreated(saved);
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      if (code !== '23505') {
+        this.logger.warn(
+          `Failed to write admin notification for user ${user.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
 
   private async trackOnboardingEvent(input: {
     userId: number | null;
@@ -412,6 +452,7 @@ export class AuthService {
         eventName: 'signup_completed',
         idempotencyKey: `signup_completed:${savedInvitedUser.id}`,
       });
+      await this.notifyUserRegistered(savedInvitedUser);
       // First-time password on shell/invite row = new acquisition for Meta.
       return {
         message: 'User successfully registered.',
@@ -436,6 +477,7 @@ export class AuthService {
       eventName: 'signup_completed',
       idempotencyKey: `signup_completed:${savedUser.id}`,
     });
+    await this.notifyUserRegistered(savedUser);
 
     return {
       message: 'User successfully registered.',
@@ -785,6 +827,8 @@ export class AuthService {
     if (!withRole) {
       throw new InternalServerErrorException('Failed to load new Google user.');
     }
+
+    await this.notifyUserRegistered(withRole);
 
     return { user: withRole, isNewUser: true };
   }

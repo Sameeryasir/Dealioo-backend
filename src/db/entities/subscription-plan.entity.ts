@@ -76,6 +76,9 @@ export class SubscriptionPlan {
   @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 
-  @OneToMany(() => require('./user-subscription.entity').UserSubscription, (subscription) => subscription.plan)
+  @OneToMany(
+    () => require('./user-subscription.entity').UserSubscription,
+    (subscription: UserSubscription) => subscription.plan,
+  )
   userSubscriptions: UserSubscription[];
 }

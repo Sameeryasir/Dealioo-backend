@@ -9,9 +9,12 @@ export class Role {
   @Column({ type: 'varchar', unique: true })
   name: string;
 
-  @OneToMany(() => require('./user.entity').User, (user) => user.role)
+  @OneToMany(() => require('./user.entity').User, (user: User) => user.role)
   users: User[];
 
-  @OneToMany(() => require('./business-member.entity').BusinessMember, (member) => member.memberRole)
+  @OneToMany(
+    () => require('./business-member.entity').BusinessMember,
+    (member: BusinessMember) => member.memberRole,
+  )
   businessMembers: BusinessMember[];
 }
