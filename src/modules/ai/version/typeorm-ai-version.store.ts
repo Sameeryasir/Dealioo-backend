@@ -63,7 +63,7 @@ export class TypeOrmAiVersionStore implements AiVersionStore {
       return;
     }
 
-    const versionNumber = funnel?.contentRevision ?? 1;
+    const versionNumber = await this.nextFunnelVersionNumber(version.funnelId);
 
     await this.funnelVersionRepository.save(
       this.funnelVersionRepository.create({
@@ -76,5 +76,36 @@ export class TypeOrmAiVersionStore implements AiVersionStore {
         createdById: null,
       }),
     );
+  }
+
+  private async nextFunnelVersionNumber(funnelId: number): Promise<number> {
+    const latest = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      select: ['id', 'contentRevision'],
+    });
+    const maxExisting = await this.getMaxVersionNumber(funnelId);
+    const versionNumber = Math.max(
+      latest?.contentRevision ?? 0,
+      maxExisting + 1,
+    );
+
+    if (latest != null && versionNumber > (latest.contentRevision ?? 0)) {
+      await this.funnelRepository.update(funnelId, {
+        contentRevision: versionNumber,
+      });
+    }
+
+    return versionNumber;
+  }
+
+  private async getMaxVersionNumber(funnelId: number): Promise<number> {
+    const result = await this.funnelVersionRepository
+      .createQueryBuilder('version')
+      .select('MAX(version.versionNumber)', 'max')
+      .where('version.funnelId = :funnelId', { funnelId })
+      .getRawOne<{ max: string | null }>();
+
+    const max = result?.max != null ? Number(result.max) : 0;
+    return Number.isFinite(max) ? max : 0;
   }
 }

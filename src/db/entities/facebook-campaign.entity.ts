@@ -18,6 +18,9 @@ export class FacebookCampaign {
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
+  @Column({ name: 'draft_id', type: 'uuid', nullable: true })
+  draftId: string | null;
+
   @Column({ name: 'ad_account_id', type: 'varchar', length: 64 })
   adAccountId: string;
 

@@ -123,6 +123,9 @@ export class FacebookController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('insights') insightsRaw?: string,
     @Query('refresh') refreshRaw?: string,
+    @Query('page') pageRaw?: string,
+    @Query('pageSize') pageSizeRaw?: string,
+    @Query('q') queryRaw?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -143,10 +146,15 @@ export class FacebookController {
     const bypassCache =
       refreshRaw?.trim().toLowerCase() === '1' ||
       refreshRaw?.trim().toLowerCase() === 'true';
+    const page = Number.parseInt(pageRaw ?? '', 10);
+    const pageSize = Number.parseInt(pageSizeRaw ?? '', 10);
 
     return this.facebookService.getAdCampaignStats(business, {
       includeInsights,
       bypassCache,
+      page: Number.isFinite(page) && page > 0 ? page : 1,
+      pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 4,
+      query: queryRaw?.trim() || undefined,
     });
   }
 

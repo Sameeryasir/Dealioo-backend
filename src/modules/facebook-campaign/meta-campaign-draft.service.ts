@@ -565,6 +565,8 @@ export class MetaCampaignDraftService {
     if (draft.status !== 'draft') {
       draft.status = 'draft';
       draft.errorMessage = null;
+      draft.publishStatus = null;
+      await this.draftRepository.save(draft);
     }
 
     return draft;

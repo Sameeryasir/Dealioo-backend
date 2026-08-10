@@ -278,6 +278,7 @@ export function mergeBusinessOrderRowsByCheckout<
     funnelId: number;
     campaignId: number;
     campaignName: string;
+    campaignImageUrl?: string | null;
     customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
     customerEmail?: string | null;
     amount?: number | null;
@@ -338,6 +339,7 @@ export function mergeBusinessOrderRowsByCheckout<
       primary.paymentCollectedAt ?? null;
     const campaignNames: string[] = [];
     const seenCampaignNames = new Set<string>();
+    let campaignImageUrl: string | null = primary.campaignImageUrl?.trim() || null;
 
     for (const row of sorted) {
       totalCampaignCents += businessOrderCampaignPriceCents(row);
@@ -366,6 +368,12 @@ export function mergeBusinessOrderRowsByCheckout<
         seenCampaignNames.add(campaignName.toLowerCase());
         campaignNames.push(campaignName);
       }
+      if (!campaignImageUrl) {
+        const imageUrl = row.campaignImageUrl?.trim();
+        if (imageUrl) {
+          campaignImageUrl = imageUrl;
+        }
+      }
     }
 
     merged.push({
@@ -373,6 +381,7 @@ export function mergeBusinessOrderRowsByCheckout<
       rowKey: groupKey,
       createdAt,
       campaignName: campaignNames.join(', ') || primary.campaignName,
+      campaignImageUrl,
       amount: totalCampaignCents > 0 ? totalCampaignCents : primary.amount,
       paymentStatus,
       orderStatus,
@@ -400,6 +409,7 @@ export function mergeBusinessOrderRowsByCustomer<
     funnelId: number;
     campaignId: number;
     campaignName: string;
+    campaignImageUrl?: string | null;
     customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
     customerEmail?: string | null;
     amount?: number | null;

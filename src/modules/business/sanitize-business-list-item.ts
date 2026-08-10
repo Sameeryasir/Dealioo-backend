@@ -27,15 +27,26 @@ export type PublicBusinessListItem = {
 export function sanitizeBusinessListItem(
   business: Business,
 ): PublicBusinessListItem {
+  // --- Integration flags (IDs alone are not “connected”) ---
+  // Stripe: OAuth callback is the only writer of stripeAccountId. No charges_enabled
+  // column exists yet, so a stored id means Connect finished — never infer this on FE.
   const stripeConnected = Boolean(business.stripeAccountId?.trim());
+  const metaStatus = (business.metaConnectionStatus ?? '').trim().toUpperCase();
+  const metaReadyStatus =
+    metaStatus === 'AD_ACCOUNT_SELECTED' ||
+    metaStatus === 'ACTIVE' ||
+    metaStatus === 'SYNCING';
+  // Meta Ads: user + token + selected ad account + a ready status. User id alone ≠ connected.
   const metaConnected = Boolean(
-    business.metaUserId?.trim() ||
-      business.metaAccessToken?.trim() ||
-      business.metaConnectionStatus?.trim() === 'ACTIVE',
+    business.metaUserId?.trim() &&
+      business.metaAccessToken?.trim() &&
+      business.metaAdAccountId?.trim() &&
+      metaReadyStatus,
   );
   const twilioPhoneNumber = business.twilioPhoneNumber?.trim() || null;
+  // Twilio: SID and a live number must both be present.
   const twilioConnected = Boolean(
-    business.twilioPhoneSid?.trim() || twilioPhoneNumber,
+    business.twilioPhoneSid?.trim() && twilioPhoneNumber,
   );
 
   return {

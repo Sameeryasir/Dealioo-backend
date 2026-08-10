@@ -396,6 +396,7 @@ export class MetaPublishService {
     let metaCampaignId: string | null = draft.metaCampaignId;
     let metaAdsetId: string | null = draft.metaAdsetId;
     let metaCreativeId: string | null = draft.metaCreativeId;
+    let metaAdId: string | null = draft.metaAdId;
 
     const tracking = await this.findOrCreateTrackingRow(
       userId,
@@ -436,8 +437,6 @@ export class MetaPublishService {
         await this.completeStep(draft, jobId, 'adset', metaAdsetId);
       }
 
-      let metaAdId: string | null = draft.metaAdId;
-
       if (!metaCreativeId) {
         await this.beginStep(draft, jobId, 'media', userId, businessId);
         logMetaPublishStep('media', 'start', {
@@ -464,6 +463,12 @@ export class MetaPublishService {
         logMetaPublishStep('ad', 'start', { metaAdsetId, metaCreativeId });
         metaAdId = await this.createAd(ctx, metaAdsetId!, metaCreativeId!);
         this.logger.log(`Meta ad created: ${metaAdId}`);
+        await this.updatePartialState(draft.id, tracking.id, {
+          metaCampaignId,
+          metaAdsetId,
+          metaCreativeId,
+          metaAdId,
+        });
         draft.metaAdId = metaAdId;
         await this.completeStep(draft, jobId, 'ad', metaAdId);
       }
@@ -548,7 +553,7 @@ export class MetaPublishService {
         tracking.id,
         jobId,
         err,
-        { metaCampaignId, metaAdsetId, metaCreativeId },
+        { metaCampaignId, metaAdsetId, metaCreativeId, metaAdId },
       );
     }
   }
@@ -855,6 +860,32 @@ export class MetaPublishService {
     creative: AdCreativeStepDataDto,
     draft: MetaCampaignDraft,
   ): Promise<FacebookCampaign> {
+    const byDraft = await this.facebookCampaignRepository.findOne({
+      where: { businessId, draftId: draft.id },
+    });
+    if (byDraft) {
+      await this.facebookCampaignRepository.update(byDraft.id, {
+        status: 'PENDING',
+        errorMessage: null,
+        campaignName: campaign.name,
+        objective: campaign.objective,
+        budget: String(adSet.dailyBudget ?? adSet.lifetimeBudget ?? 0),
+        startTime: new Date(adSet.startDate),
+        endTime: adSet.endDate ? new Date(adSet.endDate) : null,
+        facebookPageId: creative.facebookPageId,
+        instagramActorId: creative.instagramActorId?.trim() || null,
+        metaCampaignId: draft.metaCampaignId ?? byDraft.metaCampaignId,
+        metaAdsetId: draft.metaAdsetId ?? byDraft.metaAdsetId,
+        metaCreativeId: draft.metaCreativeId ?? byDraft.metaCreativeId,
+        metaAdId: draft.metaAdId ?? byDraft.metaAdId,
+      });
+      const refreshed = await this.facebookCampaignRepository.findOne({
+        where: { id: byDraft.id },
+      });
+      if (refreshed) return refreshed;
+      return byDraft;
+    }
+
     if (draft.metaCampaignId) {
       const [existing] = await this.facebookCampaignRepository.find({
         where: {
@@ -867,6 +898,7 @@ export class MetaPublishService {
 
       if (existing) {
         await this.facebookCampaignRepository.update(existing.id, {
+          draftId: draft.id,
           status: 'PENDING',
           errorMessage: null,
         });
@@ -877,6 +909,7 @@ export class MetaPublishService {
     return this.facebookCampaignRepository.save({
       userId,
       businessId,
+      draftId: draft.id,
       adAccountId,
       campaignName: campaign.name,
       objective: campaign.objective,
@@ -890,6 +923,7 @@ export class MetaPublishService {
       metaCampaignId: draft.metaCampaignId,
       metaAdsetId: draft.metaAdsetId,
       metaCreativeId: draft.metaCreativeId,
+      metaAdId: draft.metaAdId,
     });
   }
 
@@ -903,20 +937,21 @@ export class MetaPublishService {
       metaAdId?: string | null;
     },
   ): Promise<void> {
+    const trackingUpdate: Partial<FacebookCampaign> = {};
     if (partial.metaCampaignId) {
-      await this.facebookCampaignRepository.update(trackingId, {
-        metaCampaignId: partial.metaCampaignId,
-      });
+      trackingUpdate.metaCampaignId = partial.metaCampaignId;
     }
     if (partial.metaAdsetId) {
-      await this.facebookCampaignRepository.update(trackingId, {
-        metaAdsetId: partial.metaAdsetId,
-      });
+      trackingUpdate.metaAdsetId = partial.metaAdsetId;
     }
     if (partial.metaCreativeId) {
-      await this.facebookCampaignRepository.update(trackingId, {
-        metaCreativeId: partial.metaCreativeId,
-      });
+      trackingUpdate.metaCreativeId = partial.metaCreativeId;
+    }
+    if (partial.metaAdId) {
+      trackingUpdate.metaAdId = partial.metaAdId;
+    }
+    if (Object.keys(trackingUpdate).length > 0) {
+      await this.facebookCampaignRepository.update(trackingId, trackingUpdate);
     }
     await this.draftRepository.update(draftId, {
       metaCampaignId: partial.metaCampaignId ?? undefined,
@@ -937,6 +972,7 @@ export class MetaPublishService {
       metaCampaignId: string | null;
       metaAdsetId: string | null;
       metaCreativeId: string | null;
+      metaAdId: string | null;
     },
   ): Promise<never> {
     const step: MetaCreationStep =
@@ -954,6 +990,7 @@ export class MetaPublishService {
       metaCampaignId: partial.metaCampaignId,
       metaAdsetId: partial.metaAdsetId,
       metaCreativeId: partial.metaCreativeId,
+      metaAdId: partial.metaAdId,
       status: 'FAILED',
       errorMessage: userMessage,
     });
@@ -962,6 +999,7 @@ export class MetaPublishService {
       metaCampaignId: partial.metaCampaignId,
       metaAdsetId: partial.metaAdsetId,
       metaCreativeId: partial.metaCreativeId,
+      metaAdId: partial.metaAdId,
       status: 'failed',
       publishStatus: 'FAILED',
       errorMessage: userMessage,

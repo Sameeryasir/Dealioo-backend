@@ -103,4 +103,38 @@ describe('sanitizeBusinessListItem', () => {
     expect(publicItem.twilioConnected).toBe(false);
     expect(publicItem.twilioPhoneNumber).toBeNull();
   });
+
+  it('does not treat a Meta user id or Twilio number alone as connected', () => {
+    const business = {
+      id: 2,
+      name: 'Partial',
+      slug: 'partial',
+      description: null,
+      logoUrl: null,
+      websiteUrl: null,
+      email: null,
+      phoneNumber: null,
+      city: null,
+      state: null,
+      country: null,
+      postalCode: null,
+      branchCount: 0,
+      onboardingCompleted: true,
+      onboardingCompletedAt: new Date(),
+      stripeAccountId: null,
+      metaUserId: '122107064775357245',
+      metaAccessToken: null,
+      metaAdAccountId: null,
+      metaConnectionStatus: 'AUTHENTICATED',
+      twilioPhoneSid: null,
+      twilioPhoneNumber: '+15551234567',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as Business;
+
+    const publicItem = sanitizeBusinessListItem(business);
+    expect(publicItem.metaConnected).toBe(false);
+    expect(publicItem.twilioConnected).toBe(false);
+    expect(publicItem.twilioPhoneNumber).toBe('+15551234567');
+  });
 });

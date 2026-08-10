@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { MetaAdCampaignStatsSnapshot } from '../../db/entities/meta-ad-campaign-stats-snapshot.entity';
 import {
   MetaOAuthSession,
   MetaOAuthSessionStatus,
@@ -16,7 +17,16 @@ import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
-import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto';
+import {
+  FacebookAdBreakdownRowDto,
+  FacebookAdCampaignDto,
+  FacebookAdCampaignInsightDto,
+  FacebookAdCampaignPaginationDto,
+  FacebookAdCampaignStatsDto,
+  FacebookAdCampaignStatsSummaryDto,
+  FacebookAdDailyInsightDto,
+  FacebookAdInsightBreakdownsDto,
+} from './dto/facebook-ad-campaign-stats.dto';
 import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
@@ -94,27 +104,65 @@ type FacebookCampaignsResponse = {
 const META_AD_STATS_DATE_PRESET = 'last_30d';
 const META_CAMPAIGN_FIELDS =
   'id,name,status,effective_status,daily_budget';
+const META_CAMPAIGN_INSIGHT_FIELDS =
+  'campaign_id,spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type';
+const META_SINGLE_CAMPAIGN_INSIGHT_FIELDS =
+  'spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type';
 const GRAPH_FETCH_TIMEOUT_MS = 25_000;
 const GRAPH_FETCH_RETRIES = 2;
-const CAMPAIGN_STATS_CACHE_TTL_MS = 2 * 60_000;
+const CAMPAIGN_STATS_DB_TTL_MS = 10 * 60_000;
 const INSIGHTS_FETCH_CONCURRENCY = 4;
+const DEFAULT_CAMPAIGN_PAGE_SIZE = 4;
+const MAX_CAMPAIGN_PAGE_SIZE = 50;
+const PRIMARY_ACTION_PRIORITY = [
+  'purchase',
+  'omni_purchase',
+  'lead',
+  'complete_registration',
+  'submit_application',
+  'contact',
+  'schedule',
+  'start_trial',
+  'subscribe',
+  'add_to_cart',
+  'initiate_checkout',
+  'link_click',
+] as const;
 
-type CampaignStatsCacheEntry = {
-  at: number;
-  includeInsights: boolean;
-  value: FacebookAdCampaignStatsDto;
+type MetaInsightActionRow = {
+  action_type?: string;
+  value?: string;
+};
+
+type MetaCampaignInsightRow = {
+  campaign_id?: string;
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  frequency?: string;
+  actions?: MetaInsightActionRow[];
+  cost_per_action_type?: MetaInsightActionRow[];
 };
 
 @Injectable()
 export class FacebookService {
   private readonly logger = new Logger(FacebookService.name);
-  private readonly campaignStatsCache = new Map<string, CampaignStatsCacheEntry>();
+  private readonly campaignStatsRefreshInFlight = new Map<
+    string,
+    Promise<FacebookAdCampaignStatsDto>
+  >();
 
   constructor(
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(MetaOAuthSession)
     private readonly metaOAuthSessionRepository: Repository<MetaOAuthSession>,
+    @InjectRepository(MetaAdCampaignStatsSnapshot)
+    private readonly campaignStatsSnapshotRepository: Repository<MetaAdCampaignStatsSnapshot>,
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly businessAccessService: BusinessAccessService,
@@ -372,7 +420,13 @@ export class FacebookService {
 
   async getAdCampaignStats(
     business: Business,
-    options?: { includeInsights?: boolean; bypassCache?: boolean },
+    options?: {
+      includeInsights?: boolean;
+      bypassCache?: boolean;
+      page?: number;
+      pageSize?: number;
+      query?: string;
+    },
   ): Promise<FacebookAdCampaignStatsDto> {
     const includeInsights = options?.includeInsights !== false;
     const bypassCache = options?.bypassCache === true;
@@ -382,31 +436,360 @@ export class FacebookService {
     const adAccount = this.requireBusinessAdAccount(business);
     const cacheKey = `${business.id}:${adAccount.id}`;
 
+    let full: FacebookAdCampaignStatsDto;
+
     if (!bypassCache) {
-      const cached = this.campaignStatsCache.get(cacheKey);
-      if (
-        cached &&
-        Date.now() - cached.at < CAMPAIGN_STATS_CACHE_TTL_MS &&
-        (!includeInsights || cached.includeInsights)
-      ) {
-        if (includeInsights || !cached.includeInsights) {
-          return cached.value;
+      const snapshot = await this.findCampaignStatsSnapshot(
+        business.id,
+        adAccount.id,
+      );
+      if (snapshot && (!includeInsights || snapshot.includeInsights)) {
+        const payload = snapshot.payload as unknown as FacebookAdCampaignStatsDto;
+        const missingCampaignDaily =
+          includeInsights &&
+          Array.isArray(payload.campaigns) &&
+          payload.campaigns.some(
+            (c) => !Array.isArray((c as FacebookAdCampaignDto).dailyInsights),
+          );
+
+        if (missingCampaignDaily) {
+          this.logger.log(
+            `Meta campaign stats cache missing dailyInsights for business ${business.id}; refreshing from Meta`,
+          );
+        } else {
+          const ageMs = Date.now() - snapshot.fetchedAt.getTime();
+          const isStale = ageMs >= CAMPAIGN_STATS_DB_TTL_MS;
+          if (isStale) {
+            this.scheduleCampaignStatsRefresh(
+              cacheKey,
+              business,
+              adAccount.id,
+              accessToken,
+              true,
+            );
+          }
+          full = this.statsDtoFromSnapshot(snapshot, includeInsights, {
+            fromCache: true,
+            isStale,
+          });
+          return this.withCampaignListView(full, options);
         }
-        return {
-          ...cached.value,
-          campaigns: cached.value.campaigns.map((c) => ({
-            ...c,
-            insights: null,
-          })),
-        };
       }
     }
 
-    const accountMeta = await this.fetchAdAccountMeta(adAccount.id, accessToken);
+    if (bypassCache) {
+      const inFlight = this.campaignStatsRefreshInFlight.get(cacheKey);
+      if (inFlight) {
+        full = this.withInsightsPreference(await inFlight, includeInsights);
+        return this.withCampaignListView(full, options);
+      }
+    }
+
+    full = await this.refreshCampaignStatsFromMeta(
+      cacheKey,
+      business,
+      adAccount.id,
+      accessToken,
+      includeInsights,
+    );
+    return this.withCampaignListView(full, options);
+  }
+
+  invalidateCampaignStatsCache(businessId: number): void {
+    const prefix = `${businessId}:`;
+    for (const key of this.campaignStatsRefreshInFlight.keys()) {
+      if (key.startsWith(prefix)) {
+        this.campaignStatsRefreshInFlight.delete(key);
+      }
+    }
+    void this.campaignStatsSnapshotRepository
+      .delete({ businessId })
+      .catch((err) => {
+        this.logger.warn(
+          `Failed to clear Meta campaign stats snapshots for business ${businessId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+  }
+
+  private scheduleCampaignStatsRefresh(
+    cacheKey: string,
+    business: Business,
+    adAccountId: string,
+    accessToken: string,
+    includeInsights: boolean,
+  ): void {
+    if (this.campaignStatsRefreshInFlight.has(cacheKey)) return;
+    void this.refreshCampaignStatsFromMeta(
+      cacheKey,
+      business,
+      adAccountId,
+      accessToken,
+      includeInsights,
+    ).catch((err) => {
+      this.logger.warn(
+        `Background Meta campaign stats refresh failed for ${cacheKey}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
+
+  private async refreshCampaignStatsFromMeta(
+    cacheKey: string,
+    business: Business,
+    adAccountId: string,
+    accessToken: string,
+    includeInsights: boolean,
+  ): Promise<FacebookAdCampaignStatsDto> {
+    const existing = this.campaignStatsRefreshInFlight.get(cacheKey);
+    if (existing) {
+      const fresh = await existing;
+      return this.withInsightsPreference(fresh, includeInsights);
+    }
+
+    const promise = this.fetchAndPersistCampaignStats(
+      business,
+      adAccountId,
+      accessToken,
+      includeInsights,
+    ).finally(() => {
+      if (this.campaignStatsRefreshInFlight.get(cacheKey) === promise) {
+        this.campaignStatsRefreshInFlight.delete(cacheKey);
+      }
+    });
+    this.campaignStatsRefreshInFlight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async findCampaignStatsSnapshot(
+    businessId: number,
+    adAccountId: string,
+  ): Promise<MetaAdCampaignStatsSnapshot | null> {
+    try {
+      return await this.campaignStatsSnapshotRepository.findOne({
+        where: {
+          businessId,
+          adAccountId,
+          datePreset: META_AD_STATS_DATE_PRESET,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Meta campaign stats snapshot read failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private statsDtoFromSnapshot(
+    snapshot: MetaAdCampaignStatsSnapshot,
+    includeInsights: boolean,
+    flags: { fromCache: boolean; isStale: boolean },
+  ): FacebookAdCampaignStatsDto {
+    const payload = snapshot.payload as unknown as FacebookAdCampaignStatsDto;
+    const base: FacebookAdCampaignStatsDto = {
+      adAccountId: payload.adAccountId ?? snapshot.adAccountId,
+      adAccountName: payload.adAccountName ?? null,
+      currency: payload.currency ?? null,
+      datePreset: payload.datePreset ?? snapshot.datePreset,
+      campaigns: Array.isArray(payload.campaigns) ? payload.campaigns : [],
+      dailyInsights: Array.isArray(payload.dailyInsights)
+        ? payload.dailyInsights
+        : [],
+      breakdowns: payload.breakdowns ?? null,
+      fetchedAt: snapshot.fetchedAt.toISOString(),
+      fromCache: flags.fromCache,
+      isStale: flags.isStale,
+      summary: null,
+      pagination: null,
+    };
+    return this.withInsightsPreference(base, includeInsights);
+  }
+
+  private withCampaignListView(
+    stats: FacebookAdCampaignStatsDto,
+    options?: { page?: number; pageSize?: number; query?: string },
+  ): FacebookAdCampaignStatsDto {
+    const pageSize = Math.min(
+      MAX_CAMPAIGN_PAGE_SIZE,
+      Math.max(1, options?.pageSize ?? DEFAULT_CAMPAIGN_PAGE_SIZE),
+    );
+    const query = options?.query?.trim() || null;
+    const q = query?.toLowerCase() ?? '';
+
+    const filtered = q
+      ? stats.campaigns.filter(
+          (c) =>
+            c.name.toLowerCase().includes(q) ||
+            c.id.toLowerCase().includes(q),
+        )
+      : stats.campaigns;
+
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(
+      totalPages,
+      Math.max(1, options?.page ?? 1),
+    );
+    const start = (page - 1) * pageSize;
+
+    const pagination: FacebookAdCampaignPaginationDto = {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      query,
+    };
+
+    return {
+      ...stats,
+      campaigns: filtered.slice(start, start + pageSize),
+      summary: this.buildCampaignStatsSummary(stats.campaigns),
+      pagination,
+    };
+  }
+
+  private buildCampaignStatsSummary(
+    campaigns: FacebookAdCampaignDto[],
+  ): FacebookAdCampaignStatsSummaryDto {
+    const parse = (value: string | null | undefined, allowFloat = false) => {
+      if (value == null || value === '') return 0;
+      const n = allowFloat ? Number(value) : Number.parseInt(value, 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    let spend = 0;
+    let impressions = 0;
+    let reach = 0;
+    let clicks = 0;
+    let activeCampaigns = 0;
+    let ctrWeight = 0;
+    let ctrSum = 0;
+    let cpcWeight = 0;
+    let cpcSum = 0;
+    let cpmWeight = 0;
+    let cpmSum = 0;
+    let freqWeight = 0;
+    let freqSum = 0;
+    const actionTotals = new Map<string, number>();
+    const actionCosts = new Map<string, number>();
+
+    for (const campaign of campaigns) {
+      if (campaign.effectiveStatus?.toUpperCase() === 'ACTIVE') {
+        activeCampaigns += 1;
+      }
+      const insights = campaign.insights;
+      if (!insights) continue;
+
+      const campSpend = parse(insights.spend, true);
+      const campImpr = parse(insights.impressions);
+      const campClicks = parse(insights.clicks);
+      spend += campSpend;
+      impressions += campImpr;
+      reach += parse(insights.reach);
+      clicks += campClicks;
+
+      const ctr = parse(insights.ctr, true);
+      if (campImpr > 0 && ctr > 0) {
+        ctrSum += ctr * campImpr;
+        ctrWeight += campImpr;
+      }
+      const cpc = parse(insights.cpc, true);
+      if (campClicks > 0 && cpc > 0) {
+        cpcSum += cpc * campClicks;
+        cpcWeight += campClicks;
+      }
+      const cpm = parse(insights.cpm, true);
+      if (campImpr > 0 && cpm > 0) {
+        cpmSum += cpm * campImpr;
+        cpmWeight += campImpr;
+      }
+      const frequency = parse(insights.frequency, true);
+      if (campImpr > 0 && frequency > 0) {
+        freqSum += frequency * campImpr;
+        freqWeight += campImpr;
+      }
+
+      for (const action of insights.actions ?? []) {
+        const key = action.actionType;
+        actionTotals.set(
+          key,
+          (actionTotals.get(key) ?? 0) + parse(action.value),
+        );
+      }
+      for (const cost of insights.costPerActionType ?? []) {
+        const n = parse(cost.value, true);
+        if (n > 0) actionCosts.set(cost.actionType, n);
+      }
+    }
+
+    let primaryActionType: string | null = null;
+    let primaryActionValue: string | null = null;
+    for (const preferred of PRIMARY_ACTION_PRIORITY) {
+      if (actionTotals.has(preferred)) {
+        primaryActionType = preferred;
+        primaryActionValue = String(actionTotals.get(preferred));
+        break;
+      }
+    }
+    if (!primaryActionType && actionTotals.size > 0) {
+      const [type, value] = [...actionTotals.entries()][0]!;
+      primaryActionType = type;
+      primaryActionValue = String(value);
+    }
+
+    return {
+      spend,
+      impressions,
+      reach,
+      clicks,
+      activeCampaigns,
+      totalCampaigns: campaigns.length,
+      ctr: ctrWeight > 0 ? ctrSum / ctrWeight : null,
+      cpc: cpcWeight > 0 ? cpcSum / cpcWeight : null,
+      cpm: cpmWeight > 0 ? cpmSum / cpmWeight : null,
+      frequency: freqWeight > 0 ? freqSum / freqWeight : null,
+      primaryActionType,
+      primaryActionValue,
+      costPerResult:
+        primaryActionType != null
+          ? (actionCosts.get(primaryActionType) ?? null)
+          : null,
+    };
+  }
+
+  private withInsightsPreference(
+    stats: FacebookAdCampaignStatsDto,
+    includeInsights: boolean,
+  ): FacebookAdCampaignStatsDto {
+    if (includeInsights) return stats;
+    return {
+      ...stats,
+      campaigns: stats.campaigns.map((c) => ({
+        ...c,
+        insights: null,
+        dailyInsights: null,
+      })),
+      dailyInsights: [],
+      breakdowns: null,
+    };
+  }
+
+  private async fetchAndPersistCampaignStats(
+    business: Business,
+    adAccountId: string,
+    accessToken: string,
+    includeInsights: boolean,
+  ): Promise<FacebookAdCampaignStatsDto> {
+    const accountMeta = await this.fetchAdAccountMeta(adAccountId, accessToken);
 
     const campaignsResponse =
       await this.graphGetWithToken<FacebookCampaignsResponse>(
-        `/${adAccount.id}/campaigns`,
+        `/${adAccountId}/campaigns`,
         accessToken,
         {
           fields: META_CAMPAIGN_FIELDS,
@@ -431,13 +814,44 @@ export class FacebookService {
         status: row.status ?? null,
         effectiveStatus: row.effective_status ?? null,
         dailyBudget: row.daily_budget ?? null,
+        imageUrl: null,
         insights: null,
+        dailyInsights: null,
       }),
     );
 
+    if (campaigns.length > 0) {
+      const thumbnailsByCampaignId =
+        await this.fetchAccountCampaignThumbnails(adAccountId, accessToken);
+      campaigns = campaigns.map((c) => ({
+        ...c,
+        imageUrl: thumbnailsByCampaignId.get(c.id) ?? null,
+      }));
+
+      const missingThumbs = campaigns.filter((c) => !c.imageUrl);
+      if (missingThumbs.length > 0) {
+        const filled = await this.mapWithConcurrency(
+          missingThumbs,
+          INSIGHTS_FETCH_CONCURRENCY,
+          async (campaign) => {
+            const imageUrl = await this.fetchCampaignThumbnail(
+              campaign.id,
+              accessToken,
+            );
+            return { id: campaign.id, imageUrl };
+          },
+        );
+        const byId = new Map(filled.map((row) => [row.id, row.imageUrl]));
+        campaigns = campaigns.map((c) => ({
+          ...c,
+          imageUrl: c.imageUrl ?? byId.get(c.id) ?? null,
+        }));
+      }
+    }
+
     if (includeInsights && campaigns.length > 0) {
       const insightsByCampaignId = await this.fetchAccountCampaignInsights(
-        adAccount.id,
+        adAccountId,
         accessToken,
       );
 
@@ -467,81 +881,338 @@ export class FacebookService {
       }
     }
 
+    let dailyInsights: FacebookAdDailyInsightDto[] = [];
+    let breakdowns: FacebookAdInsightBreakdownsDto | null = null;
+
+    if (includeInsights) {
+      const [daily, age, device, placement, country, dailyByCampaign] =
+        await Promise.all([
+          this.fetchAccountDailyInsights(adAccountId, accessToken),
+          this.fetchAccountBreakdown(adAccountId, accessToken, 'age'),
+          this.fetchAccountBreakdown(
+            adAccountId,
+            accessToken,
+            'impression_device',
+          ),
+          this.fetchAccountBreakdown(
+            adAccountId,
+            accessToken,
+            'publisher_platform',
+          ),
+          this.fetchAccountBreakdown(adAccountId, accessToken, 'country'),
+          this.fetchAccountCampaignDailyInsights(adAccountId, accessToken),
+        ]);
+      dailyInsights = daily;
+      breakdowns = { age, device, placement, country };
+      campaigns = campaigns.map((c) => ({
+        ...c,
+        dailyInsights: dailyByCampaign.get(c.id) ?? [],
+      }));
+    }
+
+    const fetchedAt = new Date();
     const result: FacebookAdCampaignStatsDto = {
-      adAccountId: adAccount.id,
+      adAccountId,
       adAccountName: accountMeta.name,
       currency: accountMeta.currency,
       datePreset: META_AD_STATS_DATE_PRESET,
       campaigns,
+      dailyInsights,
+      breakdowns,
+      fetchedAt: fetchedAt.toISOString(),
+      fromCache: false,
+      isStale: false,
+      summary: null,
+      pagination: null,
     };
 
-    this.campaignStatsCache.set(cacheKey, {
-      at: Date.now(),
+    await this.upsertCampaignStatsSnapshot(
+      business.id,
+      adAccountId,
       includeInsights,
-      value: result,
-    });
+      result,
+      fetchedAt,
+    );
 
     return result;
   }
 
-  invalidateCampaignStatsCache(businessId: number): void {
-    const prefix = `${businessId}:`;
-    for (const key of this.campaignStatsCache.keys()) {
-      if (key.startsWith(prefix)) {
-        this.campaignStatsCache.delete(key);
+  private async upsertCampaignStatsSnapshot(
+    businessId: number,
+    adAccountId: string,
+    includeInsights: boolean,
+    result: FacebookAdCampaignStatsDto,
+    fetchedAt: Date,
+  ): Promise<void> {
+    try {
+      const existing = await this.findCampaignStatsSnapshot(
+        businessId,
+        adAccountId,
+      );
+      const payload = {
+        adAccountId: result.adAccountId,
+        adAccountName: result.adAccountName,
+        currency: result.currency,
+        datePreset: result.datePreset,
+        campaigns: result.campaigns,
+        dailyInsights: result.dailyInsights,
+        breakdowns: result.breakdowns,
+      } as unknown as Record<string, unknown>;
+
+      if (existing) {
+        existing.includeInsights = includeInsights || existing.includeInsights;
+        existing.payload = payload;
+        existing.fetchedAt = fetchedAt;
+        await this.campaignStatsSnapshotRepository.save(existing);
+        return;
       }
+
+      await this.campaignStatsSnapshotRepository.save(
+        this.campaignStatsSnapshotRepository.create({
+          businessId,
+          adAccountId,
+          datePreset: META_AD_STATS_DATE_PRESET,
+          includeInsights,
+          payload,
+          fetchedAt,
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Meta campaign stats snapshot save failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private async fetchAccountDailyInsights(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<FacebookAdDailyInsightDto[]> {
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          date_start?: string;
+          spend?: string;
+          impressions?: string;
+          clicks?: string;
+        }>;
+      }>(`/${adAccountId}/insights`, accessToken, {
+        date_preset: META_AD_STATS_DATE_PRESET,
+        time_increment: '1',
+        fields: 'spend,impressions,clicks,date_start',
+        limit: '50',
+      });
+
+      return (response.data ?? [])
+        .map((row) => {
+          const date = row.date_start?.trim();
+          if (!date) return null;
+          return {
+            date,
+            spend: row.spend ?? null,
+            impressions: row.impressions ?? null,
+            clicks: row.clicks ?? null,
+          };
+        })
+        .filter((row): row is FacebookAdDailyInsightDto => row != null);
+    } catch (err) {
+      this.logger.warn(
+        `Account daily insights skipped for ${adAccountId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  private async fetchAccountCampaignDailyInsights(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<Map<string, FacebookAdDailyInsightDto[]>> {
+    const out = new Map<string, FacebookAdDailyInsightDto[]>();
+
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          campaign_id?: string;
+          date_start?: string;
+          spend?: string;
+          impressions?: string;
+          clicks?: string;
+        }>;
+      }>(`/${adAccountId}/insights`, accessToken, {
+        level: 'campaign',
+        date_preset: META_AD_STATS_DATE_PRESET,
+        time_increment: '1',
+        fields: 'campaign_id,spend,impressions,clicks,date_start',
+        limit: '500',
+      });
+
+      for (const row of response.data ?? []) {
+        const campaignId = row.campaign_id?.trim();
+        const date = row.date_start?.trim();
+        if (!campaignId || !date) continue;
+        const point: FacebookAdDailyInsightDto = {
+          date,
+          spend: row.spend ?? null,
+          impressions: row.impressions ?? null,
+          clicks: row.clicks ?? null,
+        };
+        const list = out.get(campaignId) ?? [];
+        list.push(point);
+        out.set(campaignId, list);
+      }
+
+      for (const [campaignId, list] of out) {
+        list.sort((a, b) => a.date.localeCompare(b.date));
+        out.set(campaignId, list);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Campaign daily insights skipped for ${adAccountId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    return out;
+  }
+
+  private async fetchAccountBreakdown(
+    adAccountId: string,
+    accessToken: string,
+    breakdown: 'age' | 'impression_device' | 'publisher_platform' | 'country',
+  ): Promise<FacebookAdBreakdownRowDto[]> {
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<
+          Record<string, string | undefined> & {
+            impressions?: string;
+            spend?: string;
+          }
+        >;
+      }>(`/${adAccountId}/insights`, accessToken, {
+        date_preset: META_AD_STATS_DATE_PRESET,
+        breakdowns: breakdown,
+        fields: 'impressions,spend',
+        limit: '50',
+      });
+
+      return (response.data ?? [])
+        .map((row) => {
+          const key = row[breakdown]?.trim();
+          if (!key) return null;
+          return {
+            key,
+            impressions: row.impressions ?? null,
+            spend: row.spend ?? null,
+          };
+        })
+        .filter((row): row is FacebookAdBreakdownRowDto => row != null);
+    } catch (err) {
+      this.logger.warn(
+        `Account ${breakdown} breakdown skipped for ${adAccountId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return [];
+    }
+  }
+
+  private async fetchAccountCampaignThumbnails(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          campaign_id?: string;
+          creative?: {
+            thumbnail_url?: string;
+            image_url?: string;
+          };
+        }>;
+      }>(`/${adAccountId}/ads`, accessToken, {
+        fields: 'campaign_id,creative{thumbnail_url,image_url}',
+        limit: '100',
+      });
+
+      for (const row of response.data ?? []) {
+        const campaignId = row.campaign_id?.trim();
+        if (!campaignId || out.has(campaignId)) continue;
+        const url =
+          row.creative?.image_url?.trim() ||
+          row.creative?.thumbnail_url?.trim() ||
+          '';
+        if (url) out.set(campaignId, url);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Account campaign thumbnails skipped for ${adAccountId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    return out;
+  }
+
+  private async fetchCampaignThumbnail(
+    campaignId: string,
+    accessToken: string,
+  ): Promise<string | null> {
+    try {
+      const response = await this.graphGetWithToken<{
+        data?: Array<{
+          creative?: {
+            thumbnail_url?: string;
+            image_url?: string;
+          };
+        }>;
+      }>(`/${campaignId}/ads`, accessToken, {
+        fields: 'creative{thumbnail_url,image_url}',
+        limit: '1',
+      });
+      const creative = response.data?.[0]?.creative;
+      return (
+        creative?.image_url?.trim() ||
+        creative?.thumbnail_url?.trim() ||
+        null
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Thumbnail skipped for campaign ${campaignId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
     }
   }
 
   private async fetchAccountCampaignInsights(
     adAccountId: string,
     accessToken: string,
-  ): Promise<
-    Map<
-      string,
-      {
-        spend: string | null;
-        impressions: string | null;
-        reach: string | null;
-        clicks: string | null;
-      }
-    >
-  > {
-    const out = new Map<
-      string,
-      {
-        spend: string | null;
-        impressions: string | null;
-        reach: string | null;
-        clicks: string | null;
-      }
-    >();
+  ): Promise<Map<string, FacebookAdCampaignInsightDto>> {
+    const out = new Map<string, FacebookAdCampaignInsightDto>();
 
     try {
       const response = await this.graphGetWithToken<{
-        data?: Array<{
-          campaign_id?: string;
-          spend?: string;
-          impressions?: string;
-          reach?: string;
-          clicks?: string;
-        }>;
+        data?: MetaCampaignInsightRow[];
       }>(`/${adAccountId}/insights`, accessToken, {
         level: 'campaign',
         date_preset: META_AD_STATS_DATE_PRESET,
-        fields: 'campaign_id,spend,impressions,reach,clicks',
+        fields: META_CAMPAIGN_INSIGHT_FIELDS,
         limit: '50',
       });
 
       for (const row of response.data ?? []) {
         const id = row.campaign_id?.trim();
         if (!id) continue;
-        out.set(id, {
-          spend: row.spend ?? null,
-          impressions: row.impressions ?? null,
-          reach: row.reach ?? null,
-          clicks: row.clicks ?? null,
-        });
+        out.set(id, this.normalizeCampaignInsight(row));
       }
     } catch (err) {
       this.logger.warn(
@@ -1128,40 +1799,59 @@ export class FacebookService {
   private async fetchCampaignInsights(
     campaignId: string,
     accessToken: string,
-  ): Promise<{
-    spend: string | null;
-    impressions: string | null;
-    reach: string | null;
-    clicks: string | null;
-  } | null> {
+  ): Promise<FacebookAdCampaignInsightDto | null> {
     try {
       const response = await this.graphGetWithToken<{
-        data?: Array<{
-          spend?: string;
-          impressions?: string;
-          reach?: string;
-          clicks?: string;
-        }>;
+        data?: MetaCampaignInsightRow[];
       }>(`/${campaignId}/insights`, accessToken, {
         date_preset: META_AD_STATS_DATE_PRESET,
-        fields: 'spend,impressions,reach,clicks',
+        fields: META_SINGLE_CAMPAIGN_INSIGHT_FIELDS,
       });
       const row = response.data?.[0];
       if (!row) {
         return null;
       }
-      return {
-        spend: row.spend ?? null,
-        impressions: row.impressions ?? null,
-        reach: row.reach ?? null,
-        clicks: row.clicks ?? null,
-      };
+      return this.normalizeCampaignInsight(row);
     } catch (err) {
       this.logger.warn(
         `Insights skipped for campaign ${campaignId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
+  }
+
+  private normalizeCampaignInsight(
+    row: MetaCampaignInsightRow,
+  ): FacebookAdCampaignInsightDto {
+    return {
+      spend: row.spend ?? null,
+      impressions: row.impressions ?? null,
+      reach: row.reach ?? null,
+      clicks: row.clicks ?? null,
+      ctr: row.ctr ?? null,
+      cpc: row.cpc ?? null,
+      cpm: row.cpm ?? null,
+      frequency: row.frequency ?? null,
+      actions: this.normalizeInsightActions(row.actions),
+      costPerActionType: this.normalizeInsightActions(row.cost_per_action_type),
+    };
+  }
+
+  private normalizeInsightActions(
+    rows: MetaInsightActionRow[] | undefined,
+  ): FacebookAdCampaignInsightDto['actions'] {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const mapped = rows
+      .map((row) => {
+        const actionType = row.action_type?.trim();
+        const value = row.value?.trim();
+        if (!actionType || !value) return null;
+        return { actionType, value };
+      })
+      .filter(
+        (row): row is { actionType: string; value: string } => row != null,
+      );
+    return mapped.length > 0 ? mapped : null;
   }
 
   private requireBusinessAdAccount(business: Business): {

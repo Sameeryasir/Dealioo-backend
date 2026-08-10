@@ -1497,6 +1497,7 @@ export class FunnelEventService {
       funnelId: number;
       campaignId: number;
       campaignName: string;
+      campaignImageUrl: string | null;
       customer: {
         id: number;
         name: string;
@@ -1998,6 +1999,7 @@ export class FunnelEventService {
 
     const campaignNames: string[] = [];
     const seenCampaignNames = new Set<string>();
+    let campaignImageUrl: string | null = null;
     let totalVisitNetDollars = 0;
     let receiptUrl: string | null = null;
     let paymentCollectedAt: Date | null = order.paidAt;
@@ -2021,6 +2023,12 @@ export class FunnelEventService {
       if (campaignName && !seenCampaignNames.has(campaignName.toLowerCase())) {
         seenCampaignNames.add(campaignName.toLowerCase());
         campaignNames.push(campaignName);
+      }
+      if (!campaignImageUrl) {
+        const imageUrl = campaign?.imageUrl?.trim();
+        if (imageUrl) {
+          campaignImageUrl = imageUrl;
+        }
       }
 
       if (totalVisitNetDollars <= 0) {
@@ -2095,6 +2103,7 @@ export class FunnelEventService {
         campaignNames.join(', ') ||
         primary?.campaign?.campaignName?.trim() ||
         'Order',
+      campaignImageUrl,
       customer: customer
         ? {
             id: customer.id,

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Between, MoreThanOrEqual, Repository } from 'typeorm';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
+import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { Order, OrderStatus } from '../../db/entities/order.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
@@ -101,6 +102,8 @@ export class PlatformAdminService {
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(AdminNotification)
     private readonly adminNotificationRepository: Repository<AdminNotification>,
+    @InjectRepository(MeetingRequest)
+    private readonly meetingRequestRepository: Repository<MeetingRequest>,
   ) {}
 
   private assertSuperAdmin(user: User): void {
@@ -109,6 +112,57 @@ export class PlatformAdminService {
         'Only Super Admin can access the platform overview.',
       );
     }
+  }
+
+  async getMeetingRequests(actor: User): Promise<{
+    total: number;
+    items: Array<{
+      id: number;
+      firstName: string;
+      lastName: string;
+      email: string;
+      phone: string;
+      businessName: string;
+      businessRole: string;
+      businessCategory: string;
+      cityLocation: string;
+      monthlyRevenue: string;
+      marketingActivities: string[];
+      currentSituation: string;
+      startTimeline: string;
+      meetingCommitment: string;
+      createdAt: Date;
+    }>;
+  }> {
+    this.assertSuperAdmin(actor);
+
+    const [items, total] = await this.meetingRequestRepository.findAndCount({
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+
+    return {
+      total,
+      items: items.map((row) => ({
+        id: row.id,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        email: row.email,
+        phone: row.phone,
+        businessName: row.businessName,
+        businessRole: row.businessRole,
+        businessCategory: row.businessCategory,
+        cityLocation: row.cityLocation,
+        monthlyRevenue: row.monthlyRevenue,
+        marketingActivities: Array.isArray(row.marketingActivities)
+          ? row.marketingActivities
+          : [],
+        currentSituation: row.currentSituation,
+        startTimeline: row.startTimeline,
+        meetingCommitment: row.meetingCommitment,
+        createdAt: row.createdAt,
+      })),
+    };
   }
 
   async getNotifications(actor: User): Promise<{

@@ -18,4 +18,10 @@ export class PlatformAdminController {
   getNotifications(@Req() req: { user: User }) {
     return this.platformAdminService.getNotifications(req.user);
   }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('meeting-requests')
+  getMeetingRequests(@Req() req: { user: User }) {
+    return this.platformAdminService.getMeetingRequests(req.user);
+  }
 }
