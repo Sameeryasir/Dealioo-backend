@@ -52,6 +52,7 @@ export type SaveGoogleCampaignInfoStepResponseDto = {
   websiteUrl?: string;
   businessCategory?: string;
   logoFileName?: string;
+  logoPreviewUrl?: string;
 };
 
 export type GoogleCampaignDraftResumeResponseDto = {

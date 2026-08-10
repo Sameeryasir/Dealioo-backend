@@ -9,9 +9,26 @@ export function createDefaultGoogleCampaignDraftData(): GoogleCampaignBuilderDra
     goalDetailSubstep: 0,
     salesChannel: null,
     businessLocation: '',
+    businessLocationLat: null,
+    businessLocationLng: null,
     leadContactMethods: [],
     landingPageUrl: '',
     businessPhone: '',
+    phoneCountryCode: '+1',
+    whatsAppNumber: '',
+    whatsAppMessage: '',
+    bookingPageUrl: '',
+    googleLeadFormHeadline: 'Get a Free Quote',
+    googleLeadFormDescription:
+      'Tell us what you need and our team will contact you.',
+    googleLeadFormFields: ['FULL_NAME', 'EMAIL', 'PHONE'],
+    googleLeadFormCta: 'GET_QUOTE',
+    googleLeadFormCtaDescription: 'Get your free quote today',
+    googleLeadFormPrivacyUrl: '',
+    googleLeadFormThankYouHeadline: 'Thank you!',
+    googleLeadFormThankYouMessage: "We'll contact you shortly.",
+    googleLeadFormPostSubmitAction: 'VISIT_WEBSITE',
+    googleLeadFormPostSubmitUrl: '',
     trafficAction: null,
     businessAddress: '',
     businessHours: '',
@@ -108,6 +125,10 @@ export function generateGoogleCampaignName(
       return brand ? `${brand} Traffic` : 'Traffic Campaign';
     case 'AWARENESS':
       return brand ? `${brand} Promotion` : 'Business Promotion Campaign';
+    case 'LOCAL_VISITS':
+      return brand
+        ? `${brand} Local Visits - ${month}`
+        : `Local Visits - ${month}`;
     case 'APP_PROMOTION':
       return brand ? `${brand} App` : 'App Promotion Campaign';
     default:

@@ -2,6 +2,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -24,6 +25,7 @@ export const GOOGLE_SALES_CHANNELS = [
 
 export const GOOGLE_LEAD_CONTACT_METHODS = [
   'CONTACT_FORM',
+  'GOOGLE_LEAD_FORM',
   'PHONE_CALLS',
   'WHATSAPP',
   'APPOINTMENT_BOOKING',
@@ -58,6 +60,14 @@ export class SaveGoogleGoalDetailsStepDto {
   businessLocation?: string;
 
   @IsOptional()
+  @IsNumber()
+  businessLocationLat?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  businessLocationLng?: number | null;
+
+  @IsOptional()
   @IsString()
   businessPhone?: string;
 
@@ -69,6 +79,63 @@ export class SaveGoogleGoalDetailsStepDto {
   @IsOptional()
   @IsString()
   landingPageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  phoneCountryCode?: string;
+
+  @IsOptional()
+  @IsString()
+  whatsAppNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  whatsAppMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  bookingPageUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormHeadline?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormDescription?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  googleLeadFormFields?: string[];
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormCta?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormCtaDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormPrivacyUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormThankYouHeadline?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormThankYouMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormPostSubmitAction?: string;
+
+  @IsOptional()
+  @IsString()
+  googleLeadFormPostSubmitUrl?: string;
 
   @IsOptional()
   @IsIn(GOOGLE_TRAFFIC_ACTIONS)

@@ -3,6 +3,7 @@ export class GoogleAdsCampaignInsightDto {
   impressions: string | null;
   clicks: string | null;
   conversions: string | null;
+  conversionValue: string | null;
 }
 
 export class GoogleAdsCampaignDto {

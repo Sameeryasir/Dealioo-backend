@@ -257,10 +257,62 @@ export class GoogleCampaignDraftService {
       salesChannel: dto.salesChannel ?? base.salesChannel,
       websiteUrl,
       businessLocation: dto.businessLocation?.trim() ?? base.businessLocation,
+      businessLocationLat:
+        dto.businessLocationLat !== undefined
+          ? dto.businessLocationLat
+          : (base.businessLocationLat ?? null),
+      businessLocationLng:
+        dto.businessLocationLng !== undefined
+          ? dto.businessLocationLng
+          : (base.businessLocationLng ?? null),
       businessPhone,
       phoneNumber: businessPhone || base.phoneNumber,
       leadContactMethods: dto.leadContactMethods ?? base.leadContactMethods,
       landingPageUrl: landingPageUrl || websiteUrl,
+      phoneCountryCode:
+        dto.phoneCountryCode?.trim() ?? base.phoneCountryCode ?? '+1',
+      whatsAppNumber: dto.whatsAppNumber?.trim() ?? base.whatsAppNumber ?? '',
+      whatsAppMessage:
+        dto.whatsAppMessage?.trim() ?? base.whatsAppMessage ?? '',
+      bookingPageUrl: dto.bookingPageUrl?.trim() ?? base.bookingPageUrl ?? '',
+      googleLeadFormHeadline:
+        dto.googleLeadFormHeadline?.trim() ??
+        base.googleLeadFormHeadline ??
+        '',
+      googleLeadFormDescription:
+        dto.googleLeadFormDescription?.trim() ??
+        base.googleLeadFormDescription ??
+        '',
+      googleLeadFormFields:
+        dto.googleLeadFormFields ??
+        base.googleLeadFormFields ??
+        ['FULL_NAME', 'EMAIL', 'PHONE'],
+      googleLeadFormCta:
+        dto.googleLeadFormCta?.trim() ?? base.googleLeadFormCta ?? 'GET_QUOTE',
+      googleLeadFormCtaDescription:
+        dto.googleLeadFormCtaDescription?.trim() ??
+        base.googleLeadFormCtaDescription ??
+        '',
+      googleLeadFormPrivacyUrl:
+        dto.googleLeadFormPrivacyUrl?.trim() ??
+        base.googleLeadFormPrivacyUrl ??
+        '',
+      googleLeadFormThankYouHeadline:
+        dto.googleLeadFormThankYouHeadline?.trim() ??
+        base.googleLeadFormThankYouHeadline ??
+        '',
+      googleLeadFormThankYouMessage:
+        dto.googleLeadFormThankYouMessage?.trim() ??
+        base.googleLeadFormThankYouMessage ??
+        '',
+      googleLeadFormPostSubmitAction:
+        dto.googleLeadFormPostSubmitAction?.trim() ??
+        base.googleLeadFormPostSubmitAction ??
+        'VISIT_WEBSITE',
+      googleLeadFormPostSubmitUrl:
+        dto.googleLeadFormPostSubmitUrl?.trim() ??
+        base.googleLeadFormPostSubmitUrl ??
+        '',
       trafficAction: dto.trafficAction ?? base.trafficAction,
       businessName,
       extensionBusinessName: businessName || base.extensionBusinessName,
@@ -978,22 +1030,63 @@ export class GoogleCampaignDraftService {
     }
 
     if (goal === 'LEADS') {
-      if (!dto.leadContactMethods?.length) {
-        throw new BadRequestException(
-          'Select at least one contact method.',
-        );
+      const methods = (dto.leadContactMethods ?? []).filter(
+        (id) => id !== 'WHATSAPP' && id !== 'APPOINTMENT_BOOKING',
+      );
+      const primary = methods[0] ?? null;
+      if (!primary || methods.length !== 1) {
+        throw new BadRequestException('Choose one primary lead method.');
       }
       if (
-        dto.leadContactMethods.includes('CONTACT_FORM') &&
+        primary === 'CONTACT_FORM' &&
         !this.isValidHttpUrl(dto.landingPageUrl || dto.websiteUrl)
       ) {
         throw new BadRequestException('Add a landing page URL.');
       }
-      if (
-        dto.leadContactMethods.includes('PHONE_CALLS') &&
-        !dto.businessPhone?.trim()
-      ) {
-        throw new BadRequestException('Add a business phone number.');
+      if (primary === 'GOOGLE_LEAD_FORM') {
+        if (!dto.businessName?.trim()) {
+          throw new BadRequestException('Add a business name.');
+        }
+        if (!dto.googleLeadFormHeadline?.trim()) {
+          throw new BadRequestException('Add a lead form headline.');
+        }
+        if (!dto.googleLeadFormDescription?.trim()) {
+          throw new BadRequestException('Add a lead form description.');
+        }
+        if (!dto.googleLeadFormCta?.trim()) {
+          throw new BadRequestException('Choose a call to action.');
+        }
+        if (!dto.googleLeadFormCtaDescription?.trim()) {
+          throw new BadRequestException('Add a CTA description.');
+        }
+        if (!dto.googleLeadFormFields?.length) {
+          throw new BadRequestException('Select at least one form field.');
+        }
+        if (!this.isValidHttpUrl(dto.googleLeadFormPrivacyUrl)) {
+          throw new BadRequestException('Add a privacy policy URL.');
+        }
+        if (!dto.googleLeadFormThankYouHeadline?.trim()) {
+          throw new BadRequestException('Add a thank-you headline.');
+        }
+        if (!dto.googleLeadFormThankYouMessage?.trim()) {
+          throw new BadRequestException('Add a thank-you message.');
+        }
+        if (!dto.googleLeadFormPostSubmitAction?.trim()) {
+          throw new BadRequestException('Choose a post-submit action.');
+        }
+        if (
+          dto.googleLeadFormPostSubmitAction === 'VISIT_WEBSITE' &&
+          !this.isValidHttpUrl(
+            dto.googleLeadFormPostSubmitUrl || dto.websiteUrl || dto.landingPageUrl,
+          )
+        ) {
+          throw new BadRequestException(
+            'Add a website URL for the post-submit action.',
+          );
+        }
+      }
+      if (primary === 'PHONE_CALLS' && !dto.businessPhone?.trim()) {
+        throw new BadRequestException('Add a phone number.');
       }
     }
 
@@ -1014,6 +1107,15 @@ export class GoogleCampaignDraftService {
       }
       if (!dto.businessCategory?.trim()) {
         throw new BadRequestException('Choose a business category.');
+      }
+    }
+
+    if (goal === 'LOCAL_VISITS') {
+      if (!dto.businessLocation?.trim()) {
+        throw new BadRequestException('Add your business location.');
+      }
+      if (!dto.businessPhone?.trim()) {
+        throw new BadRequestException('Add a phone number.');
       }
     }
 
@@ -1136,6 +1238,9 @@ export class GoogleCampaignDraftService {
     if (data?.logoFileName?.trim()) {
       response.logoFileName = data.logoFileName.trim();
     }
+    if (data?.logoPreviewUrl?.trim()) {
+      response.logoPreviewUrl = data.logoPreviewUrl.trim();
+    }
 
     return response;
   }
@@ -1215,6 +1320,21 @@ export class GoogleCampaignDraftService {
       }
       if (data?.businessHours?.trim()) {
         response.businessHours = data.businessHours.trim();
+      }
+    }
+
+    if (goal === 'LOCAL_VISITS') {
+      if (data?.businessLocation?.trim()) {
+        response.businessLocation = data.businessLocation.trim();
+      }
+      if (data?.businessPhone?.trim()) {
+        response.businessPhone = data.businessPhone.trim();
+      }
+      if (data?.businessHours?.trim()) {
+        response.businessHours = data.businessHours.trim();
+      }
+      if (data?.businessAddress?.trim()) {
+        response.businessAddress = data.businessAddress.trim();
       }
     }
 

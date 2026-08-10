@@ -3,6 +3,7 @@ export type GoogleCampaignGoalId =
   | 'LEADS'
   | 'WEBSITE_TRAFFIC'
   | 'AWARENESS'
+  | 'LOCAL_VISITS'
   | 'APP_PROMOTION';
 
 export type GoogleSalesChannelId =
@@ -14,6 +15,7 @@ export type GoogleSalesChannelId =
 
 export type GoogleLeadContactMethodId =
   | 'CONTACT_FORM'
+  | 'GOOGLE_LEAD_FORM'
   | 'PHONE_CALLS'
   | 'WHATSAPP'
   | 'APPOINTMENT_BOOKING';
@@ -107,9 +109,25 @@ export type GoogleCampaignBuilderDraftData = {
   goalDetailSubstep: number;
   salesChannel: GoogleSalesChannelId | null;
   businessLocation: string;
+  businessLocationLat?: number | null;
+  businessLocationLng?: number | null;
   leadContactMethods: GoogleLeadContactMethodId[];
   landingPageUrl: string;
   businessPhone: string;
+  phoneCountryCode?: string;
+  whatsAppNumber?: string;
+  whatsAppMessage?: string;
+  bookingPageUrl?: string;
+  googleLeadFormHeadline?: string;
+  googleLeadFormDescription?: string;
+  googleLeadFormFields?: string[];
+  googleLeadFormCta?: string;
+  googleLeadFormCtaDescription?: string;
+  googleLeadFormPrivacyUrl?: string;
+  googleLeadFormThankYouHeadline?: string;
+  googleLeadFormThankYouMessage?: string;
+  googleLeadFormPostSubmitAction?: string;
+  googleLeadFormPostSubmitUrl?: string;
   trafficAction: GoogleTrafficActionId | null;
   businessAddress: string;
   businessHours: string;

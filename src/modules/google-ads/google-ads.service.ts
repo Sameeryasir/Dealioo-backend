@@ -60,6 +60,8 @@ type GoogleAdsSearchRow = {
     impressions?: string | number;
     clicks?: string | number;
     conversions?: string | number;
+    conversionsValue?: string | number;
+    conversions_value?: string | number;
   };
   customer?: {
     descriptiveName?: string;
@@ -659,7 +661,8 @@ export class GoogleAdsService {
         metrics.cost_micros,
         metrics.impressions,
         metrics.clicks,
-        metrics.conversions
+        metrics.conversions,
+        metrics.conversions_value
       FROM campaign
       WHERE segments.date DURING LAST_30_DAYS
         AND campaign.status != 'REMOVED'
@@ -682,6 +685,7 @@ export class GoogleAdsService {
         impressions: number;
         clicks: number;
         conversions: number;
+        conversionValue: number;
       }
     >();
 
@@ -697,6 +701,7 @@ export class GoogleAdsService {
         impressions: 0,
         clicks: 0,
         conversions: 0,
+        conversionValue: 0,
       };
 
       existing.costMicros += this.toNumber(
@@ -705,6 +710,9 @@ export class GoogleAdsService {
       existing.impressions += this.toNumber(row.metrics?.impressions);
       existing.clicks += this.toNumber(row.metrics?.clicks);
       existing.conversions += this.toNumber(row.metrics?.conversions);
+      existing.conversionValue += this.toNumber(
+        row.metrics?.conversionsValue ?? row.metrics?.conversions_value,
+      );
 
       aggregated.set(id, existing);
     }
@@ -720,6 +728,7 @@ export class GoogleAdsService {
         impressions: String(row.impressions),
         clicks: String(row.clicks),
         conversions: String(row.conversions),
+        conversionValue: String(row.conversionValue),
       },
     }));
   }

@@ -129,15 +129,19 @@ export function validateGoogleDraftForPublish(
   }
 
   if (draft.goal === 'LEADS') {
-    if (!draft.leadContactMethods?.length) {
+    const methods = (draft.leadContactMethods ?? []).filter(
+      (id) => id !== 'WHATSAPP' && id !== 'APPOINTMENT_BOOKING',
+    );
+    const primary = methods[0] ?? null;
+    if (!primary || methods.length !== 1) {
       errors.push({
         step: 2,
         field: 'leadContactMethods',
-        message: 'Select at least one contact method.',
+        message: 'Choose one primary lead method.',
       });
     }
     if (
-      draft.leadContactMethods?.includes('CONTACT_FORM') &&
+      primary === 'CONTACT_FORM' &&
       !isValidHttpUrl(draft.landingPageUrl || draft.websiteUrl)
     ) {
       errors.push({
@@ -146,14 +150,97 @@ export function validateGoogleDraftForPublish(
         message: 'Add a landing page URL.',
       });
     }
-    if (
-      draft.leadContactMethods?.includes('PHONE_CALLS') &&
-      !draft.businessPhone?.trim()
-    ) {
+    if (primary === 'GOOGLE_LEAD_FORM') {
+      if (!draft.businessName?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'businessName',
+          message: 'Add a business name.',
+        });
+      }
+      if (!draft.googleLeadFormHeadline?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormHeadline',
+          message: 'Add a lead form headline.',
+        });
+      }
+      if (!draft.googleLeadFormDescription?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormDescription',
+          message: 'Add a lead form description.',
+        });
+      }
+      if (!draft.googleLeadFormCta?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormCta',
+          message: 'Choose a call to action.',
+        });
+      }
+      if (!draft.googleLeadFormCtaDescription?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormCtaDescription',
+          message: 'Add a CTA description.',
+        });
+      }
+      if (!draft.googleLeadFormFields?.length) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormFields',
+          message: 'Select at least one form field.',
+        });
+      }
+      if (!isValidHttpUrl(draft.googleLeadFormPrivacyUrl)) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormPrivacyUrl',
+          message: 'Add a privacy policy URL.',
+        });
+      }
+      if (!draft.googleLeadFormThankYouHeadline?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormThankYouHeadline',
+          message: 'Add a thank-you headline.',
+        });
+      }
+      if (!draft.googleLeadFormThankYouMessage?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormThankYouMessage',
+          message: 'Add a thank-you message.',
+        });
+      }
+      if (!draft.googleLeadFormPostSubmitAction?.trim()) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormPostSubmitAction',
+          message: 'Choose a post-submit action.',
+        });
+      }
+      if (
+        draft.googleLeadFormPostSubmitAction === 'VISIT_WEBSITE' &&
+        !isValidHttpUrl(
+          draft.googleLeadFormPostSubmitUrl ||
+            draft.websiteUrl ||
+            draft.landingPageUrl,
+        )
+      ) {
+        errors.push({
+          step: 2,
+          field: 'googleLeadFormPostSubmitUrl',
+          message: 'Add a website URL for the post-submit action.',
+        });
+      }
+    }
+    if (primary === 'PHONE_CALLS' && !draft.businessPhone?.trim()) {
       errors.push({
         step: 2,
         field: 'businessPhone',
-        message: 'Add a business phone number.',
+        message: 'Add a phone number.',
       });
     }
   }
@@ -188,6 +275,23 @@ export function validateGoogleDraftForPublish(
         step: 2,
         field: 'businessCategory',
         message: 'Choose a business category.',
+      });
+    }
+  }
+
+  if (draft.goal === 'LOCAL_VISITS') {
+    if (!draft.businessLocation?.trim()) {
+      errors.push({
+        step: 2,
+        field: 'businessLocation',
+        message: 'Add your business location.',
+      });
+    }
+    if (!draft.businessPhone?.trim()) {
+      errors.push({
+        step: 2,
+        field: 'businessPhone',
+        message: 'Add a phone number.',
       });
     }
   }
@@ -318,7 +422,7 @@ export function validateGoogleDraftForPublish(
       errors.push({
         step: 9,
         field: 'headlines',
-        message: 'Keep at least 3 headlines.',
+        message: 'Add at least 3 headlines.',
       });
     } else if (headlines.some((h) => h.length > HEADLINE_MAX)) {
       errors.push({
@@ -333,7 +437,7 @@ export function validateGoogleDraftForPublish(
       errors.push({
         step: 9,
         field: 'descriptions',
-        message: 'Keep at least 2 descriptions.',
+        message: 'Add at least 2 descriptions.',
       });
     } else if (descriptions.some((d) => d.length > DESCRIPTION_MAX)) {
       errors.push({

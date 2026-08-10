@@ -6,6 +6,7 @@ export const GOOGLE_CAMPAIGN_GOALS = [
   'LEADS',
   'WEBSITE_TRAFFIC',
   'AWARENESS',
+  'LOCAL_VISITS',
   'APP_PROMOTION',
 ] as const satisfies readonly GoogleCampaignGoalId[];
 

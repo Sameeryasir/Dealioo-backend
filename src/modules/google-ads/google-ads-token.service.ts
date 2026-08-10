@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import { GoogleAdsConnectionStatus } from './google-ads-connection-status';
 import {
   GOOGLE_TAG_MANAGER_READONLY_SCOPE,
   refreshGoogleAccessToken,
@@ -156,15 +157,25 @@ export class GoogleAdsTokenService {
       } catch {}
     }
 
-    const refreshed = await this.refreshAccessToken(refreshToken);
+    try {
+      const refreshed = await this.refreshAccessToken(refreshToken);
 
-    await this.persistTokens(business.id, {
-      accessToken: refreshed.accessToken,
-      expiresIn: refreshed.expiresIn,
-      scopes: refreshed.scopes,
-    });
+      await this.persistTokens(business.id, {
+        accessToken: refreshed.accessToken,
+        expiresIn: refreshed.expiresIn,
+        scopes: refreshed.scopes,
+      });
 
-    return refreshed.accessToken;
+      return refreshed.accessToken;
+    } catch (err) {
+      if (this.isInvalidGrantError(err)) {
+        await this.invalidateGoogleTokens(business.id);
+        throw new BadRequestException(
+          'Google Ads access expired or was revoked. Reconnect Google Ads in Settings → Integrations.',
+        );
+      }
+      throw err;
+    }
   }
 
   private async refreshAccessToken(refreshToken: string): Promise<{
@@ -195,12 +206,38 @@ export class GoogleAdsTokenService {
       };
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
+      if (this.isInvalidGrantError(err)) throw err;
       throw new BadRequestException(
-        err instanceof Error
-          ? err.message
-          : 'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
+        'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
       );
     }
+  }
+
+  private isInvalidGrantError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    const anyErr = err as {
+      message?: string;
+      response?: { data?: { error?: string; error_description?: string } };
+      data?: { error?: string };
+    };
+    const parts = [
+      anyErr.message,
+      anyErr.response?.data?.error,
+      anyErr.response?.data?.error_description,
+      anyErr.data?.error,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return /invalid_grant/i.test(parts);
+  }
+
+  private async invalidateGoogleTokens(businessId: number): Promise<void> {
+    await this.businessRepository.update(businessId, {
+      googleAccessToken: null,
+      googleRefreshToken: null,
+      googleTokenExpiresAt: null,
+      googleConnectionStatus: GoogleAdsConnectionStatus.FAILED,
+    });
   }
 
   getClientId(): string {
