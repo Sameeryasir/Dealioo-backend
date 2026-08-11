@@ -31,13 +31,6 @@ export class StripeController {
     @Query('error_description') errorDescription: string,
     @Res() res: Response,
   ) {
-    console.log('[Stripe OAuth] GET /stripe/callback/oauth', {
-      hasCode: Boolean(code),
-      hasState: Boolean(state),
-      state,
-      error: error ?? null,
-    });
-
     const frontend = 'http://localhost:3002';
     const businessQuery = state?.trim()
       ? `businessId=${encodeURIComponent(state.trim())}`
