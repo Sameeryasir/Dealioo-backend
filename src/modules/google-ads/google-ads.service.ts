@@ -11,6 +11,7 @@ import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { encryptSecret } from '../../utils/token-encryption.util';
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
@@ -104,6 +105,7 @@ export class GoogleAdsService {
     private readonly businessRepository: Repository<Business>,
     private readonly auditService: GoogleAdsIntegrationAuditService,
     private readonly tokenService: GoogleAdsTokenService,
+    private readonly adminNotificationWriter: AdminNotificationWriter,
   ) {}
 
   async connect(user: User, businessId: number): Promise<{ url: string }> {
@@ -254,6 +256,7 @@ export class GoogleAdsService {
 
       const business = await this.businessRepository.findOne({
         where: { id: businessId },
+        relations: ['owner'],
       });
 
       if (!business) {
@@ -320,6 +323,15 @@ export class GoogleAdsService {
         `Google Ads connected for business ${businessId} (user ${googleUserId})`,
       );
 
+      await this.adminNotificationWriter.notifyIntegrationConnected({
+        provider: 'google',
+        businessId,
+        businessName: business.name,
+        actorUserId: business.owner?.id ?? null,
+        idempotencyKey: `google_connected:${businessId}:${googleUserId}`,
+        metadata: { googleUserId, grantedScopes },
+      });
+
       return { connected: true, businessId };
     } catch (err) {
       if (businessId != null) {
@@ -337,6 +349,18 @@ export class GoogleAdsService {
         await this.auditService.log(businessId, 'oauth_failed', {
           status: GoogleAdsConnectionStatus.FAILED,
           errorMessage: err instanceof Error ? err.message : String(err),
+        });
+        const failedBusiness = await this.businessRepository.findOne({
+          where: { id: businessId },
+          relations: ['owner'],
+        });
+        await this.adminNotificationWriter.notifyIntegrationFailed({
+          provider: 'google',
+          businessId,
+          businessName:
+            failedBusiness?.name?.trim() || `Business #${businessId}`,
+          reason: err instanceof Error ? err.message : String(err),
+          actorUserId: failedBusiness?.owner?.id ?? null,
         });
       }
       throw err;

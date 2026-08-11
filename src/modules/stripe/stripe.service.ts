@@ -11,6 +11,7 @@ import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import {
@@ -37,6 +38,7 @@ export class StripeService {
     private readonly config: ConfigService,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    private readonly adminNotificationWriter: AdminNotificationWriter,
   ) {
     this.platformSecretKey =
       this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -929,6 +931,7 @@ export class StripeService {
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
+      relations: ['owner'],
     });
 
     if (!business) {
@@ -950,9 +953,39 @@ export class StripeService {
       stripeAccountId,
     });
 
+    await this.adminNotificationWriter.notifyIntegrationConnected({
+      provider: 'stripe',
+      businessId,
+      businessName: business.name,
+      actorUserId: business.owner?.id ?? null,
+      idempotencyKey: `stripe_connected:${businessId}:${stripeAccountId}`,
+      metadata: { stripeAccountId },
+    });
+
     return {
       connected: true,
       stripeAccountId,
     };
+  }
+
+  async notifyConnectFailure(
+    businessIdRaw: string | undefined,
+    reason: string,
+  ): Promise<void> {
+    const businessId = Number.parseInt(businessIdRaw ?? '', 10);
+    if (!Number.isFinite(businessId) || businessId < 1) return;
+
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+      relations: ['owner'],
+    });
+
+    await this.adminNotificationWriter.notifyIntegrationFailed({
+      provider: 'stripe',
+      businessId,
+      businessName: business?.name?.trim() || `Business #${businessId}`,
+      reason,
+      actorUserId: business?.owner?.id ?? null,
+    });
   }
 }

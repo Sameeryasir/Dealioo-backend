@@ -34,6 +34,7 @@ import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { PusherService } from '../pusher/pusher.service';
 import {
   normalizePhoneNumber,
@@ -86,6 +87,7 @@ export class BusinessService {
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly twilioService: TwilioService,
     private readonly pusherService: PusherService,
+    private readonly adminNotificationWriter: AdminNotificationWriter,
     @InjectQueue(BUSINESS_ONBOARDING_QUEUE)
     private readonly businessOnboardingQueue: Queue<BusinessOnboardingPostCreateJob>,
   ) {}
@@ -257,6 +259,17 @@ export class BusinessService {
     });
 
     await this.notifyBusinessCreated(business, user);
+    await this.adminNotificationWriter.notifyIntegrationConnected({
+      provider: 'twilio',
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+      idempotencyKey: `twilio_connected:${business.id}:${business.twilioPhoneSid ?? 'assigned'}`,
+      metadata: {
+        twilioPhoneSid: business.twilioPhoneSid,
+        twilioPhoneNumber: business.twilioPhoneNumber,
+      },
+    });
 
     await this.draftRepository.delete({ userId: user.id });
 
@@ -538,6 +551,7 @@ export class BusinessService {
     }>;
     selectedPhoneSid: string | null;
     selectedPhoneNumber: string | null;
+    allAssigned: boolean;
   }> {
     requireAdminRole(
       user,
@@ -545,11 +559,68 @@ export class BusinessService {
     );
     await this.assertActiveSubscription(user.id);
     const numbers = await this.twilioService.listIncomingPhoneNumbers();
+    const unassigned = await this.filterUnassignedTwilioNumbers(numbers);
     return {
-      numbers,
+      numbers: unassigned,
       selectedPhoneSid: null,
       selectedPhoneNumber: null,
+      allAssigned: numbers.length > 0 && unassigned.length === 0,
     };
+  }
+
+  private async filterUnassignedTwilioNumbers(
+    numbers: Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+    }>,
+  ): Promise<
+    Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+    }>
+  > {
+    if (numbers.length === 0) return [];
+
+    const assigned = await this.businessRepository
+      .createQueryBuilder('business')
+      .select([
+        'business.id',
+        'business.twilioPhoneSid',
+        'business.twilioPhoneNumber',
+      ])
+      .where(
+        new Brackets((qb) => {
+          qb.where('business.twilioPhoneSid IS NOT NULL').orWhere(
+            'business.twilioPhoneNumber IS NOT NULL',
+          );
+        }),
+      )
+      .getMany();
+
+    const assignedSids = new Set(
+      assigned
+        .map((row) => row.twilioPhoneSid?.trim())
+        .filter((sid): sid is string => Boolean(sid)),
+    );
+    const assignedPhones = new Set(
+      assigned
+        .map((row) => {
+          const raw = row.twilioPhoneNumber?.trim() ?? '';
+          if (!raw) return null;
+          return normalizePhoneNumber(raw) ?? raw;
+        })
+        .filter((phone): phone is string => Boolean(phone)),
+    );
+
+    return numbers.filter((number) => {
+      const normalized =
+        normalizePhoneNumber(number.phoneNumber) ?? number.phoneNumber;
+      return (
+        !assignedSids.has(number.sid) && !assignedPhones.has(normalized)
+      );
+    });
   }
 
   private async requireAvailableTwilioNumber(
@@ -566,15 +637,24 @@ export class BusinessService {
     }
 
     const available = await this.twilioService.listIncomingPhoneNumbers();
-    const match = available.find(
+    const unassigned = await this.filterUnassignedTwilioNumbers(available);
+    const match = unassigned.find(
       (n) =>
         n.sid === sid ||
         n.phoneNumber === normalized ||
         n.phoneNumber === phoneNumber.trim(),
     );
     if (!match) {
+      const existsOnTwilio = available.some(
+        (n) =>
+          n.sid === sid ||
+          n.phoneNumber === normalized ||
+          n.phoneNumber === phoneNumber.trim(),
+      );
       throw new BadRequestException(
-        'That phone number was not found on the Twilio account.',
+        existsOnTwilio
+          ? 'That Twilio number is already assigned to another business.'
+          : 'That phone number was not found on the Twilio account.',
       );
     }
     return match;
@@ -659,6 +739,13 @@ export class BusinessService {
         n.phoneNumber === dto.phoneNumber.trim(),
     );
     if (!match) {
+      await this.adminNotificationWriter.notifyIntegrationFailed({
+        provider: 'twilio',
+        businessId: business.id,
+        businessName: business.name,
+        reason: 'That phone number was not found on the Twilio account.',
+        actorUserId: user.id,
+      });
       throw new BadRequestException(
         'That phone number was not found on the Twilio account.',
       );
@@ -669,6 +756,18 @@ export class BusinessService {
     business.twilioPhoneNumber = match.phoneNumber;
     business.twilioConnectedAt = connectedAt;
     await this.businessRepository.save(business);
+
+    await this.adminNotificationWriter.notifyIntegrationConnected({
+      provider: 'twilio',
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+      idempotencyKey: `twilio_connected:${business.id}:${match.sid}`,
+      metadata: {
+        twilioPhoneSid: match.sid,
+        twilioPhoneNumber: match.phoneNumber,
+      },
+    });
 
     return {
       twilioPhoneSid: match.sid,

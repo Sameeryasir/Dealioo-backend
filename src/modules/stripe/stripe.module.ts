@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessModule } from '../business/business.module';
 import { StripeCatalogService } from './stripe-catalog.service';
@@ -13,6 +14,7 @@ import { StripeService } from './stripe.service';
     TypeOrmModule.forFeature([Business, Campaign]),
     AuthModule,
     BusinessModule,
+    AdminNotificationsModule,
   ],
   controllers: [StripeController],
   providers: [StripeService, StripeCatalogService],

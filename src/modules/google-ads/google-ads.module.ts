@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import { Business } from '../../db/entities/business.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
+import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { BusinessModule } from '../business/business.module';
 import { AiModule } from '../ai/ai.module';
 import { GoogleAdsIntegrationAuditService } from './google-ads-integration-audit.service';
@@ -25,6 +26,7 @@ import { GooglePublishService } from './google-publish.service';
     ]),
     BullModule.registerQueue({ name: GOOGLE_PUBLISH_QUEUE }),
     BusinessModule,
+    AdminNotificationsModule,
     AiModule,
   ],
   controllers: [GoogleAdsController],

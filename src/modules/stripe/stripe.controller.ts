@@ -13,7 +13,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { StripeService } from './stripe.service';
 
@@ -39,24 +38,28 @@ export class StripeController {
       error: error ?? null,
     });
 
-    const frontend = getFrontendBaseUrl().replace(/\/$/, '');
+    const frontend = 'http://localhost:3002';
     const businessQuery = state?.trim()
       ? `businessId=${encodeURIComponent(state.trim())}`
       : '';
 
     if (error?.trim()) {
-      const reason = encodeURIComponent(
-        errorDescription?.trim() || error.trim() || 'access_denied',
-      );
-      const qs = [businessQuery, `error=${reason}`].filter(Boolean).join('&');
+      const reason = errorDescription?.trim() || error.trim() || 'access_denied';
+      await this.stripeService.notifyConnectFailure(state, reason);
+      const qs = [
+        businessQuery,
+        `error=${encodeURIComponent(reason)}`,
+      ]
+        .filter(Boolean)
+        .join('&');
       return res.redirect(`${frontend}/stripe/success?${qs}`);
     }
 
     if (!code || !state) {
+      const reason = 'Missing Stripe OAuth code or state.';
+      await this.stripeService.notifyConnectFailure(state, reason);
       return res.redirect(
-        `${frontend}/stripe/success?error=${encodeURIComponent(
-          'Missing Stripe OAuth code or state.',
-        )}`,
+        `${frontend}/stripe/success?error=${encodeURIComponent(reason)}`,
       );
     }
 
@@ -70,6 +73,7 @@ export class StripeController {
         err instanceof Error
           ? err.message
           : 'Stripe account connection failed.';
+      await this.stripeService.notifyConnectFailure(state, message);
       const qs = [
         businessQuery,
         `error=${encodeURIComponent(message)}`,

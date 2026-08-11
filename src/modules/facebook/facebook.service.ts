@@ -15,6 +15,7 @@ import {
 } from '../../db/entities/meta-oauth-session.entity';
 import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import {
@@ -166,6 +167,7 @@ export class FacebookService {
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly adminNotificationWriter: AdminNotificationWriter,
   ) {}
 
   private async requireMetaBusiness(
@@ -412,6 +414,18 @@ export class FacebookService {
         await this.auditService.log(businessId, 'oauth_failed', {
           status: FacebookConnectionStatus.FAILED,
           errorMessage: err instanceof Error ? err.message : String(err),
+        });
+        const failedBusiness = await this.businessRepository.findOne({
+          where: { id: businessId },
+          relations: ['owner'],
+        });
+        await this.adminNotificationWriter.notifyIntegrationFailed({
+          provider: 'meta',
+          businessId,
+          businessName:
+            failedBusiness?.name?.trim() || `Business #${businessId}`,
+          reason: err instanceof Error ? err.message : String(err),
+          actorUserId: failedBusiness?.owner?.id ?? null,
         });
       }
       throw err;
@@ -1759,6 +1773,21 @@ export class FacebookService {
     this.logger.log(
       `Facebook connected for business ${businessId} (user ${me.id}) granted=${grantedScopes.join(',')}`,
     );
+
+    const connectedBusiness = await this.businessRepository.findOne({
+      where: { id: businessId },
+      relations: ['owner'],
+    });
+    if (connectedBusiness) {
+      await this.adminNotificationWriter.notifyIntegrationConnected({
+        provider: 'meta',
+        businessId,
+        businessName: connectedBusiness.name,
+        actorUserId: connectedBusiness.owner?.id ?? null,
+        idempotencyKey: `meta_connected:${businessId}:${me.id.trim()}`,
+        metadata: { metaUserId: me.id, grantedScopes },
+      });
+    }
 
     return { connected: true, businessId, grantedScopes };
   }

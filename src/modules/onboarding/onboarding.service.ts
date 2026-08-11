@@ -37,6 +37,9 @@ import {
   fallbackPlanContents,
   type PlanContentInput,
 } from './plan-fit/plan-fit-content';
+import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import { BUSINESSES_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
+import { SpacesService } from '../spaces/spaces.service';
 import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation.service';
 import {
   BusinessCount,
@@ -118,6 +121,7 @@ export class OnboardingService {
     private readonly userSubscriptionsService: UserSubscriptionsService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly recommendationService: PlanFitRecommendationService,
+    private readonly spacesService: SpacesService,
   ) {}
 
   async trackEvent(input: TrackOnboardingEventInput): Promise<boolean> {
@@ -493,6 +497,25 @@ export class OnboardingService {
     });
 
     return this.toDraftResponse(saved);
+  }
+
+  async uploadBusinessDraftLogo(
+    userId: number,
+    file: Express.Multer.File | undefined,
+  ): Promise<BusinessOnboardingDraftResponse> {
+    if (!file) {
+      throw new BadRequestException('A logo image is required.');
+    }
+
+    await this.assertOwnerCanCreateBusiness(userId);
+
+    const logoUrl = await persistUploadedFile(
+      this.spacesService,
+      file,
+      BUSINESSES_UPLOAD_SUBDIR,
+    );
+
+    return this.upsertBusinessDraft(userId, { logoUrl });
   }
 
   async deleteBusinessDraft(userId: number): Promise<void> {

@@ -17,6 +17,7 @@ import {
 // --- SWC circular import fix ---
 // Value import of OnboardingService causes TDZ under SWC live export bindings;
 // import type + require() inside forwardRef keeps Nest DI working (MCP Context 7).
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import type { OnboardingService } from '../onboarding/onboarding.service';
 import { StripeService } from '../stripe/stripe.service';
 import { SelectUserPlanDto, CancelSubscriptionDto } from './user-subscriptions.dto';
@@ -86,6 +87,7 @@ export class UserSubscriptionsService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly stripeService: StripeService,
+    private readonly adminNotificationWriter: AdminNotificationWriter,
     @Inject(
       forwardRef(
         () =>
@@ -267,9 +269,15 @@ export class UserSubscriptionsService {
     userId: number,
     sessionId: string,
   ): Promise<UserSubscriptionResponse> {
-    const session = await this.loadCompletedCheckoutSession(userId, sessionId);
-    const subscription = await this.activateFromCheckoutSession(session);
-    return this.toResponse(subscription);
+    // Confirm Stripe checkout is paid. Activation itself is webhook-only.
+    await this.loadCompletedCheckoutSession(userId, sessionId);
+    const subscription = await this.getActiveSubscriptionForUser(userId);
+    if (!subscription) {
+      throw new BadRequestException(
+        'Stripe webhook has not activated this subscription yet.',
+      );
+    }
+    return subscription;
   }
 
   /** Primary activation path: Stripe webhook `checkout.session.completed`. */
@@ -409,6 +417,17 @@ export class UserSubscriptionsService {
       eventName: 'subscription_activated',
       idempotencyKey: `subscription_activated:${userId}:${stripeSubscriptionId}`,
       metadata: { planSlug, billingCycle, subscriptionId: saved.id },
+    });
+
+    // Super Admin live alert: "Jane Doe has subscribed to the Growth plan."
+    const buyer = await this.userRepository.findOne({ where: { id: userId } });
+    await this.adminNotificationWriter.notifySubscriptionPurchased({
+      userId,
+      userName: buyer?.name?.trim() || buyer?.email?.trim() || `User #${userId}`,
+      planName: plan.name,
+      planSlug,
+      billingCycle,
+      stripeSubscriptionId,
     });
 
     return saved;

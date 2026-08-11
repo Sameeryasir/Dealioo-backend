@@ -10,6 +10,7 @@ import { Campaign } from '../../db/entities/campaign.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
+import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { BusinessController } from './business.controller';
@@ -31,6 +32,7 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
       AdminNotification,
     ]),
     AuthModule,
+    AdminNotificationsModule,
     BusinessHistoryModule,
     BullModule.registerQueue({ name: BUSINESS_ONBOARDING_QUEUE }),
   ],

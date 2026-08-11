@@ -1,6 +1,15 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, MoreThanOrEqual, Repository } from 'typeorm';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+} from '../../common/pagination';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
@@ -165,7 +174,12 @@ export class PlatformAdminService {
     };
   }
 
-  async getNotifications(actor: User): Promise<{
+  async getNotifications(
+    actor: User,
+    page?: number,
+    limit?: number,
+    status: 'read' | 'unread' = 'read',
+  ): Promise<{
     unreadCount: number;
     items: Array<{
       id: string;
@@ -180,15 +194,26 @@ export class PlatformAdminService {
       isRead: boolean;
       createdAt: Date;
     }>;
+    meta: PaginationMeta;
   }> {
     this.assertSuperAdmin(actor);
 
-    const [items, unreadCount] = await Promise.all([
+    // --- Pagination + tab filter ---
+    // Business rule: All = read only, newest first. Unread = unread only.
+    const pagination = normalizePagination(page, limit);
+    const listWhere =
+      status === 'unread'
+        ? { isArchived: false, isRead: false }
+        : { isArchived: false, isRead: true };
+
+    const [items, total, unreadCount] = await Promise.all([
       this.adminNotificationRepository.find({
-        where: { isArchived: false },
+        where: listWhere,
         order: { createdAt: 'DESC' },
-        take: 50,
+        skip: pagination.skip,
+        take: pagination.limit,
       }),
+      this.adminNotificationRepository.count({ where: listWhere }),
       this.adminNotificationRepository.count({
         where: { isArchived: false, isRead: false },
       }),
@@ -209,6 +234,77 @@ export class PlatformAdminService {
         isRead: row.isRead,
         createdAt: row.createdAt,
       })),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
+  }
+
+  /**
+   * Mark one Super Admin notification as read.
+   * Why: the entity already has is_read / read_at; this is the API that writes them.
+   * Already-read rows stay unchanged (safe to call twice).
+   */
+  async markNotificationRead(
+    actor: User,
+    notificationId: string,
+  ): Promise<{
+    id: string;
+    isRead: boolean;
+    readAt: Date | null;
+    unreadCount: number;
+  }> {
+    this.assertSuperAdmin(actor);
+
+    // --- Find the notification ---
+    const notification = await this.adminNotificationRepository.findOne({
+      where: { id: notificationId },
+    });
+    if (!notification) {
+      throw new NotFoundException('Notification not found.');
+    }
+
+    // --- Update only if still unread ---
+    // Business rule: Super Admin can mark a platform alert as read.
+    if (!notification.isRead) {
+      const readAt = new Date();
+      notification.isRead = true;
+      notification.readAt = readAt;
+      await this.adminNotificationRepository.save(notification);
+    }
+
+    const unreadCount = await this.adminNotificationRepository.count({
+      where: { isArchived: false, isRead: false },
+    });
+
+    return {
+      id: notification.id,
+      isRead: notification.isRead,
+      readAt: notification.readAt,
+      unreadCount,
+    };
+  }
+
+  /**
+   * Mark every visible unread Super Admin notification as read.
+   * Why: powers the "Mark all as read" action. Archived rows are left alone.
+   */
+  async markAllNotificationsRead(actor: User): Promise<{
+    updatedCount: number;
+    unreadCount: number;
+  }> {
+    this.assertSuperAdmin(actor);
+
+    const readAt = new Date();
+
+    // --- Bulk update unread (non-archived) rows ---
+    // Business rule: one click clears the Super Admin unread badge.
+    const result = await this.adminNotificationRepository.update(
+      { isRead: false, isArchived: false },
+      { isRead: true, readAt },
+    );
+
+    return {
+      updatedCount: result.affected ?? 0,
+      unreadCount: 0,
     };
   }
 

@@ -96,7 +96,7 @@ export class PaymentService implements OnModuleInit {
     if (!secret) {
       this.logger.warn(
         'STRIPE_WEBHOOK_SECRET is not set — POST /payment/webhook will reject events. ' +
-          'Run: stripe listen --forward-to localhost:4001/payment/webhook and copy the whsec_ value into .env',
+          'Run: stripe listen --forward-to localhost:4001/api/payment/webhook and copy the whsec_ value into .env',
       );
     }
   }
