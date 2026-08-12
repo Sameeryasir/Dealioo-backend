@@ -70,4 +70,8 @@ export type GoogleCampaignDraftResumeResponseDto = {
   campaignName: string | null;
   goal: GoogleCampaignGoalId | null;
   draftData: GoogleCampaignBuilderDraftData | null;
+  publishStatus?: string | null;
+  publishStep?: string | null;
+  publishProgress?: number | null;
+  errorMessage?: string | null;
 };

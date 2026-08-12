@@ -496,7 +496,6 @@ export class GoogleCampaignDraftService {
     return {
       id: draft.id,
       businessId: draft.businessId,
-      
       status: draft.status,
       currentStep: draft.currentStep,
       completedSteps: draft.completedSteps ?? [],
@@ -505,6 +504,10 @@ export class GoogleCampaignDraftService {
       campaignName: draft.campaignName,
       goal: draft.goal,
       draftData: draft.draftData,
+      publishStatus: draft.publishStatus ?? null,
+      publishStep: draft.publishStep ?? null,
+      publishProgress: draft.publishProgress ?? null,
+      errorMessage: draft.errorMessage ?? null,
     };
   }
 

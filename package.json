@@ -21,7 +21,10 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "typeorm": "typeorm-ts-node-commonjs",
     "migration:generate": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:generate",
+    "migration:generate-baseline": "TS_NODE_TRANSPILE_ONLY=true npx ts-node scripts/generate-baseline-migrations.ts",
     "migration:run": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:run",
+    "migration:run:baseline": "MIGRATIONS_DIR=baseline TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:run",
+    "migration:show:baseline": "MIGRATIONS_DIR=baseline TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show",
     "migration:revert": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:revert",
     "migration:show": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show"
   },
