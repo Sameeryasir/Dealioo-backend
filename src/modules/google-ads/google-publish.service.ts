@@ -1,3 +1,4 @@
+import { getPublicAssetsBaseUrl } from '../../utils/disk-file-upload-multer';
 import { InjectQueue } from '@nestjs/bullmq';
 import {
   BadRequestException,
@@ -441,6 +442,7 @@ export class GooglePublishService {
       adId = await this.createResponsiveSearchAd(ctx, adGroupId!);
       draft.googleAdId = adId;
       await this.draftRepository.save(draft);
+      await this.uploadBusinessBrandingAssets(ctx, campaignId!);
       await this.completeStep(draft, 'ads');
     }
 
@@ -561,12 +563,18 @@ export class GooglePublishService {
         `Creating Google proximity criterion ${label} address=${proximity.addressLabel ?? ''}`,
       );
       try {
+        if (proximity.negative === true) {
+          this.logger.warn(
+            `Skipping unsupported negative proximity op=${label}; excludes use location criteria instead`,
+          );
+          continue;
+        }
         await this.mutateOne(ctx, 'campaign', label, {
           entity: 'campaign_criterion',
           operation: 'create',
           resource: {
             campaign: campaignResource,
-            negative: proximity.negative === true,
+            negative: false,
             proximity: {
               geo_point: {
                 latitude_in_micro_degrees: Math.round(
@@ -862,6 +870,228 @@ export class GooglePublishService {
     return id;
   }
 
+  private async uploadBusinessBrandingAssets(
+    ctx: PublishContext,
+    campaignId: string,
+  ): Promise<void> {
+    const campaignResource = ResourceNames.campaign(ctx.customerId, campaignId);
+    const businessName = (
+      ctx.draftData.extensionBusinessName ||
+      ctx.draftData.businessName ||
+      ''
+    ).trim();
+    const logoUrl = (ctx.draftData.logoPreviewUrl || '').trim();
+
+    if (businessName) {
+      try {
+        await this.createAndLinkBusinessNameAsset(
+          ctx,
+          campaignResource,
+          businessName,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Business name asset upload skipped: ${this.publishErrorMessage(err)}`,
+        );
+      }
+    }
+
+    if (logoUrl && !logoUrl.startsWith('blob:')) {
+      try {
+        await this.createAndLinkLogoAsset(
+          ctx,
+          campaignResource,
+          logoUrl,
+          ctx.draftData.logoFileName?.trim() || 'Business logo',
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Logo asset upload skipped: ${this.publishErrorMessage(err)}`,
+        );
+      }
+    }
+  }
+
+  private async createAndLinkBusinessNameAsset(
+    ctx: PublishContext,
+    campaignResource: string,
+    businessName: string,
+  ): Promise<void> {
+    const textResponse = await this.mutateOne(ctx, 'ads', 'business_name_asset', {
+      entity: 'asset',
+      operation: 'create',
+      resource: {
+        name: `Business name · ${businessName}`.slice(0, 100),
+        type: enums.AssetType.TEXT,
+        text_asset: { text: businessName.slice(0, 100) },
+      },
+    });
+    const textAssetName = this.firstResourceName(textResponse);
+    if (!textAssetName) {
+      throw new BadRequestException(
+        '[ads/business_name] Google Ads did not return a text asset id.',
+      );
+    }
+
+    try {
+      await this.mutateOne(ctx, 'ads', 'business_name_link', {
+        entity: 'campaign_asset',
+        operation: 'create',
+        resource: {
+          campaign: campaignResource,
+          asset: textAssetName,
+          field_type: enums.AssetFieldType.BUSINESS_NAME,
+        },
+      });
+      return;
+    } catch (err) {
+      if (!this.isAlreadyExistsGoogleError(err)) {
+        this.logger.log(
+          `BUSINESS_NAME link not available for this campaign; adding Search callout instead. ${this.publishErrorMessage(err)}`,
+        );
+      } else {
+        return;
+      }
+    }
+
+    const calloutText = businessName.slice(0, 25);
+    const calloutResponse = await this.mutateOne(
+      ctx,
+      'ads',
+      'business_name_callout_asset',
+      {
+        entity: 'asset',
+        operation: 'create',
+        resource: {
+          name: `Callout · ${calloutText}`.slice(0, 100),
+          type: enums.AssetType.CALLOUT,
+          callout_asset: { callout_text: calloutText },
+        },
+      },
+    );
+    const calloutAssetName = this.firstResourceName(calloutResponse);
+    if (!calloutAssetName) {
+      throw new BadRequestException(
+        '[ads/business_name] Google Ads did not return a callout asset id.',
+      );
+    }
+    try {
+      await this.mutateOne(ctx, 'ads', 'business_name_callout_link', {
+        entity: 'campaign_asset',
+        operation: 'create',
+        resource: {
+          campaign: campaignResource,
+          asset: calloutAssetName,
+          field_type: enums.AssetFieldType.CALLOUT,
+        },
+      });
+    } catch (err) {
+      if (!this.isAlreadyExistsGoogleError(err)) throw err;
+    }
+  }
+
+  private async createAndLinkLogoAsset(
+    ctx: PublishContext,
+    campaignResource: string,
+    logoUrl: string,
+    logoFileName: string,
+  ): Promise<void> {
+    const imageBytes = await this.loadLogoImageBytes(logoUrl);
+    const imageResponse = await this.mutateOne(ctx, 'ads', 'logo_image_asset', {
+      entity: 'asset',
+      operation: 'create',
+      resource: {
+        name: `Logo · ${logoFileName}`.slice(0, 100),
+        type: enums.AssetType.IMAGE,
+        image_asset: { data: imageBytes.toString('base64') },
+      },
+    });
+    const imageAssetName = this.firstResourceName(imageResponse);
+    if (!imageAssetName) {
+      throw new BadRequestException(
+        '[ads/logo] Google Ads did not return an image asset id.',
+      );
+    }
+
+    const fieldTypes = [
+      enums.AssetFieldType.LOGO,
+      enums.AssetFieldType.BUSINESS_LOGO,
+      enums.AssetFieldType.AD_IMAGE,
+    ] as const;
+
+    let linked = false;
+    let lastError: unknown = null;
+    for (const fieldType of fieldTypes) {
+      try {
+        await this.mutateOne(ctx, 'ads', `logo_link:${fieldType}`, {
+          entity: 'campaign_asset',
+          operation: 'create',
+          resource: {
+            campaign: campaignResource,
+            asset: imageAssetName,
+            field_type: fieldType,
+          },
+        });
+        linked = true;
+        break;
+      } catch (err) {
+        if (this.isAlreadyExistsGoogleError(err)) {
+          linked = true;
+          break;
+        }
+        lastError = err;
+        this.logger.log(
+          `Logo field_type=${fieldType} link failed; trying next. ${this.publishErrorMessage(err)}`,
+        );
+      }
+    }
+
+    if (!linked && lastError) {
+      throw lastError;
+    }
+  }
+
+  private async loadLogoImageBytes(logoUrl: string): Promise<Buffer> {
+    const trimmed = logoUrl.trim();
+    if (trimmed.startsWith('data:')) {
+      const match = trimmed.match(/^data:[^;]+;base64,(.+)$/i);
+      if (!match?.[1]) {
+        throw new BadRequestException(
+          '[ads/logo] Logo data URL is invalid. Re-upload the logo and try again.',
+        );
+      }
+      return Buffer.from(match[1], 'base64');
+    }
+
+    let absoluteUrl = trimmed;
+    if (trimmed.startsWith('/uploads/') || trimmed.startsWith('uploads/')) {
+      const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+      absoluteUrl = `${getPublicAssetsBaseUrl()}${path}`;
+    }
+
+    if (!/^https?:\/\//i.test(absoluteUrl)) {
+      throw new BadRequestException(
+        '[ads/logo] Logo URL must be a public http(s) or uploaded image. Re-upload the logo and try again.',
+      );
+    }
+
+    const response = await fetch(absoluteUrl, {
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      throw new BadRequestException(
+        `[ads/logo] Could not download logo image (${response.status}). Re-upload the logo and try again.`,
+      );
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer.length) {
+      throw new BadRequestException(
+        '[ads/logo] Logo image was empty. Re-upload the logo and try again.',
+      );
+    }
+    return buffer;
+  }
+
   private async mutateOne<T>(
     ctx: PublishContext,
     step: GooglePublishStepName,
@@ -899,6 +1129,8 @@ export class GooglePublishService {
         row.ad_group_ad_result?.resource_name ||
         row.ad_group_criterion_result?.resource_name ||
         row.campaign_criterion_result?.resource_name ||
+        row.asset_result?.resource_name ||
+        row.campaign_asset_result?.resource_name ||
         null;
       if (name) return name;
     }

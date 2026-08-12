@@ -295,7 +295,7 @@ export function buildResponsiveSearchAdPayloadFromDraft(
     throw new BadRequestException('Keep at least 2 descriptions.');
   }
 
-  const finalUrl = creative.finalUrl?.trim();
+  const finalUrl = toDealiooPublicAdsFinalUrl(creative.finalUrl?.trim() || '');
   if (!finalUrl) {
     throw new BadRequestException('Add a valid final URL.');
   }
@@ -309,23 +309,46 @@ export function buildResponsiveSearchAdPayloadFromDraft(
   };
 }
 
+const DEALIOO_PUBLIC_ORIGIN = (
+  process.env.DEALIOO_PUBLIC_APP_URL ||
+  process.env.FRONTEND_PUBLIC_URL ||
+  'https://www.dealioo.io'
+).replace(/\/$/, '');
+
+function toDealiooPublicAdsFinalUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase();
+    const isTunnel =
+      host.includes('ngrok') ||
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.endsWith('.local');
+    if (!isTunnel) return trimmed;
+    return `${DEALIOO_PUBLIC_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function buildProximityPayloadsFromDraft(
   draft: GoogleCampaignBuilderDraftData,
 ): GoogleProximityPayload[] {
   const payloads: GoogleProximityPayload[] = [];
 
-  const pushFromLocation = (
-    location: {
-      id?: string;
-      name?: string;
-      type?: string;
-      latitude?: number;
-      longitude?: number;
-      radiusValue?: number;
-      radiusUnit?: string;
-    },
-    negative: boolean,
-  ) => {
+  // Google Ads allows proximity (radius) only for INCLUDE targeting.
+  // Excluded places must use negative location criteria, not negative proximity.
+  const pushIncludeProximity = (location: {
+    id?: string;
+    name?: string;
+    type?: string;
+    latitude?: number;
+    longitude?: number;
+    radiusValue?: number;
+    radiusUnit?: string;
+  }) => {
     if (location.type === 'country') return;
     const latitude =
       typeof location.latitude === 'number' ? location.latitude : null;
@@ -343,20 +366,17 @@ export function buildProximityPayloadsFromDraft(
       radiusUnit: location.radiusUnit === 'MILES' ? 'MILES' : 'KILOMETERS',
       centerLocationId: location.id?.trim() || undefined,
       addressLabel: location.name?.trim() || undefined,
-      negative,
+      negative: false,
     });
   };
 
   for (const location of draft.targetLocations ?? []) {
-    pushFromLocation(location, false);
-  }
-  for (const location of draft.excludedLocationTargets ?? []) {
-    pushFromLocation(location, true);
+    pushIncludeProximity(location);
   }
 
   if (payloads.length === 0) {
     const legacy = buildProximityPayloadFromDraft(draft);
-    if (legacy) payloads.push(legacy);
+    if (legacy) payloads.push({ ...legacy, negative: false });
   }
 
   return payloads;
@@ -426,14 +446,10 @@ export function buildGeoTargetPayloadsFromDraft(
 ): GoogleGeoTargetPayload[] {
   const targets: GoogleGeoTargetPayload[] = [];
   const proximities = buildProximityPayloadsFromDraft(draft);
+  // Cities already published as include proximity don't also need a location criterion.
   const skipPositiveIds = new Set(
     proximities
       .filter((row) => !row.negative && row.centerLocationId)
-      .map((row) => row.centerLocationId as string),
-  );
-  const skipNegativeIds = new Set(
-    proximities
-      .filter((row) => row.negative && row.centerLocationId)
       .map((row) => row.centerLocationId as string),
   );
 
@@ -450,11 +466,11 @@ export function buildGeoTargetPayloadsFromDraft(
     });
   }
 
+  // Excludes are always place-based (Google rejects negative proximity/radius).
   for (const location of draft.excludedLocationTargets ?? []) {
     const id = location.id?.trim();
     const name = location.name?.trim();
     if (!id || !name) continue;
-    if (skipNegativeIds.has(id)) continue;
     targets.push({
       rawId: id,
       name,
