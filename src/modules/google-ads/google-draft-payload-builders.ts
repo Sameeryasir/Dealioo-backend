@@ -54,6 +54,16 @@ export type GoogleGeoTargetPayload = {
   negative: boolean;
 };
 
+export type GoogleProximityPayload = {
+  latitude: number;
+  longitude: number;
+  radiusValue: number;
+  radiusUnit: 'KILOMETERS' | 'MILES';
+  centerLocationId?: string;
+  addressLabel?: string;
+  negative?: boolean;
+};
+
 const LANGUAGE_CRITERION_IDS: Record<string, string> = {
   arabic: '1019',
   bengali: '1056',
@@ -299,15 +309,139 @@ export function buildResponsiveSearchAdPayloadFromDraft(
   };
 }
 
+export function buildProximityPayloadsFromDraft(
+  draft: GoogleCampaignBuilderDraftData,
+): GoogleProximityPayload[] {
+  const payloads: GoogleProximityPayload[] = [];
+
+  const pushFromLocation = (
+    location: {
+      id?: string;
+      name?: string;
+      type?: string;
+      latitude?: number;
+      longitude?: number;
+      radiusValue?: number;
+      radiusUnit?: string;
+    },
+    negative: boolean,
+  ) => {
+    if (location.type === 'country') return;
+    const latitude =
+      typeof location.latitude === 'number' ? location.latitude : null;
+    const longitude =
+      typeof location.longitude === 'number' ? location.longitude : null;
+    const radiusValue =
+      typeof location.radiusValue === 'number' && location.radiusValue >= 1
+        ? location.radiusValue
+        : null;
+    if (latitude == null || longitude == null || radiusValue == null) return;
+    payloads.push({
+      latitude,
+      longitude,
+      radiusValue,
+      radiusUnit: location.radiusUnit === 'MILES' ? 'MILES' : 'KILOMETERS',
+      centerLocationId: location.id?.trim() || undefined,
+      addressLabel: location.name?.trim() || undefined,
+      negative,
+    });
+  };
+
+  for (const location of draft.targetLocations ?? []) {
+    pushFromLocation(location, false);
+  }
+  for (const location of draft.excludedLocationTargets ?? []) {
+    pushFromLocation(location, true);
+  }
+
+  if (payloads.length === 0) {
+    const legacy = buildProximityPayloadFromDraft(draft);
+    if (legacy) payloads.push(legacy);
+  }
+
+  return payloads;
+}
+
+export function buildProximityPayloadFromDraft(
+  draft: GoogleCampaignBuilderDraftData,
+): GoogleProximityPayload | null {
+  const center =
+    draft.radiusCenter ??
+    (draft.targetLocations ?? []).find(
+      (row) => row.type !== 'country' && row.id?.trim(),
+    ) ??
+    null;
+
+  const latitude =
+    typeof draft.radiusLat === 'number'
+      ? draft.radiusLat
+      : typeof center?.latitude === 'number'
+        ? center.latitude
+        : null;
+  const longitude =
+    typeof draft.radiusLng === 'number'
+      ? draft.radiusLng
+      : typeof center?.longitude === 'number'
+        ? center.longitude
+        : null;
+
+  const radiusValue =
+    typeof draft.radiusValue === 'number' && draft.radiusValue >= 1
+      ? draft.radiusValue
+      : typeof center?.radiusValue === 'number' && center.radiusValue >= 1
+        ? center.radiusValue
+        : null;
+  const radiusUnit =
+    draft.radiusUnit === 'MILES' || center?.radiusUnit === 'MILES'
+      ? 'MILES'
+      : 'KILOMETERS';
+
+  const pinNeedsRadius =
+    center != null &&
+    center.type !== 'country' &&
+    latitude != null &&
+    longitude != null;
+
+  if (!draft.radiusEnabled && !pinNeedsRadius) {
+    return null;
+  }
+
+  if (latitude == null || longitude == null || radiusValue == null) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+    radiusValue,
+    radiusUnit,
+    centerLocationId: center?.id?.trim() || undefined,
+    addressLabel:
+      center?.name?.trim() || draft.radiusTargeting?.trim() || undefined,
+  };
+}
+
 export function buildGeoTargetPayloadsFromDraft(
   draft: GoogleCampaignBuilderDraftData,
 ): GoogleGeoTargetPayload[] {
   const targets: GoogleGeoTargetPayload[] = [];
+  const proximities = buildProximityPayloadsFromDraft(draft);
+  const skipPositiveIds = new Set(
+    proximities
+      .filter((row) => !row.negative && row.centerLocationId)
+      .map((row) => row.centerLocationId as string),
+  );
+  const skipNegativeIds = new Set(
+    proximities
+      .filter((row) => row.negative && row.centerLocationId)
+      .map((row) => row.centerLocationId as string),
+  );
 
   for (const location of draft.targetLocations ?? []) {
     const id = location.id?.trim();
     const name = location.name?.trim();
     if (!id || !name) continue;
+    if (skipPositiveIds.has(id)) continue;
     targets.push({
       rawId: id,
       name,
@@ -320,6 +454,7 @@ export function buildGeoTargetPayloadsFromDraft(
     const id = location.id?.trim();
     const name = location.name?.trim();
     if (!id || !name) continue;
+    if (skipNegativeIds.has(id)) continue;
     targets.push({
       rawId: id,
       name,
@@ -328,7 +463,10 @@ export function buildGeoTargetPayloadsFromDraft(
     });
   }
 
-  if (!targets.some((row) => !row.negative)) {
+  if (
+    !targets.some((row) => !row.negative) &&
+    !proximities.some((row) => !row.negative)
+  ) {
     throw new BadRequestException('Select at least one target location.');
   }
 

@@ -268,6 +268,18 @@ export class GoogleCampaignDraftService {
       businessPhone,
       phoneNumber: businessPhone || base.phoneNumber,
       leadContactMethods: dto.leadContactMethods ?? base.leadContactMethods,
+      destinationType:
+        dto.destinationType !== undefined
+          ? dto.destinationType
+          : (base.destinationType ?? null),
+      selectedFunnelId:
+        dto.selectedFunnelId !== undefined
+          ? dto.selectedFunnelId
+          : (base.selectedFunnelId ?? null),
+      selectedFunnelName:
+        dto.selectedFunnelName !== undefined
+          ? dto.selectedFunnelName.trim()
+          : (base.selectedFunnelName ?? ''),
       landingPageUrl: landingPageUrl || websiteUrl,
       phoneCountryCode:
         dto.phoneCountryCode?.trim() ?? base.phoneCountryCode ?? '+1',
@@ -596,9 +608,64 @@ export class GoogleCampaignDraftService {
     dto: SaveGoogleLocationsStepDto,
     idempotencyKey?: string,
   ): Promise<GoogleCampaignStepSaveResponseDto> {
-    if (dto.radiusEnabled && (!dto.radiusValue || dto.radiusValue < 1)) {
-      throw new BadRequestException('Enter a radius of at least 1.');
+    const normalizeLocation = (
+      row: SaveGoogleLocationsStepDto['targetLocations'][number],
+      fallbackRadius: number,
+      fallbackUnit: 'KILOMETERS' | 'MILES',
+    ) => {
+      if (row.type === 'country') {
+        return { ...row, radiusValue: undefined, radiusUnit: undefined };
+      }
+      return {
+        ...row,
+        radiusValue:
+          typeof row.radiusValue === 'number' && row.radiusValue >= 1
+            ? row.radiusValue
+            : fallbackRadius,
+        radiusUnit: row.radiusUnit === 'MILES' ? 'MILES' : fallbackUnit,
+      };
+    };
+
+    const fallbackRadius = dto.radiusValue ?? 16;
+    const fallbackUnit =
+      dto.radiusUnit === 'MILES' ? 'MILES' : 'KILOMETERS';
+    const targetLocations = dto.targetLocations.map((row) =>
+      normalizeLocation(row, fallbackRadius, fallbackUnit),
+    );
+    const excludedLocationTargets = (dto.excludedLocationTargets ?? []).map(
+      (row) => normalizeLocation(row, 16, 'KILOMETERS'),
+    );
+
+    const pinWithoutRadius = targetLocations.find((row) => {
+      if (row.type === 'country') return false;
+      const hasCoords =
+        typeof row.latitude === 'number' && typeof row.longitude === 'number';
+      const hasRadius =
+        typeof row.radiusValue === 'number' && row.radiusValue >= 1;
+      return !hasCoords || !hasRadius;
+    });
+    if (pinWithoutRadius) {
+      throw new BadRequestException(
+        `Set a map radius for ${pinWithoutRadius.name} before continuing.`,
+      );
     }
+
+    const pinCenter =
+      dto.radiusCenter ??
+      targetLocations.find((row) => row.type !== 'country') ??
+      null;
+    const pinLat =
+      dto.radiusLat ??
+      (typeof pinCenter?.latitude === 'number' ? pinCenter.latitude : null);
+    const pinLng =
+      dto.radiusLng ??
+      (typeof pinCenter?.longitude === 'number' ? pinCenter.longitude : null);
+    const hasPinLocation = targetLocations.some(
+      (row) => row.type !== 'country',
+    );
+    const radiusEnabled =
+      dto.radiusEnabled === true ||
+      (hasPinLocation && pinLat != null && pinLng != null);
 
     return this.commitWizardStep(user, businessId, dto.draftId, {
       expectedVersion: dto.expectedVersion,
@@ -606,23 +673,32 @@ export class GoogleCampaignDraftService {
       nextStep: 6,
       apply: (base) => ({
         ...base,
-        targetLocations: dto.targetLocations,
+        targetLocations,
         excludedLocationTargets:
-          dto.excludedLocationTargets ?? base.excludedLocationTargets,
+          dto.excludedLocationTargets != null
+            ? excludedLocationTargets
+            : base.excludedLocationTargets,
         countries: dto.countries ?? base.countries,
         regions: dto.regions ?? base.regions,
         cities: dto.cities ?? base.cities,
         excludedLocations: dto.excludedLocations ?? base.excludedLocations,
-        radiusEnabled: dto.radiusEnabled ?? base.radiusEnabled,
-        radiusCenter:
-          dto.radiusCenter === undefined
-            ? base.radiusCenter
-            : dto.radiusCenter,
-        radiusLat: dto.radiusLat === undefined ? base.radiusLat : dto.radiusLat,
-        radiusLng: dto.radiusLng === undefined ? base.radiusLng : dto.radiusLng,
-        radiusValue: dto.radiusValue ?? base.radiusValue,
-        radiusUnit: dto.radiusUnit ?? base.radiusUnit,
-        radiusTargeting: dto.radiusTargeting ?? base.radiusTargeting,
+        radiusEnabled,
+        radiusCenter: pinCenter ?? dto.radiusCenter ?? null,
+        radiusLat: pinLat,
+        radiusLng: pinLng,
+        radiusValue:
+          typeof pinCenter?.radiusValue === 'number'
+            ? pinCenter.radiusValue
+            : (dto.radiusValue ?? base.radiusValue ?? 16),
+        radiusUnit:
+          pinCenter?.radiusUnit === 'MILES'
+            ? 'MILES'
+            : (dto.radiusUnit ?? base.radiusUnit),
+        radiusTargeting:
+          dto.radiusTargeting ??
+          (radiusEnabled && pinCenter?.radiusValue
+            ? `${pinCenter.radiusValue} ${pinCenter.radiusUnit === 'MILES' ? 'mi' : 'km'} radius`
+            : base.radiusTargeting),
         presenceOption: dto.presenceOption ?? base.presenceOption,
       }),
       idempotencyKey,
@@ -1105,9 +1181,6 @@ export class GoogleCampaignDraftService {
       if (!dto.businessName?.trim()) {
         throw new BadRequestException('Add your business name.');
       }
-      if (!dto.businessCategory?.trim()) {
-        throw new BadRequestException('Choose a business category.');
-      }
     }
 
     if (goal === 'LOCAL_VISITS') {
@@ -1303,6 +1376,19 @@ export class GoogleCampaignDraftService {
     if (goal === 'WEBSITE_TRAFFIC') {
       if (data?.websiteUrl?.trim()) response.websiteUrl = data.websiteUrl.trim();
       if (data?.trafficAction) response.trafficAction = data.trafficAction;
+    }
+
+    if (data?.destinationType) {
+      response.destinationType = data.destinationType;
+    }
+    if (data?.selectedFunnelId != null) {
+      response.selectedFunnelId = data.selectedFunnelId;
+    }
+    if (data?.selectedFunnelName?.trim()) {
+      response.selectedFunnelName = data.selectedFunnelName.trim();
+    }
+    if (data?.landingPageUrl?.trim() && !response.landingPageUrl) {
+      response.landingPageUrl = data.landingPageUrl.trim();
     }
 
     if (goal === 'AWARENESS') {

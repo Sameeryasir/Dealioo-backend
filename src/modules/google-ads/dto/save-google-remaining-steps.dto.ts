@@ -39,6 +39,16 @@ export class GoogleLocationRefDto {
   @IsOptional()
   @IsNumber()
   longitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(80)
+  radiusValue?: number;
+
+  @IsOptional()
+  @IsIn(['KILOMETERS', 'MILES'])
+  radiusUnit?: GoogleRadiusUnitId;
 }
 
 export class GoogleSuggestedKeywordDto {

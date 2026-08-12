@@ -270,13 +270,6 @@ export function validateGoogleDraftForPublish(
         message: 'Add your business name.',
       });
     }
-    if (!draft.businessCategory?.trim()) {
-      errors.push({
-        step: 2,
-        field: 'businessCategory',
-        message: 'Choose a business category.',
-      });
-    }
   }
 
   if (draft.goal === 'LOCAL_VISITS') {
@@ -348,19 +341,30 @@ export function validateGoogleDraftForPublish(
       message: 'Select at least one target location.',
     });
   }
-  if (draft.radiusEnabled) {
-    if (!draft.radiusValue || draft.radiusValue < 1) {
+
+  const hasPinLocation = (draft.targetLocations ?? []).some(
+    (row) => row.type !== 'country',
+  );
+
+  if (hasPinLocation || draft.radiusEnabled) {
+    const pinWithoutRadius = (draft.targetLocations ?? []).find((row) => {
+      if (row.type === 'country') return false;
+      const hasCoords =
+        typeof row.latitude === 'number' && typeof row.longitude === 'number';
+      const hasRadius =
+        typeof row.radiusValue === 'number' && row.radiusValue >= 1;
+      return !hasCoords || !hasRadius;
+    });
+    if (pinWithoutRadius) {
       errors.push({
         step: 5,
         field: 'radiusValue',
-        message: 'Enter a radius of at least 1.',
+        message: `Set a map radius for ${pinWithoutRadius.name}.`,
       });
-    }
-    if (!draft.radiusCenter?.id && (draft.radiusLat == null || draft.radiusLng == null)) {
       errors.push({
         step: 5,
         field: 'radiusCenter',
-        message: 'Pick a center point for radius targeting.',
+        message: `Click ${pinWithoutRadius.name} and set its radius on the map before publishing.`,
       });
     }
   }

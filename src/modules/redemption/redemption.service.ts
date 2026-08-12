@@ -1529,6 +1529,7 @@ export class RedemptionService {
       paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
       paymentStatus: CouponPaymentStatus;
       campaignPrice: number | null;
+      imageUrl: string | null;
       expiresAt: string | null;
       canSelect: boolean;
       qrToken: string;
@@ -1552,6 +1553,7 @@ export class RedemptionService {
       paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
       paymentStatus: CouponPaymentStatus;
       campaignPrice: number | null;
+      imageUrl: string | null;
       expiresAt: string | null;
       canSelect: boolean;
       qrToken: string;

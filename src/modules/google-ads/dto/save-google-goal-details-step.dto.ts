@@ -10,6 +10,7 @@ import {
   Min,
 } from 'class-validator';
 import type {
+  GoogleDestinationTypeId,
   GoogleLeadContactMethodId,
   GoogleSalesChannelId,
   GoogleTrafficActionId,
@@ -38,6 +39,14 @@ export const GOOGLE_TRAFFIC_ACTIONS = [
   'DOWNLOAD',
   'CONTACT_US',
 ] as const satisfies readonly GoogleTrafficActionId[];
+
+export const GOOGLE_DESTINATION_TYPES = [
+  'dealioo_funnel',
+  'external_website',
+  'google_lead_form',
+  'phone',
+  'physical_location',
+] as const satisfies readonly GoogleDestinationTypeId[];
 
 export class SaveGoogleGoalDetailsStepDto {
   @IsUUID()
@@ -75,6 +84,19 @@ export class SaveGoogleGoalDetailsStepDto {
   @IsArray()
   @IsIn(GOOGLE_LEAD_CONTACT_METHODS, { each: true })
   leadContactMethods?: GoogleLeadContactMethodId[];
+
+  @IsOptional()
+  @IsIn(GOOGLE_DESTINATION_TYPES)
+  destinationType?: GoogleDestinationTypeId | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  selectedFunnelId?: number | null;
+
+  @IsOptional()
+  @IsString()
+  selectedFunnelName?: string;
 
   @IsOptional()
   @IsString()

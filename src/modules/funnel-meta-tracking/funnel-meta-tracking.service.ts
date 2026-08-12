@@ -88,10 +88,8 @@ export class FunnelMetaTrackingService {
   }
 
   private isUniqueViolation(err: unknown): boolean {
-    return (
-      err instanceof QueryFailedError &&
-      typeof (err as { code?: string }).code === 'string' &&
-      (err as { code: string }).code === '23505'
-    );
+    if (!(err instanceof QueryFailedError)) return false;
+    const code = (err as unknown as { code?: string }).code;
+    return typeof code === 'string' && code === '23505';
   }
 }

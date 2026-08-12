@@ -27,6 +27,13 @@ export type GoogleTrafficActionId =
   | 'DOWNLOAD'
   | 'CONTACT_US';
 
+export type GoogleDestinationTypeId =
+  | 'dealioo_funnel'
+  | 'external_website'
+  | 'google_lead_form'
+  | 'phone'
+  | 'physical_location';
+
 export type GoogleAgeRangeId =
   | '18-24'
   | '25-34'
@@ -77,6 +84,8 @@ export type GoogleAdsLocationRefData = {
   name: string;
   latitude?: number;
   longitude?: number;
+  radiusValue?: number;
+  radiusUnit?: GoogleRadiusUnitId;
 };
 
 export type GoogleSuggestedKeywordData = {
@@ -112,6 +121,9 @@ export type GoogleCampaignBuilderDraftData = {
   businessLocationLat?: number | null;
   businessLocationLng?: number | null;
   leadContactMethods: GoogleLeadContactMethodId[];
+  destinationType?: GoogleDestinationTypeId | null;
+  selectedFunnelId?: number | null;
+  selectedFunnelName?: string;
   landingPageUrl: string;
   businessPhone: string;
   phoneCountryCode?: string;

@@ -1,6 +1,7 @@
 import type {
   GoogleCampaignBuilderDraftData,
   GoogleCampaignGoalId,
+  GoogleDestinationTypeId,
   GoogleLeadContactMethodId,
   GoogleSalesChannelId,
   GoogleTrafficActionId,
@@ -32,6 +33,9 @@ export type SaveGoogleGoalDetailsStepResponseDto = {
   businessPhone?: string;
   leadContactMethods?: GoogleLeadContactMethodId[];
   landingPageUrl?: string;
+  destinationType?: GoogleDestinationTypeId | null;
+  selectedFunnelId?: number | null;
+  selectedFunnelName?: string;
   trafficAction?: GoogleTrafficActionId;
   businessName?: string;
   businessCategory?: string;

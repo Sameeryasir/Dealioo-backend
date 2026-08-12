@@ -43,6 +43,7 @@ import {
   buildKeywordPayloadsFromDraft,
   buildLanguageCriterionIdsFromDraft,
   buildNegativeKeywordPayloadsFromDraft,
+  buildProximityPayloadsFromDraft,
   buildResponsiveSearchAdPayloadFromDraft,
   extractGoogleResourceId,
   googleAdsCampaignConsoleUrl,
@@ -533,6 +534,65 @@ export class GooglePublishService {
     campaignId: string,
   ): Promise<void> {
     const campaignResource = ResourceNames.campaign(ctx.customerId, campaignId);
+
+    const proximities = buildProximityPayloadsFromDraft(ctx.draftData);
+    const pinTargets = (ctx.draftData.targetLocations ?? []).filter(
+      (row) => row.type !== 'country',
+    );
+    const missingTargetRadius = pinTargets.some(
+      (pin) =>
+        !proximities.some(
+          (row) =>
+            !row.negative &&
+            row.centerLocationId &&
+            row.centerLocationId === pin.id?.trim(),
+        ),
+    );
+    if (pinTargets.length > 0 && (proximities.length === 0 || missingTargetRadius)) {
+      throw new BadRequestException(
+        '[campaign/proximity] Each city/region needs its own map radius. Go back to Locations, click each place, set its radius, then publish again.',
+      );
+    }
+
+    for (const proximity of proximities) {
+      const unitLabel = proximity.radiusUnit === 'MILES' ? 'mi' : 'km';
+      const label = `${proximity.negative ? 'proximity_exclude' : 'proximity'}:${proximity.latitude.toFixed(5)},${proximity.longitude.toFixed(5)}:${proximity.radiusValue}${unitLabel}`;
+      this.logger.log(
+        `Creating Google proximity criterion ${label} address=${proximity.addressLabel ?? ''}`,
+      );
+      try {
+        await this.mutateOne(ctx, 'campaign', label, {
+          entity: 'campaign_criterion',
+          operation: 'create',
+          resource: {
+            campaign: campaignResource,
+            negative: proximity.negative === true,
+            proximity: {
+              geo_point: {
+                latitude_in_micro_degrees: Math.round(
+                  proximity.latitude * 1_000_000,
+                ),
+                longitude_in_micro_degrees: Math.round(
+                  proximity.longitude * 1_000_000,
+                ),
+              },
+              radius: proximity.radiusValue,
+              radius_units:
+                proximity.radiusUnit === 'MILES'
+                  ? enums.ProximityRadiusUnits.MILES
+                  : enums.ProximityRadiusUnits.KILOMETERS,
+            },
+          },
+        });
+      } catch (err) {
+        if (!this.isAlreadyExistsGoogleError(err)) {
+          throw err;
+        }
+        this.logger.log(
+          `Google proximity already present, skipping op=${label}`,
+        );
+      }
+    }
 
     for (const geo of buildGeoTargetPayloadsFromDraft(ctx.draftData)) {
       const criterionId = await this.resolveGoogleGeoCriterionId(ctx, geo);
