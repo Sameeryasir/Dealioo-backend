@@ -105,10 +105,10 @@ export class CampaignService {
       status,
     } = createCampaignDto;
 
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      'campaigns',
+      ['campaigns_create', 'campaigns'],
       'You do not have permission to create campaigns for this business.',
     );
 
@@ -202,10 +202,10 @@ export class CampaignService {
     limit?: number,
     search?: string,
   ): Promise<{ data: Campaign[]; meta: PaginationMeta }> {
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      'campaigns',
+      ['campaigns_view', 'campaigns'],
       'You do not have permission to view campaigns for this business.',
     );
 
@@ -271,10 +271,10 @@ export class CampaignService {
       throw new NotFoundException('Campaign not found');
     }
 
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       campaign.businessId,
-      'campaigns',
+      ['campaigns_view', 'campaigns'],
       'You do not have permission to view campaigns for this business.',
     );
 
@@ -294,10 +294,10 @@ export class CampaignService {
       throw new NotFoundException('Campaign not found');
     }
 
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       campaign.businessId,
-      'campaigns',
+      ['campaigns_edit', 'campaigns'],
       'You do not have permission to update campaigns for this business.',
     );
 
@@ -353,10 +353,10 @@ export class CampaignService {
       throw new NotFoundException('Campaign not found');
     }
 
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       campaign.businessId,
-      'campaigns',
+      ['campaigns_delete', 'campaigns'],
       'You do not have permission to delete campaigns for this business.',
     );
 

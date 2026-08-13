@@ -9,6 +9,10 @@ import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity'
 import { MetaCampaignMedia } from '../../db/entities/meta-campaign-media.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  metaCampaignPermissionKeysFor,
+  type MetaCampaignAccessAction,
+} from '../member/member.constants';
 import { SpacesService } from '../spaces/spaces.service';
 import { CAMPAIGNS_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
 import {
@@ -273,11 +277,15 @@ export class MediaService {
     }
   }
 
-  private async assertMetaAccess(user: User, businessId: number): Promise<void> {
+  private async assertMetaAccess(
+    user: User,
+    businessId: number,
+    action: MetaCampaignAccessAction = 'create',
+  ): Promise<void> {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      ['meta_ads', 'meta_campaigns'],
+      metaCampaignPermissionKeysFor(action),
       'You do not have permission to access Meta campaigns for this business.',
     );
     const business = await this.businessAccessService.findAccessibleBusiness(

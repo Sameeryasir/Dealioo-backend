@@ -672,10 +672,10 @@ export class BusinessService {
     selectedPhoneSid: string | null;
     selectedPhoneNumber: string | null;
   }> {
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      'campaigns',
+      ['campaigns_edit', 'campaigns'],
       'You do not have permission to manage Twilio for this business.',
     );
 
@@ -707,10 +707,10 @@ export class BusinessService {
     twilioPhoneNumber: string;
     twilioConnectedAt: Date;
   }> {
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      'campaigns',
+      ['campaigns_edit', 'campaigns'],
       'You do not have permission to manage Twilio for this business.',
     );
 

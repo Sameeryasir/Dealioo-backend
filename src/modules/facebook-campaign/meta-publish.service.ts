@@ -15,6 +15,10 @@ import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entit
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  metaCampaignPermissionKeysFor,
+  type MetaCampaignAccessAction,
+} from '../member/member.constants';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { FacebookService } from '../facebook/facebook.service';
@@ -109,7 +113,7 @@ export class MetaPublishService {
     businessId: number,
     draftId: string,
   ): Promise<EnqueueMetaPublishResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     const jobId = metaPublishJobId(businessId, draftId.trim());
 
@@ -318,7 +322,7 @@ export class MetaPublishService {
     businessId: number,
     draftId: string,
   ): Promise<MetaPublishStatusDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'view');
 
     const draft = await this.draftRepository.findOne({
       where: {
@@ -1070,11 +1074,12 @@ export class MetaPublishService {
   private async loadOwnedBusiness(
     user: User,
     businessId: number,
+    action: MetaCampaignAccessAction = 'view',
   ): Promise<Business> {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      ['meta_ads', 'meta_campaigns'],
+      metaCampaignPermissionKeysFor(action),
       'You do not have permission to access Meta campaigns for this business.',
     );
     const business = await this.businessAccessService.findAccessibleBusiness(

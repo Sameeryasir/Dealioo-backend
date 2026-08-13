@@ -17,6 +17,10 @@ import { User } from '../../db/entities/user.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  metaCampaignPermissionKeysFor,
+  type MetaCampaignAccessAction,
+} from '../member/member.constants';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
 import {
   FacebookAdBreakdownRowDto,
@@ -173,12 +177,12 @@ export class FacebookService {
   private async requireMetaBusiness(
     user: User,
     businessId: number,
-    permission: 'meta_ads' | 'meta_campaigns' = 'meta_ads',
+    action: MetaCampaignAccessAction = 'view',
   ): Promise<Business> {
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      permission,
+      metaCampaignPermissionKeysFor(action),
       'You do not have permission to access Meta for this business.',
     );
     const business = await this.businessAccessService.findAccessibleBusiness(
@@ -198,7 +202,7 @@ export class FacebookService {
     businessId: number,
     selectedScopes: string[],
   ): Promise<{ url: string; scopes: string[] }> {
-    const business = await this.requireMetaBusiness(user, businessId);
+    const business = await this.requireMetaBusiness(user, businessId, 'create');
 
     const requestedScopes = (() => {
       try {

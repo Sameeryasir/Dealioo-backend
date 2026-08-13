@@ -10,6 +10,10 @@ import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity'
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  metaCampaignPermissionKeysFor,
+  type MetaCampaignAccessAction,
+} from '../member/member.constants';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
@@ -56,7 +60,7 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveCampaignStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
     this.assertCampaignStepBusinessRules(dto);
 
     const campaignData: CampaignStepDataDto = {
@@ -124,7 +128,7 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdSetStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     const draft = await this.findEditableDraft(
       user.id,
@@ -240,7 +244,7 @@ export class MetaCampaignDraftService {
     businessId: number,
     dto: SaveAdCreativeStepDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     const draft = await this.findEditableDraft(
       user.id,
@@ -314,7 +318,7 @@ export class MetaCampaignDraftService {
     draftId: string,
     dto: AutosaveDraftDto,
   ): Promise<MetaCampaignDraftResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     const draft = await this.findEditableDraft(
       user.id,
@@ -373,7 +377,7 @@ export class MetaCampaignDraftService {
     businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraftResponseDto> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'view');
 
     const draft = await this.draftRepository.findOne({
       where: { id: draftId.trim(), businessId, userId: user.id },
@@ -390,7 +394,7 @@ export class MetaCampaignDraftService {
     user: User,
     businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'view');
 
     const drafts = await this.draftRepository.find({
       where: {
@@ -575,11 +579,12 @@ export class MetaCampaignDraftService {
   private async loadOwnedBusiness(
     user: User,
     businessId: number,
+    action: MetaCampaignAccessAction = 'view',
   ): Promise<Business> {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      ['meta_ads', 'meta_campaigns'],
+      metaCampaignPermissionKeysFor(action),
       'You do not have permission to access Meta campaigns for this business.',
     );
     const business = await this.businessAccessService.findAccessibleBusiness(

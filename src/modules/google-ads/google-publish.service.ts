@@ -16,7 +16,11 @@ import { Business } from '../../db/entities/business.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
-import { BusinessService } from '../business/business.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  googleCampaignPermissionKeysFor,
+  type GoogleCampaignAccessAction,
+} from '../member/member.constants';
 import { EnqueueGooglePublishResponseDto } from './dto/enqueue-google-publish-response.dto';
 import { GooglePublishStatusDto } from './dto/google-publish-status.dto';
 import { PublishGoogleCampaignDraftDto } from './dto/publish-google-campaign-draft.dto';
@@ -77,7 +81,7 @@ export class GooglePublishService {
     private readonly draftRepository: Repository<GoogleCampaignDraft>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    private readonly businessService: BusinessService,
+    private readonly businessAccessService: BusinessAccessService,
     private readonly googleAdsTokenService: GoogleAdsTokenService,
     @InjectQueue(GOOGLE_PUBLISH_QUEUE)
     private readonly googlePublishQueue: Queue<GooglePublishJobPayload>,
@@ -88,7 +92,7 @@ export class GooglePublishService {
     businessId: number,
     dto: PublishGoogleCampaignDraftDto,
   ): Promise<EnqueueGooglePublishResponseDto> {
-    await this.assertBusinessAccess(user, businessId);
+    await this.assertBusinessAccess(user, businessId, 'create');
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
@@ -264,7 +268,7 @@ export class GooglePublishService {
     businessId: number,
     draftId: string,
   ): Promise<GooglePublishStatusDto> {
-    await this.assertBusinessAccess(user, businessId);
+    await this.assertBusinessAccess(user, businessId, 'view');
 
     const draft = await this.draftRepository.findOne({
       where: {
@@ -1196,15 +1200,23 @@ export class GooglePublishService {
   private async assertBusinessAccess(
     user: User,
     businessId: number,
+    action: GoogleCampaignAccessAction = 'create',
   ): Promise<void> {
-    const business = await this.businessService.findBusinessForUser(
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      googleCampaignPermissionKeysFor(action),
+      'You do not have permission to access Google campaigns for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
       user,
       businessId,
     );
 
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
   }

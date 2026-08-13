@@ -9,7 +9,11 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
 import { User } from '../../db/entities/user.entity';
-import { BusinessService } from '../business/business.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  googleCampaignPermissionKeysFor,
+  type GoogleCampaignAccessAction,
+} from '../member/member.constants';
 import {
   GoogleCampaignDraftResumeResponseDto,
   SaveGoogleCampaignInfoStepResponseDto,
@@ -69,7 +73,7 @@ export class GoogleCampaignDraftService {
     private readonly draftRepository: Repository<GoogleCampaignDraft>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-    private readonly businessService: BusinessService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   
@@ -479,7 +483,7 @@ export class GoogleCampaignDraftService {
     businessId: number,
     draftId: string,
   ): Promise<GoogleCampaignDraftResumeResponseDto> {
-    await this.assertBusinessAccess(user, businessId);
+    await this.assertBusinessAccess(user, businessId, 'view');
 
     const draft = await this.draftRepository.findOne({
       where: {
@@ -1272,15 +1276,23 @@ export class GoogleCampaignDraftService {
   private async assertBusinessAccess(
     user: User,
     businessId: number,
+    action: GoogleCampaignAccessAction = 'create',
   ): Promise<void> {
-    const business = await this.businessService.findBusinessForUser(
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      googleCampaignPermissionKeysFor(action),
+      'You do not have permission to access Google campaigns for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
       user,
       businessId,
     );
 
     if (!business) {
       throw new NotFoundException(
-        'Business not found or you do not own this business.',
+        'Business not found or you do not have access to this business.',
       );
     }
   }

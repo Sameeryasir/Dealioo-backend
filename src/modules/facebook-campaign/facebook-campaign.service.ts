@@ -12,6 +12,10 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import {
+  metaCampaignPermissionKeysFor,
+  type MetaCampaignAccessAction,
+} from '../member/member.constants';
+import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
 } from '../../utils/disk-file-upload-multer';
@@ -90,7 +94,7 @@ export class FacebookCampaignService {
     businessId: number,
     file: Express.Multer.File,
   ): Promise<{ imageUrl: string }> {
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     if (!file) {
       throw new BadRequestException('Image file is required.');
@@ -129,7 +133,7 @@ export class FacebookCampaignService {
     file: Express.Multer.File,
   ): Promise<{ videoUrl: string }> {
 
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'create');
 
     if (!file) {
       throw new BadRequestException('Video file is required.');
@@ -168,7 +172,7 @@ export class FacebookCampaignService {
     dto: CreateFacebookCampaignDto,
   ): Promise<CreateFacebookCampaignResponseDto> {
 
-    const business = await this.loadOwnedBusiness(user, businessId);
+    const business = await this.loadOwnedBusiness(user, businessId, 'create');
 
     const { accessToken, adAccountId: storedAdAccountId } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
@@ -379,7 +383,7 @@ export class FacebookCampaignService {
       throw new BadRequestException('Meta campaign id is required.');
     }
 
-    const business = await this.loadOwnedBusiness(user, businessId);
+    const business = await this.loadOwnedBusiness(user, businessId, 'delete');
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
@@ -409,7 +413,7 @@ export class FacebookCampaignService {
     businessId: number,
   ): Promise<FacebookCampaign[]> {
 
-    await this.loadOwnedBusiness(user, businessId);
+    await this.loadOwnedBusiness(user, businessId, 'view');
 
     return this.facebookCampaignRepository.find({
       where: { businessId },
@@ -420,11 +424,12 @@ export class FacebookCampaignService {
   private async loadOwnedBusiness(
     user: User,
     businessId: number,
+    action: MetaCampaignAccessAction = 'view',
   ): Promise<Business> {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      ['meta_ads', 'meta_campaigns'],
+      metaCampaignPermissionKeysFor(action),
       'You do not have permission to access Meta campaigns for this business.',
     );
     const business = await this.businessAccessService.findAccessibleBusiness(

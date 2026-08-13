@@ -4,6 +4,9 @@ import { Repository } from 'typeorm';
 import { BusinessTracking } from '../../db/entities/business-tracking.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  metaCampaignPermissionKeysFor,
+} from '../member/member.constants';
 import { UpsertBusinessTrackingDto } from './dto/upsert-business-tracking.dto';
 
 export type BusinessTrackingResponse = {
@@ -26,10 +29,10 @@ export class BusinessTrackingService {
   ) {}
 
   private async assertMetaAccess(user: User, businessId: number) {
-    await this.businessAccessService.assertPermission(
+    await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      'meta_ads',
+      metaCampaignPermissionKeysFor('view'),
       'You do not have permission to manage ads tracking for this business.',
     );
 
