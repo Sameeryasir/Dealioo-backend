@@ -19,6 +19,7 @@ import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
+import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
 import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { FacebookService } from '../facebook/facebook.service';
@@ -1091,6 +1092,10 @@ export class MetaPublishService {
       throw new NotFoundException(
         'Business not found or you do not have access to this business.',
       );
+    }
+
+    if (action === 'create' || action === 'delete') {
+      assertBusinessCanManageMetaAds(business.metaOauthScopes);
     }
 
     return business;

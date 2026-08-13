@@ -3,9 +3,6 @@ import { ArrayMinSize, IsArray, IsIn, IsString } from 'class-validator';
 export const SELECTABLE_META_OAUTH_SCOPES = [
   'ads_read',
   'ads_management',
-  'business_management',
-  'pages_show_list',
-  'pages_read_engagement',
 ] as const;
 
 export type SelectableMetaOAuthScope =

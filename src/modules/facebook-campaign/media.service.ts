@@ -13,6 +13,7 @@ import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
+import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
 import { SpacesService } from '../spaces/spaces.service';
 import { CAMPAIGNS_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
 import {
@@ -296,6 +297,10 @@ export class MediaService {
       throw new NotFoundException(
         'Business not found or you do not have access to this business.',
       );
+    }
+
+    if (action === 'create' || action === 'delete') {
+      assertBusinessCanManageMetaAds(business.metaOauthScopes);
     }
   }
 }

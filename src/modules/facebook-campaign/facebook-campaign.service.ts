@@ -15,6 +15,7 @@ import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
+import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
 import {
   CAMPAIGNS_UPLOAD_SUBDIR,
   toAbsoluteAssetUrlIfRelative,
@@ -441,6 +442,10 @@ export class FacebookCampaignService {
       throw new NotFoundException(
         'Business not found or you do not have access to this business.',
       );
+    }
+
+    if (action === 'create' || action === 'delete') {
+      assertBusinessCanManageMetaAds(business.metaOauthScopes);
     }
 
     return business;

@@ -1,4 +1,7 @@
-import { InternalServerErrorException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 
 export function parseFacebookScopeList(raw: string | undefined): string[] {
   if (!raw?.trim()) {
@@ -38,4 +41,22 @@ export function getConfiguredFacebookRequiredScopes(): string[] {
 
 export function toFacebookOAuthScopeParam(scopes: string[]): string {
   return scopes.join(',');
+}
+
+export function businessHasMetaOauthScope(
+  metaOauthScopes: string | null | undefined,
+  scope: string,
+): boolean {
+  return parseFacebookScopeList(metaOauthScopes ?? undefined).includes(scope);
+}
+
+/** Create/edit/delete Meta campaigns require ads_management (ads_read alone is not enough). */
+export function assertBusinessCanManageMetaAds(
+  metaOauthScopes: string | null | undefined,
+): void {
+  if (!businessHasMetaOauthScope(metaOauthScopes, 'ads_management')) {
+    throw new ForbiddenException(
+      'Meta ads_management permission is required to create or manage campaigns. Reconnect Meta Ads and grant Manage advertising campaigns.',
+    );
+  }
 }

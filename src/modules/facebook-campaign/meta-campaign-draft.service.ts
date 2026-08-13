@@ -14,6 +14,7 @@ import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
+import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
@@ -596,6 +597,10 @@ export class MetaCampaignDraftService {
       throw new NotFoundException(
         'Business not found or you do not have access to this business.',
       );
+    }
+
+    if (action === 'create' || action === 'delete') {
+      assertBusinessCanManageMetaAds(business.metaOauthScopes);
     }
 
     return business;
