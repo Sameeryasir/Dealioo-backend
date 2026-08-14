@@ -32,7 +32,10 @@ import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { InvitationService } from '../invitation/invitation.service';
+import { normalizeInvitationRole } from '../invitation/invitationDto/create-business-invitation.dto';
+import { sanitizeStoredMemberPermissions } from '../member/member-permissions.util';
 import { PusherService } from '../pusher/pusher.service';
+import type { MemberJoinedPusherPayload } from '../pusher/pusher.types';
 import { RegisterUserDto } from './authDto/register.dto';
 import { RegisterWithInvitationDto } from './authDto/register-with-invitation.dto';
 import { LoginUserDto } from './authDto/login.dto';
@@ -211,7 +214,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const tokenHash = this.invitationService.hashToken(dto.token);
 
-    const userId = await this.dataSource.transaction(async (manager) => {
+    const joined = await this.dataSource.transaction(async (manager) => {
       const invitationRepo = manager.getRepository(BusinessInvitation);
       const userRepo = manager.getRepository(User);
       const roleRepo = manager.getRepository(Role);
@@ -262,6 +265,14 @@ export class AuthService {
           `Role '${invitation.role}' does not exist. Seed Manager and Staff roles first.`,
         );
       }
+
+      const memberRoleKey =
+        normalizeInvitationRole(invitation.role) ??
+        (invitation.role as 'Manager' | 'Staff');
+      const permissionKeys = sanitizeStoredMemberPermissions(
+        invitation.permissions,
+        memberRoleKey,
+      );
 
       let user = await userRepo
         .createQueryBuilder('user')
@@ -325,18 +336,17 @@ export class AuthService {
             user,
             role: invitation.role,
             memberRole: platformRole,
-            permissions: invitation.permissions ?? [],
+            permissions: permissionKeys,
           }),
         );
       } else {
         member.role = invitation.role;
         member.memberRole = platformRole;
-        member.permissions = invitation.permissions ?? [];
+        member.permissions = permissionKeys;
         member = await memberRepo.save(member);
       }
 
       await permissionRepo.delete({ businessMember: { id: member.id } });
-      const permissionKeys = invitation.permissions ?? [];
       if (permissionKeys.length > 0) {
         await permissionRepo.save(
           permissionKeys.map((permission) =>
@@ -350,13 +360,28 @@ export class AuthService {
 
       invitation.status = BusinessInvitationStatus.ACCEPTED;
       invitation.acceptedAt = new Date();
+      invitation.permissions = permissionKeys;
       await invitationRepo.save(invitation);
 
-      return user.id;
+      const payload: MemberJoinedPusherPayload = {
+        businessId: business.id,
+        invitationId: invitation.id,
+        member: {
+          id: member.id,
+          userId: user.id,
+          name: user.name?.trim() || user.email,
+          email: user.email,
+          role: member.role,
+          status: 'active',
+          permissions: permissionKeys,
+        },
+      };
+
+      return { userId: user.id, joined: payload };
     });
 
     const user = await this.userRepository.findOne({
-      where: { id: userId },
+      where: { id: joined.userId },
       relations: ['role'],
     });
     if (!user) {
@@ -367,6 +392,8 @@ export class AuthService {
 
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
+
+    void this.pusherService.notifyMemberJoined(joined.joined);
 
     const session = await this.buildAuthSession(user);
     // Business rule: invite register only succeeds for first-time credential setup → new for Meta.

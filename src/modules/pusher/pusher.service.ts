@@ -17,6 +17,7 @@ import {
   pusherAutomationChannel,
   pusherBusinessActivityChannel,
   pusherBusinessConversationsChannel,
+  pusherBusinessMembersChannel,
   pusherConversationMessagesChannel,
   pusherExecutionChannel,
 } from './pusher.constants';
@@ -24,6 +25,7 @@ import type {
   CampaignActivityPusherPayload,
   ChatMessagePusherPayload,
   ExecutionTerminalPusherPayload,
+  MemberJoinedPusherPayload,
 } from './pusher.types';
 
 @Injectable()
@@ -223,6 +225,34 @@ export class PusherService implements OnModuleInit {
       return;
     }
     await this.client.trigger(channel, event, payload);
+  }
+
+  async notifyMemberJoined(payload: MemberJoinedPusherPayload): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.businessId) || payload.businessId < 1) {
+      this.logger.warn(
+        `Pusher member-joined skipped — invalid business id (${payload.businessId})`,
+      );
+      return;
+    }
+
+    const channel = pusherBusinessMembersChannel(payload.businessId);
+
+    try {
+      await this.client.trigger(channel, PUSHER_EVENT.MEMBER_JOINED, payload);
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.MEMBER_JOINED} | member: ${payload.member.id} | email: ${payload.member.email}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher member-joined notify failed for business ${payload.businessId}: ${message}`,
+      );
+    }
   }
 
   async notifyAdminNotificationCreated(

@@ -43,3 +43,17 @@ export type CampaignActivityPusherPayload = {
   actorName: string | null;
   occurredAt: string;
 };
+
+export type MemberJoinedPusherPayload = {
+  businessId: number;
+  invitationId: number;
+  member: {
+    id: number;
+    userId: number;
+    name: string;
+    email: string;
+    role: string;
+    status: 'active';
+    permissions: string[];
+  };
+};

@@ -26,7 +26,12 @@ import { BrevoSendFailedError } from '../mail/brevo-mail.errors';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { MemberInviteEmail } from '../../templates/member-invite-email';
 import { BusinessAccessService } from '../business-access/business-access.service';
-import { normalizeMemberPermissions } from '../member/member-permissions.util';
+import {
+  normalizeMemberPermissions,
+  sanitizeStoredMemberPermissions,
+} from '../member/member-permissions.util';
+import { PusherService } from '../pusher/pusher.service';
+import type { MemberJoinedPusherPayload } from '../pusher/pusher.types';
 import { BUSINESS_INVITATION_EXPIRY_DAYS } from './invitation.constants';
 import {
   CreateBusinessInvitationDto,
@@ -63,6 +68,7 @@ export class InvitationService {
     private readonly businessAccessService: BusinessAccessService,
     private readonly mailDelivery: MailDeliveryService,
     private readonly dataSource: DataSource,
+    private readonly pusherService: PusherService,
   ) {}
 
   async createInvitation(
@@ -226,7 +232,7 @@ export class InvitationService {
 
     const tokenHash = this.hashToken(rawToken);
 
-    const businessId = await this.dataSource.transaction(async (manager) => {
+    const joined = await this.dataSource.transaction(async (manager) => {
       const invitationRepo = manager.getRepository(BusinessInvitation);
       const memberRepo = manager.getRepository(BusinessMember);
       const permissionRepo = manager.getRepository(BusinessMemberPermission);
@@ -283,6 +289,14 @@ export class InvitationService {
         );
       }
 
+      const memberRoleKey =
+        normalizeInvitationRole(locked.role) ??
+        (locked.role as 'Manager' | 'Staff');
+      const permissionKeys = sanitizeStoredMemberPermissions(
+        locked.permissions,
+        memberRoleKey,
+      );
+
       await userRepo
         .createQueryBuilder()
         .update(User)
@@ -305,21 +319,20 @@ export class InvitationService {
             user: fullUser,
             role: locked.role,
             memberRole: platformRole,
-            permissions: locked.permissions ?? [],
+            permissions: permissionKeys,
           }),
         );
       } else {
         member.role = locked.role;
         member.memberRole = platformRole;
-        member.permissions = locked.permissions ?? [];
+        member.permissions = permissionKeys;
         member = await memberRepo.save(member);
       }
 
       await permissionRepo.delete({ businessMember: { id: member.id } });
-      const keys = locked.permissions ?? [];
-      if (keys.length > 0) {
+      if (permissionKeys.length > 0) {
         await permissionRepo.save(
-          keys.map((permission) =>
+          permissionKeys.map((permission) =>
             permissionRepo.create({
               businessMember: member!,
               permission,
@@ -330,14 +343,31 @@ export class InvitationService {
 
       locked.status = BusinessInvitationStatus.ACCEPTED;
       locked.acceptedAt = new Date();
+      locked.permissions = permissionKeys;
       await invitationRepo.save(locked);
 
-      return business.id;
+      const payload: MemberJoinedPusherPayload = {
+        businessId: business.id,
+        invitationId: locked.id,
+        member: {
+          id: member.id,
+          userId: fullUser.id,
+          name: fullUser.name?.trim() || fullUser.email,
+          email: fullUser.email,
+          role: member.role,
+          status: 'active',
+          permissions: permissionKeys,
+        },
+      };
+
+      return payload;
     });
+
+    void this.pusherService.notifyMemberJoined(joined);
 
     return {
       message: 'Invitation accepted successfully.',
-      businessId,
+      businessId: joined.businessId,
     };
   }
 
@@ -414,7 +444,8 @@ export class InvitationService {
 
     const text = [
       `${params.inviterName} invited you to join ${params.businessName} as ${params.role}.`,
-      `Accept: ${params.acceptUrl}`,
+      `Open invite: ${params.acceptUrl}`,
+      `You stay Pending until you finish signup or sign in and join.`,
       `This link expires in ${expiresInDays} days.`,
     ].join('\n');
 

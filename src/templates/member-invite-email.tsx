@@ -29,7 +29,7 @@ export function MemberInviteEmail({
     permissionLine
       ? `You will have access to: ${permissionLine}.`
       : null,
-    `Click the button below to accept the invitation. This link expires in ${expiresInDays} ${dayLabel}.`,
+    `Use the button below to open your invite. You will stay Pending until you finish creating an account or signing in and joining the team. This link expires in ${expiresInDays} ${dayLabel}.`,
     'If you did not expect this email, you can safely ignore it.',
   ].filter((paragraph): paragraph is string => Boolean(paragraph));
 
@@ -40,7 +40,7 @@ export function MemberInviteEmail({
       customerName="there"
       skipGreeting
       paragraphs={paragraphs}
-      ctaLabel="Accept invitation"
+      ctaLabel="Open invitation"
       ctaUrl={acceptUrl}
     />
   );

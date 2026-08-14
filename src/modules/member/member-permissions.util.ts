@@ -31,3 +31,23 @@ export function normalizeMemberPermissions(
 
   return normalized;
 }
+
+export function sanitizeStoredMemberPermissions(
+  permissions: string[] | undefined | null,
+  role: BusinessMemberRole,
+): BusinessMemberPermission[] {
+  const allowed = new Set<string>(BUSINESS_MEMBER_PERMISSIONS);
+  const filtered = [
+    ...new Set(
+      (permissions ?? [])
+        .map((permission) => permission.trim())
+        .filter((permission) => allowed.has(permission)),
+    ),
+  ] as BusinessMemberPermission[];
+
+  if (filtered.length > 0) {
+    return filtered;
+  }
+
+  return [...DEFAULT_PERMISSIONS_BY_ROLE[role]];
+}
