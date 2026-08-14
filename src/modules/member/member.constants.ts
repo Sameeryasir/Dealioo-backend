@@ -3,7 +3,6 @@ export const BUSINESS_MEMBER_ROLES = ['Manager', 'Staff'] as const;
 export type BusinessMemberRole = (typeof BUSINESS_MEMBER_ROLES)[number];
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
-  'campaigns_view',
   'campaigns_create',
   'campaigns_edit',
   'campaigns_delete',
@@ -13,7 +12,6 @@ export type CampaignActionPermission =
   (typeof CAMPAIGN_ACTION_PERMISSIONS)[number];
 
 export const META_CAMPAIGN_ACTION_PERMISSIONS = [
-  'meta_campaigns_view',
   'meta_campaigns_create',
   'meta_campaigns_delete',
 ] as const;
@@ -24,7 +22,6 @@ export type MetaCampaignActionPermission =
 export type MetaCampaignAccessAction = 'view' | 'create' | 'delete';
 
 export const GOOGLE_CAMPAIGN_ACTION_PERMISSIONS = [
-  'google_campaigns_view',
   'google_campaigns_create',
   'google_campaigns_delete',
 ] as const;
@@ -36,10 +33,13 @@ export type GoogleCampaignAccessAction = 'view' | 'create' | 'delete';
 
 export const BUSINESS_MEMBER_PERMISSIONS = [
   'campaigns',
+  'campaigns_view',
   ...CAMPAIGN_ACTION_PERMISSIONS,
   'meta_ads',
   'meta_campaigns',
+  'meta_campaigns_view',
   ...META_CAMPAIGN_ACTION_PERMISSIONS,
+  'google_campaigns_view',
   ...GOOGLE_CAMPAIGN_ACTION_PERMISSIONS,
   'orders',
   'activity',
@@ -57,14 +57,11 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
   BusinessMemberPermission[]
 > = {
   Manager: [
-    'campaigns_view',
     'campaigns_create',
     'campaigns_edit',
     'campaigns_delete',
-    'meta_campaigns_view',
     'meta_campaigns_create',
     'meta_campaigns_delete',
-    'google_campaigns_view',
     'google_campaigns_create',
     'google_campaigns_delete',
     'orders',
@@ -82,7 +79,7 @@ export const ALL_BUSINESS_MEMBER_PERMISSIONS: BusinessMemberPermission[] = [
 export function hasAnyCampaignPermission(
   permissions: readonly string[],
 ): boolean {
-  if (permissions.includes('campaigns')) {
+  if (permissions.includes('campaigns') || permissions.includes('campaigns_view')) {
     return true;
   }
   return CAMPAIGN_ACTION_PERMISSIONS.some((key) => permissions.includes(key));
@@ -93,7 +90,8 @@ export function hasAnyMetaCampaignPermission(
 ): boolean {
   if (
     permissions.includes('meta_ads') ||
-    permissions.includes('meta_campaigns')
+    permissions.includes('meta_campaigns') ||
+    permissions.includes('meta_campaigns_view')
   ) {
     return true;
   }
@@ -105,7 +103,10 @@ export function hasAnyMetaCampaignPermission(
 export function hasAnyGoogleCampaignPermission(
   permissions: readonly string[],
 ): boolean {
-  if (permissions.includes('campaigns')) {
+  if (
+    permissions.includes('campaigns') ||
+    permissions.includes('google_campaigns_view')
+  ) {
     return true;
   }
   return GOOGLE_CAMPAIGN_ACTION_PERMISSIONS.some((key) =>
@@ -114,8 +115,15 @@ export function hasAnyGoogleCampaignPermission(
 }
 
 export function campaignPermissionKeysFor(
-  action: CampaignActionPermission,
+  action: CampaignActionPermission | 'view',
 ): BusinessMemberPermission[] {
+  if (action === 'view') {
+    return [
+      'campaigns',
+      'campaigns_view',
+      ...CAMPAIGN_ACTION_PERMISSIONS,
+    ];
+  }
   return [action, 'campaigns'];
 }
 
@@ -123,7 +131,12 @@ export function metaCampaignPermissionKeysFor(
   action: MetaCampaignAccessAction,
 ): BusinessMemberPermission[] {
   if (action === 'view') {
-    return ['meta_campaigns_view', 'meta_ads', 'meta_campaigns'];
+    return [
+      'meta_campaigns_view',
+      'meta_ads',
+      'meta_campaigns',
+      ...META_CAMPAIGN_ACTION_PERMISSIONS,
+    ];
   }
   if (action === 'create') {
     return ['meta_campaigns_create', 'meta_campaigns'];
@@ -135,7 +148,11 @@ export function googleCampaignPermissionKeysFor(
   action: GoogleCampaignAccessAction,
 ): BusinessMemberPermission[] {
   if (action === 'view') {
-    return ['google_campaigns_view', 'campaigns'];
+    return [
+      'google_campaigns_view',
+      'campaigns',
+      ...GOOGLE_CAMPAIGN_ACTION_PERMISSIONS,
+    ];
   }
   if (action === 'create') {
     return ['google_campaigns_create', 'campaigns'];

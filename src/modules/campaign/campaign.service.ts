@@ -39,6 +39,7 @@ import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { AutomationService } from '../automation/automation.service';
+import { campaignPermissionKeysFor } from '../member/member.constants';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -205,7 +206,7 @@ export class CampaignService {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      ['campaigns_view', 'campaigns'],
+      campaignPermissionKeysFor('view'),
       'You do not have permission to view campaigns for this business.',
     );
 
@@ -274,7 +275,7 @@ export class CampaignService {
     await this.businessAccessService.assertAnyPermission(
       user,
       campaign.businessId,
-      ['campaigns_view', 'campaigns'],
+      campaignPermissionKeysFor('view'),
       'You do not have permission to view campaigns for this business.',
     );
 

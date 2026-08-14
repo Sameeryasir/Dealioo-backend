@@ -97,6 +97,18 @@ export class InvitationService {
       throw new ConflictException('The business owner is already a member.');
     }
 
+    const ownedBusiness = await this.businessRepository
+      .createQueryBuilder('business')
+      .innerJoin('business.owner', 'owner')
+      .where('LOWER(owner.email) = :email', { email })
+      .getOne();
+
+    if (ownedBusiness) {
+      throw new ConflictException(
+        'Business owners cannot be invited as members.',
+      );
+    }
+
     const existingMember = await this.businessMemberRepository
       .createQueryBuilder('member')
       .innerJoin('member.user', 'user')
@@ -197,6 +209,18 @@ export class InvitationService {
     if (inviteEmail !== userEmail) {
       throw new ForbiddenException(
         'Sign in with the email address this invitation was sent to.',
+      );
+    }
+
+    const ownedBusiness = await this.businessRepository
+      .createQueryBuilder('business')
+      .innerJoin('business.owner', 'owner')
+      .where('LOWER(owner.email) = :email', { email: inviteEmail })
+      .getOne();
+
+    if (ownedBusiness) {
+      throw new ConflictException(
+        'Business owners cannot be invited as members.',
       );
     }
 
