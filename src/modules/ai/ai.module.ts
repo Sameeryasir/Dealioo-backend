@@ -13,6 +13,8 @@ import { AiMessageService } from './ai-message.service';
 import { AiController } from './ai.controller';
 import { AiOrchestratorService } from './ai.orchestrator.service';
 import { AuditService } from './audit/audit.service';
+import { AiLandingImageService } from './image/ai-landing-image.service';
+import { GeminiImageProvider } from './image/gemini-image.provider';
 import { AI_PROVIDER } from './interfaces/ai-provider.interface';
 import { PromptBuilderService } from './prompt-builder/prompt-builder.service';
 import { ClaudeProvider } from './providers/claude.provider';
@@ -45,6 +47,8 @@ import { VersionService } from './version/version.service';
     OpenAiProvider,
     ClaudeProvider,
     GeminiProvider,
+    GeminiImageProvider,
+    AiLandingImageService,
     {
       provide: AI_PROVIDER,
       useExisting: GeminiProvider,
@@ -76,6 +80,8 @@ import { VersionService } from './version/version.service';
     OpenAiProvider,
     ClaudeProvider,
     GeminiProvider,
+    GeminiImageProvider,
+    AiLandingImageService,
     AI_PROVIDER,
     AiEditUiQueueService,
     AiConversationService,
