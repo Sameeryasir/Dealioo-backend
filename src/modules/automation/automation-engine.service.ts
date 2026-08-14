@@ -20,7 +20,7 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { ActivityService } from '../activity/activity.service';
 import { ChatMessageService } from '../chat/chat-message.service';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
@@ -1723,23 +1723,22 @@ export class AutomationEngineService {
       const coupon =
         (await this.couponService.findByPaymentId(paymentId)) ??
         (await this.couponService.findLatestByPaymentId(paymentId));
-      if (!coupon) {
-        continue;
+      const token = coupon?.qrToken?.trim();
+      if (token) {
+        return buildGuestPassUrl(token);
       }
-
-      const linkedId = coupon.funnelPaymentId;
-      if (
-        linkedId != null &&
-        linkedId !== paymentId &&
-        (await this.funnelPaymentRepository.exist({ where: { id: linkedId } }))
-      ) {
-        return `${getFrontendBaseUrl()}/pass/${linkedId}`;
-      }
-
-      return `${getFrontendBaseUrl()}/pass/${paymentId}`;
     }
 
-    return `${getFrontendBaseUrl()}/pass/guest/${execution.customerId}/${funnelId}`;
+    const signupCoupon = await this.couponService.findByCustomerAndFunnel(
+      execution.customerId,
+      funnelId,
+    );
+    const signupToken = signupCoupon?.qrToken?.trim();
+    if (signupToken) {
+      return buildGuestPassUrl(signupToken);
+    }
+
+    return null;
   }
 
   async resolvePostVisitResumeNodeId(

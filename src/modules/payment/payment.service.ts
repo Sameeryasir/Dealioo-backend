@@ -10,9 +10,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
 import { DataSource, MoreThan, Repository } from 'typeorm';
 import {
-  FunnelCollectionChannel,
   FunnelPayment,
-  FunnelPaymentMethod,
   FunnelPaymentSource,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
@@ -35,6 +33,7 @@ import { PaymentFinalizeService } from './payment-finalize.service';
 import { PaymentWebhookHandler } from './payment-webhook.handler';
 import { StripeWebhookService } from './stripe-webhook.service';
 import { CheckoutResumeService } from './checkout-resume.service';
+import { PendingFunnelPaymentService } from './pending-funnel-payment.service';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -83,6 +82,7 @@ export class PaymentService implements OnModuleInit {
     private readonly couponService: CouponService,
     private readonly checkoutResumeService: CheckoutResumeService,
     private readonly userSubscriptionsService: UserSubscriptionsService,
+    private readonly pendingFunnelPaymentService: PendingFunnelPaymentService,
   ) {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -482,13 +482,13 @@ export class PaymentService implements OnModuleInit {
 
     const customerEmail = checkoutIdentity.customerEmail.trim().toLowerCase();
 
-    // --- Idempotent claim: one PENDING payment per business+funnel+guest ---
-    const payment = await this.claimOrCreatePendingPayment({
+    const payment = await this.pendingFunnelPaymentService.ensurePendingPayment({
       funnelId: checkoutIdentity.funnelId,
       businessId: checkoutIdentity.businessId,
       campaignId: funnel.campaign.id,
-      stripeAccountId,
-      amount: catalog.amount,
+      campaignType: funnel.campaign.campaignType,
+      stripeConnectedAccountId: stripeAccountId,
+      amountCents: catalog.amount,
       currency: catalog.currency,
       platformFeeAmount: applicationFeeAmount,
       customerEmail,
@@ -521,113 +521,6 @@ export class PaymentService implements OnModuleInit {
     }
 
     return result;
-  }
-
-  private checkoutGuestLockKeys(
-    businessId: number,
-    funnelId: number,
-    customerEmail: string,
-  ): [number, number] {
-    const email = customerEmail.trim().toLowerCase();
-    let hash = 2166136261;
-    for (let i = 0; i < email.length; i += 1) {
-      hash ^= email.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    const key1 = (Math.imul(businessId, 1_000_003) + funnelId) | 0;
-    const key2 = hash | 0;
-    return [key1, key2];
-  }
-
-  private pendingReuseCutoff(): Date {
-    return new Date(
-      Date.now() -
-        PaymentWebhookHandler.PENDING_REUSE_HOURS * 60 * 60 * 1000,
-    );
-  }
-
-  private async claimOrCreatePendingPayment(opts: {
-    funnelId: number;
-    businessId: number;
-    campaignId: number;
-    stripeAccountId: string;
-    amount: number;
-    currency: string;
-    platformFeeAmount: number;
-    customerEmail: string;
-    customerId: number | null;
-  }): Promise<FunnelPayment> {
-    const [lockKey1, lockKey2] = this.checkoutGuestLockKeys(
-      opts.businessId,
-      opts.funnelId,
-      opts.customerEmail,
-    );
-    const cutoff = this.pendingReuseCutoff();
-
-    return this.dataSource.transaction(async (manager) => {
-      await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
-        lockKey1,
-        lockKey2,
-      ]);
-
-      const pending = await manager.findOne(FunnelPayment, {
-        where: {
-          funnelId: opts.funnelId,
-          businessId: opts.businessId,
-          customerEmail: opts.customerEmail,
-          status: FunnelPaymentStatus.PENDING,
-          createdAt: MoreThan(cutoff),
-        },
-        order: { createdAt: 'DESC' },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (pending) {
-        if (
-          opts.customerId != null &&
-          pending.customerId !== opts.customerId
-        ) {
-          pending.customerId = opts.customerId;
-          await manager.save(pending);
-        }
-        logStripePayment({
-          phase: 'checkout_session_claim',
-          outcome: 'reuse_pending_payment',
-          paymentId: pending.id,
-          checkoutSessionId: pending.stripeCheckoutSessionId,
-        });
-        return pending;
-      }
-
-      const created = manager.create(FunnelPayment, {
-        funnelId: opts.funnelId,
-        businessId: opts.businessId,
-        campaignId: opts.campaignId,
-        customerId: opts.customerId,
-        stripeConnectedAccountId: opts.stripeAccountId,
-        amount: opts.amount,
-        currency: opts.currency,
-        platformFeeAmount: opts.platformFeeAmount,
-        customerEmail: opts.customerEmail,
-        status: FunnelPaymentStatus.PENDING,
-        paymentSource: FunnelPaymentSource.STRIPE,
-        collectionChannel: FunnelCollectionChannel.ONLINE,
-        paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
-        paymentCollectedBy: null,
-        paymentCollectedAt: null,
-        stripePaymentIntentId: null,
-        stripeCheckoutSessionId: null,
-        refundedAmount: 0,
-      });
-
-      const saved = await manager.save(created);
-      logStripePayment({
-        phase: 'checkout_session_claim',
-        outcome: 'created_pending_payment',
-        paymentId: saved.id,
-      });
-      return saved;
-    });
   }
 
   private async ensureOpenCheckoutSessionForPayment(opts: {

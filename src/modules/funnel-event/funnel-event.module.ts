@@ -18,6 +18,7 @@ import { BusinessHistoryModule } from '../business-history/business-history.modu
 import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
 import { CustomerModule } from '../customer/customer.module';
+import { PaymentModule } from '../payment/payment.module';
 import { RedemptionModule } from '../redemption/redemption.module';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { FunnelEventController } from './funnel-event.controller';
@@ -41,6 +42,7 @@ import { FunnelEventService } from './funnel-event.service';
     ]),
     forwardRef(() => AutomationModule),
     forwardRef(() => RedemptionModule),
+    forwardRef(() => PaymentModule),
     ActivityModule,
     BusinessHistoryModule,
     CustomerActivityModule,

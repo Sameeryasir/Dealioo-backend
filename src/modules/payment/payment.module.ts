@@ -24,6 +24,7 @@ import { CheckoutResumeService } from './checkout-resume.service';
 import { UserSubscriptionsModule } from '../user-subscriptions/user-subscriptions.module';
 import { PAYMENT_RECOVERY_QUEUE } from './payment-recovery.constants';
 import { PaymentRecoveryScheduler } from './payment-recovery.scheduler';
+import { PendingFunnelPaymentService } from './pending-funnel-payment.service';
 
 @Module({
   imports: [
@@ -54,7 +55,13 @@ import { PaymentRecoveryScheduler } from './payment-recovery.scheduler';
     PaymentFinalizeService,
     CheckoutResumeService,
     PaymentRecoveryScheduler,
+    PendingFunnelPaymentService,
   ],
-  exports: [PaymentService, CheckoutResumeService, PaymentFinalizeService],
+  exports: [
+    PaymentService,
+    CheckoutResumeService,
+    PaymentFinalizeService,
+    PendingFunnelPaymentService,
+  ],
 })
 export class PaymentModule {}

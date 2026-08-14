@@ -151,32 +151,17 @@ export class RedemptionController {
     return this.redemptionService.getBusinessStats(businessId);
   }
 
-  /** Guest fetches their signup pass before checkout (public). */
-  @Get('coupon/customer/:customerId/funnel/:funnelId')
-  async getCouponByCustomerAndFunnel(
-    @Param('customerId', ParseIntPipe) customerId: number,
-    @Param('funnelId', ParseIntPipe) funnelId: number,
-  ) {
-    const coupon = await this.couponService.findByCustomerAndFunnel(
-      customerId,
-      funnelId,
-    );
-    if (!coupon) {
-      throw new NotFoundException('Pass not found for this guest');
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get('coupon/pass')
+  async getCouponByAccessToken(@Query('accessToken') accessToken?: string) {
+    const token = accessToken?.trim() ?? '';
+    if (token.length < 8) {
+      throw new NotFoundException('Pass not found');
     }
-    return this.buildGuestCouponResponse(coupon);
-  }
 
-  /** Guest fetches their coupon + QR by payment session (public). */
-  @Get('coupon/payment/:funnelPaymentId')
-  async getCouponByPayment(
-    @Param('funnelPaymentId', ParseIntPipe) funnelPaymentId: number,
-  ) {
-    const coupon =
-      (await this.couponService.findByPaymentId(funnelPaymentId)) ??
-      (await this.couponService.findLatestByPaymentId(funnelPaymentId));
+    const coupon = await this.couponService.findByQrToken(token);
     if (!coupon) {
-      throw new NotFoundException('Coupon not found for this payment');
+      throw new NotFoundException('Pass not found');
     }
     return this.buildGuestCouponResponse(coupon);
   }

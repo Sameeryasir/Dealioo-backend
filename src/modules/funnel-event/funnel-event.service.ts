@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { And, DataSource, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
-import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
@@ -47,6 +47,7 @@ import { BusinessHistoryService } from '../business-history/business-history.ser
 import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { CustomerJourneyService } from '../customer-journey/customer-journey.service';
 import { CustomerService } from '../customer/customer.service';
+import { PendingFunnelPaymentService } from '../payment/pending-funnel-payment.service';
 import { CouponService } from '../redemption/coupon.service';
 import {
   CouponPaymentStatus,
@@ -125,6 +126,7 @@ export class FunnelEventService {
     private readonly customerJourneyService: CustomerJourneyService,
     private readonly customerService: CustomerService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly pendingFunnelPaymentService: PendingFunnelPaymentService,
   ) {}
 
   async track(
@@ -187,8 +189,8 @@ export class FunnelEventService {
           // --- Pending order for unpaid / postpaid signup ---
           // Link the signup coupon so Guest deals can show this pass (not only Business deals).
           // Platform/medium must match campaign type (postpaid ≠ Stripe).
-          const pendingPaymentId =
-            await this.ensurePendingOrderForUnpaidFunnelSignup({
+          const pendingPayment =
+            await this.pendingFunnelPaymentService.ensurePendingPayment({
               funnelId: dto.funnelId,
               businessId,
               campaignId: funnel.campaign.id,
@@ -198,11 +200,11 @@ export class FunnelEventService {
               amountCents,
               currency: 'usd',
             });
-          if (pendingPaymentId != null && pendingPaymentId > 0) {
+          if (pendingPayment.id > 0) {
             await this.couponService.linkSignupCouponToPayment(
               tracked.event.customerId,
               dto.funnelId,
-              pendingPaymentId,
+              pendingPayment.id,
             );
           }
         }
@@ -1640,144 +1642,6 @@ export class FunnelEventService {
       .where('ord.business_id = :businessId', { businessId })
       .andWhere('ord.deleted_at IS NULL')
       .getMany();
-  }
-
-  /**
-   * Changed: returns pending payment id; tags postpaid as in-store (not Stripe).
-   * Why: Guest deals needs coupon.funnel_payment_id; Orders Platform must match medium.
-   * Related: coupon.service linkSignupCouponToPayment, track() signup path, FunnelOrdersPanel.
-   * MCP Context 7: keep payment provenance accurate at create time.
-   */
-  private async ensurePendingOrderForUnpaidFunnelSignup(input: {
-    funnelId: number;
-    businessId: number;
-    campaignId: number;
-    campaignType: CampaignType | string | null | undefined;
-    customerId: number;
-    customerEmail: string;
-    amountCents: number;
-    currency: string;
-  }): Promise<number | null> {
-    const email = input.customerEmail.trim().toLowerCase();
-    // Postpaid = pay later in store — never mark medium as Stripe until a real Stripe charge.
-    const isPostpaid =
-      String(input.campaignType ?? '').toLowerCase() === CampaignType.POSTPAID;
-
-    const provenance = isPostpaid
-      ? {
-          paymentSource: FunnelPaymentSource.MANUAL,
-          collectionChannel: FunnelCollectionChannel.IN_STORE,
-          paymentMethod: FunnelPaymentMethod.OTHER,
-          orderSource: OrderSource.MANUAL,
-        }
-      : {
-          paymentSource: FunnelPaymentSource.STRIPE,
-          collectionChannel: FunnelCollectionChannel.ONLINE,
-          paymentMethod: FunnelPaymentMethod.ONLINE_CARD,
-          orderSource: OrderSource.STRIPE,
-        };
-
-    let payment = await this.funnelPaymentRepository.findOne({
-      where: {
-        funnelId: input.funnelId,
-        businessId: input.businessId,
-        customerEmail: email,
-        status: FunnelPaymentStatus.PENDING,
-      },
-      order: { createdAt: 'DESC' },
-    });
-
-    const now = new Date();
-    const amountCents =
-      input.amountCents > 0 ? input.amountCents : (payment?.amount ?? 0);
-
-    if (payment) {
-      const hasStripeLink = Boolean(
-        payment.stripePaymentIntentId?.trim() ||
-          payment.stripeCheckoutSessionId?.trim(),
-      );
-      // Heal wrongly tagged postpaid pending rows that never touched Stripe.
-      const shouldHealProvenance = isPostpaid && !hasStripeLink;
-
-      await this.funnelPaymentRepository.update(payment.id, {
-        customerId: input.customerId,
-        campaignId: payment.campaignId ?? input.campaignId,
-        amount: amountCents > 0 ? amountCents : payment.amount,
-        ...(shouldHealProvenance
-          ? {
-              paymentSource: provenance.paymentSource,
-              collectionChannel: provenance.collectionChannel,
-              paymentMethod: provenance.paymentMethod,
-            }
-          : {}),
-        updatedAt: now,
-      });
-      payment.customerId = input.customerId;
-      payment.updatedAt = now;
-      if (amountCents > 0) {
-        payment.amount = amountCents;
-      }
-
-      if (payment.orderId != null) {
-        await this.orderRepository.update(payment.orderId, {
-          ...(amountCents > 0 ? { totalAmount: amountCents } : {}),
-          ...(shouldHealProvenance ? { source: provenance.orderSource } : {}),
-          updatedAt: now,
-        });
-      } else {
-        const order = await this.orderRepository.save(
-          this.orderRepository.create({
-            businessId: input.businessId,
-            status: OrderStatus.PENDING,
-            source: provenance.orderSource,
-            totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
-            currency: payment.currency || input.currency || 'usd',
-            paidAt: null,
-          }),
-        );
-        await this.funnelPaymentRepository.update(payment.id, {
-          orderId: order.id,
-        });
-      }
-      return payment.id;
-    }
-
-    payment = await this.funnelPaymentRepository.save(
-      this.funnelPaymentRepository.create({
-        funnelId: input.funnelId,
-        businessId: input.businessId,
-        campaignId: input.campaignId,
-        customerId: input.customerId,
-        customerEmail: email,
-        amount: input.amountCents,
-        currency: input.currency || 'usd',
-        platformFeeAmount: 0,
-        status: FunnelPaymentStatus.PENDING,
-        paymentSource: provenance.paymentSource,
-        collectionChannel: provenance.collectionChannel,
-        paymentMethod: provenance.paymentMethod,
-        stripePaymentIntentId: null,
-        stripeCheckoutSessionId: null,
-        refundedAmount: 0,
-        orderId: null,
-      }),
-    );
-
-    const order = await this.orderRepository.save(
-      this.orderRepository.create({
-        businessId: input.businessId,
-        status: OrderStatus.PENDING,
-        source: provenance.orderSource,
-        totalAmount: payment.amount > 0 ? payment.amount : input.amountCents,
-        currency: payment.currency || input.currency || 'usd',
-        paidAt: null,
-      }),
-    );
-
-    await this.funnelPaymentRepository.update(payment.id, {
-      orderId: order.id,
-    });
-    return payment.id;
   }
 
   private async backfillPendingOrdersForOpenCheckouts(

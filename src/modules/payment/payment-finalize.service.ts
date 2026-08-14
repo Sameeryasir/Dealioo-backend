@@ -53,8 +53,6 @@ export class PaymentFinalizeService {
   constructor(
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
-    @InjectRepository(Order)
-    private readonly orderRepository: Repository<Order>,
     private readonly dataSource: DataSource,
     private readonly activityService: ActivityService,
     private readonly customerActivityService: CustomerActivityService,
@@ -84,6 +82,7 @@ export class PaymentFinalizeService {
           customerId: payment.customerId,
           alreadyPaid: false,
           finalized: false,
+          skipSideEffects: true as const,
         };
       }
 
@@ -94,6 +93,9 @@ export class PaymentFinalizeService {
         payment.paidAt = payment.paidAt ?? paidAt;
         payment.paymentSource = FunnelPaymentSource.STRIPE;
         payment.collectionChannel = FunnelCollectionChannel.ONLINE;
+        payment.failedAt = null;
+        payment.failureReason = null;
+        payment.cancelledAt = null;
       }
 
       if (payment.customerId == null) {
@@ -104,25 +106,7 @@ export class PaymentFinalizeService {
         }
       }
 
-      if (input.stripePaymentIntentId?.trim()) {
-        payment.stripePaymentIntentId = input.stripePaymentIntentId.trim();
-      }
-      if (input.stripeCheckoutSessionId?.trim()) {
-        payment.stripeCheckoutSessionId = input.stripeCheckoutSessionId.trim();
-      }
-      if (input.stripeConnectedAccountId?.trim()) {
-        payment.stripeConnectedAccountId =
-          input.stripeConnectedAccountId.trim();
-      }
-      if (input.stripeChargeId?.trim()) {
-        payment.stripeChargeId = input.stripeChargeId.trim();
-      }
-      if (input.receiptUrl?.trim()) {
-        payment.receiptUrl = input.receiptUrl.trim();
-      }
-      if (input.paymentMethod?.trim()) {
-        payment.paymentMethod = input.paymentMethod.trim();
-      }
+      this.applyStripeMetadata(payment, input);
 
       await manager.save(payment);
       const orderId = await this.ensureOrderForPaidPaymentInManager(
@@ -136,6 +120,7 @@ export class PaymentFinalizeService {
         customerId: payment.customerId,
         alreadyPaid,
         finalized: !alreadyPaid,
+        skipSideEffects: false as const,
       };
     });
 
@@ -157,48 +142,57 @@ export class PaymentFinalizeService {
     }
 
     if (result.alreadyPaid) {
-      if (input.source === 'webhook') {
-        this.logger.log(
-          `[FunnelPayment] paymentId=${result.paymentId} webhook arrived late — already paid (likely via status API). Skipping duplicate finalize.`,
-        );
-      } else {
-        this.logger.log(
-          `[FunnelPayment] paymentId=${result.paymentId} already paid — source=${input.source}`,
-        );
-      }
-    } else if (input.source === 'webhook') {
+      logStripePayment({
+        phase: 'finalize_successful_payment',
+        outcome: 'already_paid_noop',
+        paymentId: result.paymentId,
+        orderId: result.orderId,
+        customerId: result.customerId,
+        paymentIntentId: input.stripePaymentIntentId ?? null,
+        checkoutSessionId: input.stripeCheckoutSessionId ?? null,
+        syncSource: input.source,
+        webhookEventId: input.webhookEventId ?? null,
+      });
       this.logger.log(
-        `[FunnelPayment] paymentId=${result.paymentId} confirmed via webhook` +
+        `[FunnelPayment] paymentId=${result.paymentId} finalize no-op — already paid (source=${input.source})`,
+      );
+    } else if (result.finalized) {
+      logStripePayment({
+        phase: 'finalize_successful_payment',
+        outcome: 'finalized',
+        paymentId: result.paymentId,
+        orderId: result.orderId,
+        customerId: result.customerId,
+        paymentIntentId: input.stripePaymentIntentId ?? null,
+        checkoutSessionId: input.stripeCheckoutSessionId ?? null,
+        syncSource: input.source,
+        webhookEventId: input.webhookEventId ?? null,
+      });
+      this.logger.log(
+        `[FunnelPayment] paymentId=${result.paymentId} finalized via ${input.source}` +
           (input.webhookEventId ? ` eventId=${input.webhookEventId}` : ''),
-      );
-    } else if (input.source === 'status_sync') {
-      this.logger.log(
-        `[FunnelPayment] paymentId=${result.paymentId} webhook late/missing — confirmed via status API`,
-      );
-    } else {
-      this.logger.log(
-        `[FunnelPayment] paymentId=${result.paymentId} confirmed via ${input.source}`,
       );
     }
 
-    logStripePayment({
-      phase: 'finalize_successful_payment',
-      outcome: result.alreadyPaid ? 'already_paid' : 'finalized',
-      paymentId: result.paymentId,
-      orderId: result.orderId,
-      customerId: result.customerId,
-      paymentIntentId: input.stripePaymentIntentId ?? null,
-      checkoutSessionId: input.stripeCheckoutSessionId ?? null,
-      syncSource: input.source,
-      webhookEventId: input.webhookEventId ?? null,
-    });
-
-    if (result.alreadyPaid) {
-      return result;
+    if (result.skipSideEffects) {
+      return {
+        paymentId: result.paymentId,
+        orderId: result.orderId,
+        customerId: result.customerId,
+        alreadyPaid: result.alreadyPaid,
+        finalized: result.finalized,
+      };
     }
 
     await this.runPostPaidSideEffects(result.paymentId, input.source);
-    return result;
+
+    return {
+      paymentId: result.paymentId,
+      orderId: result.orderId,
+      customerId: result.customerId,
+      alreadyPaid: result.alreadyPaid,
+      finalized: result.finalized,
+    };
   }
 
   async ensureOrderForPaidPayment(paymentId: number): Promise<number | null> {
@@ -212,6 +206,31 @@ export class PaymentFinalizeService {
       }
       return this.ensureOrderForPaidPaymentInManager(manager, payment);
     });
+  }
+
+  private applyStripeMetadata(
+    payment: FunnelPayment,
+    input: FinalizeSuccessfulPaymentInput,
+  ): void {
+    if (input.stripePaymentIntentId?.trim()) {
+      payment.stripePaymentIntentId = input.stripePaymentIntentId.trim();
+    }
+    if (input.stripeCheckoutSessionId?.trim()) {
+      payment.stripeCheckoutSessionId = input.stripeCheckoutSessionId.trim();
+    }
+    if (input.stripeConnectedAccountId?.trim()) {
+      payment.stripeConnectedAccountId =
+        input.stripeConnectedAccountId.trim();
+    }
+    if (input.stripeChargeId?.trim()) {
+      payment.stripeChargeId = input.stripeChargeId.trim();
+    }
+    if (input.receiptUrl?.trim()) {
+      payment.receiptUrl = input.receiptUrl.trim();
+    }
+    if (input.paymentMethod?.trim()) {
+      payment.paymentMethod = input.paymentMethod.trim();
+    }
   }
 
   private async resolveCustomerIdFromPaymentEmail(
@@ -247,13 +266,15 @@ export class PaymentFinalizeService {
           ? OrderSource.MANUAL
           : OrderSource.STRIPE;
 
+    const paidAt = payment.paidAt ?? new Date();
+
     if (payment.orderId != null) {
       await manager.update(Order, payment.orderId, {
         status: OrderStatus.PAID,
         source,
         totalAmount: payment.amount,
         currency: payment.currency || 'usd',
-        paidAt: payment.paidAt ?? new Date(),
+        paidAt,
       });
       return payment.orderId;
     }
@@ -265,7 +286,7 @@ export class PaymentFinalizeService {
         source,
         totalAmount: payment.amount,
         currency: payment.currency || 'usd',
-        paidAt: payment.paidAt ?? new Date(),
+        paidAt,
       }),
     );
 
@@ -330,13 +351,26 @@ export class PaymentFinalizeService {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      warnStripePayment({
-        phase: 'finalize_successful_payment',
-        outcome: 'customer_activity_log_failed',
-        paymentId,
-        syncSource: source,
-        error: message,
-      });
+      if (
+        message.includes('UQ_') ||
+        message.includes('duplicate key') ||
+        message.includes('idempotency')
+      ) {
+        logStripePayment({
+          phase: 'finalize_successful_payment',
+          outcome: 'customer_activity_already_exists',
+          paymentId,
+          syncSource: source,
+        });
+      } else {
+        warnStripePayment({
+          phase: 'finalize_successful_payment',
+          outcome: 'customer_activity_log_failed',
+          paymentId,
+          syncSource: source,
+          error: message,
+        });
+      }
     }
 
     try {

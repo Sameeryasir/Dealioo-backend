@@ -198,6 +198,7 @@ export class FunnelService {
     id: number;
     campaignId: number;
     businessId: number | null;
+    campaignType: CampaignType;
     pixelId: string | null;
     googleTagManagerId: string | null;
     step: string;
@@ -215,18 +216,18 @@ export class FunnelService {
       throw new NotFoundException('Funnel not found');
     }
 
-    let businessId =
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: funnel.campaignId },
+      select: { id: true, businessId: true, campaignType: true },
+    });
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found for funnel');
+    }
+
+    const businessId =
       trackingBusinessId && trackingBusinessId > 0
         ? trackingBusinessId
-        : funnel.businessId;
-
-    if (businessId == null) {
-      const campaign = await this.campaignRepository.findOne({
-        where: { id: funnel.campaignId },
-        select: { id: true, businessId: true },
-      });
-      businessId = campaign?.businessId ?? null;
-    }
+        : (funnel.businessId ?? campaign.businessId ?? null);
 
     const tracking =
       businessId != null
@@ -247,6 +248,7 @@ export class FunnelService {
       id: funnel.id,
       campaignId: funnel.campaignId,
       businessId,
+      campaignType: campaign.campaignType ?? CampaignType.PREPAID,
       pixelId: tracking.pixelId,
       googleTagManagerId: tracking.googleTagManagerId,
       step: resolvedStep,

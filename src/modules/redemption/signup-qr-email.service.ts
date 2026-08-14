@@ -8,12 +8,11 @@ import { DataSource, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
-import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { getPurposeEmailDefaults } from '../automation/automation-email-catalog';
 import { PaymentConfirmationEmail } from '../../templates/automation/payment-confirmation-email';
 import { SignupQrWelcomeEmail } from '../../templates/automation/signup-qr-welcome-email';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { CouponService } from './coupon.service';
 import {
@@ -48,8 +47,6 @@ export class SignupQrEmailService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
-    @InjectRepository(FunnelPayment)
-    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
   ) {}
 
   handlesSignupWelcomeEmail(): boolean {
@@ -267,12 +264,7 @@ export class SignupQrEmailService {
       campaignName,
     );
 
-    const passUrl = await this.resolveVerifiedPassUrl({
-      coupon,
-      customerId: params.customerId,
-      funnelId: params.funnelId,
-      candidatePaymentId: params.funnelPaymentId,
-    });
+    const passUrl = this.resolveGuestPassUrl(coupon);
 
     const qr = await this.couponService.buildQrPayload(coupon);
 
@@ -324,42 +316,15 @@ export class SignupQrEmailService {
     }
   }
 
-  private async resolveVerifiedPassUrl(params: {
-    coupon: Coupon;
-    customerId: number;
-    funnelId: number;
-    candidatePaymentId?: number;
-  }): Promise<string> {
-    const guestUrl = `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
-
-    const candidates = [
-      params.coupon.funnelPaymentId,
-      params.candidatePaymentId,
-    ].filter(
-      (id): id is number =>
-        id != null && Number.isFinite(id) && id > 0,
-    );
-
-    const seen = new Set<number>();
-    for (const paymentId of candidates) {
-      if (seen.has(paymentId)) {
-        continue;
-      }
-      seen.add(paymentId);
-
-      const exists = await this.funnelPaymentRepository.exist({
-        where: { id: paymentId },
-      });
-      if (exists) {
-        return `${getFrontendBaseUrl()}/pass/${paymentId}`;
-      }
-
+  private resolveGuestPassUrl(coupon: Coupon): string {
+    const token = coupon.qrToken?.trim();
+    if (!token) {
       this.logger.warn(
-        `Pass email skipped deleted/missing payment ${paymentId} for coupon ${params.coupon.id}`,
+        `Pass email missing qrToken for coupon ${coupon.id}`,
       );
+      throw new Error('Coupon access token is missing');
     }
-
-    return guestUrl;
+    return buildGuestPassUrl(token);
   }
 
   private async deliverSignupPassEmail(
@@ -376,6 +341,17 @@ export class SignupQrEmailService {
       return false;
     }
 
+    const coupon = await this.couponRepository.findOne({
+      where: { id: params.couponId },
+    });
+    const accessToken = coupon?.qrToken?.trim();
+    if (!accessToken) {
+      this.logger.warn(
+        `Skipping signup pass email — missing access token for coupon ${params.couponId}`,
+      );
+      return false;
+    }
+
     const funnel = await this.funnelRepository.findOne({
       where: { id: params.funnelId },
       relations: ['campaign'],
@@ -384,7 +360,7 @@ export class SignupQrEmailService {
       funnel?.campaign?.campaignName?.trim() || 'your campaign';
     const customerName = customer?.name?.trim() || 'Guest';
 
-    const passUrl = `${getFrontendBaseUrl()}/pass/guest/${params.customerId}/${params.funnelId}`;
+    const passUrl = buildGuestPassUrl(accessToken);
 
     const subject = `Your QR pass for ${campaignName}`;
     const html = await render(

@@ -37,7 +37,8 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { buildGuestPassUrl } from '../../utils/guest-pass-url';
+import { CouponService } from '../redemption/coupon.service';
 import { ActivityService } from '../activity/activity.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { ChatMessageService } from '../chat/chat-message.service';
@@ -129,6 +130,7 @@ export class AutomationService {
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly chatMessageService: ChatMessageService,
     private readonly checkoutResumeService: CheckoutResumeService,
+    private readonly couponService: CouponService,
   ) {}
 
   async createAutomation(
@@ -1989,8 +1991,16 @@ export class AutomationService {
           if (!recipient.customerId) {
             continue;
           }
+          const coupon = await this.couponService.findByCustomerAndFunnel(
+            recipient.customerId,
+            batch.funnelId,
+          );
+          const token = coupon?.qrToken?.trim();
+          if (!token) {
+            continue;
+          }
           recipientTemplateOverrides.set(recipient.customerId, {
-            ctaUrl: `${getFrontendBaseUrl()}/pass/guest/${recipient.customerId}/${batch.funnelId}`,
+            ctaUrl: buildGuestPassUrl(token),
           });
         }
       }
