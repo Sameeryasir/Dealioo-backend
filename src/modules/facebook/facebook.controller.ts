@@ -97,6 +97,15 @@ export class FacebookController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('connect-abort/:businessId')
+  async abortConnect(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<{ restored: true }> {
+    return this.facebookService.abortOAuthConnect(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('status/:businessId')
   async status(
     @Req() req,

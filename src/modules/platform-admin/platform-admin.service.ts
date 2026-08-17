@@ -214,9 +214,7 @@ export class PlatformAdminService {
         take: pagination.limit,
       }),
       this.adminNotificationRepository.count({ where: listWhere }),
-      this.adminNotificationRepository.count({
-        where: { isArchived: false, isRead: false },
-      }),
+      this.countUnreadNotifications(),
     ]);
 
     return {
@@ -236,6 +234,19 @@ export class PlatformAdminService {
       })),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
+  }
+
+  async getNotificationsUnreadCount(
+    actor: User,
+  ): Promise<{ unreadCount: number }> {
+    this.assertSuperAdmin(actor);
+    return { unreadCount: await this.countUnreadNotifications() };
+  }
+
+  private async countUnreadNotifications(): Promise<number> {
+    return this.adminNotificationRepository.count({
+      where: { isArchived: false, isRead: false },
+    });
   }
 
   /**
@@ -271,9 +282,7 @@ export class PlatformAdminService {
       await this.adminNotificationRepository.save(notification);
     }
 
-    const unreadCount = await this.adminNotificationRepository.count({
-      where: { isArchived: false, isRead: false },
-    });
+    const unreadCount = await this.countUnreadNotifications();
 
     return {
       id: notification.id,

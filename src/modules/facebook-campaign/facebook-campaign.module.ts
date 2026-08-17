@@ -7,9 +7,7 @@ import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity'
 import { MetaCampaignMedia } from '../../db/entities/meta-campaign-media.entity';
 import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entity';
 import { Business } from '../../db/entities/business.entity';
-import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import { SpacesModule } from '../spaces/spaces.module';
-import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookModule } from '../facebook/facebook.module';
 import { FacebookCampaignController } from './facebook-campaign.controller';
 import { FacebookCampaignService } from './facebook-campaign.service';
@@ -31,7 +29,6 @@ import { MetaPublishService } from './meta-publish.service';
       MetaCampaignMedia,
       MetaPublishAttempt,
       Business,
-      IntegrationAuditLog,
     ]),
     BullModule.registerQueue({ name: META_PUBLISH_QUEUE }),
     FacebookModule,
@@ -47,7 +44,6 @@ import { MetaPublishService } from './meta-publish.service';
     AdPublishService,
     MetaPublishQueueProcessor,
     MetaPublishRealtimeService,
-    FacebookIntegrationAuditService,
   ],
   exports: [
     FacebookCampaignService,

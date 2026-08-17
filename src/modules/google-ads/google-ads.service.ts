@@ -250,10 +250,6 @@ export class GoogleAdsService {
       
       
 
-      await this.auditService.log(businessId, 'oauth_callback_received', {
-        status: GoogleAdsConnectionStatus.AUTHENTICATED,
-      });
-
       const business = await this.businessRepository.findOne({
         where: { id: businessId },
         relations: ['owner'],
@@ -312,11 +308,6 @@ export class GoogleAdsService {
         googleConnectionStatus: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
         googleTokenExpiresAt: tokenExpiresAt,
         googleOauthScopes: grantedScopes.join(','),
-      });
-
-      await this.auditService.log(businessId, 'token_exchanged', {
-        status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
-        metadata: { googleUserId, grantedScopes },
       });
 
       this.logger.log(
@@ -400,7 +391,6 @@ export class GoogleAdsService {
       status,
       googleUserId: normalized.googleUserId,
       googleConnectedAt: normalized.googleConnectedAt,
-      googleCustomerId: normalized.googleCustomerId,
       googleTokenExpiresAt: normalized.googleTokenExpiresAt,
       googleOauthScopes: grantedScopes,
       missingRequiredScopes,
@@ -511,12 +501,16 @@ export class GoogleAdsService {
       ? this.normalizeCustomerId(managerCustomerId)
       : normalizedId;
 
+    let connectedAccount = 'Google Ads account';
     try {
-      await this.fetchCustomerMeta(
+      const customerMeta = await this.fetchCustomerMeta(
         refreshToken,
         normalizedId,
         loginCustomerId,
       );
+      if (customerMeta.name?.trim()) {
+        connectedAccount = customerMeta.name.trim();
+      }
     } catch (err) {
       throw new BadRequestException(
         formatGoogleAdsSdkError(
@@ -532,12 +526,9 @@ export class GoogleAdsService {
       googleConnectionStatus: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
     });
 
-    await this.auditService.log(businessId, 'customer_selected', {
+    await this.auditService.log(businessId, 'google_ads_connected', {
       status: GoogleAdsConnectionStatus.CUSTOMER_SELECTED,
-      metadata: {
-        customerId: normalizedId,
-        loginCustomerId,
-      },
+      metadata: { connectedAccount },
     });
 
     this.logger.log(
@@ -570,9 +561,6 @@ export class GoogleAdsService {
       );
     }
 
-    const previousCustomerId = business.googleCustomerId?.trim() ?? null;
-    const previousGoogleUserId = business.googleUserId?.trim() ?? null;
-
     await this.businessRepository.update(businessId, {
       googleUserId: null,
       googleRefreshToken: null,
@@ -586,11 +574,11 @@ export class GoogleAdsService {
     });
 
     await this.auditService.log(businessId, 'google_ads_disconnected', {
-      metadata: { previousCustomerId, previousGoogleUserId },
+      metadata: { connectedAccount: 'Google Ads was removed' },
     });
 
     this.logger.log(
-      `Google Ads disconnected for business ${businessId} (removed customer ${previousCustomerId ?? 'none'})`,
+      `Google Ads disconnected for business ${businessId}`,
     );
 
     return { disconnected: true };
@@ -660,10 +648,6 @@ export class GoogleAdsService {
         ),
       );
     }
-
-    await this.auditService.log(businessId, 'google_ads_campaign_deleted', {
-      metadata: { googleCampaignId: campaignId },
-    });
 
     this.logger.log(
       `Google Ads campaign ${campaignId} deleted for business ${businessId}`,

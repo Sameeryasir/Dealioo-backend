@@ -14,6 +14,8 @@ import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
+import { StripeIntegrationAuditService } from './stripe-integration-audit.service';
+import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import {
   errorStripePayment,
   logStripePayment,
@@ -39,6 +41,7 @@ export class StripeService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly adminNotificationWriter: AdminNotificationWriter,
+    private readonly auditService: StripeIntegrationAuditService,
   ) {
     this.platformSecretKey =
       this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -126,6 +129,44 @@ export class StripeService {
     return this.createOAuthConnectUrl(businessId);
   }
 
+  getConnectionStatus(business: Business): StripeConnectionStatusDto {
+    const connected = Boolean(business.stripeAccountId?.trim());
+    return {
+      connected,
+      status: connected ? 'connected' : null,
+    };
+  }
+
+  async abortOAuthConnect(
+    user: User,
+    businessId: number,
+  ): Promise<{ restored: true }> {
+    requireAdminRole(
+      user,
+      'You do not have permission to connect Stripe for this account.',
+    );
+
+    const business = await this.businessRepository.findOne({
+      where: businessAccessWhere(user, businessId),
+    });
+
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
+    }
+
+    if (business.stripeAccountId?.trim()) {
+      return { restored: true };
+    }
+
+    await this.auditService.log(businessId, 'oauth_aborted', {
+      status: 'aborted',
+    });
+
+    return { restored: true };
+  }
+
   async disconnectStripeForBusiness(
     user: User,
     businessId: number,
@@ -176,6 +217,11 @@ export class StripeService {
 
     await this.businessRepository.update(businessId, {
       stripeAccountId: null,
+    });
+
+    await this.auditService.log(businessId, 'stripe_disconnected', {
+      status: 'disconnected',
+      metadata: { connectedAccount: 'Stripe was removed' },
     });
 
     logStripePayment({
@@ -1241,6 +1287,10 @@ export class StripeService {
 
     const state = String(businessId);
 
+    await this.auditService.log(businessId, 'oauth_started', {
+      status: 'initiated',
+    });
+
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
@@ -1284,8 +1334,25 @@ export class StripeService {
       throw new BadRequestException('Stripe account connection failed.');
     }
 
+    let connectedAccount = 'Stripe account';
+    try {
+      const account = await this.stripe.accounts.retrieve(stripeAccountId);
+      connectedAccount =
+        account.business_profile?.name?.trim() ||
+        account.settings?.dashboard?.display_name?.trim() ||
+        account.email?.trim() ||
+        'Stripe account';
+    } catch {
+      // Keep a generic label so the audit log never includes the Stripe account id.
+    }
+
     await this.businessRepository.update(businessId, {
       stripeAccountId,
+    });
+
+    await this.auditService.log(businessId, 'stripe_connected', {
+      status: 'connected',
+      metadata: { connectedAccount },
     });
 
     await this.adminNotificationWriter.notifyIntegrationConnected({
@@ -1313,6 +1380,11 @@ export class StripeService {
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
       relations: ['owner'],
+    });
+
+    await this.auditService.log(businessId, 'oauth_failed', {
+      status: 'failed',
+      errorMessage: reason,
     });
 
     await this.adminNotificationWriter.notifyIntegrationFailed({

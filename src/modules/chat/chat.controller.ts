@@ -30,21 +30,6 @@ export class ChatController {
   ) {}
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('business/:businessId/unread-summary')
-  async getChatUnreadSummary(
-    @Param('businessId', ParseIntPipe) businessId: number,
-    @Req() req: AuthRequest,
-  ) {
-    await this.redemptionService.verifyBusinessAccess(
-      businessId,
-      req.user.id,
-      req.user.role.name,
-    );
-
-    return this.chatService.getChatUnreadSummary(businessId, req.user.id);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
   @Post('business/:businessId/mark-read')
   async markBusinessChatsRead(
     @Param('businessId', ParseIntPipe) businessId: number,

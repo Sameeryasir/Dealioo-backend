@@ -37,6 +37,7 @@ import { MeetingRequestModule } from './modules/meeting-request/meeting-request.
 import { SubscriptionPlansModule } from './modules/subscription-plans/subscription-plans.module';
 import { UserSubscriptionsModule } from './modules/user-subscriptions/user-subscriptions.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { IntegrationAuditModule } from './modules/integration-audit/integration-audit.module';
 import { SmsModule } from './modules/sms/sms.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { UploadModule } from './modules/upload/upload.module';
@@ -105,6 +106,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     SubscriptionPlansModule,
     UserSubscriptionsModule,
     BillingModule,
+    IntegrationAuditModule,
     PlatformAdminModule,
   ],
   controllers: [AppController],

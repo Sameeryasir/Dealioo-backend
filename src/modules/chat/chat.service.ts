@@ -24,7 +24,6 @@ import { BusinessUserChatReadState } from '../../db/entities/business-user-chat-
 import {
   ActiveFlowCustomerDto,
   ChatCustomerSummaryDto,
-  ChatUnreadSummaryDto,
   ConversationDetailDto,
   ConversationMessageDirection,
   ConversationMessageDto,
@@ -55,26 +54,6 @@ export class ChatService {
     private readonly chatReadStateRepository: Repository<BusinessUserChatReadState>,
   ) {}
 
-  async getChatUnreadSummary(
-    businessId: number,
-    userId: number,
-  ): Promise<ChatUnreadSummaryDto> {
-    const readState = await this.chatReadStateRepository.findOne({
-      where: { businessId, userId },
-    });
-
-    const unreadCount = await this.countUnreadInboundMessages(
-      businessId,
-      readState?.chatsLastViewedAt ?? null,
-    );
-
-    return {
-      hasUnread: unreadCount > 0,
-      unreadCount,
-      chatsLastViewedAt: readState?.chatsLastViewedAt ?? null,
-    };
-  }
-
   async markBusinessChatsRead(
     businessId: number,
     userId: number,
@@ -94,26 +73,6 @@ export class ChatService {
     );
 
     return viewedAt;
-  }
-
-  private async countUnreadInboundMessages(
-    businessId: number,
-    lastViewedAt: Date | null,
-  ): Promise<number> {
-    const qb = this.messageRepository
-      .createQueryBuilder('message')
-      .innerJoin('message.conversation', 'conversation')
-      .where('conversation.businessId = :businessId', { businessId })
-      .andWhere('message.direction = :direction', {
-        direction: StoredMessageDirection.INBOUND,
-      })
-      .andWhere('message.sentByCustomerId IS NOT NULL');
-
-    if (lastViewedAt) {
-      qb.andWhere('message.sentAt > :lastViewedAt', { lastViewedAt });
-    }
-
-    return qb.getCount();
   }
 
   async getActiveFlowCustomers(

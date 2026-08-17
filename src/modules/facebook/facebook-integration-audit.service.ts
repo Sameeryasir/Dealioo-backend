@@ -4,6 +4,14 @@ import { Repository } from 'typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import type { FacebookConnectionStatusValue } from './facebook-connection-status';
 
+const CONNECTION_EVENT_TYPES = new Set([
+  'oauth_started',
+  'meta_connected',
+  'oauth_failed',
+  'oauth_aborted',
+  'meta_disconnected',
+]);
+
 @Injectable()
 export class FacebookIntegrationAuditService {
   private readonly logger = new Logger(FacebookIntegrationAuditService.name);
@@ -22,6 +30,10 @@ export class FacebookIntegrationAuditService {
       errorMessage?: string;
     },
   ): Promise<void> {
+    if (!CONNECTION_EVENT_TYPES.has(eventType)) {
+      return;
+    }
+
     const metadata = this.sanitizeMetadata(options?.metadata);
 
     await this.auditRepository.save({

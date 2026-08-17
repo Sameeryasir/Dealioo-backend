@@ -15,6 +15,8 @@ describe('StripeController', () => {
           provide: StripeService,
           useValue: {
             connect: jest.fn(),
+            abortOAuthConnect: jest.fn(),
+            getConnectionStatus: jest.fn(),
             createDashboardLoginLink: jest.fn(),
             createOAuthConnectUrl: jest.fn(),
             handleOAuthCallback: jest.fn(),

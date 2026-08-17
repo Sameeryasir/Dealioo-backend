@@ -13,9 +13,9 @@ import {
 } from '../../db/entities/business-invitation.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { User } from '../../db/entities/user.entity';
-import { isSuperAdmin } from '../../utils/user-roles';
+import { isAdminOrSuperAdmin, isSuperAdmin } from '../../utils/user-roles';
 import { BusinessAccessService } from '../business-access/business-access.service';
-import { ALL_BUSINESS_MEMBER_PERMISSIONS } from './member.constants';
+import { FULL_ACCESS_PERMISSION } from './member.constants';
 
 type AuthUser = {
   id: number;
@@ -90,7 +90,7 @@ export class MemberService {
 
     const activeMembers = await this.businessMemberRepository.find({
       where: { business: { id: businessId } },
-      relations: ['user', 'permissionRows'],
+      relations: ['user', 'user.role', 'permissionRows'],
       order: { createdAt: 'ASC' },
     });
 
@@ -119,7 +119,7 @@ export class MemberService {
         email: business.owner.email,
         role: 'Owner',
         status: 'owner',
-        permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
+        permissions: [FULL_ACCESS_PERMISSION],
       },
       ...activeMembers.map((member) => {
         const permissionList =
@@ -134,7 +134,9 @@ export class MemberService {
           email: member.user.email,
           role: member.role,
           status: 'active' as const,
-          permissions: permissionList,
+          permissions: isAdminOrSuperAdmin(member.user)
+            ? [FULL_ACCESS_PERMISSION]
+            : permissionList,
         };
       }),
       ...activePending
@@ -259,7 +261,7 @@ export class MemberService {
   private async getBusinessOrThrow(businessId: number): Promise<Business> {
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
-      relations: ['owner'],
+      relations: ['owner', 'owner.role'],
     });
 
     if (!business) {

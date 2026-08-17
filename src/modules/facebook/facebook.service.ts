@@ -36,7 +36,10 @@ import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
-import { FacebookConnectionStatus } from './facebook-connection-status';
+import {
+  FacebookConnectionStatus,
+  type FacebookConnectionStatusValue,
+} from './facebook-connection-status';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
 import { FacebookMetaTokenService } from './facebook-meta-token.service';
 import {
@@ -229,6 +232,39 @@ export class FacebookService {
     return this.createOAuthConnectUrl(business.id, requestedScopes);
   }
 
+  async abortOAuthConnect(
+    user: User,
+    businessId: number,
+  ): Promise<{ restored: true }> {
+    const business = await this.requireMetaBusiness(user, businessId, 'create');
+
+    if (business.metaConnectionStatus !== FacebookConnectionStatus.INITIATED) {
+      return { restored: true };
+    }
+
+    const hasMetaLogin = Boolean(
+      business.metaUserId?.trim() && business.metaAccessToken?.trim(),
+    );
+
+    let restoredStatus: FacebookConnectionStatusValue | null = null;
+
+    if (hasMetaLogin && business.metaAdAccountId?.trim()) {
+      restoredStatus = FacebookConnectionStatus.AD_ACCOUNT_SELECTED;
+    } else if (hasMetaLogin) {
+      restoredStatus = FacebookConnectionStatus.TOKEN_EXCHANGED;
+    }
+
+    await this.businessRepository.update(businessId, {
+      metaConnectionStatus: restoredStatus,
+    });
+
+    await this.auditService.log(businessId, 'oauth_aborted', {
+      status: restoredStatus,
+    });
+
+    return { restored: true };
+  }
+
   async createOAuthConnectUrl(
     businessId: number,
     selectedScopes: string[],
@@ -349,11 +385,6 @@ export class FacebookService {
           'Meta OAuth session expired or was not found. Select permissions and try connecting again.',
         );
       }
-
-      await this.auditService.log(businessId, 'oauth_callback_received', {
-        status: FacebookConnectionStatus.AUTHENTICATED,
-        metadata: { requestedScopes: oauthSession.requestedScopes },
-      });
 
       const business = await this.businessRepository.findOne({
         where: { id: businessId },
@@ -1528,9 +1559,11 @@ export class FacebookService {
       metaConnectionStatus: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
     });
 
-    await this.auditService.log(businessId, 'ad_account_selected', {
+    await this.auditService.log(businessId, 'meta_connected', {
       status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
-      metadata: { adAccountId: normalizedId },
+      metadata: {
+        connectedAccount: match.name?.trim() || 'Meta ad account',
+      },
     });
 
     this.logger.log(
@@ -1558,9 +1591,6 @@ export class FacebookService {
       );
     }
 
-    const previousAdAccountId = business.metaAdAccountId?.trim() ?? null;
-    const previousMetaUserId = business.metaUserId?.trim() ?? null;
-
     await this.businessRepository.update(businessId, {
       metaUserId: null,
       metaAccessToken: null,
@@ -1573,11 +1603,11 @@ export class FacebookService {
     });
 
     await this.auditService.log(businessId, 'meta_disconnected', {
-      metadata: { previousAdAccountId, previousMetaUserId },
+      metadata: { connectedAccount: 'Meta Ads was removed' },
     });
 
     this.logger.log(
-      `Facebook disconnected for business ${businessId} (removed ad account ${previousAdAccountId ?? 'none'})`,
+      `Facebook disconnected for business ${businessId}`,
     );
 
     return { disconnected: true };
@@ -1763,15 +1793,6 @@ export class FacebookService {
       metaTokenExpiresAt: tokenExpiresAt,
       metaOauthScopes: grantedScopes.join(','),
       metaRequestedScopes: requestedScopes.join(','),
-    });
-
-    await this.auditService.log(businessId, 'token_exchanged', {
-      status: FacebookConnectionStatus.TOKEN_EXCHANGED,
-      metadata: {
-        metaUserId: me.id,
-        requestedScopes,
-        grantedScopes,
-      },
     });
 
     this.logger.log(

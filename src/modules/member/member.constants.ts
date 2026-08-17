@@ -76,6 +76,8 @@ export const ALL_BUSINESS_MEMBER_PERMISSIONS: BusinessMemberPermission[] = [
   ...BUSINESS_MEMBER_PERMISSIONS,
 ];
 
+export const FULL_ACCESS_PERMISSION = 'full_access' as const;
+
 export function hasAnyCampaignPermission(
   permissions: readonly string[],
 ): boolean {

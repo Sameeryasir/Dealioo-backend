@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
+import { StripeIntegrationAuditService } from './stripe-integration-audit.service';
 import { StripeService } from './stripe.service';
 
 describe('StripeService', () => {
@@ -37,6 +39,19 @@ describe('StripeService', () => {
             findOne: jest.fn(),
             save: jest.fn(),
             update: jest.fn(),
+          },
+        },
+        {
+          provide: AdminNotificationWriter,
+          useValue: {
+            notifyIntegrationConnected: jest.fn(),
+            notifyIntegrationFailed: jest.fn(),
+          },
+        },
+        {
+          provide: StripeIntegrationAuditService,
+          useValue: {
+            log: jest.fn(),
           },
         },
       ],

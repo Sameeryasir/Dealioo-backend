@@ -20,7 +20,6 @@ import {
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
 import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
-import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { FacebookService } from '../facebook/facebook.service';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
@@ -94,7 +93,6 @@ export class MetaPublishService {
     private readonly dataSource: DataSource,
     private readonly businessAccessService: BusinessAccessService,
     private readonly metaTokenService: FacebookMetaTokenService,
-    private readonly auditService: FacebookIntegrationAuditService,
     private readonly facebookService: FacebookService,
     private readonly metaAdsService: MetaAdsService,
     private readonly realtimeService: MetaPublishRealtimeService,
@@ -531,17 +529,6 @@ export class MetaPublishService {
         metaId: metaAdId,
         errorMessage: null,
         complete: true,
-      });
-
-      await this.auditService.log(businessId, 'meta_campaign_published', {
-        metadata: {
-          draftId: draft.id,
-          metaCampaignId,
-          metaAdsetId,
-          metaCreativeId,
-          metaAdId,
-          jobId,
-        },
       });
 
       this.facebookService.invalidateCampaignStatsCache(businessId);
@@ -1030,11 +1017,6 @@ export class MetaPublishService {
       metaErrorCode,
       metaErrorMessage,
       rawResponse,
-    });
-
-    await this.auditService.log(businessId, 'meta_campaign_publish_failed', {
-      errorMessage: userMessage,
-      metadata: { draftId, step, metaErrorCode, jobId },
     });
 
     const draft = await this.draftRepository.findOne({

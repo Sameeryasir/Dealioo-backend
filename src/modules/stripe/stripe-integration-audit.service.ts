@@ -2,19 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
-import type { GoogleAdsConnectionStatusValue } from './google-ads-connection-status';
 
 const CONNECTION_EVENT_TYPES = new Set([
   'oauth_started',
-  'google_ads_connected',
+  'stripe_connected',
   'oauth_failed',
   'oauth_aborted',
-  'google_ads_disconnected',
+  'stripe_disconnected',
 ]);
 
 @Injectable()
-export class GoogleAdsIntegrationAuditService {
-  private readonly logger = new Logger(GoogleAdsIntegrationAuditService.name);
+export class StripeIntegrationAuditService {
+  private readonly logger = new Logger(StripeIntegrationAuditService.name);
 
   constructor(
     @InjectRepository(IntegrationAuditLog)
@@ -25,7 +24,7 @@ export class GoogleAdsIntegrationAuditService {
     businessId: number,
     eventType: string,
     options?: {
-      status?: GoogleAdsConnectionStatusValue | null;
+      status?: string | null;
       metadata?: Record<string, unknown>;
       errorMessage?: string;
     },
@@ -38,7 +37,7 @@ export class GoogleAdsIntegrationAuditService {
 
     await this.auditRepository.save({
       businessId,
-      provider: 'google_ads',
+      provider: 'stripe',
       eventType,
       status: options?.status ?? null,
       metadata,
@@ -46,7 +45,7 @@ export class GoogleAdsIntegrationAuditService {
     });
 
     this.logger.log(
-      `google_ads.${eventType} business=${businessId} status=${options?.status ?? 'n/a'}`,
+      `stripe.${eventType} business=${businessId} status=${options?.status ?? 'n/a'}`,
     );
   }
 

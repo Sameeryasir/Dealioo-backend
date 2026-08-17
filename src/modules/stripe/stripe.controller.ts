@@ -14,6 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { BusinessService } from '../business/business.service';
+import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import { StripeService } from './stripe.service';
 
 @Controller('stripe')
@@ -87,6 +88,15 @@ export class StripeController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('connect-abort/:businessId')
+  async abortConnect(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<{ restored: true }> {
+    return this.stripeService.abortOAuthConnect(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Post('disconnect/:businessId')
   async disconnect(
     @Req() req,
@@ -119,6 +129,26 @@ export class StripeController {
     return this.stripeService.createDashboardLoginLink(
       business.stripeAccountId,
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('status/:businessId')
+  async status(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<StripeConnectionStatusDto> {
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
+      businessId,
+    );
+
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
+    }
+
+    return this.stripeService.getConnectionStatus(business);
   }
 
   @UseGuards(AuthGuard('jwt'))

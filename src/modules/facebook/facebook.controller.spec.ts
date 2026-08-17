@@ -15,6 +15,7 @@ describe('FacebookController', () => {
           provide: FacebookService,
           useValue: {
             connect: jest.fn(),
+            abortOAuthConnect: jest.fn(),
             createOAuthConnectUrl: jest.fn(),
             handleOAuthCallback: jest.fn(),
             getConnectionStatus: jest.fn(),

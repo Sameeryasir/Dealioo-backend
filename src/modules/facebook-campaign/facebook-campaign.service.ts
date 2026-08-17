@@ -22,7 +22,6 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import { SpacesService } from '../spaces/spaces.service';
-import { FacebookIntegrationAuditService } from '../facebook/facebook-integration-audit.service';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { FacebookService } from '../facebook/facebook.service';
 import { CreateFacebookCampaignDto } from './dto/create-facebook-campaign.dto';
@@ -83,7 +82,6 @@ export class FacebookCampaignService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly businessAccessService: BusinessAccessService,
-    private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly facebookService: FacebookService,
     private readonly spacesService: SpacesService,
@@ -332,16 +330,6 @@ export class FacebookCampaignService {
         errorMessage: null,
       });
 
-      await this.auditService.log(businessId, 'meta_campaign_created', {
-        metadata: {
-          metaCampaignId,
-          metaAdsetId,
-          metaCreativeId,
-          metaAdId: adId,
-          adAccountId,
-        },
-      });
-
       this.facebookService.invalidateCampaignStatsCache(businessId);
 
       this.logger.log(
@@ -394,10 +382,6 @@ export class FacebookCampaignService {
     await this.facebookCampaignRepository.delete({
       businessId,
       metaCampaignId: campaignId,
-    });
-
-    await this.auditService.log(businessId, 'meta_campaign_deleted', {
-      metadata: { metaCampaignId: campaignId },
     });
 
     this.facebookService.invalidateCampaignStatsCache(businessId);
@@ -490,11 +474,6 @@ export class FacebookCampaignService {
       metaErrorCode,
       metaErrorMessage,
       rawResponse,
-    });
-
-    await this.auditService.log(businessId, 'meta_campaign_failed', {
-      errorMessage: userMessage,
-      metadata: { step, metaErrorCode },
     });
 
     this.logger.error(

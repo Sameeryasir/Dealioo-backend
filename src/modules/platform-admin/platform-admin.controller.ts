@@ -25,6 +25,12 @@ export class PlatformAdminController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('notifications/unread-count')
+  getNotificationsUnreadCount(@Req() req: { user: User }) {
+    return this.platformAdminService.getNotificationsUnreadCount(req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('notifications')
   getNotifications(
     @Req() req: { user: User },
