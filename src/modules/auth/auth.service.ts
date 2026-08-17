@@ -895,7 +895,7 @@ export class AuthService {
       ])
       .where('sub.user_id = :userId', { userId })
       .andWhere('sub.status IN (:...statuses)', {
-        statuses: ['active', 'trialing'],
+        statuses: ['active', 'trialing', 'past_due'],
       })
       .orderBy('sub.created_at', 'DESC')
       .limit(1)

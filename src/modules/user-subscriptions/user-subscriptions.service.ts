@@ -76,6 +76,20 @@ type StripeSubscriptionWebhookObject = StripeSubscription & {
 };
 
 const PLATFORM_SUBSCRIPTION = 'platform_subscription';
+const PAID_SUBSCRIPTION_STATUSES: UserSubscription['status'][] = [
+  'active',
+  'trialing',
+];
+const CURRENT_SUBSCRIPTION_STATUSES: UserSubscription['status'][] = [
+  'active',
+  'trialing',
+  'past_due',
+];
+
+type StripeInvoiceWebhookObject = {
+  id?: string;
+  subscription?: string | { id?: string } | null;
+};
 
 @Injectable()
 export class UserSubscriptionsService {
@@ -101,11 +115,18 @@ export class UserSubscriptionsService {
   getActiveSubscriptionForUser(
     userId: number,
   ): Promise<UserSubscriptionResponse | null> {
-    return this.getPlanSummaryForUser(userId);
+    return this.getPlanSummaryForUser(userId, PAID_SUBSCRIPTION_STATUSES);
+  }
+
+  getCurrentSubscriptionForUser(
+    userId: number,
+  ): Promise<UserSubscriptionResponse | null> {
+    return this.getPlanSummaryForUser(userId, CURRENT_SUBSCRIPTION_STATUSES);
   }
 
   getPlanSummaryForUser(
     userId: number,
+    statuses: UserSubscription['status'][] = PAID_SUBSCRIPTION_STATUSES,
   ): Promise<UserSubscriptionResponse | null> {
     return this.subscriptionRepository
       .createQueryBuilder('sub')
@@ -123,9 +144,7 @@ export class UserSubscriptionsService {
         'plan.name',
       ])
       .where('sub.user_id = :userId', { userId })
-      .andWhere('sub.status IN (:...statuses)', {
-        statuses: ['active', 'trialing'],
-      })
+      .andWhere('sub.status IN (:...statuses)', { statuses })
       .orderBy('sub.created_at', 'DESC')
       .limit(1)
       .getOne()
@@ -211,8 +230,16 @@ export class UserSubscriptionsService {
       throw new NotFoundException('User not found.');
     }
 
-    if (await this.userHasActiveSubscription(userId)) {
-      throw new ConflictException('You already have an active subscription.');
+    const existing = await this.subscriptionRepository.findOne({
+      where: { userId, status: In(CURRENT_SUBSCRIPTION_STATUSES) },
+      order: { createdAt: 'DESC' },
+    });
+    if (existing) {
+      throw new ConflictException(
+        existing.status === 'past_due'
+          ? 'Your last payment failed or needs confirmation. Update your card instead of starting a new checkout.'
+          : 'You already have an active subscription.',
+      );
     }
 
     const plan = await this.planRepository.findOne({
@@ -314,7 +341,49 @@ export class UserSubscriptionsService {
       await this.markSubscriptionCancelled(
         (event.data.object as StripeSubscription).id,
       );
+      return;
     }
+
+    if (
+      event.type === 'invoice.payment_failed' ||
+      event.type === 'invoice.paid' ||
+      event.type === 'invoice.payment_action_required'
+    ) {
+      await this.syncFromPlatformInvoice(
+        event.type,
+        event.data.object as StripeInvoiceWebhookObject,
+      );
+    }
+  }
+
+  private async syncFromPlatformInvoice(
+    eventType:
+      | 'invoice.payment_failed'
+      | 'invoice.paid'
+      | 'invoice.payment_action_required',
+    invoice: StripeInvoiceWebhookObject,
+  ): Promise<void> {
+    const stripeSubscriptionId = this.extractStripeId(invoice.subscription);
+    if (!stripeSubscriptionId) return;
+
+    const record = await this.subscriptionRepository.findOne({
+      where: { stripeSubscriptionId },
+    });
+    if (!record || record.status === 'cancelled') return;
+
+    if (
+      eventType === 'invoice.payment_failed' ||
+      eventType === 'invoice.payment_action_required'
+    ) {
+      if (record.status === 'past_due') return;
+      await this.subscriptionRepository.update(record.id, {
+        status: 'past_due',
+      });
+      return;
+    }
+
+    if (record.status !== 'past_due') return;
+    await this.subscriptionRepository.update(record.id, { status: 'active' });
   }
 
   private async loadCompletedCheckoutSession(

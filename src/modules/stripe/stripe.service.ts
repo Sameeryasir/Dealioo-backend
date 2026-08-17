@@ -625,6 +625,51 @@ export class StripeService {
     });
   }
 
+  async createPlatformBillingPortalSession(opts: {
+    stripeCustomerId: string;
+  }): Promise<{ url: string }> {
+    const stripeCustomerId = opts.stripeCustomerId.trim();
+    if (!stripeCustomerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    const returnUrl = `${getFrontendBaseUrl()}/dashboard/settings/billing`;
+
+    try {
+      const session = await this.stripe.billingPortal.sessions.create({
+        customer: stripeCustomerId,
+        return_url: returnUrl,
+      });
+
+      if (!session.url) {
+        throw new InternalServerErrorException(
+          'Stripe did not return a billing portal URL.',
+        );
+      }
+
+      return { url: session.url };
+    } catch (err) {
+      if (
+        err instanceof BadRequestException ||
+        err instanceof InternalServerErrorException
+      ) {
+        throw err;
+      }
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        throw new BadRequestException(
+          (err as { message?: string }).message ||
+            'Unable to open billing portal.',
+        );
+      }
+      throw err;
+    }
+  }
+
   async retrievePlatformPrice(
     priceId: string,
   ): Promise<
@@ -873,6 +918,279 @@ export class StripeService {
     }
 
     return null;
+  }
+
+  async retrievePlatformCustomer(stripeCustomerId: string): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['customers']['retrieve']>>
+  > {
+    const customerId = stripeCustomerId.trim();
+    if (!customerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    try {
+      return await this.stripe.customers.retrieve(customerId, {
+        expand: ['invoice_settings.default_payment_method'],
+      });
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load billing customer.');
+    }
+  }
+
+  async retrievePlatformSubscription(opts: {
+    stripeSubscriptionId: string;
+  }): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>>
+  > {
+    const subscriptionId = opts.stripeSubscriptionId.trim();
+    if (!subscriptionId) {
+      throw new BadRequestException('Missing Stripe subscription id.');
+    }
+
+    try {
+      return await this.stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ['items.data.price', 'default_payment_method'],
+      });
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load the Stripe subscription.');
+    }
+  }
+
+  async listPlatformCardPaymentMethods(stripeCustomerId: string): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['paymentMethods']['list']>>
+  > {
+    const customerId = stripeCustomerId.trim();
+    if (!customerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    try {
+      return await this.stripe.paymentMethods.list({
+        customer: customerId,
+        type: 'card',
+        limit: 10,
+      });
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load payment methods.');
+    }
+  }
+
+  async listPlatformInvoices(stripeCustomerId: string): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['invoices']['list']>>
+  > {
+    const customerId = stripeCustomerId.trim();
+    if (!customerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    try {
+      return await this.stripe.invoices.list({
+        customer: customerId,
+        limit: 12,
+      });
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load invoices.');
+    }
+  }
+
+  async createPlatformSetupIntent(opts: {
+    stripeCustomerId: string;
+    userId: number;
+  }): Promise<{ clientSecret: string; setupIntentId: string }> {
+    const customerId = opts.stripeCustomerId.trim();
+    if (!customerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    try {
+      const setupIntent = await this.stripe.setupIntents.create({
+        customer: customerId,
+        payment_method_types: ['card'],
+        usage: 'off_session',
+        metadata: {
+          purpose: 'platform_subscription',
+          userId: String(opts.userId),
+        },
+      });
+
+      const clientSecret = setupIntent.client_secret?.trim() || '';
+      if (!clientSecret) {
+        throw new InternalServerErrorException(
+          'Stripe did not return a SetupIntent client secret.',
+        );
+      }
+
+      return { clientSecret, setupIntentId: setupIntent.id };
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to start card update.');
+    }
+  }
+
+  async retrievePlatformSetupIntent(setupIntentId: string): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['setupIntents']['retrieve']>>
+  > {
+    const id = setupIntentId.trim();
+    if (!id) {
+      throw new BadRequestException('Missing SetupIntent id.');
+    }
+
+    try {
+      return await this.stripe.setupIntents.retrieve(id);
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load the card setup.');
+    }
+  }
+
+  async setDefaultPlatformPaymentMethod(opts: {
+    stripeCustomerId: string;
+    paymentMethodId: string;
+    stripeSubscriptionId?: string | null;
+  }): Promise<void> {
+    const customerId = opts.stripeCustomerId.trim();
+    const paymentMethodId = opts.paymentMethodId.trim();
+    if (!customerId || !paymentMethodId) {
+      throw new BadRequestException('Missing payment method details.');
+    }
+
+    try {
+      await this.stripe.paymentMethods.attach(paymentMethodId, {
+        customer: customerId,
+      });
+    } catch (err) {
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? (err as { code?: string }).code
+          : '';
+      const message =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message ?? '')
+          : '';
+      const alreadyAttached =
+        code === 'resource_already_exists' ||
+        /already been attached/i.test(message);
+      if (!alreadyAttached) {
+        this.rethrowStripeApiError(err, 'Unable to save this card.');
+      }
+    }
+
+    try {
+      await this.stripe.customers.update(customerId, {
+        invoice_settings: { default_payment_method: paymentMethodId },
+      });
+
+      const subscriptionId = opts.stripeSubscriptionId?.trim();
+      if (subscriptionId) {
+        await this.stripe.subscriptions.update(subscriptionId, {
+          default_payment_method: paymentMethodId,
+        });
+      }
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to set the default card.');
+    }
+  }
+
+  async updatePlatformCustomerBilling(opts: {
+    stripeCustomerId: string;
+    name?: string | null;
+    email?: string | null;
+    address?: {
+      line1?: string | null;
+      line2?: string | null;
+      city?: string | null;
+      state?: string | null;
+      postalCode?: string | null;
+      country?: string | null;
+    } | null;
+  }): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['customers']['update']>>
+  > {
+    const customerId = opts.stripeCustomerId.trim();
+    if (!customerId) {
+      throw new BadRequestException('No billing customer found');
+    }
+
+    const update: {
+      name?: string;
+      email?: string;
+      address?: {
+        line1?: string;
+        line2?: string;
+        city?: string;
+        state?: string;
+        postal_code?: string;
+        country?: string;
+      } | null;
+    } = {};
+    if (opts.name !== undefined) {
+      update.name = opts.name?.trim() || '';
+    }
+    if (opts.email !== undefined) {
+      update.email = opts.email?.trim() || undefined;
+    }
+    if (opts.address !== undefined) {
+      if (opts.address == null) {
+        update.address = null;
+      } else {
+        update.address = {
+          line1: opts.address.line1?.trim() || undefined,
+          line2: opts.address.line2?.trim() || undefined,
+          city: opts.address.city?.trim() || undefined,
+          state: opts.address.state?.trim() || undefined,
+          postal_code: opts.address.postalCode?.trim() || undefined,
+          country: opts.address.country?.trim().toUpperCase() || undefined,
+        };
+      }
+    }
+
+    try {
+      return await this.stripe.customers.update(customerId, update);
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to update billing details.');
+    }
+  }
+
+  async resumePlatformSubscription(opts: {
+    stripeSubscriptionId: string;
+  }): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['subscriptions']['update']>>
+  > {
+    const subscriptionId = opts.stripeSubscriptionId.trim();
+    if (!subscriptionId) {
+      throw new BadRequestException('Missing Stripe subscription id.');
+    }
+
+    try {
+      return await this.stripe.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: false,
+      });
+    } catch (err) {
+      this.rethrowStripeApiError(
+        err,
+        'Unable to resume this subscription.',
+      );
+    }
+  }
+
+  private rethrowStripeApiError(err: unknown, fallbackMessage: string): never {
+    if (
+      err instanceof BadRequestException ||
+      err instanceof NotFoundException ||
+      err instanceof InternalServerErrorException
+    ) {
+      throw err;
+    }
+    if (
+      err &&
+      typeof err === 'object' &&
+      'type' in err &&
+      ((err as { type?: string }).type === 'StripeInvalidRequestError' ||
+        (err as { type?: string }).type === 'StripeCardError')
+    ) {
+      throw new BadRequestException(
+        (err as { message?: string }).message || fallbackMessage,
+      );
+    }
+    throw err;
   }
 
   async createOAuthConnectUrl(

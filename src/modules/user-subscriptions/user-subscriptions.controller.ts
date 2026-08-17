@@ -22,7 +22,7 @@ export class UserSubscriptionsController {
   getMySubscription(
     @Req() req: { user: { id: number } },
   ): Promise<UserSubscriptionResponse | null> {
-    return this.userSubscriptionsService.getActiveSubscriptionForUser(
+    return this.userSubscriptionsService.getCurrentSubscriptionForUser(
       req.user.id,
     );
   }
