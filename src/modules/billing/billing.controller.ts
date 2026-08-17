@@ -2,15 +2,19 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Patch,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/jwt/jwt-auth.guard';
+import { BillingAccountOwnerGuard } from './billing-account-owner.guard';
 import { BillingService } from './billing.service';
 import type {
   BillingDetailsUpdateResponse,
+  BillingInvoiceLinksResponse,
   BillingOverviewResponse,
   BillingPaymentMethodUpdateResponse,
   BillingPortalResponse,
@@ -23,10 +27,10 @@ import { UpdateBillingDetailsDto } from './dto/update-billing-details.dto';
 import { UpgradeSubscriptionDto } from './dto/upgrade-subscription.dto';
 
 @Controller('billing')
+@UseGuards(JwtAuthGuard, BillingAccountOwnerGuard)
 export class BillingController {
   constructor(private readonly billingService: BillingService) {}
 
-  @UseGuards(JwtAuthGuard)
   @Get('overview')
   getOverview(
     @Req() req: { user: { id: number } },
@@ -34,7 +38,7 @@ export class BillingController {
     return this.billingService.getOverview(req.user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('setup-intent')
   createSetupIntent(
     @Req() req: { user: { id: number } },
@@ -42,7 +46,7 @@ export class BillingController {
     return this.billingService.createSetupIntent(req.user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('payment-method')
   confirmPaymentMethod(
     @Req() req: { user: { id: number } },
@@ -51,7 +55,7 @@ export class BillingController {
     return this.billingService.confirmPaymentMethod(req.user.id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Patch('customer')
   updateCustomer(
     @Req() req: { user: { id: number } },
@@ -60,7 +64,15 @@ export class BillingController {
     return this.billingService.updateBillingDetails(req.user.id, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Get('invoices/:invoiceId/links')
+  getInvoiceLinks(
+    @Req() req: { user: { id: number } },
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<BillingInvoiceLinksResponse> {
+    return this.billingService.getInvoiceLinks(req.user.id, invoiceId);
+  }
+
   @Post('resume')
   resume(
     @Req() req: { user: { id: number } },
@@ -68,7 +80,6 @@ export class BillingController {
     return this.billingService.resumeSubscription(req.user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('portal')
   createPortal(
     @Req() req: { user: { id: number } },
@@ -76,7 +87,6 @@ export class BillingController {
     return this.billingService.createBillingPortalSession(req.user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('upgrade')
   upgrade(
     @Req() req: { user: { id: number } },

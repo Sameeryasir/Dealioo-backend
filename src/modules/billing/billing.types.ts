@@ -42,6 +42,9 @@ export type BillingInvoice = {
   amountFormatted: string;
   currency: string;
   status: string;
+};
+
+export type BillingInvoiceLinksResponse = {
   hostedInvoiceUrl: string | null;
   invoicePdfUrl: string | null;
 };

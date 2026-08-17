@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -21,6 +22,7 @@ import type {
   BillingDetails,
   BillingDetailsUpdateResponse,
   BillingInvoice,
+  BillingInvoiceLinksResponse,
   BillingOverviewResponse,
   BillingPaymentMethod,
   BillingPaymentMethodUpdateResponse,
@@ -156,6 +158,11 @@ export class BillingService {
       throw new BadRequestException('This card setup does not belong to you.');
     }
 
+    const setupUserId = setupIntent.metadata?.userId?.trim() || '';
+    if (setupUserId && setupUserId !== String(userId)) {
+      throw new BadRequestException('This card setup does not belong to you.');
+    }
+
     if (setupIntent.status !== 'succeeded') {
       throw new BadRequestException(
         'Card setup is not complete yet. Please try again.',
@@ -198,11 +205,25 @@ export class BillingService {
       where: { id: userId },
       select: { id: true, name: true, email: true },
     });
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const accountEmail = user.email.trim();
+    const requestedEmail = dto.email?.trim() || '';
+    if (
+      requestedEmail &&
+      requestedEmail.toLowerCase() !== accountEmail.toLowerCase()
+    ) {
+      throw new BadRequestException(
+        'Invoices are sent to your Dealioo account email. Change that in Account settings.',
+      );
+    }
 
     const customer = await this.stripeService.updatePlatformCustomerBilling({
       stripeCustomerId,
       name: dto.name,
-      email: dto.email,
+      email: accountEmail,
       address: dto.address,
     });
 
@@ -265,6 +286,32 @@ export class BillingService {
     return this.stripeService.createPlatformBillingPortalSession({
       stripeCustomerId,
     });
+  }
+
+  async getInvoiceLinks(
+    userId: number,
+    invoiceId: string,
+  ): Promise<BillingInvoiceLinksResponse> {
+    const { stripeCustomerId } = await this.requireStripeCustomer(userId);
+    const invoice = await this.stripeService.retrievePlatformInvoice({
+      stripeInvoiceId: invoiceId,
+    });
+
+    const invoiceCustomerId =
+      typeof invoice.customer === 'string'
+        ? invoice.customer
+        : invoice.customer?.id ?? '';
+    if (invoiceCustomerId !== stripeCustomerId) {
+      throw new ForbiddenException('This invoice does not belong to you.');
+    }
+
+    const hostedInvoiceUrl = invoice.hosted_invoice_url?.trim() || null;
+    const invoicePdfUrl = invoice.invoice_pdf?.trim() || null;
+    if (!hostedInvoiceUrl && !invoicePdfUrl) {
+      throw new NotFoundException('Invoice is not available.');
+    }
+
+    return { hostedInvoiceUrl, invoicePdfUrl };
   }
 
   private async requireStripeCustomer(userId: number): Promise<{
@@ -683,8 +730,6 @@ export class BillingService {
     amount_due?: number;
     currency: string;
     status?: string | null;
-    hosted_invoice_url?: string | null;
-    invoice_pdf?: string | null;
   }): BillingInvoice {
     const amount =
       invoice.status === 'paid'
@@ -698,8 +743,6 @@ export class BillingService {
       amountFormatted: this.formatMoney(amount, invoice.currency, true),
       currency: invoice.currency,
       status: invoice.status?.trim() || 'unknown',
-      hostedInvoiceUrl: invoice.hosted_invoice_url?.trim() || null,
-      invoicePdfUrl: invoice.invoice_pdf?.trim() || null,
     };
   }
 }

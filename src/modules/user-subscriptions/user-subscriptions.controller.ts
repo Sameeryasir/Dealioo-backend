@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt/jwt-auth.guard';
+import { BillingAccountOwnerGuard } from '../billing/billing-account-owner.guard';
 import {
   CancelSubscriptionDto,
   SelectUserPlanDto,
@@ -75,7 +76,7 @@ export class UserSubscriptionsController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, BillingAccountOwnerGuard)
   @Post('cancel')
   cancelSubscription(
     @Req() req: { user: { id: number } },

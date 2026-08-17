@@ -993,6 +993,23 @@ export class StripeService {
     }
   }
 
+  async retrievePlatformInvoice(opts: {
+    stripeInvoiceId: string;
+  }): Promise<
+    Awaited<ReturnType<InstanceType<typeof Stripe>['invoices']['retrieve']>>
+  > {
+    const invoiceId = opts.stripeInvoiceId.trim();
+    if (!invoiceId.startsWith('in_')) {
+      throw new BadRequestException('Missing invoice id.');
+    }
+
+    try {
+      return await this.stripe.invoices.retrieve(invoiceId);
+    } catch (err) {
+      this.rethrowStripeApiError(err, 'Unable to load this invoice.');
+    }
+  }
+
   async createPlatformSetupIntent(opts: {
     stripeCustomerId: string;
     userId: number;
