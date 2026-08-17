@@ -49,6 +49,11 @@ export type BillingInvoiceLinksResponse = {
   invoicePdfUrl: string | null;
 };
 
+export type BillingInvoicePdfFile = {
+  buffer: Buffer;
+  filename: string;
+};
+
 export type BillingSubscriptionSummary = {
   planName: string;
   planSlug: string;

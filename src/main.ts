@@ -59,6 +59,7 @@ async function bootstrap() {
       callback(new Error(`Blocked by CORS: ${origin ?? 'unknown'}`));
     },
     credentials: true,
+    exposedHeaders: ['Content-Disposition'],
   });
   app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
   app.useGlobalPipes(

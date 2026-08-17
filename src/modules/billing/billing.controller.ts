@@ -6,6 +6,7 @@ import {
   Patch,
   Post,
   Req,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -71,6 +72,23 @@ export class BillingController {
     @Param('invoiceId') invoiceId: string,
   ): Promise<BillingInvoiceLinksResponse> {
     return this.billingService.getInvoiceLinks(req.user.id, invoiceId);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Get('invoices/:invoiceId/pdf')
+  async downloadInvoicePdf(
+    @Req() req: { user: { id: number } },
+    @Param('invoiceId') invoiceId: string,
+  ): Promise<StreamableFile> {
+    const file = await this.billingService.downloadInvoicePdf(
+      req.user.id,
+      invoiceId,
+    );
+    return new StreamableFile(file.buffer, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${file.filename}"`,
+      length: file.buffer.length,
+    });
   }
 
   @Post('resume')

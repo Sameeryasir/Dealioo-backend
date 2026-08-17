@@ -17,12 +17,14 @@ import { StripeService } from '../stripe/stripe.service';
 import type { ConfirmPaymentMethodDto } from './dto/confirm-payment-method.dto';
 import type { UpdateBillingDetailsDto } from './dto/update-billing-details.dto';
 import type { UpgradeSubscriptionDto } from './dto/upgrade-subscription.dto';
+import { buildDealiooInvoicePdf } from './invoice-pdf';
 import type {
   BillingAddress,
   BillingDetails,
   BillingDetailsUpdateResponse,
   BillingInvoice,
   BillingInvoiceLinksResponse,
+  BillingInvoicePdfFile,
   BillingOverviewResponse,
   BillingPaymentMethod,
   BillingPaymentMethodUpdateResponse,
@@ -292,6 +294,81 @@ export class BillingService {
     userId: number,
     invoiceId: string,
   ): Promise<BillingInvoiceLinksResponse> {
+    const invoice = await this.requireOwnedStripeInvoice(userId, invoiceId);
+    const hostedInvoiceUrl = invoice.hosted_invoice_url?.trim() || null;
+    const invoicePdfUrl = invoice.invoice_pdf?.trim() || null;
+    if (!hostedInvoiceUrl && !invoicePdfUrl) {
+      throw new NotFoundException('Invoice is not available.');
+    }
+
+    return { hostedInvoiceUrl, invoicePdfUrl };
+  }
+
+  async downloadInvoicePdf(
+    userId: number,
+    invoiceId: string,
+  ): Promise<BillingInvoicePdfFile> {
+    const invoice = await this.requireOwnedStripeInvoice(userId, invoiceId);
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: { id: true, name: true, email: true },
+    });
+
+    const amountCents =
+      invoice.status === 'paid'
+        ? (invoice.amount_paid ?? invoice.amount_due ?? 0)
+        : (invoice.amount_due ?? invoice.amount_paid ?? 0);
+    const currency = invoice.currency || 'usd';
+    const totalAmount = this.formatMoney(amountCents, currency, true);
+
+    const lineItems = (invoice.lines?.data ?? [])
+      .map((item) => {
+        const description =
+          item.description?.trim() ||
+          invoice.description?.trim() ||
+          'Dealioo subscription';
+        return {
+          description,
+          amount: this.formatMoney(item.amount ?? 0, currency, true),
+        };
+      })
+      .filter((item) => item.description);
+
+    const lines =
+      lineItems.length > 0
+        ? lineItems
+        : [{ description: 'Dealioo subscription', amount: totalAmount }];
+
+    const address = invoice.customer_address;
+    const billToAddress = [
+      address?.line1?.trim() || '',
+      address?.line2?.trim() || '',
+      [address?.city, address?.state, address?.postal_code]
+        .map((part) => part?.trim() || '')
+        .filter(Boolean)
+        .join(', '),
+      address?.country?.trim() || '',
+    ].filter(Boolean);
+
+    const buffer = buildDealiooInvoicePdf({
+      number: invoice.number?.trim() || invoice.id,
+      issuedAt: this.formatInvoiceDate(invoice.created),
+      status: this.formatInvoiceStatus(invoice.status),
+      billToName:
+        invoice.customer_name?.trim() || user?.name?.trim() || 'Dealioo customer',
+      billToEmail: invoice.customer_email?.trim() || user?.email?.trim() || '',
+      billToAddress,
+      lines,
+      totalAmount,
+    });
+
+    return {
+      buffer,
+      filename: this.toInvoicePdfFilename(invoice.number, invoice.id),
+    };
+  }
+
+  private async requireOwnedStripeInvoice(userId: number, invoiceId: string) {
     const { stripeCustomerId } = await this.requireStripeCustomer(userId);
     const invoice = await this.stripeService.retrievePlatformInvoice({
       stripeInvoiceId: invoiceId,
@@ -305,13 +382,31 @@ export class BillingService {
       throw new ForbiddenException('This invoice does not belong to you.');
     }
 
-    const hostedInvoiceUrl = invoice.hosted_invoice_url?.trim() || null;
-    const invoicePdfUrl = invoice.invoice_pdf?.trim() || null;
-    if (!hostedInvoiceUrl && !invoicePdfUrl) {
-      throw new NotFoundException('Invoice is not available.');
-    }
+    return invoice;
+  }
 
-    return { hostedInvoiceUrl, invoicePdfUrl };
+  private toInvoicePdfFilename(
+    invoiceNumber: string | null | undefined,
+    invoiceId: string,
+  ): string {
+    const raw = invoiceNumber?.trim() || invoiceId.replace(/^in_/, '').slice(-8);
+    const safe = raw.replace(/[^A-Za-z0-9._-]/g, '-') || 'invoice';
+    return `Invoice-${safe}.pdf`;
+  }
+
+  private formatInvoiceDate(unixSeconds: number | null | undefined): string {
+    const iso = this.toIsoFromUnixSeconds(unixSeconds);
+    if (!iso) return '';
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    }).format(new Date(iso));
+  }
+
+  private formatInvoiceStatus(status: string | null | undefined): string {
+    const value = status?.trim() || 'unknown';
+    return value.charAt(0).toUpperCase() + value.slice(1);
   }
 
   private async requireStripeCustomer(userId: number): Promise<{
