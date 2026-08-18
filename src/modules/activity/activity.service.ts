@@ -37,6 +37,7 @@ import { CouponPaymentStatus } from '../../db/entities/coupon.entity';
 import { visitedActivityDescription } from './visited-activity-description.util';
 import {
   ACTIVITY_IN_PERSON_FILTER,
+  ACTIVITY_IN_STORE_PREPAID_SQL,
   escapeIlikePattern,
   normalizeActivitySearch,
   resolveActivityDateRange,
@@ -508,18 +509,7 @@ export class ActivityService {
     };
   }
 
-  private readonly inStorePrepaidSql = `(
-    COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
-    OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
-    OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
-    OR activity.description ILIKE '% at %'
-  )`;
-
-  private readonly staffLookupVisitSql = `(
-    COALESCE(activity.metadata->>'visitSource', '') = :staffLookupSource
-    OR activity.description ILIKE 'Checked in at%'
-    OR activity.description ILIKE 'Checked in for%'
-  )`;
+  private readonly inStorePrepaidSql = ACTIVITY_IN_STORE_PREPAID_SQL;
 
   private applyEventTypeFilter(
     qb: ReturnType<Repository<ActivityEvent>['createQueryBuilder']>,
@@ -531,15 +521,9 @@ export class ActivityService {
 
     if (eventType === ACTIVITY_IN_PERSON_FILTER) {
       qb.andWhere(
-        `(
-          (activity.eventType = :prepaidType AND ${this.inStorePrepaidSql})
-          OR
-          (activity.eventType = :visitedType AND ${this.staffLookupVisitSql})
-        )`,
+        `(activity.eventType = :prepaidType AND ${this.inStorePrepaidSql})`,
         {
           prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
-          visitedType: ActivityEventType.VISITED,
-          staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
         },
       );
       return;
@@ -555,8 +539,6 @@ export class ActivityService {
     if (eventType === ActivityEventType.VISITED) {
       qb.andWhere('activity.eventType = :visitedType', {
         visitedType: ActivityEventType.VISITED,
-      }).andWhere(`NOT ${this.staffLookupVisitSql}`, {
-        staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
       });
       return;
     }
@@ -583,17 +565,23 @@ export class ActivityService {
         : '';
 
     if (
+      source === 'online_payment' ||
+      paymentSource === 'STRIPE' ||
+      collectionChannel === 'ONLINE'
+    ) {
+      return 'online';
+    }
+
+    if (
       source === 'scanner_purchase' ||
       paymentSource === 'SCANNER' ||
-      collectionChannel === 'IN_STORE' ||
-      row.description.includes(' at ')
+      collectionChannel === 'IN_STORE'
     ) {
       return 'in_store';
     }
     return 'online';
   }
 
-  // --- Visit channel (QR scan → Activity "Scanned" tag) ---
   private resolveVisitChannel(row: ActivityEvent): 'scanned' | 'in_store' | null {
     if (row.eventType !== ActivityEventType.VISITED) {
       return null;
@@ -604,14 +592,8 @@ export class ActivityService {
         ? metadata.visitSource.trim()
         : '';
     if (
-      visitSource === CustomerVisitSource.STAFF_LOOKUP ||
-      row.description.trim().toLowerCase().startsWith('checked in')
-    ) {
-      return 'in_store';
-    }
-    if (
       visitSource === CustomerVisitSource.QR_REDEMPTION ||
-      row.description.trim().toLowerCase().startsWith('scanned at')
+      row.description.trim().toLowerCase().startsWith('scanned')
     ) {
       return 'scanned';
     }
@@ -669,10 +651,7 @@ export class ActivityService {
     const qb = this.activityRepository
       .createQueryBuilder('activity')
       .select(
-        `COUNT(*) FILTER (
-          WHERE activity.eventType = :countVisited
-          AND NOT ${this.staffLookupVisitSql}
-        )`,
+        `COUNT(*) FILTER (WHERE activity.eventType = :countVisited)`,
         'totalVisited',
       )
       .addSelect(
@@ -685,8 +664,7 @@ export class ActivityService {
       )
       .addSelect(
         `COUNT(*) FILTER (
-          WHERE (activity.eventType = :countPrepaid AND ${this.inStorePrepaidSql})
-          OR (activity.eventType = :countVisited AND ${this.staffLookupVisitSql})
+          WHERE activity.eventType = :countPrepaid AND ${this.inStorePrepaidSql}
         )`,
         'totalInPerson',
       )
@@ -702,7 +680,6 @@ export class ActivityService {
         countRedeemed: ActivityEventType.REDEEMED_REWARD,
         countPrepaid: ActivityEventType.PREPAID_FOR_OFFER,
         countMessage: ActivityEventType.MESSAGE_SENT,
-        staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
       });
 
     this.applyEventTypeFilter(qb, options.eventType);

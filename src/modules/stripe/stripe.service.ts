@@ -1387,9 +1387,7 @@ export class StripeService {
         account.settings?.dashboard?.display_name?.trim() ||
         account.email?.trim() ||
         'Stripe account';
-    } catch {
-      // Keep a generic label so the audit log never includes the Stripe account id.
-    }
+    } catch {}
 
     await this.businessRepository.update(businessId, {
       stripeAccountId,

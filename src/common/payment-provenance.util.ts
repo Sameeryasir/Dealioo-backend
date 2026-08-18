@@ -34,15 +34,16 @@ export function isScannerFunnelPayment(
   if (!payment) {
     return false;
   }
+  if (isOnlineFunnelPayment(payment)) {
+    return false;
+  }
   if (payment.paymentSource === FunnelPaymentSource.SCANNER) {
     return true;
   }
   if (payment.collectionChannel === FunnelCollectionChannel.IN_STORE) {
     return true;
   }
-  return (
-    payment.status === FunnelPaymentStatus.PAID && !isOnlineFunnelPayment(payment)
-  );
+  return payment.status === FunnelPaymentStatus.PAID;
 }
 
 export function resolveGuestDealPaymentBadge(params: {
