@@ -1,6 +1,5 @@
 import {
   Controller,
-  DefaultValuePipe,
   Get,
   NotFoundException,
   Param,
@@ -14,6 +13,7 @@ import type { Request } from 'express';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from './business-history.service';
+import { GetBusinessHistoryQueryDto } from './dto/get-business-history-query.dto';
 
 type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
@@ -30,7 +30,7 @@ export class BusinessHistoryController {
   @Get('business/:businessId')
   async getBusinessHistory(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query() query: GetBusinessHistoryQueryDto,
     @Req() req: AuthRequest,
   ) {
     requireAdminRole(
@@ -48,6 +48,12 @@ export class BusinessHistoryController {
       );
     }
 
-    return this.businessHistoryService.getBusinessHistory(businessId, page);
+    return this.businessHistoryService.getBusinessHistory(businessId, {
+      page: query.page ?? 1,
+      category: query.category ?? 'all',
+      eventType: query.eventType,
+      actorUserId: query.actorUserId,
+      q: query.q,
+    });
   }
 }

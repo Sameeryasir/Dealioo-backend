@@ -59,7 +59,7 @@ export type ActivityEventListItem = {
   /** online = funnel Stripe prepaid; in_store = counter / physical pay */
   paymentChannel?: 'online' | 'in_store' | null;
   /** scanned = QR redeem visit logged in activity */
-  visitChannel?: 'scanned' | null;
+  visitChannel?: 'scanned' | 'in_store' | null;
 };
 
 export type ActivitySummary = {
@@ -67,6 +67,7 @@ export type ActivitySummary = {
   totalVisited: number;
   totalRedeemed: number;
   totalPrepaid: number;
+  totalInPerson: number;
   totalMessagesSent: number;
   from: string;
   to: string;
@@ -419,21 +420,6 @@ export class ActivityService {
         .andWhere('activity.occurredAt >= :from', { from: range.from })
         .andWhere('activity.occurredAt <= :to', { to: range.to });
 
-      qb.andWhere(
-        `NOT (
-          activity.event_type = :hideVisitedType
-          AND (
-            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
-            OR activity.description ILIKE :hideCheckedInPrefix
-          )
-        )`,
-        {
-          hideVisitedType: ActivityEventType.VISITED,
-          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
-          hideCheckedInPrefix: 'Checked in at%',
-        },
-      );
-
       this.applyEventTypeFilter(qb, options.eventType);
 
       if (search) {
@@ -464,20 +450,6 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
-      .andWhere(
-        `NOT (
-          activity.event_type = :hideVisitedType
-          AND (
-            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
-            OR activity.description ILIKE :hideCheckedInPrefix
-          )
-        )`,
-        {
-          hideVisitedType: ActivityEventType.VISITED,
-          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
-          hideCheckedInPrefix: 'Checked in at%',
-        },
-      )
       .getCount();
 
     const [rows, total] = await Promise.all([
@@ -543,6 +515,12 @@ export class ActivityService {
     OR activity.description ILIKE '% at %'
   )`;
 
+  private readonly staffLookupVisitSql = `(
+    COALESCE(activity.metadata->>'visitSource', '') = :staffLookupSource
+    OR activity.description ILIKE 'Checked in at%'
+    OR activity.description ILIKE 'Checked in for%'
+  )`;
+
   private applyEventTypeFilter(
     qb: ReturnType<Repository<ActivityEvent>['createQueryBuilder']>,
     eventType?: ParsedActivityEventFilter,
@@ -552,9 +530,18 @@ export class ActivityService {
     }
 
     if (eventType === ACTIVITY_IN_PERSON_FILTER) {
-      qb.andWhere('activity.eventType = :prepaidType', {
-        prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
-      }).andWhere(this.inStorePrepaidSql);
+      qb.andWhere(
+        `(
+          (activity.eventType = :prepaidType AND ${this.inStorePrepaidSql})
+          OR
+          (activity.eventType = :visitedType AND ${this.staffLookupVisitSql})
+        )`,
+        {
+          prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
+          visitedType: ActivityEventType.VISITED,
+          staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
+        },
+      );
       return;
     }
 
@@ -562,6 +549,15 @@ export class ActivityService {
       qb.andWhere('activity.eventType = :prepaidType', {
         prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
       }).andWhere(`NOT ${this.inStorePrepaidSql}`);
+      return;
+    }
+
+    if (eventType === ActivityEventType.VISITED) {
+      qb.andWhere('activity.eventType = :visitedType', {
+        visitedType: ActivityEventType.VISITED,
+      }).andWhere(`NOT ${this.staffLookupVisitSql}`, {
+        staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
+      });
       return;
     }
 
@@ -598,7 +594,7 @@ export class ActivityService {
   }
 
   // --- Visit channel (QR scan → Activity "Scanned" tag) ---
-  private resolveVisitChannel(row: ActivityEvent): 'scanned' | null {
+  private resolveVisitChannel(row: ActivityEvent): 'scanned' | 'in_store' | null {
     if (row.eventType !== ActivityEventType.VISITED) {
       return null;
     }
@@ -607,7 +603,12 @@ export class ActivityService {
       typeof metadata.visitSource === 'string'
         ? metadata.visitSource.trim()
         : '';
-    // Business rule: QR redeem check-ins show as Scanned in Activity Log
+    if (
+      visitSource === CustomerVisitSource.STAFF_LOOKUP ||
+      row.description.trim().toLowerCase().startsWith('checked in')
+    ) {
+      return 'in_store';
+    }
     if (
       visitSource === CustomerVisitSource.QR_REDEMPTION ||
       row.description.trim().toLowerCase().startsWith('scanned at')
@@ -667,62 +668,71 @@ export class ActivityService {
 
     const qb = this.activityRepository
       .createQueryBuilder('activity')
-      .select('activity.eventType', 'eventType')
-      .addSelect('COUNT(*)', 'count')
+      .select(
+        `COUNT(*) FILTER (
+          WHERE activity.eventType = :countVisited
+          AND NOT ${this.staffLookupVisitSql}
+        )`,
+        'totalVisited',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE activity.eventType = :countRedeemed)`,
+        'totalRedeemed',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE activity.eventType = :countPrepaid AND NOT ${this.inStorePrepaidSql})`,
+        'totalPrepaid',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (
+          WHERE (activity.eventType = :countPrepaid AND ${this.inStorePrepaidSql})
+          OR (activity.eventType = :countVisited AND ${this.staffLookupVisitSql})
+        )`,
+        'totalInPerson',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE activity.eventType = :countMessage)`,
+        'totalMessagesSent',
+      )
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
-      .andWhere(
-        `NOT (
-          activity.event_type = :hideVisitedType
-          AND (
-            COALESCE(activity.metadata->>'visitSource', '') = :hideStaffLookup
-            OR activity.description ILIKE :hideCheckedInPrefix
-          )
-        )`,
-        {
-          hideVisitedType: ActivityEventType.VISITED,
-          hideStaffLookup: CustomerVisitSource.STAFF_LOOKUP,
-          hideCheckedInPrefix: 'Checked in at%',
-        },
-      )
-      .groupBy('activity.eventType');
+      .setParameters({
+        countVisited: ActivityEventType.VISITED,
+        countRedeemed: ActivityEventType.REDEEMED_REWARD,
+        countPrepaid: ActivityEventType.PREPAID_FOR_OFFER,
+        countMessage: ActivityEventType.MESSAGE_SENT,
+        staffLookupSource: CustomerVisitSource.STAFF_LOOKUP,
+      });
 
     this.applyEventTypeFilter(qb, options.eventType);
 
-    const rows = await qb.getRawMany<{ eventType: ActivityEventType; count: string }>();
+    const row = await qb.getRawOne<{
+      totalVisited: string;
+      totalRedeemed: string;
+      totalPrepaid: string;
+      totalInPerson: string;
+      totalMessagesSent: string;
+    }>();
 
-    let totalVisited = 0;
-    let totalRedeemed = 0;
-    let totalPrepaid = 0;
-    let totalMessagesSent = 0;
-
-    for (const row of rows) {
-      const count = Number.parseInt(row.count, 10) || 0;
-      switch (row.eventType) {
-        case ActivityEventType.VISITED:
-          totalVisited = count;
-          break;
-        case ActivityEventType.REDEEMED_REWARD:
-          totalRedeemed = count;
-          break;
-        case ActivityEventType.PREPAID_FOR_OFFER:
-          totalPrepaid = count;
-          break;
-        case ActivityEventType.MESSAGE_SENT:
-          totalMessagesSent = count;
-          break;
-        default:
-          break;
-      }
-    }
+    const totalVisited = Number.parseInt(row?.totalVisited ?? '0', 10) || 0;
+    const totalRedeemed = Number.parseInt(row?.totalRedeemed ?? '0', 10) || 0;
+    const totalPrepaid = Number.parseInt(row?.totalPrepaid ?? '0', 10) || 0;
+    const totalInPerson = Number.parseInt(row?.totalInPerson ?? '0', 10) || 0;
+    const totalMessagesSent =
+      Number.parseInt(row?.totalMessagesSent ?? '0', 10) || 0;
 
     return {
       totalEvents:
-        totalVisited + totalRedeemed + totalPrepaid + totalMessagesSent,
+        totalVisited +
+        totalRedeemed +
+        totalPrepaid +
+        totalInPerson +
+        totalMessagesSent,
       totalVisited,
       totalRedeemed,
       totalPrepaid,
+      totalInPerson,
       totalMessagesSent,
       from: range.from.toISOString(),
       to: range.to.toISOString(),

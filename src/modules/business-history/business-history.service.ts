@@ -10,6 +10,7 @@ import {
   BusinessHistory,
   BusinessHistoryEventType,
 } from '../../db/entities/business-history.entity';
+import type { HistoryCategory } from './dto/get-business-history-query.dto';
 
 export type BusinessHistoryListItem = {
   id: number;
@@ -17,7 +18,44 @@ export type BusinessHistoryListItem = {
   description: string;
   actorUserId: number | null;
   actorName: string | null;
+  actorRole: string | null;
   occurredAt: string;
+};
+
+export type BusinessHistoryListFilters = {
+  page?: number;
+  category?: HistoryCategory;
+  eventType?: string;
+  actorUserId?: number;
+  q?: string;
+  from?: string;
+  to?: string;
+};
+
+const CATEGORY_EVENT_TYPES: Record<
+  Exclude<HistoryCategory, 'all'>,
+  BusinessHistoryEventType[]
+> = {
+  funnels: [
+    BusinessHistoryEventType.FUNNEL_UPDATED,
+    BusinessHistoryEventType.FUNNEL_DELETED,
+  ],
+  automations: [
+    BusinessHistoryEventType.AUTOMATION_UPDATED,
+    BusinessHistoryEventType.AUTOMATION_ACTIVATED,
+    BusinessHistoryEventType.AUTOMATION_DEACTIVATED,
+    BusinessHistoryEventType.AUTOMATION_DELETED,
+  ],
+  campaigns: [
+    BusinessHistoryEventType.CAMPAIGN_CREATED,
+    BusinessHistoryEventType.CAMPAIGN_UPDATED,
+    BusinessHistoryEventType.CAMPAIGN_DELETED,
+  ],
+  payments: [
+    BusinessHistoryEventType.SCANNER_REDEEMED,
+    BusinessHistoryEventType.SCANNER_PAYMENT,
+    BusinessHistoryEventType.SCANNER_PURCHASE,
+  ],
 };
 
 type LogCampaignParams = {
@@ -88,17 +126,74 @@ export class BusinessHistoryService {
 
   async getBusinessHistory(
     businessId: number,
-    page?: number,
-  ): Promise<{ data: BusinessHistoryListItem[]; meta: PaginationMeta }> {
-    const pagination = normalizePagination(page, HISTORY_PAGE_SIZE);
+    filters: BusinessHistoryListFilters = {},
+  ): Promise<{
+    data: BusinessHistoryListItem[];
+    meta: PaginationMeta;
+    counts: Record<HistoryCategory, number>;
+    actors: Array<{ id: number; name: string }>;
+  }> {
+    const pagination = normalizePagination(filters.page, HISTORY_PAGE_SIZE);
+    const qb = this.historyRepository
+      .createQueryBuilder('history')
+      .leftJoinAndSelect('history.actorUser', 'actorUser')
+      .leftJoinAndSelect('actorUser.role', 'actorRole')
+      .where('history.businessId = :businessId', { businessId });
 
-    const [rows, total] = await this.historyRepository.findAndCount({
-      where: { businessId },
-      relations: ['actorUser'],
-      order: { occurredAt: 'DESC', id: 'DESC' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    });
+    const categoryTypes = categoryEventTypes(filters.category);
+    if (categoryTypes) {
+      qb.andWhere('history.eventType IN (:...categoryTypes)', { categoryTypes });
+    }
+
+    if (
+      filters.eventType &&
+      Object.values(BusinessHistoryEventType).includes(
+        filters.eventType as BusinessHistoryEventType,
+      )
+    ) {
+      qb.andWhere('history.eventType = :eventType', {
+        eventType: filters.eventType,
+      });
+    }
+
+    if (
+      typeof filters.actorUserId === 'number' &&
+      Number.isFinite(filters.actorUserId) &&
+      filters.actorUserId > 0
+    ) {
+      qb.andWhere('history.actorUserId = :actorUserId', {
+        actorUserId: filters.actorUserId,
+      });
+    }
+
+    const search = filters.q?.trim();
+    if (search) {
+      qb.andWhere(
+        '(history.description ILIKE :search OR history.eventType ILIKE :search OR actorUser.name ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+
+    const fromDate = parseDayEdge(filters.from, 'start');
+    const toDate = parseDayEdge(filters.to, 'end');
+    if (fromDate) {
+      qb.andWhere('history.occurredAt >= :fromDate', { fromDate });
+    }
+    if (toDate) {
+      qb.andWhere('history.occurredAt <= :toDate', { toDate });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('history.occurredAt', 'DESC')
+      .addOrderBy('history.id', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit)
+      .getManyAndCount();
+
+    const [counts, actors] = await Promise.all([
+      this.categoryCounts(businessId),
+      this.distinctActors(businessId),
+    ]);
 
     return {
       data: rows.map((row) => ({
@@ -107,10 +202,62 @@ export class BusinessHistoryService {
         description: row.description,
         actorUserId: row.actorUserId,
         actorName: row.actorUser?.name?.trim() || null,
+        actorRole: row.actorUser?.role?.name?.trim() || null,
         occurredAt: row.occurredAt.toISOString(),
       })),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      counts,
+      actors,
     };
+  }
+
+  private async categoryCounts(
+    businessId: number,
+  ): Promise<Record<HistoryCategory, number>> {
+    const rows = await this.historyRepository
+      .createQueryBuilder('history')
+      .select('history.eventType', 'eventType')
+      .addSelect('COUNT(*)', 'count')
+      .where('history.businessId = :businessId', { businessId })
+      .groupBy('history.eventType')
+      .getRawMany<{ eventType: BusinessHistoryEventType; count: string }>();
+
+    const byType = new Map(
+      rows.map((row) => [row.eventType, Number(row.count) || 0]),
+    );
+    const sum = (types: BusinessHistoryEventType[]) =>
+      types.reduce((total, type) => total + (byType.get(type) ?? 0), 0);
+
+    return {
+      all: rows.reduce((total, row) => total + (Number(row.count) || 0), 0),
+      funnels: sum(CATEGORY_EVENT_TYPES.funnels),
+      automations: sum(CATEGORY_EVENT_TYPES.automations),
+      campaigns: sum(CATEGORY_EVENT_TYPES.campaigns),
+      payments: sum(CATEGORY_EVENT_TYPES.payments),
+    };
+  }
+
+  private async distinctActors(
+    businessId: number,
+  ): Promise<Array<{ id: number; name: string }>> {
+    const rows = await this.historyRepository
+      .createQueryBuilder('history')
+      .innerJoin('history.actorUser', 'actorUser')
+      .select('actorUser.id', 'id')
+      .addSelect('actorUser.name', 'name')
+      .where('history.businessId = :businessId', { businessId })
+      .andWhere('history.actorUserId IS NOT NULL')
+      .groupBy('actorUser.id')
+      .addGroupBy('actorUser.name')
+      .orderBy('actorUser.name', 'ASC')
+      .getRawMany<{ id: number; name: string }>();
+
+    return rows
+      .map((row) => ({
+        id: Number(row.id),
+        name: row.name?.trim() || 'User',
+      }))
+      .filter((row) => Number.isFinite(row.id) && row.id > 0);
   }
 
   async logCampaignCreated(params: LogCampaignParams): Promise<void> {
@@ -348,4 +495,24 @@ export class BusinessHistoryService {
       }),
     );
   }
+}
+
+function categoryEventTypes(
+  category?: HistoryCategory,
+): BusinessHistoryEventType[] | null {
+  if (!category || category === 'all') return null;
+  return CATEGORY_EVENT_TYPES[category] ?? null;
+}
+
+function parseDayEdge(
+  value: string | undefined,
+  edge: 'start' | 'end',
+): Date | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return undefined;
+  const [year, month, day] = trimmed.split('-').map(Number);
+  if (edge === 'start') {
+    return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+  }
+  return new Date(year, (month ?? 1) - 1, day ?? 1, 23, 59, 59, 999);
 }
