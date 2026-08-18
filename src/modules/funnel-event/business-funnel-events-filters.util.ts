@@ -278,6 +278,7 @@ export function mergeBusinessOrderRowsByCheckout<
     funnelId: number;
     campaignId: number;
     campaignName: string;
+    campaignType?: 'prepaid' | 'postpaid' | null;
     campaignImageUrl?: string | null;
     customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
     customerEmail?: string | null;
@@ -339,6 +340,8 @@ export function mergeBusinessOrderRowsByCheckout<
       primary.paymentCollectedAt ?? null;
     const campaignNames: string[] = [];
     const seenCampaignNames = new Set<string>();
+    const campaignTypes: Array<'prepaid' | 'postpaid'> = [];
+    const seenCampaignTypes = new Set<string>();
     let campaignImageUrl: string | null = primary.campaignImageUrl?.trim() || null;
 
     for (const row of sorted) {
@@ -368,6 +371,16 @@ export function mergeBusinessOrderRowsByCheckout<
         seenCampaignNames.add(campaignName.toLowerCase());
         campaignNames.push(campaignName);
       }
+      const type =
+        row.campaignType === 'postpaid'
+          ? 'postpaid'
+          : row.campaignType === 'prepaid'
+            ? 'prepaid'
+            : null;
+      if (type && !seenCampaignTypes.has(type)) {
+        seenCampaignTypes.add(type);
+        campaignTypes.push(type);
+      }
       if (!campaignImageUrl) {
         const imageUrl = row.campaignImageUrl?.trim();
         if (imageUrl) {
@@ -381,6 +394,10 @@ export function mergeBusinessOrderRowsByCheckout<
       rowKey: groupKey,
       createdAt,
       campaignName: campaignNames.join(', ') || primary.campaignName,
+      campaignType:
+        campaignTypes.length > 0
+          ? campaignTypes[0]!
+          : (primary.campaignType ?? null),
       campaignImageUrl,
       amount: totalCampaignCents > 0 ? totalCampaignCents : primary.amount,
       paymentStatus,

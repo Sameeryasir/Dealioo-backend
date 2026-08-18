@@ -1,25 +1,29 @@
 import { ActivityEventType } from '../../db/entities/activity-event.entity';
+import { ACTIVITY_PAYMENT_PLACE } from './activity-payment-place.util';
 
 export const ACTIVITY_DEFAULT_MONTH_COUNT = 6;
 
 export const ACTIVITY_IN_PERSON_FILTER = 'in_person' as const;
 
 export const ACTIVITY_IN_STORE_PREPAID_SQL = `(
-  (
-    COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
-    OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
-    OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
+  COALESCE(activity.metadata->>'paymentPlace', '') = '${ACTIVITY_PAYMENT_PLACE.IN_STORE}'
+  OR (
+    COALESCE(activity.metadata->>'paymentPlace', '') = ''
+    AND (
+      COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
+      OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
+      OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
+    )
+    AND COALESCE(activity.metadata->>'source', '') <> 'online_payment'
+    AND COALESCE(activity.metadata->>'paymentSource', '') <> 'STRIPE'
+    AND COALESCE(activity.metadata->>'collectionChannel', '') <> 'ONLINE'
   )
-  AND COALESCE(activity.metadata->>'source', '') <> 'online_payment'
-  AND COALESCE(activity.metadata->>'paymentSource', '') <> 'STRIPE'
-  AND COALESCE(activity.metadata->>'collectionChannel', '') <> 'ONLINE'
 )`;
 
 export const ACTIVITY_EVENT_TYPE_FILTERS = [
   'all',
   ActivityEventType.VISITED,
   ActivityEventType.REDEEMED_REWARD,
-  ActivityEventType.PREPAID_FOR_OFFER,
   ACTIVITY_IN_PERSON_FILTER,
   ActivityEventType.MESSAGE_SENT,
 ] as const;
@@ -46,6 +50,10 @@ export function parseActivityEventTypeFilter(
 
   if (value === ACTIVITY_IN_PERSON_FILTER) {
     return ACTIVITY_IN_PERSON_FILTER;
+  }
+
+  if (value === ActivityEventType.PREPAID_FOR_OFFER) {
+    return null;
   }
 
   if (Object.values(ActivityEventType).includes(value as ActivityEventType)) {

@@ -1539,6 +1539,7 @@ export class FunnelEventService {
       funnelId: number;
       campaignId: number;
       campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
       campaignImageUrl: string | null;
       customer: {
         id: number;
@@ -1903,6 +1904,8 @@ export class FunnelEventService {
 
     const campaignNames: string[] = [];
     const seenCampaignNames = new Set<string>();
+    const campaignTypes: Array<'prepaid' | 'postpaid'> = [];
+    const seenCampaignTypes = new Set<string>();
     let campaignImageUrl: string | null = null;
     let totalVisitNetDollars = 0;
     let receiptUrl: string | null = null;
@@ -1927,6 +1930,16 @@ export class FunnelEventService {
       if (campaignName && !seenCampaignNames.has(campaignName.toLowerCase())) {
         seenCampaignNames.add(campaignName.toLowerCase());
         campaignNames.push(campaignName);
+      }
+      const type =
+        campaign?.campaignType === CampaignType.POSTPAID
+          ? CampaignType.POSTPAID
+          : campaign?.campaignType === CampaignType.PREPAID
+            ? CampaignType.PREPAID
+            : null;
+      if (type && !seenCampaignTypes.has(type)) {
+        seenCampaignTypes.add(type);
+        campaignTypes.push(type);
       }
       if (!campaignImageUrl) {
         const imageUrl = campaign?.imageUrl?.trim();
@@ -2007,6 +2020,16 @@ export class FunnelEventService {
         campaignNames.join(', ') ||
         primary?.campaign?.campaignName?.trim() ||
         'Order',
+      campaignType:
+        campaignTypes.length === 1
+          ? campaignTypes[0]!
+          : campaignTypes.length > 1
+            ? campaignTypes[0]!
+            : primary?.campaign?.campaignType === CampaignType.POSTPAID
+              ? CampaignType.POSTPAID
+              : primary?.campaign?.campaignType === CampaignType.PREPAID
+                ? CampaignType.PREPAID
+                : null,
       campaignImageUrl,
       customer: customer
         ? {

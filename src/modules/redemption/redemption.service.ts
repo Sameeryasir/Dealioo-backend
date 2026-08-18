@@ -929,6 +929,72 @@ export class RedemptionService {
         extraItemsAmount,
       );
 
+      if (
+        hasPrepaid &&
+        !hasUnpaid &&
+        visitOrderSubtotal != null &&
+        visitOrderSubtotal > 0
+      ) {
+        const extrasCents = dollarsToCents(visitOrderSubtotal);
+        const customerEmail =
+          primaryCoupon.customer?.email?.trim().toLowerCase() || '';
+        const extrasOrder = await manager.save(
+          manager.create(Order, {
+            businessId,
+            status: OrderStatus.PAID,
+            source: OrderSource.SCANNER,
+            totalAmount: extrasCents,
+            currency: 'usd',
+            paidAt: redeemedAt,
+          }),
+        );
+        const extrasPayment = await manager.save(
+          manager.create(FunnelPayment, {
+            funnelId: primaryCoupon.funnelId ?? null,
+            businessId,
+            campaignId: primaryCoupon.campaignId,
+            customerId: primaryCoupon.customerId,
+            orderId: extrasOrder.id,
+            amount: extrasCents,
+            currency: 'usd',
+            status: FunnelPaymentStatus.PAID,
+            customerEmail,
+            platformFeeAmount: 0,
+            refundedAmount: 0,
+            stripePaymentIntentId: null,
+            stripeConnectedAccountId: null,
+            paymentSource: FunnelPaymentSource.SCANNER,
+            collectionChannel: FunnelCollectionChannel.IN_STORE,
+            paymentMethod: FunnelPaymentMethod.OTHER,
+            paymentCollectedBy: audit.scannedBy,
+            paymentCollectedAt: redeemedAt,
+            paidAt: redeemedAt,
+          }),
+        );
+        settledOrderIdByCouponId.set(primaryCoupon.id, extrasOrder.id);
+        await this.activityService.logPrepaidForOffer({
+          paymentId: extrasPayment.id,
+          customerId: primaryCoupon.customerId,
+          occurredAt: redeemedAt,
+          counterExtrasOnly: true,
+          manager,
+        });
+        await this.customerActivityService.recordInStorePurchase({
+          businessId,
+          customerId: primaryCoupon.customerId,
+          orderId: extrasOrder.id,
+          amountCents: extrasCents,
+          currency: 'usd',
+          funnelPaymentIds: [extrasPayment.id],
+          funnelIds:
+            primaryCoupon.funnelId != null ? [primaryCoupon.funnelId] : [],
+          campaignIds: [primaryCoupon.campaignId],
+          staffUserId: audit.scannedBy,
+          occurredAt: redeemedAt,
+          manager,
+        });
+      }
+
       await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         businessId,
@@ -961,13 +1027,25 @@ export class RedemptionService {
           orderSubtotal > 0
             ? orderSubtotal
             : 0;
+        const prepaidExtras =
+          hasPrepaid &&
+          !hasUnpaid &&
+          visitOrderSubtotal != null &&
+          visitOrderSubtotal > 0
+            ? visitOrderSubtotal
+            : 0;
         const listedOffer = lockedCoupons.reduce((sum, coupon) => {
           const price = Number(coupon.campaign?.price);
           return Number.isFinite(price) && price >= 0 ? sum + price : sum;
         }, 0);
-        const offerDollars = enteredOffer > 0 ? enteredOffer : listedOffer;
+        const offerDollars =
+          enteredOffer > 0
+            ? enteredOffer
+            : prepaidExtras > 0
+              ? prepaidExtras
+              : listedOffer;
         historyHint.value = {
-          collectedPayment: hasUnpaid,
+          collectedPayment: hasUnpaid || prepaidExtras > 0,
           amountLabel:
             offerDollars > 0 ? `$${offerDollars.toFixed(2)}` : 'payment',
           couponIds: lockedCoupons.map((coupon) => coupon.id),

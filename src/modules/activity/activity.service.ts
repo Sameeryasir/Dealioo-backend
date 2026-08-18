@@ -23,6 +23,7 @@ import { Business } from '../../db/entities/business.entity';
 import {
   Campaign,
   CampaignPublicationStatus,
+  CampaignType,
 } from '../../db/entities/campaign.entity';
 import { CreateActivityEventDto } from './activityDto/create-activity-event.dto';
 import { LogMessageSentDto } from './activityDto/log-message-sent.dto';
@@ -44,6 +45,10 @@ import {
   type ParsedActivityEventFilter,
 } from './activity-filters.util';
 import {
+  ACTIVITY_PAYMENT_PLACE,
+  resolveActivityPaymentPlace,
+} from './activity-payment-place.util';
+import {
   buildRecentMonthBuckets,
   clampOverviewMonths,
   monthKeyToMap,
@@ -57,9 +62,8 @@ export type ActivityEventListItem = {
   customerName: string | null;
   customerEmail: string | null;
   description: string;
-  /** online = funnel Stripe prepaid; in_store = counter / physical pay */
   paymentChannel?: 'online' | 'in_store' | null;
-  /** scanned = QR redeem visit logged in activity */
+  campaignType?: 'prepaid' | 'postpaid' | null;
   visitChannel?: 'scanned' | 'in_store' | null;
 };
 
@@ -250,10 +254,14 @@ export class ActivityService {
       'Reward';
     const businessName = params.businessName.trim() || 'Business';
     const paymentLabel =
-      params.coupon.paymentStatus === CouponPaymentStatus.PENDING
-        ? 'pay at counter'
-        : 'prepaid';
-    const description = `Redeemed ${offerName} (${paymentLabel}) at ${businessName}`;
+      params.coupon.campaign?.campaignType === CampaignType.POSTPAID
+        ? 'Postpaid'
+        : params.coupon.campaign?.campaignType === CampaignType.PREPAID
+          ? 'Prepaid'
+          : params.coupon.paymentStatus === CouponPaymentStatus.PENDING
+            ? 'pay at counter'
+            : 'paid';
+    const description = `Redeemed ${offerName} · ${paymentLabel} at ${businessName}`;
 
     const payload: CreateActivityEventDto = {
       businessId: params.businessId,
@@ -267,6 +275,7 @@ export class ActivityService {
         campaignId: params.coupon.campaignId,
         offerName,
         businessName,
+        campaignType: params.coupon.campaign?.campaignType ?? null,
         paymentStatus: params.coupon.paymentStatus ?? null,
       },
     };
@@ -336,32 +345,76 @@ export class ActivityService {
 
     let campaignName =
       payment.funnel?.campaign?.campaignName?.trim() || null;
-    if (!campaignName && payment.campaignId) {
+    let campaignType =
+      payment.funnel?.campaign?.campaignType === CampaignType.POSTPAID
+        ? CampaignType.POSTPAID
+        : payment.funnel?.campaign?.campaignType === CampaignType.PREPAID
+          ? CampaignType.PREPAID
+          : null;
+    if ((!campaignName || !campaignType) && payment.campaignId) {
       const campaign = await manager.findOne(Campaign, {
         where: { id: payment.campaignId },
-        select: ['id', 'campaignName'],
+        select: ['id', 'campaignName', 'campaignType'],
       });
-      campaignName = campaign?.campaignName?.trim() || null;
+      campaignName = campaignName || campaign?.campaignName?.trim() || null;
+      if (!campaignType) {
+        campaignType =
+          campaign?.campaignType === CampaignType.POSTPAID
+            ? CampaignType.POSTPAID
+            : campaign?.campaignType === CampaignType.PREPAID
+              ? CampaignType.PREPAID
+              : null;
+      }
     }
 
     const businessName =
       payment.business?.name?.trim() || 'Business';
     const amountLabel = formatMoney(payment.amount, payment.currency);
     const isScannerWalkIn = isScannerFunnelPayment(payment);
-    const extraItemsCents =
-      params.extraItemsCents != null &&
-      Number.isFinite(params.extraItemsCents) &&
-      params.extraItemsCents > 0
+    const paymentPlace = resolveActivityPaymentPlace({
+      isInStore: isScannerWalkIn,
+    });
+    const counterExtrasOnly = params.counterExtrasOnly === true;
+    const extraItemsCents = counterExtrasOnly
+      ? Math.max(0, Math.round(payment.amount ?? 0))
+      : params.extraItemsCents != null &&
+          Number.isFinite(params.extraItemsCents) &&
+          params.extraItemsCents > 0
         ? Math.round(params.extraItemsCents)
         : 0;
-    const extrasLabel =
-      extraItemsCents > 0
-        ? ` + ${formatMoney(extraItemsCents, payment.currency)} extras`
-        : '';
+    const offerCents = counterExtrasOnly
+      ? 0
+      : Math.max(0, Math.round(payment.amount ?? 0));
+    const campaignTypeLabel =
+      campaignType === CampaignType.POSTPAID
+        ? 'Postpaid'
+        : campaignType === CampaignType.PREPAID
+          ? 'Prepaid'
+          : null;
+    const campaignLabel = campaignName || 'Campaign';
 
-    const description = isScannerWalkIn
-      ? `${amountLabel}${extrasLabel} · ${campaignName || 'Campaign'} at ${businessName}`
-      : `${amountLabel}${extrasLabel} · ${campaignName || 'Campaign'}`;
+    let moneyLabel = '';
+    if (counterExtrasOnly && extraItemsCents > 0) {
+      moneyLabel = `${formatMoney(extraItemsCents, payment.currency)} counter extras`;
+    } else if (offerCents > 0 && extraItemsCents > 0) {
+      moneyLabel = `${formatMoney(offerCents, payment.currency)} offer + ${formatMoney(extraItemsCents, payment.currency)} extras`;
+    } else if (offerCents > 0) {
+      moneyLabel = `${formatMoney(offerCents, payment.currency)} offer`;
+    } else if (extraItemsCents > 0) {
+      moneyLabel = `${formatMoney(extraItemsCents, payment.currency)} extras`;
+    } else {
+      moneyLabel = amountLabel;
+    }
+
+    const detailParts = [
+      moneyLabel,
+      ...(campaignTypeLabel ? [campaignTypeLabel] : []),
+      campaignLabel,
+    ];
+    const description =
+      paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE
+        ? `${detailParts.join(' · ')} at ${businessName}`
+        : detailParts.join(' · ');
 
     const payload: CreateActivityEventDto = {
       businessId: payment.businessId,
@@ -372,14 +425,20 @@ export class ActivityService {
       occurredAt: params.occurredAt ?? payment.paidAt ?? new Date(),
       metadata: {
         funnelPaymentId: payment.id,
-        amountCents: payment.amount,
+        amountCents: offerCents,
         ...(extraItemsCents > 0 ? { extraItemsCents } : {}),
+        ...(counterExtrasOnly ? { counterExtrasOnly: true } : {}),
         currency: payment.currency,
         funnelId: payment.funnelId,
         campaignId: payment.campaignId,
         campaignName: campaignName || null,
+        campaignType,
         businessName,
-        source: isScannerWalkIn ? 'scanner_purchase' : 'online_payment',
+        paymentPlace,
+        source:
+          paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE
+            ? 'scanner_purchase'
+            : 'online_payment',
         paymentSource: payment.paymentSource ?? null,
         collectionChannel: payment.collectionChannel ?? null,
       },
@@ -430,7 +489,14 @@ export class ActivityService {
     ) => {
       qb.where('activity.businessId = :businessId', { businessId })
         .andWhere('activity.occurredAt >= :from', { from: range.from })
-        .andWhere('activity.occurredAt <= :to', { to: range.to });
+        .andWhere('activity.occurredAt <= :to', { to: range.to })
+        .andWhere(
+          `NOT (
+            activity.eventType = :excludeOnlinePrepaid
+            AND NOT ${this.inStorePrepaidSql}
+          )`,
+          { excludeOnlinePrepaid: ActivityEventType.PREPAID_FOR_OFFER },
+        );
 
       this.applyEventTypeFilter(qb, options.eventType);
 
@@ -462,6 +528,13 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
+      .andWhere(
+        `NOT (
+          activity.eventType = :excludeOnlinePrepaid
+          AND NOT ${this.inStorePrepaidSql}
+        )`,
+        { excludeOnlinePrepaid: ActivityEventType.PREPAID_FOR_OFFER },
+      )
       .getCount();
 
     const [rows, total] = await Promise.all([
@@ -489,15 +562,22 @@ export class ActivityService {
     );
 
     const campaignNameById = new Map<number, string>();
+    const campaignTypeById = new Map<number, CampaignType>();
     if (prepaidCampaignIds.length > 0) {
       const campaigns = await this.campaignRepository.find({
         where: { id: In(prepaidCampaignIds) },
-        select: ['id', 'campaignName'],
+        select: ['id', 'campaignName', 'campaignType'],
       });
       for (const campaign of campaigns) {
         const name = campaign.campaignName?.trim();
         if (name) {
           campaignNameById.set(campaign.id, name);
+        }
+        if (
+          campaign.campaignType === CampaignType.POSTPAID ||
+          campaign.campaignType === CampaignType.PREPAID
+        ) {
+          campaignTypeById.set(campaign.id, campaign.campaignType);
         }
       }
     }
@@ -509,8 +589,13 @@ export class ActivityService {
         occurredAt: row.occurredAt.toISOString(),
         customerName: row.customer?.name?.trim() || null,
         customerEmail: row.customer?.email?.trim() || null,
-        description: this.prepaidActivityDescription(row, campaignNameById),
+        description: this.prepaidActivityDescription(
+          row,
+          campaignNameById,
+          campaignTypeById,
+        ),
         paymentChannel: this.resolvePaymentChannel(row),
+        campaignType: this.resolveCampaignType(row, campaignTypeById),
         visitChannel: this.resolveVisitChannel(row),
       })),
       meta: {
@@ -541,9 +626,7 @@ export class ActivityService {
     }
 
     if (eventType === ActivityEventType.PREPAID_FOR_OFFER) {
-      qb.andWhere('activity.eventType = :prepaidType', {
-        prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
-      }).andWhere(`NOT ${this.inStorePrepaidSql}`);
+      qb.andWhere('1 = 0');
       return;
     }
 
@@ -557,6 +640,29 @@ export class ActivityService {
     qb.andWhere('activity.eventType = :eventType', { eventType });
   }
 
+  private resolveCampaignType(
+    row: ActivityEvent,
+    campaignTypeById: Map<number, CampaignType>,
+  ): 'prepaid' | 'postpaid' | null {
+    if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
+      return null;
+    }
+    const metadata = row.metadata ?? {};
+    const fromMeta =
+      typeof metadata.campaignType === 'string'
+        ? metadata.campaignType.trim().toLowerCase()
+        : '';
+    if (fromMeta === CampaignType.POSTPAID || fromMeta === CampaignType.PREPAID) {
+      return fromMeta;
+    }
+    const campaignId =
+      typeof metadata.campaignId === 'number' ? metadata.campaignId : null;
+    if (campaignId != null) {
+      return campaignTypeById.get(campaignId) ?? null;
+    }
+    return null;
+  }
+
   private resolvePaymentChannel(
     row: ActivityEvent,
   ): 'online' | 'in_store' | null {
@@ -564,6 +670,18 @@ export class ActivityService {
       return null;
     }
     const metadata = row.metadata ?? {};
+    const paymentPlace =
+      typeof metadata.paymentPlace === 'string'
+        ? metadata.paymentPlace.trim().toUpperCase()
+        : '';
+
+    if (paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE) {
+      return 'in_store';
+    }
+    if (paymentPlace === ACTIVITY_PAYMENT_PLACE.ONLINE) {
+      return 'online';
+    }
+
     const source =
       typeof metadata.source === 'string' ? metadata.source.trim() : '';
     const paymentSource =
@@ -614,6 +732,7 @@ export class ActivityService {
   private prepaidActivityDescription(
     row: ActivityEvent,
     campaignNameById: Map<number, string>,
+    campaignTypeById: Map<number, CampaignType>,
   ): string {
     if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
       return row.description;
@@ -622,20 +741,32 @@ export class ActivityService {
     const metadata = row.metadata ?? {};
     const currency =
       typeof metadata.currency === 'string' ? metadata.currency : 'usd';
+    const counterExtrasOnly = metadata.counterExtrasOnly === true;
     const amountCents =
       typeof metadata.amountCents === 'number' ? metadata.amountCents : null;
-    const amountLabel =
-      amountCents != null ? formatMoney(amountCents, currency) : null;
     const extraItemsCents =
       typeof metadata.extraItemsCents === 'number' &&
       Number.isFinite(metadata.extraItemsCents) &&
       metadata.extraItemsCents > 0
         ? Math.round(metadata.extraItemsCents)
         : 0;
-    const extrasLabel =
+
+    let moneyLabel = '';
+    if (counterExtrasOnly && extraItemsCents > 0) {
+      moneyLabel = `${formatMoney(extraItemsCents, currency)} counter extras`;
+    } else if (
+      amountCents != null &&
+      amountCents > 0 &&
       extraItemsCents > 0
-        ? ` + ${formatMoney(extraItemsCents, currency)} extras`
-        : '';
+    ) {
+      moneyLabel = `${formatMoney(amountCents, currency)} offer + ${formatMoney(extraItemsCents, currency)} extras`;
+    } else if (amountCents != null && amountCents > 0) {
+      moneyLabel = `${formatMoney(amountCents, currency)} offer`;
+    } else if (extraItemsCents > 0) {
+      moneyLabel = `${formatMoney(extraItemsCents, currency)} extras`;
+    } else if (amountCents != null) {
+      moneyLabel = formatMoney(amountCents, currency);
+    }
 
     const storedCampaignName =
       typeof metadata.campaignName === 'string'
@@ -648,15 +779,51 @@ export class ActivityService {
       (campaignId != null ? campaignNameById.get(campaignId) : undefined) ||
       '';
 
-    if (amountLabel && campaignName) {
-      return `${amountLabel}${extrasLabel} · ${campaignName}`;
+    const campaignTypeRaw =
+      typeof metadata.campaignType === 'string'
+        ? metadata.campaignType.trim().toLowerCase()
+        : '';
+    const resolvedType =
+      campaignTypeRaw === CampaignType.POSTPAID ||
+      campaignTypeRaw === CampaignType.PREPAID
+        ? campaignTypeRaw
+        : campaignId != null
+          ? (campaignTypeById.get(campaignId) ?? null)
+          : null;
+    const campaignTypeLabel =
+      resolvedType === CampaignType.POSTPAID
+        ? 'Postpaid'
+        : resolvedType === CampaignType.PREPAID
+          ? 'Prepaid'
+          : null;
+
+    const businessName =
+      typeof metadata.businessName === 'string'
+        ? metadata.businessName.trim()
+        : '';
+    const paymentPlace =
+      typeof metadata.paymentPlace === 'string'
+        ? metadata.paymentPlace.trim().toUpperCase()
+        : '';
+    const isInStore =
+      paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE ||
+      this.resolvePaymentChannel(row) === 'in_store';
+
+    const detailParts = [
+      ...(moneyLabel ? [moneyLabel] : []),
+      ...(campaignTypeLabel ? [campaignTypeLabel] : []),
+      ...(campaignName ? [campaignName] : []),
+    ];
+
+    if (detailParts.length === 0) {
+      return row.description;
     }
 
-    if (amountLabel) {
-      return `${amountLabel}${extrasLabel}`;
+    if (isInStore && businessName) {
+      return `${detailParts.join(' · ')} at ${businessName}`;
     }
 
-    return row.description;
+    return detailParts.join(' · ');
   }
 
   async getBusinessSummary(
@@ -680,10 +847,6 @@ export class ActivityService {
         'totalRedeemed',
       )
       .addSelect(
-        `COUNT(*) FILTER (WHERE activity.eventType = :countPrepaid AND NOT ${this.inStorePrepaidSql})`,
-        'totalPrepaid',
-      )
-      .addSelect(
         `COUNT(*) FILTER (
           WHERE activity.eventType = :countPrepaid AND ${this.inStorePrepaidSql}
         )`,
@@ -696,6 +859,12 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
+      .andWhere(
+        `NOT (
+          activity.eventType = :countPrepaid
+          AND NOT ${this.inStorePrepaidSql}
+        )`,
+      )
       .setParameters({
         countVisited: ActivityEventType.VISITED,
         countRedeemed: ActivityEventType.REDEEMED_REWARD,
@@ -708,28 +877,22 @@ export class ActivityService {
     const row = await qb.getRawOne<{
       totalVisited: string;
       totalRedeemed: string;
-      totalPrepaid: string;
       totalInPerson: string;
       totalMessagesSent: string;
     }>();
 
     const totalVisited = Number.parseInt(row?.totalVisited ?? '0', 10) || 0;
     const totalRedeemed = Number.parseInt(row?.totalRedeemed ?? '0', 10) || 0;
-    const totalPrepaid = Number.parseInt(row?.totalPrepaid ?? '0', 10) || 0;
     const totalInPerson = Number.parseInt(row?.totalInPerson ?? '0', 10) || 0;
     const totalMessagesSent =
       Number.parseInt(row?.totalMessagesSent ?? '0', 10) || 0;
 
     return {
       totalEvents:
-        totalVisited +
-        totalRedeemed +
-        totalPrepaid +
-        totalInPerson +
-        totalMessagesSent,
+        totalVisited + totalRedeemed + totalInPerson + totalMessagesSent,
       totalVisited,
       totalRedeemed,
-      totalPrepaid,
+      totalPrepaid: 0,
       totalInPerson,
       totalMessagesSent,
       from: range.from.toISOString(),
