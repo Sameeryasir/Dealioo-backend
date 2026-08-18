@@ -74,11 +74,25 @@ export class PaymentWebhookHandler {
     event: {
       id: string;
       type: string;
+      account?: string | null;
+      user_id?: string | null;
       data: { object: unknown };
     },
     connectedAccountId?: string,
   ): Promise<void> {
     switch (event.type) {
+      case 'account.application.deauthorized': {
+        const payload = event.data.object as {
+          stripe_user_id?: string | null;
+        };
+        await this.stripeService.clearStripeConnectionByAccountId(
+          connectedAccountId ||
+            event.account ||
+            event.user_id ||
+            payload?.stripe_user_id,
+        );
+        break;
+      }
       case 'checkout.session.completed':
         await this.handleCheckoutSessionCompleted(
           event.data.object as CheckoutSessionPayload,

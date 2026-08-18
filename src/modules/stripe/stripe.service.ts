@@ -196,42 +196,87 @@ export class StripeService {
     const clientId =
       this.config.get<string>('STRIPE_CONNECT_CLIENT_ID')?.trim() ||
       this.config.get<string>('STRIPE_CLIENT_ID')?.trim();
+    if (!clientId) {
+      throw new InternalServerErrorException(
+        'Set STRIPE_CONNECT_CLIENT_ID or STRIPE_CLIENT_ID for Connect OAuth.',
+      );
+    }
 
-    if (clientId) {
-      try {
-        await this.stripe.oauth.deauthorize({
+    const response = await fetch(
+      'https://connect.stripe.com/oauth/deauthorize',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.platformSecretKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
           client_id: clientId,
           stripe_user_id: stripeAccountId,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        error_description?: string;
+      } | null;
+      const message =
+        payload?.error_description?.trim() ||
+        payload?.error?.trim() ||
+        'Could not disconnect Stripe.';
+      const alreadyDisconnected =
+        /not connected/i.test(message) || payload?.error === 'invalid_grant';
+      if (!alreadyDisconnected) {
         warnStripePayment({
           phase: 'stripe_disconnect',
           businessId,
           stripeAccountId,
-          outcome: 'deauthorize_skipped',
+          outcome: 'deauthorize_failed',
           error: message,
         });
+        throw new BadRequestException(message);
       }
     }
-
-    await this.businessRepository.update(businessId, {
-      stripeAccountId: null,
-    });
-
-    await this.auditService.log(businessId, 'stripe_disconnected', {
-      status: 'disconnected',
-      metadata: { connectedAccount: 'Stripe was removed' },
-    });
 
     logStripePayment({
       phase: 'stripe_disconnect',
       businessId,
       stripeAccountId,
-      outcome: 'disconnected',
+      outcome: 'deauthorized',
     });
 
+    await this.clearStripeConnectionByAccountId(stripeAccountId);
+
     return { disconnected: true };
+  }
+
+  async clearStripeConnectionByAccountId(
+    stripeAccountIdRaw?: string | null,
+  ): Promise<void> {
+    const stripeAccountId = stripeAccountIdRaw?.trim();
+    if (!stripeAccountId) return;
+
+    const businesses = await this.businessRepository.find({
+      where: { stripeAccountId },
+    });
+
+    for (const business of businesses) {
+      await this.businessRepository.update(business.id, {
+        stripeAccountId: null,
+      });
+      await this.auditService.log(business.id, 'stripe_disconnected', {
+        status: 'disconnected',
+        metadata: { connectedAccount: 'Stripe was removed' },
+      });
+      logStripePayment({
+        phase: 'stripe_disconnect',
+        businessId: business.id,
+        stripeAccountId,
+        outcome: 'disconnected',
+      });
+    }
   }
 
   async createDashboardLoginLink(
