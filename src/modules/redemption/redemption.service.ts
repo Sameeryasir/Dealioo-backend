@@ -500,7 +500,6 @@ export class RedemptionService {
     };
   }
 
-  /** Confirms redemption and creates the customer visit only after staff selects rewards. */
   async scan(
     rawToken: string,
     businessId: number,
@@ -558,8 +557,6 @@ export class RedemptionService {
 
     await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
 
-    // QR scan redeems only the coupon row for this token.
-    // Staff lookup may redeem multiple selected deals for the same guest.
     const idsToRedeem =
       audit.visitSource === CustomerVisitSource.STAFF_LOOKUP &&
       couponIds?.length
@@ -719,25 +716,15 @@ export class RedemptionService {
       }
 
       if (hasUnpaid) {
-        const campaignPrices = lockedCoupons.map((coupon) => {
-          if (coupon.campaign?.price == null) return null;
-          const price = Number(coupon.campaign.price);
-          return Number.isFinite(price) && price >= 0 ? price : null;
-        });
-        const hasAllPrices = campaignPrices.every((price) => price != null);
-        if (hasAllPrices) {
-          const expectedTotal = campaignPrices.reduce<number>(
-            (sum, price) => sum + (price as number),
-            0,
-          );
-          const entered =
-            orderSubtotal != null && Number.isFinite(orderSubtotal)
-              ? orderSubtotal
-              : null;
-          if (
-            entered == null ||
-            !dollarsEqualInCents(entered, expectedTotal)
-          ) {
+        const allPostpaid = lockedCoupons.every(
+          (coupon) => coupon.campaign?.campaignType === CampaignType.POSTPAID,
+        );
+        const entered =
+          orderSubtotal != null && Number.isFinite(orderSubtotal)
+            ? orderSubtotal
+            : null;
+        if (allPostpaid) {
+          if (entered == null || entered <= 0) {
             await this.logAuditInTransaction(manager, {
               eventType: RedemptionEventType.REDEEM_FAILURE,
               coupon: lockedCoupons[0],
@@ -751,6 +738,37 @@ export class RedemptionService {
               message: ScannerErrorMessage.INVALID_AMOUNT,
               errorCode: ScannerErrorCode.INVALID_AMOUNT,
             } as ScanResult;
+          }
+        } else {
+          const campaignPrices = lockedCoupons.map((coupon) => {
+            if (coupon.campaign?.price == null) return null;
+            const price = Number(coupon.campaign.price);
+            return Number.isFinite(price) && price >= 0 ? price : null;
+          });
+          const hasAllPrices = campaignPrices.every((price) => price != null);
+          if (hasAllPrices) {
+            const expectedTotal = campaignPrices.reduce<number>(
+              (sum, price) => sum + (price as number),
+              0,
+            );
+            if (
+              entered == null ||
+              !dollarsEqualInCents(entered, expectedTotal)
+            ) {
+              await this.logAuditInTransaction(manager, {
+                eventType: RedemptionEventType.REDEEM_FAILURE,
+                coupon: lockedCoupons[0],
+                businessId,
+                audit,
+                success: false,
+                failureReason: ScannerErrorMessage.INVALID_AMOUNT,
+              });
+              return {
+                success: false,
+                message: ScannerErrorMessage.INVALID_AMOUNT,
+                errorCode: ScannerErrorCode.INVALID_AMOUNT,
+              } as ScanResult;
+            }
           }
         }
       }
@@ -782,6 +800,7 @@ export class RedemptionService {
       for (const coupon of lockedCoupons) {
         const walkInPayment =
           coupon.paymentStatus === CouponPaymentStatus.PENDING;
+        let settledOfferCents: number | null = null;
 
         const updateResult = await manager.update(
           Coupon,
@@ -821,14 +840,23 @@ export class RedemptionService {
               businessId,
               staffUserId: audit.scannedBy,
               paidAt: redeemedAt,
+              offerAmountDollars: orderSubtotal,
             },
           );
           if (settled != null) {
             settledOrderIdByCouponId.set(coupon.id, settled.orderId);
+            settledOfferCents = settled.amountCents;
+            const extraItemsCents =
+              extraItemsAmount != null &&
+              Number.isFinite(extraItemsAmount) &&
+              extraItemsAmount > 0
+                ? dollarsToCents(extraItemsAmount)
+                : 0;
             await this.activityService.logPrepaidForOffer({
               paymentId: settled.paymentId,
               customerId: coupon.customerId,
               occurredAt: redeemedAt,
+              extraItemsCents,
               manager,
             });
             await this.customerActivityService.recordInStorePurchase({
@@ -866,10 +894,15 @@ export class RedemptionService {
           manager,
         });
 
-        const offerCents =
+        const campaignOfferCents =
           coupon.campaign?.price != null
             ? dollarsToCents(Number(coupon.campaign.price))
             : null;
+        const offerCents =
+          settledOfferCents ??
+          (campaignOfferCents != null && Number.isFinite(campaignOfferCents)
+            ? campaignOfferCents
+            : null);
         await this.customerActivityService.recordRedemption({
           businessId,
           customerId: coupon.customerId,
@@ -896,7 +929,6 @@ export class RedemptionService {
         extraItemsAmount,
       );
 
-      // Visit activity 1ms after redeem so newest-first feed shows Scanned above Redeemed.
       await this.recordVisitFromQrScan({
         coupon: primaryCoupon,
         businessId,
@@ -922,11 +954,18 @@ export class RedemptionService {
       );
 
       if (successResult.success) {
-        // History shows offer/campaign price only (not visit total with extras).
-        const offerDollars = lockedCoupons.reduce((sum, coupon) => {
+        const enteredOffer =
+          hasUnpaid &&
+          orderSubtotal != null &&
+          Number.isFinite(orderSubtotal) &&
+          orderSubtotal > 0
+            ? orderSubtotal
+            : 0;
+        const listedOffer = lockedCoupons.reduce((sum, coupon) => {
           const price = Number(coupon.campaign?.price);
           return Number.isFinite(price) && price >= 0 ? sum + price : sum;
         }, 0);
+        const offerDollars = enteredOffer > 0 ? enteredOffer : listedOffer;
         historyHint.value = {
           collectedPayment: hasUnpaid,
           amountLabel:
@@ -985,6 +1024,7 @@ export class RedemptionService {
       businessId: number;
       staffUserId: number | null;
       paidAt: Date;
+      offerAmountDollars?: number;
     },
   ): Promise<{
     orderId: number;
@@ -993,6 +1033,27 @@ export class RedemptionService {
     currency: string;
   } | null> {
     const { coupon, businessId, staffUserId, paidAt } = params;
+    const isPostpaid =
+      coupon.campaign?.campaignType === CampaignType.POSTPAID;
+    const campaignPriceDollars =
+      coupon.campaign?.price != null ? Number(coupon.campaign.price) : NaN;
+    const campaignOfferCents =
+      Number.isFinite(campaignPriceDollars) && campaignPriceDollars >= 0
+        ? dollarsToCents(campaignPriceDollars)
+        : null;
+    const enteredCents =
+      params.offerAmountDollars != null &&
+      Number.isFinite(params.offerAmountDollars) &&
+      params.offerAmountDollars > 0
+        ? dollarsToCents(params.offerAmountDollars)
+        : null;
+    const offerAmountCents = isPostpaid
+      ? (enteredCents ?? campaignOfferCents)
+      : (campaignOfferCents ?? enteredCents);
+
+    if (offerAmountCents == null || offerAmountCents <= 0) {
+      return null;
+    }
 
     let payment: FunnelPayment | null = null;
     if (coupon.funnelPaymentId != null) {
@@ -1021,25 +1082,17 @@ export class RedemptionService {
       }
     }
 
-    // No pending/online checkout — still record paid scanner payment + order for walk-in.
     if (!payment) {
-      const priceDollars =
-        coupon.campaign?.price != null ? Number(coupon.campaign.price) : NaN;
-      if (!Number.isFinite(priceDollars) || priceDollars < 0) {
-        return null;
-      }
-
       const customer = await manager.findOne(Customer, {
         where: { id: coupon.customerId },
         select: ['id', 'email'],
       });
-      const amountCents = dollarsToCents(priceDollars);
       const order = await manager.save(
         manager.create(Order, {
           businessId,
           status: OrderStatus.PAID,
           source: OrderSource.SCANNER,
-          totalAmount: amountCents,
+          totalAmount: offerAmountCents,
           currency: 'usd',
           paidAt,
         }),
@@ -1051,7 +1104,7 @@ export class RedemptionService {
           campaignId: coupon.campaignId,
           customerId: coupon.customerId,
           orderId: order.id,
-          amount: amountCents,
+          amount: offerAmountCents,
           currency: 'usd',
           status: FunnelPaymentStatus.PAID,
           customerEmail: customer?.email?.trim().toLowerCase() || '',
@@ -1073,13 +1126,14 @@ export class RedemptionService {
       return {
         orderId: order.id,
         paymentId: payment.id,
-        amountCents,
+        amountCents: offerAmountCents,
         currency: 'usd',
       };
     }
 
     await manager.update(FunnelPayment, payment.id, {
       status: FunnelPaymentStatus.PAID,
+      amount: offerAmountCents,
       paidAt: payment.paidAt ?? paidAt,
       paymentSource: FunnelPaymentSource.SCANNER,
       collectionChannel: FunnelCollectionChannel.IN_STORE,
@@ -1089,6 +1143,7 @@ export class RedemptionService {
       customerId: coupon.customerId ?? payment.customerId ?? null,
     });
     payment.status = FunnelPaymentStatus.PAID;
+    payment.amount = offerAmountCents;
     payment.paidAt = payment.paidAt ?? paidAt;
     payment.customerId = coupon.customerId ?? payment.customerId ?? null;
     payment.paymentCollectedBy = staffUserId;
@@ -1106,7 +1161,7 @@ export class RedemptionService {
       await manager.update(Order, orderId, {
         status: OrderStatus.PAID,
         source: OrderSource.SCANNER,
-        totalAmount: payment.amount,
+        totalAmount: offerAmountCents,
         currency: payment.currency || 'usd',
         paidAt: payment.paidAt ?? paidAt,
       });
@@ -1116,7 +1171,7 @@ export class RedemptionService {
           businessId,
           status: OrderStatus.PAID,
           source: OrderSource.SCANNER,
-          totalAmount: payment.amount,
+          totalAmount: offerAmountCents,
           currency: payment.currency || 'usd',
           paidAt: payment.paidAt ?? paidAt,
         }),
@@ -1132,7 +1187,7 @@ export class RedemptionService {
       {
         eventType: FunnelEventType.PAYMENT,
         paymentStatus: FunnelPaymentStatus.PAID,
-        amount: payment.amount,
+        amount: offerAmountCents,
         currency: payment.currency || 'usd',
       },
     );
@@ -1140,7 +1195,7 @@ export class RedemptionService {
     return {
       orderId,
       paymentId: payment.id,
-      amountCents: payment.amount,
+      amountCents: offerAmountCents,
       currency: payment.currency || 'usd',
     };
   }
@@ -1157,7 +1212,6 @@ export class RedemptionService {
     businessName?: string;
   }): Promise<CustomerVisitRecordResult> {
     const visitedAt = params.visitedAt ?? new Date();
-    const activityOccurredAt = params.activityOccurredAt ?? visitedAt;
     const manager = params.manager ?? this.dataSource.manager;
 
     const existingVisit = await manager.findOne(CustomerVisit, {
@@ -1186,14 +1240,6 @@ export class RedemptionService {
       };
     }
 
-    let businessName = params.businessName?.trim();
-    if (!businessName) {
-      const business = await manager.findOne(Business, {
-        where: { id: params.businessId },
-      });
-      businessName = business?.name?.trim() || 'Business';
-    }
-
     const visit = manager.create(CustomerVisit, {
       customerId: params.coupon.customerId,
       campaignId: params.coupon.campaignId,
@@ -1211,20 +1257,6 @@ export class RedemptionService {
 
     const visitSource =
       params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
-
-    await this.activityService.logVisited({
-      businessId: params.businessId,
-      customerId: params.coupon.customerId,
-      couponId: params.coupon.id,
-      businessName,
-      occurredAt: activityOccurredAt,
-      visitSource,
-      offerName:
-        params.coupon.campaign?.offer?.trim() ||
-        params.coupon.campaign?.campaignName?.trim() ||
-        null,
-      manager: params.manager,
-    });
 
     if (visitSource !== CustomerVisitSource.STAFF_LOOKUP) {
       await this.customerJourneyService.recordQrRedeemed({
@@ -1571,11 +1603,9 @@ export class RedemptionService {
       }
 
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
-      // Postpaid funnel signups are real unpaid guest deals even if payment link heal lagged.
       const isPostpaidCampaign =
         coupon.campaign.campaignType === CampaignType.POSTPAID;
 
-      // Unpaid guest deals: open online checkout, or postpaid campaign pending pass.
       if (!isPrepaid) {
         if (coupon.paymentStatus !== CouponPaymentStatus.PENDING) {
           continue;
@@ -1742,7 +1772,6 @@ export class RedemptionService {
         ? dollarsToCents(extraItemsAmount)
         : 0;
 
-    // Store counter extras only — never deal/campaign price.
     if (allPrepaid) {
       const prepaidExtraCents =
         orderSubtotal != null &&

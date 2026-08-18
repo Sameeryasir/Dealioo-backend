@@ -15,4 +15,9 @@ export class LogPrepaidForOfferDto {
   @Type(() => Date)
   @IsDate()
   occurredAt?: Date;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  extraItemsCents?: number;
 }

@@ -277,6 +277,7 @@ export class FunnelService {
           campaignName: true,
           price: true,
           imageUrl: true,
+          campaignType: true,
         },
       },
       order: { createdAt: 'DESC' },
@@ -288,6 +289,7 @@ export class FunnelService {
       price:
         funnel.campaign.price != null ? Number(funnel.campaign.price) : null,
       imageUrl: funnel.campaign.imageUrl?.trim() || null,
+      campaignType: funnel.campaign.campaignType ?? null,
     }));
   }
 

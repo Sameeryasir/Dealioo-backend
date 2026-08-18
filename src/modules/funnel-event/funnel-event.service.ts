@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { And, DataSource, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
-import { Campaign } from '../../db/entities/campaign.entity';
+import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
@@ -326,11 +326,6 @@ export class FunnelEventService {
     });
   }
 
-  /**
-   * Changed: accept purchaseMeans (IN_PERSON | REDEEMED | SCANNED) from the scanner payload.
-   * Why: callers must say how the deal was recorded — in person, redeemed, or scanned.
-   * Related: ScannerPurchaseDealsDto, purchase-scanner-deals.ts (frontend).
-   */
   async purchaseDealsAtScanner(params: {
     businessId: number;
     customerId: number;
@@ -342,7 +337,6 @@ export class FunnelEventService {
     idempotencyKey?: string;
   }): Promise<ScannerPurchasedDeal[]> {
     const { businessId, customerId, staffUserId } = params;
-    // --- Validate purchase means ---
     const purchaseMeans = params.purchaseMeans;
     if (
       purchaseMeans !== ScannerPurchaseMeans.IN_PERSON &&
@@ -416,6 +410,7 @@ export class FunnelEventService {
 
     const funnelsForPurchase: Array<Funnel & { campaign: Campaign }> = [];
     let expectedTotalCents = 0;
+    let postpaidWithoutPriceCount = 0;
 
     for (const funnelId of uniqueFunnelIds) {
       const funnel = await this.funnelRepository.findOne({
@@ -434,21 +429,52 @@ export class FunnelEventService {
         });
       }
 
+      const isPostpaid = funnel.campaign.campaignType === CampaignType.POSTPAID;
       const campaignPrice =
         funnel.campaign.price != null ? Number(funnel.campaign.price) : null;
+      const hasCampaignPrice =
+        campaignPrice != null &&
+        Number.isFinite(campaignPrice) &&
+        campaignPrice > 0;
+
+      if (!hasCampaignPrice) {
+        if (!isPostpaid) {
+          throw new BadRequestException({
+            code: ScannerErrorCode.INVALID_AMOUNT,
+            message: ScannerErrorMessage.INVALID_AMOUNT,
+          });
+        }
+        postpaidWithoutPriceCount += 1;
+      } else {
+        expectedTotalCents += dollarsToCents(campaignPrice);
+      }
+
+      funnelsForPurchase.push(funnel as Funnel & { campaign: Campaign });
+    }
+
+    const usesStaffEnteredOfferAmount =
+      postpaidWithoutPriceCount > 0 &&
+      postpaidWithoutPriceCount === funnelsForPurchase.length;
+
+    if (postpaidWithoutPriceCount > 0 && !usesStaffEnteredOfferAmount) {
+      throw new BadRequestException({
+        code: ScannerErrorCode.INVALID_AMOUNT,
+        message: ScannerErrorMessage.INVALID_AMOUNT,
+      });
+    }
+
+    if (usesStaffEnteredOfferAmount) {
       if (
-        campaignPrice == null ||
-        !Number.isFinite(campaignPrice) ||
-        campaignPrice < 0
+        params.orderSubtotal == null ||
+        !Number.isFinite(params.orderSubtotal) ||
+        params.orderSubtotal <= 0
       ) {
         throw new BadRequestException({
           code: ScannerErrorCode.INVALID_AMOUNT,
           message: ScannerErrorMessage.INVALID_AMOUNT,
         });
       }
-
-      expectedTotalCents += dollarsToCents(campaignPrice);
-      funnelsForPurchase.push(funnel as Funnel & { campaign: Campaign });
+      expectedTotalCents = dollarsToCents(params.orderSubtotal);
     }
 
     const expectedTotalDollars = centsToDollars(expectedTotalCents);
@@ -460,6 +486,7 @@ export class FunnelEventService {
     }
 
     if (
+      !usesStaffEnteredOfferAmount &&
       params.orderSubtotal != null &&
       Number.isFinite(params.orderSubtotal) &&
       !dollarsEqualInCents(params.orderSubtotal, expectedTotalDollars)
@@ -542,7 +569,15 @@ export class FunnelEventService {
       };
 
       for (const funnel of funnelsForPurchase) {
-        const amountCents = dollarsToCents(Number(funnel.campaign.price));
+        const campaignPrice =
+          funnel.campaign.price != null ? Number(funnel.campaign.price) : null;
+        const hasCampaignPrice =
+          campaignPrice != null &&
+          Number.isFinite(campaignPrice) &&
+          campaignPrice > 0;
+        const amountCents = hasCampaignPrice
+          ? dollarsToCents(campaignPrice)
+          : Math.round(expectedTotalCents / funnelsForPurchase.length);
 
         // Reuse unpaid funnel checkout (registered online, pay at counter).
         let pending = await manager.findOne(FunnelPayment, {
@@ -886,7 +921,10 @@ export class FunnelEventService {
           businessId,
           customerName: guestName,
           dealNames,
-          amountLabel: `$${expectedTotalDollars.toFixed(2)}`,
+          amountLabel:
+            extraItemsCents > 0
+              ? `$${expectedTotalDollars.toFixed(2)} (+ $${centsToDollars(extraItemsCents).toFixed(2)} extras)`
+              : `$${expectedTotalDollars.toFixed(2)}`,
           couponIds: purchased
             .map((row) => row.couponId)
             .filter((id): id is number => id != null && id > 0),
@@ -901,12 +939,14 @@ export class FunnelEventService {
         );
       }
 
-      for (const deal of deals) {
+      for (let index = 0; index < deals.length; index += 1) {
+        const deal = deals[index]!;
         try {
           await this.activityService.logPrepaidForOffer({
             paymentId: deal.paymentId,
             customerId,
             occurredAt: collectedAt,
+            extraItemsCents: index === 0 ? extraItemsCents : 0,
           });
         } catch (activityError) {
           this.logger.warn(

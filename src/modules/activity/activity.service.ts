@@ -348,10 +348,20 @@ export class ActivityService {
       payment.business?.name?.trim() || 'Business';
     const amountLabel = formatMoney(payment.amount, payment.currency);
     const isScannerWalkIn = isScannerFunnelPayment(payment);
+    const extraItemsCents =
+      params.extraItemsCents != null &&
+      Number.isFinite(params.extraItemsCents) &&
+      params.extraItemsCents > 0
+        ? Math.round(params.extraItemsCents)
+        : 0;
+    const extrasLabel =
+      extraItemsCents > 0
+        ? ` + ${formatMoney(extraItemsCents, payment.currency)} extras`
+        : '';
 
     const description = isScannerWalkIn
-      ? `${amountLabel} · ${campaignName || 'Campaign'} at ${businessName}`
-      : `${amountLabel} · ${campaignName || 'Campaign'}`;
+      ? `${amountLabel}${extrasLabel} · ${campaignName || 'Campaign'} at ${businessName}`
+      : `${amountLabel}${extrasLabel} · ${campaignName || 'Campaign'}`;
 
     const payload: CreateActivityEventDto = {
       businessId: payment.businessId,
@@ -363,6 +373,7 @@ export class ActivityService {
       metadata: {
         funnelPaymentId: payment.id,
         amountCents: payment.amount,
+        ...(extraItemsCents > 0 ? { extraItemsCents } : {}),
         currency: payment.currency,
         funnelId: payment.funnelId,
         campaignId: payment.campaignId,
@@ -615,6 +626,16 @@ export class ActivityService {
       typeof metadata.amountCents === 'number' ? metadata.amountCents : null;
     const amountLabel =
       amountCents != null ? formatMoney(amountCents, currency) : null;
+    const extraItemsCents =
+      typeof metadata.extraItemsCents === 'number' &&
+      Number.isFinite(metadata.extraItemsCents) &&
+      metadata.extraItemsCents > 0
+        ? Math.round(metadata.extraItemsCents)
+        : 0;
+    const extrasLabel =
+      extraItemsCents > 0
+        ? ` + ${formatMoney(extraItemsCents, currency)} extras`
+        : '';
 
     const storedCampaignName =
       typeof metadata.campaignName === 'string'
@@ -628,11 +649,11 @@ export class ActivityService {
       '';
 
     if (amountLabel && campaignName) {
-      return `${amountLabel} · ${campaignName}`;
+      return `${amountLabel}${extrasLabel} · ${campaignName}`;
     }
 
     if (amountLabel) {
-      return amountLabel;
+      return `${amountLabel}${extrasLabel}`;
     }
 
     return row.description;
