@@ -23,6 +23,7 @@ export type CheckoutResumeContext = {
   businessId: number;
   campaignId: number | null;
   funnelPaymentId: number | null;
+  paymentStatus: FunnelPaymentStatus | null;
 };
 
 export type IssuedCheckoutLink = {
@@ -61,6 +62,15 @@ export class CheckoutResumeService {
       input.funnelId,
       customer.email.trim(),
     );
+    const paidPayment = pendingPayment
+      ? null
+      : await this.findLatestPaidPayment(
+          input.funnelId,
+          customer.email.trim(),
+        );
+    const funnelPaymentId = pendingPayment?.id ?? paidPayment?.id ?? null;
+    const paymentStatus =
+      pendingPayment?.status ?? paidPayment?.status ?? null;
 
     const token = randomBytes(32).toString('base64url');
     const tokenHash = this.hashToken(token);
@@ -73,7 +83,7 @@ export class CheckoutResumeService {
         funnelId: input.funnelId,
         businessId: input.businessId,
         campaignId: input.campaignId,
-        funnelPaymentId: pendingPayment?.id ?? null,
+        funnelPaymentId,
         expiresAt,
       }),
     );
@@ -82,7 +92,8 @@ export class CheckoutResumeService {
       funnelId: input.funnelId,
       businessId: input.businessId,
       campaignId: input.campaignId,
-      funnelPaymentId: pendingPayment?.id ?? null,
+      funnelPaymentId,
+      paymentStatus,
     });
 
     return {
@@ -122,16 +133,30 @@ export class CheckoutResumeService {
       );
       if (pendingPayment) {
         funnelPaymentId = pendingPayment.id;
-      } else {
-        const paidPayment = await this.findLatestPaidPayment(
-          row.funnelId,
-          customer.email.trim(),
-        );
-        funnelPaymentId = paidPayment?.id ?? null;
       }
       if (funnelPaymentId !== row.funnelPaymentId) {
         await this.tokenRepository.update(row.id, { funnelPaymentId });
       }
+    }
+
+    const paidPayment = await this.findLatestPaidPayment(
+      row.funnelId,
+      customer.email.trim(),
+    );
+    if (paidPayment) {
+      funnelPaymentId = paidPayment.id;
+      if (funnelPaymentId !== row.funnelPaymentId) {
+        await this.tokenRepository.update(row.id, { funnelPaymentId });
+      }
+    }
+
+    let paymentStatus: FunnelPaymentStatus | null = paidPayment?.status ?? null;
+    if (paymentStatus == null && funnelPaymentId != null) {
+      const linked = await this.funnelPaymentRepository.findOne({
+        where: { id: funnelPaymentId },
+        select: ['id', 'status'],
+      });
+      paymentStatus = linked?.status ?? null;
     }
 
     return this.toResumeContext(customer, {
@@ -139,6 +164,7 @@ export class CheckoutResumeService {
       businessId: row.businessId,
       campaignId: row.campaignId,
       funnelPaymentId,
+      paymentStatus,
     });
   }
 
@@ -200,6 +226,7 @@ export class CheckoutResumeService {
       businessId: number;
       campaignId: number | null;
       funnelPaymentId: number | null;
+      paymentStatus: FunnelPaymentStatus | null;
     },
   ): CheckoutResumeContext {
     return {
@@ -211,6 +238,7 @@ export class CheckoutResumeService {
       businessId: scope.businessId,
       campaignId: scope.campaignId,
       funnelPaymentId: scope.funnelPaymentId,
+      paymentStatus: scope.paymentStatus,
     };
   }
 
@@ -248,13 +276,15 @@ export class CheckoutResumeService {
     funnelId: number,
     customerEmail: string,
   ): Promise<FunnelPayment | null> {
-    return this.funnelPaymentRepository.findOne({
-      where: {
-        funnelId,
-        customerEmail: customerEmail.trim(),
+    const email = customerEmail.trim().toLowerCase();
+    return this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.funnelId = :funnelId', { funnelId })
+      .andWhere('LOWER(payment.customerEmail) = :email', { email })
+      .andWhere('payment.status = :status', {
         status: FunnelPaymentStatus.PAID,
-      },
-      order: { createdAt: 'DESC' },
-    });
+      })
+      .orderBy('payment.createdAt', 'DESC')
+      .getOne();
   }
 }

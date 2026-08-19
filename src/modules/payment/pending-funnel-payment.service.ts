@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { CampaignType } from '../../db/entities/campaign.entity';
@@ -52,6 +52,21 @@ export class PendingFunnelPaymentService {
         lockKey1,
         lockKey2,
       ]);
+
+      const alreadyPaid = await manager.findOne(FunnelPayment, {
+        where: {
+          funnelId: input.funnelId,
+          businessId: input.businessId,
+          customerEmail: email,
+          status: FunnelPaymentStatus.PAID,
+        },
+        order: { createdAt: 'DESC' },
+      });
+      if (alreadyPaid) {
+        throw new ConflictException(
+          'You have already paid for this offer.',
+        );
+      }
 
       const pending = await manager.findOne(FunnelPayment, {
         where: {

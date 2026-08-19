@@ -184,10 +184,13 @@ export class FunnelService {
 
   private publicPagesForStep(step?: string | null): FunnelPageType[] {
     const normalized = step?.trim().toLowerCase() ?? '';
-    if (normalized && isFunnelPageType(normalized)) {
-      return [normalized];
+    if (!normalized || !isFunnelPageType(normalized)) {
+      return [FunnelPageType.LANDING];
     }
-    return [FunnelPageType.LANDING];
+    if (normalized === FunnelPageType.LANDING) {
+      return [FunnelPageType.LANDING];
+    }
+    return [FunnelPageType.LANDING, normalized];
   }
 
   async getPublicFunnelById(
