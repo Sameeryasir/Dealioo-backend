@@ -5,6 +5,7 @@ import {
   buildPaginationMeta,
   normalizePagination,
 } from '../../common/pagination';
+import { CHAT_MESSAGE_SYNC_PAGE_SIZE } from './chat-sync.constants';
 import {
   ActivityEvent,
   ActivityEventType,
@@ -279,21 +280,34 @@ export class ChatService {
     businessId: number,
     customerId: number,
     afterMessageId: number,
+    limit: number = CHAT_MESSAGE_SYNC_PAGE_SIZE,
   ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { businessId, customerId, isPrivate: true },
     });
 
-    if (!conversation || conversation.messageCount === 0) {
+    if (!conversation) {
       throw new NotFoundException(
         'No messages found for this guest at this business.',
       );
     }
 
-    const messages = await this.messageRepository.find({
+    if (conversation.messageCount === 0) {
+      return {
+        conversationId: conversation.id,
+        customerId,
+        messages: [],
+        hasMore: false,
+      };
+    }
+
+    const pageSize = Math.max(1, Math.min(limit, CHAT_MESSAGE_SYNC_PAGE_SIZE));
+    const cursorId = Math.max(0, afterMessageId);
+
+    const rows = await this.messageRepository.find({
       where: {
         conversationId: conversation.id,
-        id: MoreThan(afterMessageId),
+        id: MoreThan(cursorId),
       },
       relations: [
         'automation',
@@ -304,15 +318,20 @@ export class ChatService {
         'sentToBusiness',
         'sentToCustomer',
       ],
-      order: { sentAt: 'ASC' },
+      order: { id: 'ASC' },
+      take: pageSize + 1,
     });
+
+    const hasMore = rows.length > pageSize;
+    const page = hasMore ? rows.slice(0, pageSize) : rows;
 
     return {
       conversationId: conversation.id,
       customerId,
-      messages: messages.map((message) =>
+      messages: page.map((message) =>
         this.toConversationMessageFromStoredMessage(message),
       ),
+      hasMore,
     };
   }
 
@@ -340,21 +359,32 @@ export class ChatService {
     businessId: number,
     conversationId: number,
     afterMessageId: number,
+    limit: number = CHAT_MESSAGE_SYNC_PAGE_SIZE,
   ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId, businessId, isPrivate: true },
     });
 
-    if (!conversation || conversation.messageCount === 0) {
+    if (!conversation) {
       throw new NotFoundException(
         'No messages found for this conversation.',
       );
+    }
+
+    if (conversation.messageCount === 0) {
+      return {
+        conversationId: conversation.id,
+        customerId: conversation.customerId,
+        messages: [],
+        hasMore: false,
+      };
     }
 
     return this.syncCustomerConversationMessages(
       businessId,
       conversation.customerId,
       afterMessageId,
+      limit,
     );
   }
 

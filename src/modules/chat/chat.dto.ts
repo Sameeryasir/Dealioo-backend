@@ -106,6 +106,7 @@ export class CustomerConversationMessagesDto {
   conversationId: number;
   customerId: number;
   messages: ConversationMessageDto[];
+  hasMore?: boolean;
 }
 
 export class SyncChatMessagesThreadDto {

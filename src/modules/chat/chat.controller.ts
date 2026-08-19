@@ -147,6 +147,7 @@ export class ChatController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('conversationId', ParseIntPipe) conversationId: number,
     @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -159,6 +160,7 @@ export class ChatController {
       businessId,
       conversationId,
       afterMessageId,
+      limit,
     );
   }
 
@@ -203,6 +205,7 @@ export class ChatController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('customerId', ParseIntPipe) customerId: number,
     @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -215,6 +218,7 @@ export class ChatController {
       businessId,
       customerId,
       afterMessageId,
+      limit,
     );
   }
 
