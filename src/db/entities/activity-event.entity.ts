@@ -17,6 +17,7 @@ export enum ActivityEventType {
   REDEEMED_REWARD = 'redeemed_reward',
   PREPAID_FOR_OFFER = 'prepaid_for_offer',
   MESSAGE_SENT = 'message_sent',
+  SIGNED_UP = 'signed_up',
 }
 
 @Entity('activity_event')

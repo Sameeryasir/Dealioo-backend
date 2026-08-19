@@ -29,6 +29,7 @@ import { CreateActivityEventDto } from './activityDto/create-activity-event.dto'
 import { LogMessageSentDto } from './activityDto/log-message-sent.dto';
 import { LogPrepaidForOfferDto } from './activityDto/log-prepaid-for-offer.dto';
 import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
+import { LogSignedUpDto } from './activityDto/log-signed-up.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import {
@@ -73,6 +74,7 @@ export type ActivitySummary = {
   totalRedeemed: number;
   totalPrepaid: number;
   totalInPerson: number;
+  totalSignedUp: number;
   totalMessagesSent: number;
   from: string;
   to: string;
@@ -245,6 +247,58 @@ export class ActivityService {
       }
       throw err;
     }
+  }
+
+  async logSignedUp(params: LogSignedUpDto): Promise<void> {
+    const campaignName = params.campaignName?.trim() || 'Campaign';
+    const campaignTypeRaw = params.campaignType?.trim().toLowerCase() || '';
+    const campaignTypeLabel =
+      campaignTypeRaw === CampaignType.POSTPAID
+        ? 'Postpaid'
+        : campaignTypeRaw === CampaignType.PREPAID
+          ? 'Prepaid'
+          : null;
+    const description = campaignTypeLabel
+      ? `Signed up · ${campaignTypeLabel} · ${campaignName}`
+      : `Signed up · ${campaignName}`;
+    const occurredAt = params.occurredAt ?? new Date();
+    const idempotencyKey = `signup:funnel:${params.funnelId}:customer:${params.customerId}`;
+
+    const manager = this.activityRepository.manager;
+    const existing = await manager.findOne(ActivityEvent, {
+      where: { idempotencyKey },
+      select: ['id'],
+    });
+    if (existing) {
+      await manager.update(ActivityEvent, existing.id, {
+        description,
+        occurredAt,
+        metadata: {
+          funnelId: params.funnelId,
+          campaignId: params.campaignId ?? null,
+          campaignName,
+          campaignType: campaignTypeRaw || null,
+        },
+      });
+      return;
+    }
+
+    const payload: CreateActivityEventDto = {
+      businessId: params.businessId,
+      customerId: params.customerId,
+      eventType: ActivityEventType.SIGNED_UP,
+      description,
+      idempotencyKey,
+      occurredAt,
+      metadata: {
+        funnelId: params.funnelId,
+        campaignId: params.campaignId ?? null,
+        campaignName,
+        campaignType: campaignTypeRaw || null,
+      },
+    };
+
+    await this.logInTransaction(manager, payload);
   }
 
   async logRedeemedReward(params: LogRedeemedRewardDto): Promise<void> {
@@ -489,14 +543,7 @@ export class ActivityService {
     ) => {
       qb.where('activity.businessId = :businessId', { businessId })
         .andWhere('activity.occurredAt >= :from', { from: range.from })
-        .andWhere('activity.occurredAt <= :to', { to: range.to })
-        .andWhere(
-          `NOT (
-            activity.eventType = :excludeOnlinePrepaid
-            AND NOT ${this.inStorePrepaidSql}
-          )`,
-          { excludeOnlinePrepaid: ActivityEventType.PREPAID_FOR_OFFER },
-        );
+        .andWhere('activity.occurredAt <= :to', { to: range.to });
 
       this.applyEventTypeFilter(qb, options.eventType);
 
@@ -528,13 +575,6 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
-      .andWhere(
-        `NOT (
-          activity.eventType = :excludeOnlinePrepaid
-          AND NOT ${this.inStorePrepaidSql}
-        )`,
-        { excludeOnlinePrepaid: ActivityEventType.PREPAID_FOR_OFFER },
-      )
       .getCount();
 
     const [rows, total] = await Promise.all([
@@ -626,7 +666,9 @@ export class ActivityService {
     }
 
     if (eventType === ActivityEventType.PREPAID_FOR_OFFER) {
-      qb.andWhere('1 = 0');
+      qb.andWhere('activity.eventType = :prepaidType', {
+        prepaidType: ActivityEventType.PREPAID_FOR_OFFER,
+      }).andWhere(`NOT ${this.inStorePrepaidSql}`);
       return;
     }
 
@@ -847,10 +889,18 @@ export class ActivityService {
         'totalRedeemed',
       )
       .addSelect(
+        `COUNT(*) FILTER (WHERE activity.eventType = :countPrepaid AND NOT ${this.inStorePrepaidSql})`,
+        'totalPrepaid',
+      )
+      .addSelect(
         `COUNT(*) FILTER (
           WHERE activity.eventType = :countPrepaid AND ${this.inStorePrepaidSql}
         )`,
         'totalInPerson',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE activity.eventType = :countSignedUp)`,
+        'totalSignedUp',
       )
       .addSelect(
         `COUNT(*) FILTER (WHERE activity.eventType = :countMessage)`,
@@ -859,16 +909,11 @@ export class ActivityService {
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt >= :from', { from: range.from })
       .andWhere('activity.occurredAt <= :to', { to: range.to })
-      .andWhere(
-        `NOT (
-          activity.eventType = :countPrepaid
-          AND NOT ${this.inStorePrepaidSql}
-        )`,
-      )
       .setParameters({
         countVisited: ActivityEventType.VISITED,
         countRedeemed: ActivityEventType.REDEEMED_REWARD,
         countPrepaid: ActivityEventType.PREPAID_FOR_OFFER,
+        countSignedUp: ActivityEventType.SIGNED_UP,
         countMessage: ActivityEventType.MESSAGE_SENT,
       });
 
@@ -877,23 +922,33 @@ export class ActivityService {
     const row = await qb.getRawOne<{
       totalVisited: string;
       totalRedeemed: string;
+      totalPrepaid: string;
       totalInPerson: string;
+      totalSignedUp: string;
       totalMessagesSent: string;
     }>();
 
     const totalVisited = Number.parseInt(row?.totalVisited ?? '0', 10) || 0;
     const totalRedeemed = Number.parseInt(row?.totalRedeemed ?? '0', 10) || 0;
+    const totalPrepaid = Number.parseInt(row?.totalPrepaid ?? '0', 10) || 0;
     const totalInPerson = Number.parseInt(row?.totalInPerson ?? '0', 10) || 0;
+    const totalSignedUp = Number.parseInt(row?.totalSignedUp ?? '0', 10) || 0;
     const totalMessagesSent =
       Number.parseInt(row?.totalMessagesSent ?? '0', 10) || 0;
 
     return {
       totalEvents:
-        totalVisited + totalRedeemed + totalInPerson + totalMessagesSent,
+        totalVisited +
+        totalRedeemed +
+        totalPrepaid +
+        totalInPerson +
+        totalSignedUp +
+        totalMessagesSent,
       totalVisited,
       totalRedeemed,
-      totalPrepaid: 0,
+      totalPrepaid,
       totalInPerson,
+      totalSignedUp,
       totalMessagesSent,
       from: range.from.toISOString(),
       to: range.to.toISOString(),

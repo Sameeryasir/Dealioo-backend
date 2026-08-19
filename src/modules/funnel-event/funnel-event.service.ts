@@ -170,6 +170,28 @@ export class FunnelEventService {
         });
       }
 
+      if (businessId != null && businessId > 0) {
+        try {
+          await this.activityService.logSignedUp({
+            businessId,
+            customerId: tracked.event.customerId,
+            funnelId: dto.funnelId,
+            campaignId: funnel.campaign?.id ?? null,
+            campaignName: funnel.campaign?.campaignName ?? null,
+            campaignType: funnel.campaign?.campaignType ?? null,
+            occurredAt: new Date(),
+          });
+        } catch (activityError) {
+          this.logger.warn(
+            `Signup activity_event log failed funnel=${dto.funnelId} customer=${tracked.event.customerId}: ${
+              activityError instanceof Error
+                ? activityError.message
+                : String(activityError)
+            }`,
+          );
+        }
+      }
+
       if (
         !options?.skipPendingOrder &&
         businessId != null &&
@@ -271,10 +293,20 @@ export class FunnelEventService {
       tracked.event.funnelPaymentId &&
       this.isPaidFunnelEvent(tracked.event)
     ) {
-      await this.activityService.logPrepaidForOffer({
-        paymentId: tracked.event.funnelPaymentId,
-        customerId: tracked.event.customerId,
-      });
+      try {
+        await this.activityService.logPrepaidForOffer({
+          paymentId: tracked.event.funnelPaymentId,
+          customerId: tracked.event.customerId,
+        });
+      } catch (activityError) {
+        this.logger.warn(
+          `Payment activity_event log failed payment=${tracked.event.funnelPaymentId}: ${
+            activityError instanceof Error
+              ? activityError.message
+              : String(activityError)
+          }`,
+        );
+      }
     }
 
     await this.recordJourneyFromTrackedEvent(funnel, tracked.event);

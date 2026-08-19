@@ -22,8 +22,10 @@ export const ACTIVITY_IN_STORE_PREPAID_SQL = `(
 
 export const ACTIVITY_EVENT_TYPE_FILTERS = [
   'all',
+  ActivityEventType.SIGNED_UP,
   ActivityEventType.VISITED,
   ActivityEventType.REDEEMED_REWARD,
+  ActivityEventType.PREPAID_FOR_OFFER,
   ACTIVITY_IN_PERSON_FILTER,
   ActivityEventType.MESSAGE_SENT,
 ] as const;
@@ -50,10 +52,6 @@ export function parseActivityEventTypeFilter(
 
   if (value === ACTIVITY_IN_PERSON_FILTER) {
     return ACTIVITY_IN_PERSON_FILTER;
-  }
-
-  if (value === ActivityEventType.PREPAID_FOR_OFFER) {
-    return null;
   }
 
   if (Object.values(ActivityEventType).includes(value as ActivityEventType)) {
