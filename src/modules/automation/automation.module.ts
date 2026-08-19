@@ -11,6 +11,7 @@ import { AutomationExecutionEvent } from '../../db/entities/automation-execution
 import { AutomationExecutionRecipient } from '../../db/entities/automation-execution-recipient.entity';
 import { AutomationExecutionStep } from '../../db/entities/automation-execution-step.entity';
 import { AutomationLog } from '../../db/entities/automation-log.entity';
+import { AutomationSendAttempt } from '../../db/entities/automation-send-attempt.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
@@ -41,6 +42,7 @@ import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationQueueProcessor } from './automation-queue.processor';
 import { AutomationQueueService } from './automation-queue.service';
+import { AutomationSendAttemptService } from './automation-send-attempt.service';
 import { AutomationWaitSchedulerService } from './automation-wait-scheduler.service';
 import { AutomationService } from './automation.service';
 
@@ -70,6 +72,7 @@ import { AutomationService } from './automation.service';
       AutomationExecutionRecipient,
       AutomationDeadLetter,
       AutomationLog,
+      AutomationSendAttempt,
       Business,
       Campaign,
       Funnel,
@@ -104,6 +107,7 @@ import { AutomationService } from './automation.service';
     AutomationConditionRegistry,
     CustomerVisitedConditionEvaluator,
     AutomationLogService,
+    AutomationSendAttemptService,
     AutomationQueueService,
     AutomationQueueProcessor,
     AutomationCronSchedulerService,

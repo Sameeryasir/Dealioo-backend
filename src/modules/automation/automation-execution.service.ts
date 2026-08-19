@@ -601,11 +601,19 @@ export class AutomationExecutionService {
 
   async hasBlockingBatchSendForAutomation(
     automationId: number,
+    options?: { excludeWaiting?: boolean },
   ): Promise<boolean> {
+    const statuses = options?.excludeWaiting
+      ? [
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+        ]
+      : this.liveExecutionStatuses();
+
     return this.executionRepository.exist({
       where: {
         automationId,
-        status: In(this.liveExecutionStatuses()),
+        status: In(statuses),
       },
     });
   }
@@ -692,7 +700,14 @@ export class AutomationExecutionService {
   async findOpenExecutionIdsForAutomation(
     automationId: number,
   ): Promise<number[]> {
-    const rows = await this.executionRepository.find({
+    const rows = await this.findOpenExecutionsForAutomation(automationId);
+    return rows.map((row) => row.id);
+  }
+
+  async findOpenExecutionsForAutomation(
+    automationId: number,
+  ): Promise<Array<{ id: number; status: AutomationExecutionStatus }>> {
+    return this.executionRepository.find({
       where: {
         automationId,
         status: In([
@@ -702,10 +717,23 @@ export class AutomationExecutionService {
           AutomationExecutionStatus.PAUSED,
         ]),
       },
-      select: ['id'],
+      select: ['id', 'status'],
       order: { id: 'ASC' },
     });
-    return rows.map((row) => row.id);
+  }
+
+  async findLatestCompletedExecutionId(
+    automationId: number,
+  ): Promise<number | null> {
+    const row = await this.executionRepository.findOne({
+      where: {
+        automationId,
+        status: AutomationExecutionStatus.COMPLETED,
+      },
+      order: { completedAt: 'DESC', id: 'DESC' },
+      select: ['id'],
+    });
+    return row?.id ?? null;
   }
 
   async clearPauseState(

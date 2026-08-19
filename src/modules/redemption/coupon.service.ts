@@ -112,7 +112,7 @@ export class CouponService {
       customerId,
       funnelId,
     );
-    if (active?.paymentStatus === CouponPaymentStatus.PAID) {
+    if (active?.paymentStatus === CouponPaymentStatus.PAID && !openCheckout) {
       return null;
     }
 

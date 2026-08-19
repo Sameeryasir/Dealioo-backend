@@ -7,6 +7,7 @@ import {
   resolveAutomationQueueConcurrency,
 } from './automation-queue.constants';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type {
   CronTickJob,
   ProcessExecutionJob,
@@ -66,11 +67,14 @@ export class AutomationQueueProcessor extends WorkerHost {
 
     try {
       switch (job.name) {
-        case AutomationJobName.CRON_TICK:
-          await this.automationService.runCronTick(
-            (job.data as CronTickJob).automationId,
+        case AutomationJobName.CRON_TICK: {
+          const automationId = (job.data as CronTickJob).automationId;
+          this.logger.log(
+            `[PaymentReminderCron] QUEUE JOB RECEIVED automation=${automationId} jobId=${job.id ?? 'unknown'}`,
           );
+          await this.automationService.runCronTick(automationId);
           break;
+        }
 
         case AutomationJobName.UNPAID_REMINDER_BATCH:
           await this.automationService.runUnpaidReminderBatch(
@@ -87,11 +91,25 @@ export class AutomationQueueProcessor extends WorkerHost {
           break;
         }
 
-        case AutomationJobName.RESUME_EXECUTION:
-          await this.engineService.resumeAfterWait(
-            (job.data as ResumeExecutionJob).executionId,
-          );
+        case AutomationJobName.RESUME_EXECUTION: {
+          const resumeExecutionId = (job.data as ResumeExecutionJob)
+            .executionId;
+          const execution =
+            await this.executionService.findById(resumeExecutionId);
+          const resumePassAfterWait =
+            execution.executionContext?.paymentReminderResume ===
+              'pass_after_wait' ||
+            execution.automation?.purpose ===
+              AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER;
+          if (resumePassAfterWait) {
+            await this.automationService.resumePaymentReminderAfterWait(
+              resumeExecutionId,
+            );
+          } else {
+            await this.engineService.resumeAfterWait(resumeExecutionId);
+          }
           break;
+        }
 
         default:
           this.logger.warn(`Unknown automation job: ${job.name}`);

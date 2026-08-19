@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import {
   AutomationExecution,
   AutomationExecutionStatus,
@@ -71,31 +71,49 @@ export class AutomationWaitSchedulerService
 
   async pollDueWaits(): Promise<number> {
     const now = new Date();
-    const due = await this.executionRepository.find({
-      where: {
-        status: AutomationExecutionStatus.WAITING,
-        scheduledAt: LessThanOrEqual(now),
-      },
-      relations: ['automation'],
-      take: 100,
-      order: { scheduledAt: 'ASC' },
+    return this.executionRepository.manager.transaction(async (manager) => {
+      const due = await manager
+        .createQueryBuilder(AutomationExecution, 'execution')
+        .innerJoinAndSelect('execution.automation', 'automation')
+        .where('execution.status = :status', {
+          status: AutomationExecutionStatus.WAITING,
+        })
+        .andWhere('execution.scheduledAt IS NOT NULL')
+        .andWhere('execution.scheduledAt <= :now', { now })
+        .orderBy('execution.scheduledAt', 'ASC')
+        .take(100)
+        .setLock('pessimistic_partial_write')
+        .getMany();
+
+      let enqueued = 0;
+      for (const execution of due) {
+        if (!execution.automation?.isActive || !execution.automation.published) {
+          await this.executionService.pauseExecution(execution.id);
+          continue;
+        }
+        try {
+          if (await this.queueService.hasPendingResumeJob(execution.id)) {
+            continue;
+          }
+          await this.queueService.addResumeExecution(
+            { executionId: execution.id },
+            0,
+          );
+          enqueued += 1;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Resume enqueue failed';
+          this.logger.warn(
+            `Left execution ${execution.id} WAITING in Postgres (queue unavailable): ${message}`,
+          );
+        }
+      }
+
+      if (enqueued > 0) {
+        this.logger.log(`Enqueued ${enqueued} due wait resume job(s)`);
+      }
+
+      return enqueued;
     });
-
-    for (const execution of due) {
-      if (!execution.automation?.isActive) {
-        await this.executionService.pauseExecution(execution.id);
-        continue;
-      }
-      if (await this.queueService.hasPendingResumeJob(execution.id)) {
-        continue;
-      }
-      await this.queueService.addResumeExecution({ executionId: execution.id }, 0);
-    }
-
-    if (due.length > 0) {
-      this.logger.log(`Enqueued ${due.length} due wait resume job(s)`);
-    }
-
-    return due.length;
   }
 }

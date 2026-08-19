@@ -316,9 +316,7 @@ export class AutomationEngineService {
       execution.customerId,
       {
         skipCycleCheck:
-          execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT ||
-          execution.automation?.purpose ===
-            AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+          execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT,
         paceOutboundActions:
           execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP,
       },
@@ -515,10 +513,12 @@ export class AutomationEngineService {
             scheduledAt: resumeAt.toISOString(),
           },
         );
-        await this.queueService.addResumeExecution(
-          { executionId: execution.id },
-          delayMs,
-        );
+        if (delayMs <= 0) {
+          await this.queueService.addResumeExecution(
+            { executionId: execution.id },
+            0,
+          );
+        }
         return 'wait';
       }
 
@@ -727,31 +727,14 @@ export class AutomationEngineService {
             return 'complete';
           }
 
-          const loopNode =
-            await this.executionService.findPaymentReminderLoopRestartNode(
-              execution.automationId,
-              config,
-            );
-          if (!loopNode) {
-            await this.logService.createLog({
-              executionId: execution.id,
-              nodeId: node.id,
-              customerId: execution.customerId,
-              message: 'Guest still unpaid — could not restart reminder loop',
-              error: 'Missing loop target for payment reminder branch',
-            });
-            return 'failed';
-          }
-
           await this.logService.createLog({
             executionId: execution.id,
             nodeId: node.id,
             customerId: execution.customerId,
             message:
-              'Guest still unpaid — sending reminder emails again after wait',
+              'Guest still unpaid — this cycle ends; next run starts at the cron node',
           });
-
-          return this.restartExecutionAtLoopNode(execution, node, loopNode);
+          return 'complete';
         }
 
         if (

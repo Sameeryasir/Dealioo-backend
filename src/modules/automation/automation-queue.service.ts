@@ -223,7 +223,7 @@ export class AutomationQueueService {
     const retry = resolveResumeExecutionRetryPolicy();
     const job = await this.queue.add(AutomationJobName.RESUME_EXECUTION, data, {
       jobId: `resume-execution-${data.executionId}`,
-      delay: delayMs,
+      delay: 0,
       attempts: retry.attempts,
       ...(retry.backoff ? { backoff: retry.backoff } : {}),
       ...AUTOMATION_JOB_CLEANUP_OPTIONS,
@@ -232,17 +232,21 @@ export class AutomationQueueService {
   }
 
   async hasPendingResumeJob(executionId: number): Promise<boolean> {
-    const job = await this.queue.getJob(`resume-execution-${executionId}`);
-    if (!job) {
+    try {
+      const job = await this.queue.getJob(`resume-execution-${executionId}`);
+      if (!job) {
+        return false;
+      }
+      const state = await job.getState();
+      return (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'prioritized'
+      );
+    } catch {
       return false;
     }
-    const state = await job.getState();
-    return (
-      state === 'active' ||
-      state === 'waiting' ||
-      state === 'delayed' ||
-      state === 'prioritized'
-    );
   }
 
   async removeResumeExecutionJob(executionId: number): Promise<void> {
@@ -252,28 +256,77 @@ export class AutomationQueueService {
     }
   }
 
+  /** Drop queued cron-tick jobs so a reschedule does not fire an early rerun. */
+  async removePendingCronTickJobs(automationId: number): Promise<number> {
+    let removed = 0;
+
+    for (const state of QUEUE_JOB_SCAN_STATES) {
+      let start = 0;
+      const batchSize = 100;
+
+      while (true) {
+        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
+        if (jobs.length === 0) {
+          break;
+        }
+
+        for (const job of jobs) {
+          if (job.name !== AutomationJobName.CRON_TICK) {
+            continue;
+          }
+          const data = job.data as CronTickJob;
+          if (data.automationId !== automationId) {
+            continue;
+          }
+          if (state === 'active') {
+            continue;
+          }
+          await this.safeRemoveJob(job);
+          removed += 1;
+        }
+
+        if (jobs.length < batchSize) {
+          break;
+        }
+        start += batchSize;
+      }
+    }
+
+    return removed;
+  }
+
   async upsertCronSchedule(
     automationId: number,
     intervalMs: number,
-  ): Promise<void> {
+    options?: { restartFromNow?: boolean },
+  ): Promise<Date | null> {
     const schedulerKey = automationCronSchedulerKey(automationId);
     const schedulers = await this.queue.getJobSchedulers();
     const existing = schedulers.find((entry) => entry.key === schedulerKey);
     const intervalChanged =
       existing != null && Number(existing.every) !== intervalMs;
-    const isFirstSchedule = existing == null;
+    const restartFromNow = options?.restartFromNow === true;
 
-    if (intervalChanged) {
+    if (existing != null && !intervalChanged && !restartFromNow) {
+      return null;
+    }
+
+    if (intervalChanged || restartFromNow) {
+      await this.removePendingCronTickJobs(automationId);
       await this.removeCronSchedule(automationId);
     }
+
+    const repeatEvery = intervalMs;
+    const nextScheduledAt =
+      restartFromNow || intervalChanged || existing == null
+        ? Date.now() + repeatEvery
+        : null;
 
     await this.queue.upsertJobScheduler(
       schedulerKey,
       {
-        every: intervalMs,
-        ...(isFirstSchedule || intervalChanged
-          ? { startDate: Date.now() + intervalMs }
-          : {}),
+        every: repeatEvery,
+        ...(nextScheduledAt != null ? { startDate: nextScheduledAt } : {}),
       },
       {
         name: AutomationJobName.CRON_TICK,
@@ -281,6 +334,8 @@ export class AutomationQueueService {
         opts: AUTOMATION_JOB_CLEANUP_OPTIONS,
       },
     );
+
+    return nextScheduledAt != null ? new Date(nextScheduledAt) : null;
   }
 
   async removeCronSchedule(automationId: number): Promise<void> {

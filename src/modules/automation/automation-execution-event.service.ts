@@ -40,9 +40,21 @@ export class AutomationExecutionEventService {
 
     const saved = await this.eventRepository.save(event);
 
+    const current = await this.executionRepository.findOne({
+      where: { id: params.executionId },
+      select: ['id', 'executionContext'],
+    });
+    const existingContext =
+      current?.executionContext && typeof current.executionContext === 'object'
+        ? current.executionContext
+        : {};
+
     await this.executionRepository.update(params.executionId, {
       lastEventId: saved.id,
-      executionContext: params.snapshot.executionContext as object,
+      executionContext: {
+        ...existingContext,
+        ...(params.snapshot.executionContext ?? {}),
+      } as object,
     });
 
     return saved;

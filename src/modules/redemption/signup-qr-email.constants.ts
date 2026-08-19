@@ -12,11 +12,7 @@ export function signupQrEmailJobId(
 }
 
 export function isBuiltinSignupPassEmailEnabled(): boolean {
-  const raw = process.env.BUILTIN_SIGNUP_PASS_EMAIL_ENABLED?.trim().toLowerCase();
-  if (raw === 'false' || raw === '0' || raw === 'no') {
-    return false;
-  }
-  return true;
+  return false;
 }
 
 export function resolveSignupQrEmailDelayMs(): number {

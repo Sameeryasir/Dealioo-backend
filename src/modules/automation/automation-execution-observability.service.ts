@@ -72,6 +72,7 @@ export class AutomationExecutionObservabilityService {
   async onBatchExecutionCreated(params: {
     executionId: number;
     nodeId: number;
+    emailNodeId?: number | null;
     unpaidCount: number;
     triggeredByCron: boolean;
   }): Promise<void> {
@@ -101,11 +102,27 @@ export class AutomationExecutionObservabilityService {
         snapshot,
       });
 
+      if (params.triggeredByCron) {
+        await this.startStep({
+          executionId: params.executionId,
+          stepKey: 'cron_trigger',
+          stepLabel: 'Cron Schedule',
+          nodeId: params.nodeId,
+          phase: 'cron',
+        });
+        await this.completeStep({
+          executionId: params.executionId,
+          stepKey: 'cron_trigger',
+          status: AutomationExecutionStepStatus.COMPLETED,
+          metadata: { unpaidCount: params.unpaidCount },
+        });
+      }
+
       await this.ensureStep({
         executionId: params.executionId,
         stepKey: 'payment_email',
         stepLabel: 'Payment Email',
-        nodeId: params.nodeId,
+        nodeId: params.emailNodeId ?? params.nodeId,
         phase: 'payment',
         metadata: { recipientsFound: params.unpaidCount },
       });

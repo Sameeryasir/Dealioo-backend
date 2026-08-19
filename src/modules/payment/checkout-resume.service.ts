@@ -126,32 +126,29 @@ export class CheckoutResumeService {
       }
     }
 
-    if (funnelPaymentId == null) {
-      const pendingPayment = await this.findLatestOpenPayment(
-        row.funnelId,
-        customer.email.trim(),
-      );
-      if (pendingPayment) {
-        funnelPaymentId = pendingPayment.id;
-      }
-      if (funnelPaymentId !== row.funnelPaymentId) {
-        await this.tokenRepository.update(row.id, { funnelPaymentId });
-      }
-    }
-
-    const paidPayment = await this.findLatestPaidPayment(
+    const pendingPayment = await this.findLatestOpenPayment(
       row.funnelId,
       customer.email.trim(),
     );
-    if (paidPayment) {
-      funnelPaymentId = paidPayment.id;
-      if (funnelPaymentId !== row.funnelPaymentId) {
-        await this.tokenRepository.update(row.id, { funnelPaymentId });
+
+    if (pendingPayment) {
+      funnelPaymentId = pendingPayment.id;
+    } else if (funnelPaymentId == null) {
+      const paidPayment = await this.findLatestPaidPayment(
+        row.funnelId,
+        customer.email.trim(),
+      );
+      if (paidPayment) {
+        funnelPaymentId = paidPayment.id;
       }
     }
 
-    let paymentStatus: FunnelPaymentStatus | null = paidPayment?.status ?? null;
-    if (paymentStatus == null && funnelPaymentId != null) {
+    if (funnelPaymentId !== row.funnelPaymentId) {
+      await this.tokenRepository.update(row.id, { funnelPaymentId });
+    }
+
+    let paymentStatus: FunnelPaymentStatus | null = null;
+    if (funnelPaymentId != null) {
       const linked = await this.funnelPaymentRepository.findOne({
         where: { id: funnelPaymentId },
         select: ['id', 'status'],

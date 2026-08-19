@@ -8,6 +8,7 @@ export type AutomationExecutionContext = {
   funnelPaymentId?: number | null;
   pausedFromStatus?: string;
   pausedAt?: string;
+  paymentReminderResume?: string;
 };
 
 export type AutomationExecutionSnapshot = {
@@ -61,6 +62,9 @@ export function normalizeExecutionContext(
       ? { pausedFromStatus: raw.pausedFromStatus }
       : {}),
     ...(typeof raw.pausedAt === 'string' ? { pausedAt: raw.pausedAt } : {}),
+    ...(typeof raw.paymentReminderResume === 'string'
+      ? { paymentReminderResume: raw.paymentReminderResume }
+      : {}),
   };
 }
 

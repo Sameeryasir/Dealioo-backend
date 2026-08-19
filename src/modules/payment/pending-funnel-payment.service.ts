@@ -1,6 +1,6 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, In } from 'typeorm';
 import { CampaignType } from '../../db/entities/campaign.entity';
 import {
   FunnelCollectionChannel,
@@ -53,27 +53,18 @@ export class PendingFunnelPaymentService {
         lockKey2,
       ]);
 
-      const alreadyPaid = await manager.findOne(FunnelPayment, {
-        where: {
-          funnelId: input.funnelId,
-          businessId: input.businessId,
-          customerEmail: email,
-          status: FunnelPaymentStatus.PAID,
-        },
-        order: { createdAt: 'DESC' },
-      });
-      if (alreadyPaid) {
-        throw new ConflictException(
-          'You have already paid for this offer.',
-        );
-      }
-
+      // Paid rows stay as completed purchases. Unpaid rows are reused so a
+      // second funnel signup updates the open checkout instead of stacking copies.
       const pending = await manager.findOne(FunnelPayment, {
         where: {
           funnelId: input.funnelId,
           businessId: input.businessId,
           customerEmail: email,
-          status: FunnelPaymentStatus.PENDING,
+          status: In([
+            FunnelPaymentStatus.PENDING,
+            FunnelPaymentStatus.FAILED,
+            FunnelPaymentStatus.CANCELLED,
+          ]),
         },
         order: { createdAt: 'DESC' },
         lock: { mode: 'pessimistic_write' },
@@ -164,6 +155,10 @@ export class PendingFunnelPaymentService {
 
     const patch: {
       updatedAt: Date;
+      status?: FunnelPaymentStatus;
+      cancelledAt?: Date | null;
+      stripeCheckoutSessionId?: string | null;
+      stripePaymentIntentId?: string | null;
       campaignId?: number | null;
       customerId?: number | null;
       amount?: number;
@@ -177,6 +172,17 @@ export class PendingFunnelPaymentService {
       updatedAt: now,
       campaignId: payment.campaignId ?? input.campaignId,
     };
+
+    if (payment.status !== FunnelPaymentStatus.PENDING) {
+      patch.status = FunnelPaymentStatus.PENDING;
+      patch.cancelledAt = null;
+      patch.stripeCheckoutSessionId = null;
+      patch.stripePaymentIntentId = null;
+      payment.status = FunnelPaymentStatus.PENDING;
+      payment.cancelledAt = null;
+      payment.stripeCheckoutSessionId = null;
+      payment.stripePaymentIntentId = null;
+    }
 
     if (input.customerId != null && payment.customerId !== input.customerId) {
       patch.customerId = input.customerId;

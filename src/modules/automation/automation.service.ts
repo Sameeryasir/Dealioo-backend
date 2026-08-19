@@ -67,6 +67,11 @@ import {
   resolveCronFromAutomationNodes,
 } from './automation-cron.config';
 import { AutomationQueueService } from './automation-queue.service';
+import {
+  AutomationSendAttemptService,
+  PAYMENT_REMINDER_EMAIL_ACTION,
+  PAYMENT_REMINDER_PASS_ACTION,
+} from './automation-send-attempt.service';
 import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationExecutionRecoveryService } from './automation-execution-recovery.service';
 import { AutomationMetricsService } from './automation-metrics.service';
@@ -98,6 +103,8 @@ import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.
 @Injectable()
 export class AutomationService {
   private readonly logger = new Logger(AutomationService.name);
+  /** Grep terminal for this prefix to trace scheduled payment-reminder cron reruns. */
+  private static readonly PAYMENT_REMINDER_CRON_LOG = '[PaymentReminderCron]';
 
   constructor(
     @InjectRepository(Automation)
@@ -131,6 +138,7 @@ export class AutomationService {
     private readonly chatMessageService: ChatMessageService,
     private readonly checkoutResumeService: CheckoutResumeService,
     private readonly couponService: CouponService,
+    private readonly sendAttemptService: AutomationSendAttemptService,
   ) {}
 
   async createAutomation(
@@ -245,11 +253,11 @@ export class AutomationService {
       await this.closeOpenPaymentReminderRuns(saved.id);
     }
 
-    await this.cronScheduler.syncAutomationCron(saved.id);
+    await this.cronScheduler.syncAutomationCron(saved.id, {
+      restartFromNow: cronPaymentReminder && becomingActive,
+    });
 
-    if (cronPaymentReminder) {
-      await this.runCronTick(saved.id);
-    } else if (becomingActive) {
+    if (!cronPaymentReminder && becomingActive) {
       if (
         saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
       ) {
@@ -439,11 +447,11 @@ export class AutomationService {
       await this.closeOpenPaymentReminderRuns(saved.id);
     }
 
-    await this.cronScheduler.syncAutomationCron(saved.id);
+    await this.cronScheduler.syncAutomationCron(saved.id, {
+      restartFromNow: becomingActive && cronPaymentReminder,
+    });
 
-    if (cronPaymentReminder) {
-      await this.runCronTick(saved.id);
-    } else if (becomingActive) {
+    if (!cronPaymentReminder && becomingActive) {
       if (
         saved.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
       ) {
@@ -558,7 +566,7 @@ export class AutomationService {
     }
 
     this.logger.log(
-      `Closed ${openExecutionIds.length} open payment-reminder run(s) for automation ${automationId} before instant cron`,
+      `Closed ${openExecutionIds.length} open payment-reminder run(s) for automation ${automationId}`,
     );
   }
 
@@ -619,10 +627,6 @@ export class AutomationService {
           execution.id,
           AutomationExecutionStatus.WAITING,
           execution.scheduledAt,
-        );
-        await this.queueService.addResumeExecution(
-          { executionId: execution.id },
-          delayMs,
         );
         return;
       }
@@ -771,7 +775,11 @@ export class AutomationService {
       throw new NotFoundException('Automation node not found');
     }
 
-    await this.assertAutomationEditable(node.automationId);
+    const structuralChange =
+      dto.type !== undefined || dto.order !== undefined;
+    if (structuralChange) {
+      await this.assertAutomationEditable(node.automationId);
+    }
 
     if (dto.type !== undefined) {
       node.type = dto.type;
@@ -812,7 +820,18 @@ export class AutomationService {
 
     const saved = await this.nodeRepository.save(node);
     await this.bumpAutomationGraphVersion(saved.automationId);
-    await this.cronScheduler.syncAutomationCron(saved.automationId);
+    const automationAfterSave = await this.automationRepository.findOne({
+      where: { id: saved.automationId },
+      select: ['id', 'isActive', 'published'],
+    });
+    const cronConfigChanged =
+      dto.config !== undefined && isCronTriggerAutomationNode(saved);
+    await this.cronScheduler.syncAutomationCron(saved.automationId, {
+      restartFromNow:
+        cronConfigChanged &&
+        automationAfterSave?.isActive === true &&
+        automationAfterSave?.published === true,
+    });
     return saved;
   }
 
@@ -1205,27 +1224,39 @@ export class AutomationService {
       return;
     }
 
-    if (
-      await this.executionService.hasBlockingBatchSendForAutomation(automationId)
-    ) {
+    const openExecutions =
+      await this.executionService.findOpenExecutionsForAutomation(
+        automationId,
+      );
+    if (openExecutions.length > 0) {
+      const openSummary = openExecutions
+        .map((row) => `#${row.id}:${row.status}`)
+        .join(', ');
       this.logger.log(
-        `Cron tick skipped for automation ${automationId}: a run is already in progress (queued, running, waiting, or paused)`,
+        `${AutomationService.PAYMENT_REMINDER_CRON_LOG} TICK SKIPPED automation=${automationId} reason=previous_run_still_open openRuns=${openSummary} action=will_retry_on_next_interval`,
       );
       return;
     }
 
+    const previousCompletedRun =
+      await this.executionService.findLatestCompletedExecutionId(automationId);
+    const isRerun = previousCompletedRun != null;
+
     try {
+      this.logger.log(
+        `${AutomationService.PAYMENT_REMINDER_CRON_LOG} TICK FIRED automation=${automationId} rerun=${isRerun} previousCompletedRun=${previousCompletedRun ?? 'none'} interval=${verified.interval}${verified.unit} action=start_at_cron_node`,
+      );
       const result = await this.enqueueUnpaidReminderBatch(automation, {
         skipIfNoRecipients: true,
         triggeredByCron: true,
       });
       if (!result) {
         this.logger.log(
-          `Cron tick for automation ${automationId}: no unpaid recipients`,
+          `${AutomationService.PAYMENT_REMINDER_CRON_LOG} TICK NOOP automation=${automationId} rerun=${isRerun} reason=no_unpaid_recipients`,
         );
       } else {
         this.logger.log(
-          `Cron tick started new payment-reminder run for automation ${automationId} (execution=${result.status.executionId}, unpaid≈${result.status.totalRecipients ?? '?'})`,
+          `${AutomationService.PAYMENT_REMINDER_CRON_LOG} RERUN STARTED automation=${automationId} execution=${result.status.executionId} rerun=${isRerun} previousCompletedRun=${previousCompletedRun ?? 'none'} unpaid=${result.status.totalRecipients ?? '?'}`,
         );
       }
     } catch (error) {
@@ -1338,6 +1369,14 @@ export class AutomationService {
       },
     );
 
+    if (options.triggeredByCron) {
+      await this.executionService.updateCurrentNode(
+        execution.id,
+        plan.startNodeId,
+        AutomationExecutionStatus.RUNNING,
+      );
+    }
+
     const predictedTotalChunks = predictSendChunkCount(
       unpaidCount,
       AUTOMATION_SEND_CHUNK_SIZE,
@@ -1346,16 +1385,25 @@ export class AutomationService {
     this.logger.log(
       `Payment reminder enqueue start automation=${automation.id} execution=${execution.id} funnel=${automation.funnelId} unpaid=${unpaidCount} pageSize=${AUTOMATION_RECIPIENT_PAGE_SIZE} chunkSize=${AUTOMATION_SEND_CHUNK_SIZE} predictedChunks=${predictedTotalChunks} cron=${options.triggeredByCron}`,
     );
+    if (options.triggeredByCron) {
+      this.logger.log(
+        `${AutomationService.PAYMENT_REMINDER_CRON_LOG} CRON NODE execution=${execution.id} automation=${automation.id} cronNodeId=${plan.startNodeId} unpaid=${unpaidCount}`,
+      );
+    }
+
     await this.logService.createLog({
       executionId: execution.id,
       nodeId: initialNodeId,
       customerId: firstCustomerId,
-      message: `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${AUTOMATION_RECIPIENT_PAGE_SIZE} and send chunks of ${AUTOMATION_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
+      message: options.triggeredByCron
+        ? `Trigger fired (cron) — starting workflow (${unpaidCount} unpaid guest(s))`
+        : `Payment reminder started: ${unpaidCount} unpaid guest(s), queuing in pages of ${AUTOMATION_RECIPIENT_PAGE_SIZE} and send chunks of ${AUTOMATION_SEND_CHUNK_SIZE} (~${predictedTotalChunks} chunk job(s))`,
     });
 
     void this.observabilityService.onBatchExecutionCreated({
       executionId: execution.id,
-      nodeId: plan.emailNode?.id ?? actionNode.id,
+      nodeId: initialNodeId,
+      emailNodeId: actionNode.id,
       unpaidCount,
       triggeredByCron: options.triggeredByCron,
     });
@@ -1687,6 +1735,16 @@ export class AutomationService {
       return;
     }
 
+    if (
+      !execution.automation?.isActive ||
+      !execution.automation.published
+    ) {
+      this.logger.log(
+        `Skipping ${batchPhase} chunk for inactive/unpublished automation ${batch.automationId}`,
+      );
+      return;
+    }
+
     const customerIds =
       batch.customerIds?.length && batch.customerIds.length > 0
         ? batch.customerIds
@@ -1780,9 +1838,28 @@ export class AutomationService {
 
     const lockedRecipients: EmailRecipient[] = [];
     const lockSkipped: EmailRecipient[] = [];
+    const sendActionType =
+      batchPhase === 'pass'
+        ? PAYMENT_REMINDER_PASS_ACTION
+        : PAYMENT_REMINDER_EMAIL_ACTION;
     for (const recipient of batch.recipients) {
       if (recipient.customerId == null) {
         continue;
+      }
+      if (
+        batch.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
+      ) {
+        const claimed = await this.sendAttemptService.tryClaim({
+          automationId: batch.automationId,
+          customerId: recipient.customerId,
+          actionType: sendActionType,
+          attempt: batch.executionId,
+          executionId: batch.executionId,
+        });
+        if (!claimed) {
+          lockSkipped.push(recipient);
+          continue;
+        }
       }
       const acquired = await this.queueService.tryAcquireUnpaidReminderSendLock(
         batch.funnelId,
@@ -1836,7 +1913,20 @@ export class AutomationService {
       recipientsTotal: batch.recipients.length,
     });
 
-    if (!batch.anchorStepOnTrigger && batchPhase === 'payment' && chunkIndex === 0) {
+    if (batchPhase === 'payment' && chunkIndex === 0) {
+      if (batch.anchorStepOnTrigger) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.plan.startNodeId,
+        );
+        this.logger.log(
+          `Payment reminder advancing from cron node execution=${batch.executionId} node=${batch.plan.startNodeId}`,
+        );
+        this.logger.log(
+          `${AutomationService.PAYMENT_REMINDER_CRON_LOG} CRON NODE DONE execution=${batch.executionId} cronNodeId=${batch.plan.startNodeId} next=condition_or_payment_email`,
+        );
+      }
+
       if (batch.plan.conditionNode) {
         await this.executionService.updateCurrentNode(
           batch.executionId,
@@ -2232,6 +2322,12 @@ export class AutomationService {
       }
 
       const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
+      if ((batch.waitDelayMs ?? 0) > 0) {
+        await this.executionService.updateExecutionContext(batch.executionId, {
+          ...(execution.executionContext ?? {}),
+          paymentReminderResume: 'pass_after_wait',
+        });
+      }
       await this.executionService.updateCurrentNode(
         batch.executionId,
         waitNodeId,
@@ -2263,6 +2359,145 @@ export class AutomationService {
       return;
     }
 
+    const waitDelayMs = batch.waitDelayMs ?? 0;
+    if (waitDelayMs > 0) {
+      const waitNodeId = batch.waitBeforePassNodeId ?? batch.passEmailNodeId;
+      await this.executionService.updateExecutionContext(batch.executionId, {
+        ...(execution.executionContext ?? {}),
+        paymentReminderResume: 'pass_after_wait',
+      });
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        new Date(Date.now() + waitDelayMs),
+      );
+      void this.observabilityService.onWaiting({
+        executionId: batch.executionId,
+        nodeId: waitNodeId,
+        waitDelayMs,
+      });
+      void this.observabilityService.completeStep({
+        executionId: batch.executionId,
+        stepKey: 'payment_email',
+        status: AutomationExecutionStepStatus.COMPLETED,
+      });
+      return;
+    }
+
+    await this.enqueuePaymentReminderPassPhase(batch);
+  }
+
+  async resumePaymentReminderAfterWait(executionId: number): Promise<void> {
+    const execution = await this.executionService.findById(executionId);
+    if (execution.status === AutomationExecutionStatus.PAUSED) {
+      return;
+    }
+    if (execution.status !== AutomationExecutionStatus.WAITING) {
+      return;
+    }
+
+    const automation = execution.automation;
+    if (!automation?.isActive || !automation.published) {
+      await this.executionService.pauseExecution(executionId);
+      return;
+    }
+    if (!automation.funnelId) {
+      await this.executionService.markFailed(
+        executionId,
+        'Automation has no funnel linked',
+      );
+      return;
+    }
+
+    const waitNodeId = execution.currentNodeId;
+    await this.logService.createLog({
+      executionId,
+      nodeId: waitNodeId,
+      customerId: execution.customerId,
+      message: 'Wait completed',
+    });
+
+    try {
+      await this.enqueuePaymentReminderPassPhaseFromExecution(
+        execution,
+        automation,
+      );
+    } catch (error) {
+      await this.executionService.updateCurrentNode(
+        executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        new Date(),
+      );
+      throw error;
+    }
+  }
+
+  private async enqueuePaymentReminderPassPhaseFromExecution(
+    execution: AutomationExecution,
+    automation: Automation,
+  ): Promise<void> {
+    const plan = await this.flowService.buildExecutionPlan(automation.id);
+    if (!plan.passEmailNode) {
+      await this.executionService.markCompleted(execution.id);
+      return;
+    }
+
+    const campaignName =
+      automation.campaign?.campaignName?.trim() || 'the campaign';
+    const passPrepared = this.automationEmailService.prepareFromActionNode(
+      plan.passEmailNode,
+      automation.purpose,
+      { requireSubject: false, campaignName },
+    );
+    if (!String(passPrepared.templateProps.ctaLabel ?? '').trim()) {
+      passPrepared.templateProps.ctaLabel = 'View my pass';
+    }
+
+    await this.enqueuePaymentReminderPassPhase({
+      executionId: execution.id,
+      automationId: automation.id,
+      businessId: automation.businessId,
+      funnelId: automation.funnelId!,
+      campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
+      emailNodeId: plan.passEmailNode.id,
+      conditionNodeId: plan.conditionNode?.id ?? plan.passEmailNode.id,
+      purpose: automation.purpose,
+      prepared: passPrepared,
+      plan,
+      recipients: [],
+      anchorStepOnTrigger: true,
+      batchPhase: 'pass',
+      passPrepared,
+      passEmailNodeId: plan.passEmailNode.id,
+      waitBeforePassNodeId: plan.waitBeforePassNode?.id ?? null,
+      waitDelayMs: 0,
+    });
+  }
+
+  private async enqueuePaymentReminderPassPhase(
+    batch: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'chunkIndex' | 'totalChunks'
+    >,
+  ): Promise<void> {
+    if (!batch.passPrepared || !batch.passEmailNodeId) {
+      return;
+    }
+
+    const unpaidCount =
+      await this.recipientsService.countUnpaidCustomersForFunnel(batch.funnelId);
+    if (unpaidCount === 0) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'pass',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
     const passBase: Omit<
       UnpaidReminderBatchJob,
       'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
@@ -2282,13 +2517,13 @@ export class AutomationService {
       passPrepared: batch.passPrepared,
       passEmailNodeId: batch.passEmailNodeId,
       waitBeforePassNodeId: batch.waitBeforePassNodeId,
-      waitDelayMs: batch.waitDelayMs,
+      waitDelayMs: 0,
     };
 
     const { totalChunks } = await this.enqueueUnpaidReminderChunksFromPages({
       funnelId: batch.funnelId,
       baseBatch: passBase,
-      delayMs: batch.waitDelayMs ?? 0,
+      delayMs: 0,
       predictedTotalChunks: predictSendChunkCount(
         unpaidCount,
         AUTOMATION_SEND_CHUNK_SIZE,
@@ -2296,9 +2531,12 @@ export class AutomationService {
     });
 
     if (totalChunks === 0) {
-      await this.finishUnpaidReminderBatchExecution(batch, 'pass', [], {
-        allowEmptySent: true,
-      });
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'pass',
+        [],
+        { allowEmptySent: true },
+      );
       return;
     }
 
@@ -2306,17 +2544,9 @@ export class AutomationService {
     await this.executionService.updateCurrentNode(
       batch.executionId,
       waitNodeId,
-      AutomationExecutionStatus.WAITING,
-      batch.waitDelayMs && batch.waitDelayMs > 0
-        ? new Date(Date.now() + batch.waitDelayMs)
-        : null,
+      AutomationExecutionStatus.RUNNING,
+      null,
     );
-
-    void this.observabilityService.onWaiting({
-      executionId: batch.executionId,
-      nodeId: waitNodeId,
-      waitDelayMs: batch.waitDelayMs ?? 0,
-    });
     void this.observabilityService.completeStep({
       executionId: batch.executionId,
       stepKey: 'payment_email',
@@ -2369,17 +2599,10 @@ export class AutomationService {
       return;
     }
 
-    if (batch.anchorStepOnTrigger) {
-      await this.executionService.updateCurrentNode(
-        batch.executionId,
-        batch.plan.startNodeId,
-      );
-    } else {
-      await this.executionService.updateCurrentNode(
-        batch.executionId,
-        batch.plan.endNodeId,
-      );
-    }
+    await this.executionService.updateCurrentNode(
+      batch.executionId,
+      batch.plan.endNodeId,
+    );
     await this.executionService.markCompleted(batch.executionId);
 
     void this.observabilityService.completeStep({
@@ -2392,8 +2615,15 @@ export class AutomationService {
     });
 
     if (batch.anchorStepOnTrigger) {
+      const schedule = await this.cronScheduler.syncAutomationCron(
+        batch.automationId,
+        { restartFromNow: true, silent: true },
+      );
+      const nextCronAt =
+        schedule?.nextCronAt?.toISOString() ??
+        'unknown (automation inactive or cron removed)';
       this.logger.log(
-        `Cron payment-reminder run completed (execution=${batch.executionId}) — next cron tick may start a new run`,
+        `${AutomationService.PAYMENT_REMINDER_CRON_LOG} CYCLE COMPLETE automation=${batch.automationId} execution=${batch.executionId} nextCronAt=${nextCronAt} action=full_cycle_done_reschedule_next_rerun_from_cron_node`,
       );
     }
   }

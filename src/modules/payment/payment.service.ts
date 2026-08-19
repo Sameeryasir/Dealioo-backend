@@ -482,30 +482,6 @@ export class PaymentService implements OnModuleInit {
 
     const customerEmail = checkoutIdentity.customerEmail.trim().toLowerCase();
 
-    const alreadyPaid = await this.funnelPaymentRepository.findOne({
-      where: {
-        funnelId: checkoutIdentity.funnelId,
-        businessId: checkoutIdentity.businessId,
-        customerEmail,
-        status: FunnelPaymentStatus.PAID,
-      },
-      order: { createdAt: 'DESC' },
-    });
-    if (alreadyPaid) {
-      await this.attachCheckoutSessionPayment(
-        checkoutIdentity.checkoutSessionToken,
-        alreadyPaid.id,
-      );
-      return {
-        checkoutSessionId: alreadyPaid.stripeCheckoutSessionId?.trim() || '',
-        paymentIntentId: alreadyPaid.stripePaymentIntentId ?? undefined,
-        paymentId: alreadyPaid.id,
-        stripeAccountId,
-        reused: true,
-        alreadyCompleted: true,
-      };
-    }
-
     const payment = await this.pendingFunnelPaymentService.ensurePendingPayment({
       funnelId: checkoutIdentity.funnelId,
       businessId: checkoutIdentity.businessId,

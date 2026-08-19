@@ -46,8 +46,8 @@ export class AutomationCronSchedulerService implements OnModuleInit {
 
   async syncAutomationCron(
     automationId: number,
-    options?: { silent?: boolean },
-  ): Promise<VerifiedCronSchedule | null> {
+    options?: { silent?: boolean; restartFromNow?: boolean },
+  ): Promise<(VerifiedCronSchedule & { nextCronAt: Date | null }) | null> {
     const verified = await this.resolvePublishedCronSchedule(automationId);
 
     if (!verified) {
@@ -56,15 +56,21 @@ export class AutomationCronSchedulerService implements OnModuleInit {
     }
 
     const intervalMs = cronIntervalMs(verified.config);
-    await this.queueService.upsertCronSchedule(automationId, intervalMs);
+    const nextCronAt = await this.queueService.upsertCronSchedule(
+      automationId,
+      intervalMs,
+      {
+        restartFromNow: options?.restartFromNow === true,
+      },
+    );
 
     if (!options?.silent) {
       this.logger.log(
-        `Cron schedule synced for automation ${automationId} (every ${verified.interval} ${verified.unit}, ${intervalMs}ms)`,
+        `Cron schedule synced for automation ${automationId} (every ${verified.interval} ${verified.unit}, ${intervalMs}ms${nextCronAt ? `, next tick ${nextCronAt.toISOString()}` : ''})`,
       );
     }
 
-    return verified;
+    return { ...verified, nextCronAt };
   }
 
   /** Read cron config from DB only — does not touch the BullMQ scheduler. */
