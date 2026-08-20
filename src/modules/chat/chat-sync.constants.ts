@@ -1,1 +1,3 @@
 export const CHAT_MESSAGE_SYNC_PAGE_SIZE = 25;
+
+export const CHAT_CONVERSATION_SYNC_PAGE_SIZE = 25;

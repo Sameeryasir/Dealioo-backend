@@ -108,6 +108,7 @@ export class ChatController {
   async syncBusinessConversations(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('afterConversationId', ParseIntPipe) afterConversationId: number,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -119,6 +120,7 @@ export class ChatController {
     return this.chatService.syncBusinessChatCustomers(
       businessId,
       afterConversationId,
+      limit,
     );
   }
 

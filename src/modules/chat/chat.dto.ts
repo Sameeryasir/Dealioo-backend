@@ -87,6 +87,7 @@ export class PaginatedChatCustomersDto {
 
 export class SyncChatCustomersDto {
   data: ChatCustomerSummaryDto[];
+  hasMore?: boolean;
 }
 
 export class GuestConversationDto {

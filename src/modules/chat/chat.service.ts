@@ -5,7 +5,7 @@ import {
   buildPaginationMeta,
   normalizePagination,
 } from '../../common/pagination';
-import { CHAT_MESSAGE_SYNC_PAGE_SIZE } from './chat-sync.constants';
+import { CHAT_CONVERSATION_SYNC_PAGE_SIZE, CHAT_MESSAGE_SYNC_PAGE_SIZE } from './chat-sync.constants';
 import {
   ActivityEvent,
   ActivityEventType,
@@ -190,6 +190,7 @@ export class ChatService {
   async syncBusinessChatCustomers(
     businessId: number,
     afterConversationId: number,
+    limit: number = CHAT_CONVERSATION_SYNC_PAGE_SIZE,
   ): Promise<SyncChatCustomersDto> {
     const cursor = await this.conversationRepository.findOne({
       where: {
@@ -200,8 +201,13 @@ export class ChatService {
     });
 
     if (!cursor) {
-      return { data: [] };
+      return { data: [], hasMore: false };
     }
+
+    const pageSize = Math.max(
+      1,
+      Math.min(limit, CHAT_CONVERSATION_SYNC_PAGE_SIZE),
+    );
 
     const conversations = await this.conversationRepository.find({
       where: {
@@ -211,13 +217,18 @@ export class ChatService {
         createdAt: MoreThan(cursor.createdAt),
       },
       relations: ['customer', 'lastAutomation'],
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'ASC', id: 'ASC' },
+      take: pageSize + 1,
     });
 
+    const hasMore = conversations.length > pageSize;
+    const page = hasMore ? conversations.slice(0, pageSize) : conversations;
+
     return {
-      data: conversations.map((conversation) =>
+      data: page.map((conversation) =>
         this.toChatCustomerSummary(conversation),
       ),
+      hasMore,
     };
   }
 
