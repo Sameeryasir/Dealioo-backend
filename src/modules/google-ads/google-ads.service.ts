@@ -16,6 +16,11 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
+import {
+  GoogleAdsConversionGoalDto,
+  GoogleAdsConversionGoalsResponseDto,
+} from './dto/google-ads-conversion-goals.dto';
+import { GoogleAdsBusinessProfileDto } from './dto/google-ads-business-profile.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
@@ -45,9 +50,30 @@ import {
   fromMicros,
   ResourceNames,
 } from './google-ads-sdk.client';
+import { enums } from 'google-ads-api';
 
 const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
 const GOOGLE_ADS_SDK_TIMEOUT_MS = 12_000;
+
+function buildEnumNameByNumber(enumObject: Record<string, string | number>) {
+  const byNumber = new Map<number, string>();
+  for (const [key, value] of Object.entries(enumObject)) {
+    if (typeof value === 'number' && Number.isFinite(value) && !/^\d+$/.test(key)) {
+      byNumber.set(value, key);
+    }
+  }
+  return byNumber;
+}
+
+const CONVERSION_CATEGORY_BY_NUMBER = buildEnumNameByNumber(
+  enums.ConversionActionCategory as unknown as Record<string, string | number>,
+);
+const CONVERSION_ORIGIN_BY_NUMBER = buildEnumNameByNumber(
+  enums.ConversionOrigin as unknown as Record<string, string | number>,
+);
+const ASSET_FIELD_TYPE_BY_NUMBER = buildEnumNameByNumber(
+  enums.AssetFieldType as unknown as Record<string, string | number>,
+);
 
 type GoogleAdsSearchRow = {
   campaign?: {
@@ -70,6 +96,83 @@ type GoogleAdsSearchRow = {
     currencyCode?: string;
     currency_code?: string;
     manager?: boolean;
+  };
+  customerConversionGoal?: {
+    category?: string | number;
+    origin?: string | number;
+    biddable?: boolean;
+  };
+  customer_conversion_goal?: {
+    category?: string | number;
+    origin?: string | number;
+    biddable?: boolean;
+  };
+  conversionAction?: {
+    name?: string;
+    category?: string | number;
+    origin?: string | number;
+    status?: string | number;
+  };
+  conversion_action?: {
+    name?: string;
+    category?: string | number;
+    origin?: string | number;
+    status?: string | number;
+  };
+  customerAsset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  customer_asset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  campaignAsset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  campaign_asset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  assetGroupAsset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  asset_group_asset?: {
+    fieldType?: string | number;
+    field_type?: string | number;
+    status?: string | number;
+  };
+  asset?: {
+    name?: string;
+    type?: string | number;
+    id?: string | number;
+    resourceName?: string;
+    resource_name?: string;
+    textAsset?: { text?: string };
+    text_asset?: { text?: string };
+    imageAsset?: {
+      fullSize?: { url?: string; heightPixels?: number; widthPixels?: number };
+      full_size?: { url?: string; height_pixels?: number; width_pixels?: number };
+    };
+    image_asset?: {
+      fullSize?: { url?: string; heightPixels?: number; widthPixels?: number };
+      full_size?: { url?: string; height_pixels?: number; width_pixels?: number };
+    };
+    structuredSnippetAsset?: {
+      header?: string;
+      values?: string[];
+    };
+    structured_snippet_asset?: {
+      header?: string;
+      values?: string[];
+    };
   };
 };
 
@@ -602,6 +705,548 @@ export class GoogleAdsService {
       datePreset: GOOGLE_AD_STATS_DATE_PRESET,
       campaigns,
     };
+  }
+
+  async getConversionGoals(
+    business: Business,
+  ): Promise<GoogleAdsConversionGoalsResponseDto> {
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    const goals = await this.fetchConversionGoals(
+      refreshToken,
+      customerId!,
+      loginCustomerId,
+    );
+
+    return {
+      customerId,
+      goals,
+    };
+  }
+
+  /**
+   * Change summary: returns business name + inferred category from connected Ads.
+   * Why: Campaign information prefills from Ads (phone lookup reverted).
+   * Related: GoogleAdsController GET ads/business-profile/:businessId
+   */
+  async getAdsBusinessProfile(
+    business: Business,
+  ): Promise<GoogleAdsBusinessProfileDto> {
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    try {
+      return await this.fetchAdsBusinessProfile(
+        refreshToken,
+        customerId!,
+        loginCustomerId,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Google Ads business profile failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return {
+        customerId: customerId ?? null,
+        businessName: null,
+        businessCategory: null,
+        websiteUrl: null,
+      };
+    }
+  }
+
+  private async fetchAdsBusinessProfile(
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string = customerId,
+  ): Promise<GoogleAdsBusinessProfileDto> {
+    let businessName: string | null = null;
+    const categoryHints: string[] = [];
+
+    try {
+      const customerMeta = await this.fetchCustomerMeta(
+        refreshToken,
+        customerId,
+        loginCustomerId,
+      );
+      businessName = customerMeta.name;
+    } catch (err) {
+      this.logger.warn(
+        `Google Ads customer meta for business profile failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    try {
+      const brandRows = await this.searchAdsBrandTextRows(
+        refreshToken,
+        customerId,
+        loginCustomerId,
+      );
+
+      for (const row of brandRows) {
+        const link =
+          row.customerAsset ??
+          row.customer_asset ??
+          row.campaignAsset ??
+          row.campaign_asset ??
+          row.assetGroupAsset ??
+          row.asset_group_asset;
+        const asset = row.asset;
+        const fieldType = this.normalizeAssetFieldType(
+          link?.fieldType ?? link?.field_type,
+        );
+        const text =
+          asset?.textAsset?.text?.trim() ||
+          asset?.text_asset?.text?.trim() ||
+          null;
+        const snippet =
+          asset?.structuredSnippetAsset ?? asset?.structured_snippet_asset;
+        const snippetHeader = snippet?.header?.trim() || '';
+        const snippetValues = Array.isArray(snippet?.values)
+          ? snippet.values.map((v) => String(v || '').trim()).filter(Boolean)
+          : [];
+
+        if (fieldType === 'BUSINESS_NAME' && text) {
+          businessName = text;
+        }
+
+        if (
+          fieldType === 'STRUCTURED_SNIPPET' &&
+          /^(types?|services?|brands?|styles?)$/i.test(snippetHeader)
+        ) {
+          categoryHints.push(...snippetValues);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Google Ads brand text lookup failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    if (businessName) {
+      categoryHints.unshift(businessName);
+    }
+
+    return {
+      customerId,
+      businessName,
+      businessCategory: this.inferBusinessCategoryFromAdsHints(categoryHints),
+      websiteUrl: null,
+    };
+  }
+
+  private async searchAdsBrandTextRows(
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string,
+  ): Promise<GoogleAdsSearchRow[]> {
+    return this.searchAdsAssetLinkRows(
+      refreshToken,
+      customerId,
+      loginCustomerId,
+      `
+      asset.name,
+      asset.text_asset.text,
+      asset.structured_snippet_asset.header,
+      asset.structured_snippet_asset.values
+      `.trim(),
+      `field_type IN ('BUSINESS_NAME', 'STRUCTURED_SNIPPET')`,
+      ['customer_asset'],
+    );
+  }
+
+  private async searchAdsAssetLinkRows(
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string,
+    assetSelect: string,
+    fieldTypeFilter: string,
+    resources: Array<'customer_asset' | 'campaign_asset' | 'asset_group_asset'> = [
+      'customer_asset',
+      'campaign_asset',
+      'asset_group_asset',
+    ],
+  ): Promise<GoogleAdsSearchRow[]> {
+    const queryByResource: Record<string, string> = {
+      customer_asset: `
+      SELECT
+        customer_asset.field_type,
+        ${assetSelect}
+      FROM customer_asset
+      WHERE customer_asset.status != 'REMOVED'
+        AND customer_asset.${fieldTypeFilter}
+      `.trim(),
+      campaign_asset: `
+      SELECT
+        campaign_asset.field_type,
+        ${assetSelect}
+      FROM campaign_asset
+      WHERE campaign_asset.status != 'REMOVED'
+        AND campaign_asset.${fieldTypeFilter}
+      `.trim(),
+      asset_group_asset: `
+      SELECT
+        asset_group_asset.field_type,
+        ${assetSelect}
+      FROM asset_group_asset
+      WHERE asset_group_asset.status != 'REMOVED'
+        AND asset_group_asset.${fieldTypeFilter}
+      `.trim(),
+    };
+
+    const settled = await Promise.all(
+      resources.map(async (resource) => {
+        try {
+          return await this.googleAdsSearch<GoogleAdsSearchRow>(
+            refreshToken,
+            customerId,
+            queryByResource[resource],
+            loginCustomerId,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Google Ads ${resource} lookup failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return [] as GoogleAdsSearchRow[];
+        }
+      }),
+    );
+
+    return settled.flat();
+  }
+
+  /**
+   * Maps Ads account signals (name + structured snippet values) onto our
+   * Campaign Information category options. Google Ads has no single category field.
+   */
+  private inferBusinessCategoryFromAdsHints(hints: string[]): string | null {
+    const haystack = hints.join(' ').toLowerCase();
+    if (!haystack.trim()) {
+      return null;
+    }
+
+    const rules: Array<{ category: string; needles: string[] }> = [
+      {
+        category: 'Food & Dining',
+        needles: [
+          'restaurant',
+          'cafe',
+          'coffee',
+          'food',
+          'dining',
+          'pizza',
+          'bakery',
+          'bar ',
+          'grill',
+        ],
+      },
+      {
+        category: 'Retail',
+        needles: [
+          'retail',
+          'shop',
+          'store',
+          'boutique',
+          'ecommerce',
+          'e-commerce',
+          'marketplace',
+        ],
+      },
+      {
+        category: 'Health & Wellness',
+        needles: [
+          'clinic',
+          'dental',
+          'doctor',
+          'health',
+          'wellness',
+          'medical',
+          'pharmacy',
+          'fitness',
+          'gym',
+        ],
+      },
+      {
+        category: 'Beauty & Personal Care',
+        needles: [
+          'salon',
+          'spa',
+          'beauty',
+          'barber',
+          'nail',
+          'skincare',
+          'hair',
+        ],
+      },
+      {
+        category: 'Home Services',
+        needles: [
+          'plumb',
+          'hvac',
+          'electric',
+          'roof',
+          'cleaning',
+          'landscap',
+          'handyman',
+          'home service',
+          'repair',
+        ],
+      },
+      {
+        category: 'Professional Services',
+        needles: [
+          'law',
+          'attorney',
+          'accountant',
+          'consult',
+          'agency',
+          'insurance',
+          'finance',
+          'legal',
+        ],
+      },
+      {
+        category: 'Travel & Hospitality',
+        needles: [
+          'hotel',
+          'travel',
+          'tour',
+          'motel',
+          'resort',
+          'hospitality',
+          'airbnb',
+        ],
+      },
+      {
+        category: 'Automotive',
+        needles: [
+          'auto',
+          'car ',
+          'vehicle',
+          'dealer',
+          'mechanic',
+          'garage',
+          'tire',
+        ],
+      },
+      {
+        category: 'Education',
+        needles: [
+          'school',
+          'tutor',
+          'education',
+          'university',
+          'college',
+          'course',
+          'training',
+        ],
+      },
+      {
+        category: 'Technology',
+        needles: [
+          'software',
+          'saas',
+          'tech',
+          'it ',
+          'digital',
+          'app ',
+          'cloud',
+          'cyber',
+        ],
+      },
+    ];
+
+    for (const rule of rules) {
+      if (rule.needles.some((needle) => haystack.includes(needle))) {
+        return rule.category;
+      }
+    }
+
+    return 'Other';
+  }
+
+  private normalizeAssetFieldType(
+    value: string | number | null | undefined,
+  ): string {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return ASSET_FIELD_TYPE_BY_NUMBER.get(value) ?? '';
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return ASSET_FIELD_TYPE_BY_NUMBER.get(Number(trimmed)) ?? '';
+      }
+      return trimmed.toUpperCase();
+    }
+    return '';
+  }
+
+  private async fetchConversionGoals(
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string = customerId,
+  ): Promise<GoogleAdsConversionGoalDto[]> {
+    const goalQuery = `
+      SELECT
+        customer_conversion_goal.category,
+        customer_conversion_goal.origin,
+        customer_conversion_goal.biddable
+      FROM customer_conversion_goal
+    `.trim();
+
+    const actionQuery = `
+      SELECT
+        conversion_action.name,
+        conversion_action.category,
+        conversion_action.origin,
+        conversion_action.status
+      FROM conversion_action
+      WHERE conversion_action.status = 'ENABLED'
+    `.trim();
+
+    const [goalRows, actionRows] = await Promise.all([
+      this.googleAdsSearch<GoogleAdsSearchRow>(
+        refreshToken,
+        customerId,
+        goalQuery,
+        loginCustomerId,
+      ),
+      this.googleAdsSearch<GoogleAdsSearchRow>(
+        refreshToken,
+        customerId,
+        actionQuery,
+        loginCustomerId,
+      ),
+    ]);
+
+    const actionCounts = new Map<string, number>();
+    for (const row of actionRows) {
+      const action = row.conversionAction ?? row.conversion_action;
+      const category = this.normalizeConversionCategory(action?.category);
+      const origin = this.normalizeConversionOrigin(action?.origin);
+      if (!category || !origin) {
+        continue;
+      }
+      const key = `${category}::${origin}`;
+      actionCounts.set(key, (actionCounts.get(key) ?? 0) + 1);
+    }
+
+    const goals: GoogleAdsConversionGoalDto[] = [];
+    for (const row of goalRows) {
+      const goal = row.customerConversionGoal ?? row.customer_conversion_goal;
+      const category = this.normalizeConversionCategory(goal?.category);
+      const origin = this.normalizeConversionOrigin(goal?.origin);
+      if (!category || !origin) {
+        continue;
+      }
+
+      const key = `${category}::${origin}`;
+      const actionCount = actionCounts.get(key) ?? 0;
+      if (actionCount < 1) {
+        continue;
+      }
+
+      const accountDefault = goal?.biddable === true;
+      goals.push({
+        category,
+        origin,
+        name: this.conversionCategoryLabel(category),
+        sourceLabel: this.conversionOriginLabel(origin),
+        actionCount,
+        accountDefault,
+      });
+    }
+
+    goals.sort((left, right) => {
+      if (left.accountDefault !== right.accountDefault) {
+        return left.accountDefault ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    return goals;
+  }
+
+  private normalizeConversionCategory(
+    value: string | number | null | undefined,
+  ): string {
+    return this.normalizeGoogleAdsEnum(value, CONVERSION_CATEGORY_BY_NUMBER);
+  }
+
+  private normalizeConversionOrigin(
+    value: string | number | null | undefined,
+  ): string {
+    return this.normalizeGoogleAdsEnum(value, CONVERSION_ORIGIN_BY_NUMBER);
+  }
+
+  private normalizeGoogleAdsEnum(
+    value: string | number | null | undefined,
+    byNumber: Map<number, string>,
+  ): string {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return byNumber.get(value) ?? '';
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return byNumber.get(Number(trimmed)) ?? '';
+      }
+      return trimmed.toUpperCase();
+    }
+    return '';
+  }
+
+  private conversionCategoryLabel(category: string): string {
+    const labels: Record<string, string> = {
+      PURCHASE: 'Purchases',
+      ADD_TO_CART: 'Add to cart',
+      BEGIN_CHECKOUT: 'Begin checkout',
+      SUBSCRIBE_PAID: 'Paid subscriptions',
+      PAGE_VIEW: 'Page views',
+      LEAD: 'Leads',
+      SIGNUP: 'Sign-ups',
+      CONTACT: 'Contacts',
+      SUBMIT_LEAD_FORM: 'Submit lead form',
+      BOOK_APPOINTMENT: 'Book appointment',
+      REQUEST_QUOTE: 'Request quote',
+      GET_DIRECTIONS: 'Get directions',
+      OUTBOUND_CLICK: 'Outbound clicks',
+      PHONE_CALL_LEAD: 'Phone call leads',
+      STORE_SALE: 'Store sales',
+      STORE_VISIT: 'Store visits',
+      ENGAGEMENT: 'Engagements',
+      IMPORTED_LEAD: 'Imported leads',
+      QUALIFIED_LEAD: 'Qualified leads',
+      CONVERTED_LEAD: 'Converted leads',
+      DEFAULT: 'Default',
+      UNKNOWN: 'Unknown',
+      UNSPECIFIED: 'Unspecified',
+    };
+    return labels[category] ?? category.replace(/_/g, ' ').toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  private conversionOriginLabel(origin: string): string {
+    const labels: Record<string, string> = {
+      WEBSITE: 'Website',
+      GOOGLE_HOSTED: 'Google hosted',
+      APP: 'App',
+      CALL_FROM_ADS: 'Calls from ads',
+      STORE: 'Store',
+      YOUTUBE_HOSTED: 'YouTube hosted',
+      UNKNOWN: 'Unknown',
+      UNSPECIFIED: 'Unspecified',
+    };
+    return labels[origin] ?? origin.replace(/_/g, ' ').toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
   }
 
   async deleteCampaignForBusiness(

@@ -21,6 +21,8 @@ import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
+import { GoogleAdsConversionGoalsResponseDto } from './dto/google-ads-conversion-goals.dto';
+import { GoogleAdsBusinessProfileDto } from './dto/google-ads-business-profile.dto';
 import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status.dto';
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
@@ -425,6 +427,46 @@ export class GoogleAdsController {
     }
 
     return this.googleAdsService.getAdCampaignStats(business);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('ads/conversion-goals/:businessId')
+  async conversionGoals(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<GoogleAdsConversionGoalsResponseDto> {
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
+      businessId,
+    );
+
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
+    }
+
+    return this.googleAdsService.getConversionGoals(business);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('ads/business-profile/:businessId')
+  async adsBusinessProfile(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<GoogleAdsBusinessProfileDto> {
+    const business = await this.businessService.findBusinessForUser(
+      req.user,
+      businessId,
+    );
+
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not own this business.',
+      );
+    }
+
+    return this.googleAdsService.getAdsBusinessProfile(business);
   }
 
   @UseGuards(AuthGuard('jwt'))

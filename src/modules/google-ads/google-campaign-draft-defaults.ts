@@ -103,6 +103,7 @@ export function createDefaultGoogleCampaignDraftData(): GoogleCampaignBuilderDra
     ipExclusions: '',
     urlTrackingParams: '',
     conversionGoals: '',
+    selectedConversionGoals: [],
     brandExclusions: '',
     frequencyCapping: '',
     contentExclusions: '',

@@ -668,15 +668,15 @@ export class ChatService {
         : Number(metaFunnelIdRaw);
 
     const automationName =
-      metaAutomationName ||
       message.automation?.name?.trim() ||
+      metaAutomationName ||
       (message.automationId != null
         ? `Automation #${message.automationId}`
         : null);
 
     const campaignName =
-      metaCampaignName ||
       message.automation?.campaign?.campaignName?.trim() ||
+      metaCampaignName ||
       null;
 
     const funnelId =

@@ -201,6 +201,12 @@ export type GoogleCampaignBuilderDraftData = {
   ipExclusions: string;
   urlTrackingParams: string;
   conversionGoals: string;
+  selectedConversionGoals: Array<{
+    category: string;
+    origin: string;
+    accountDefault?: boolean;
+    name?: string;
+  }>;
   brandExclusions: string;
   frequencyCapping: string;
   contentExclusions: string;

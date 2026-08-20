@@ -419,8 +419,10 @@ export class GooglePublishService {
       await this.draftRepository.save(draft);
     }
 
+    await this.beginStep(draft, 'campaign');
+    await this.applyCampaignConversionGoals(ctx, campaignId!);
+
     if (!adGroupId) {
-      await this.beginStep(draft, 'campaign');
       await this.createCampaignCriteria(ctx, campaignId!);
       await this.completeStep(draft, 'campaign');
     }
@@ -533,6 +535,256 @@ export class GooglePublishService {
       );
     }
     return id;
+  }
+
+  private async applyCampaignConversionGoals(
+    ctx: PublishContext,
+    campaignId: string,
+  ): Promise<void> {
+    const goalQuery = `
+      SELECT
+        customer_conversion_goal.category,
+        customer_conversion_goal.origin,
+        customer_conversion_goal.biddable
+      FROM customer_conversion_goal
+    `.trim();
+
+    type GoalRow = {
+      customerConversionGoal?: {
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+      customer_conversion_goal?: {
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+    };
+
+    let rows: GoalRow[] = [];
+    try {
+      rows = (await ctx.customer.query(goalQuery)) as GoalRow[];
+    } catch (err) {
+      this.logger.warn(
+        `Skipping conversion goals apply (query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
+      );
+      return;
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      this.logger.log(
+        `No customer conversion goals found for customer=${ctx.customerId}; skipping apply.`,
+      );
+      return;
+    }
+
+    const selected = Array.isArray(ctx.draftData.selectedConversionGoals)
+      ? ctx.draftData.selectedConversionGoals
+      : [];
+    const wantKeys = new Set(
+      selected
+        .map((goal) => {
+          const category = String(goal.category ?? '')
+            .trim()
+            .toUpperCase();
+          const origin = String(goal.origin ?? '')
+            .trim()
+            .toUpperCase();
+          return category && origin ? `${category}::${origin}` : '';
+        })
+        .filter(Boolean),
+    );
+
+    if (wantKeys.size === 0) {
+      for (const key of this.objectiveConversionGoalKeys(
+        ctx.draftData.goal,
+        rows,
+      )) {
+        wantKeys.add(key);
+      }
+    }
+
+    if (wantKeys.size === 0) {
+      for (const row of rows) {
+        const goal = row.customerConversionGoal ?? row.customer_conversion_goal;
+        if (goal?.biddable !== true) continue;
+        const category = this.normalizeAdsEnumName(
+          goal.category,
+          enums.ConversionActionCategory as unknown as Record<
+            string,
+            string | number
+          >,
+        );
+        const origin = this.normalizeAdsEnumName(
+          goal.origin,
+          enums.ConversionOrigin as unknown as Record<string, string | number>,
+        );
+        if (category && origin) {
+          wantKeys.add(`${category}::${origin}`);
+        }
+      }
+    }
+
+    if (wantKeys.size === 0) {
+      this.logger.log(
+        `No conversion goals to apply for campaign=${campaignId}; skipping.`,
+      );
+      return;
+    }
+
+    const updates: Array<{ resource_name: string; biddable: boolean }> = [];
+    for (const row of rows) {
+      const goal = row.customerConversionGoal ?? row.customer_conversion_goal;
+      const categoryName = this.normalizeAdsEnumName(
+        goal?.category,
+        enums.ConversionActionCategory as unknown as Record<
+          string,
+          string | number
+        >,
+      );
+      const originName = this.normalizeAdsEnumName(
+        goal?.origin,
+        enums.ConversionOrigin as unknown as Record<string, string | number>,
+      );
+      if (!categoryName || !originName) {
+        continue;
+      }
+
+      const categoryEnum = (
+        enums.ConversionActionCategory as unknown as Record<string, number>
+      )[categoryName];
+      const originEnum = (
+        enums.ConversionOrigin as unknown as Record<string, number>
+      )[originName];
+      if (
+        typeof categoryEnum !== 'number' ||
+        typeof originEnum !== 'number'
+      ) {
+        continue;
+      }
+
+      const key = `${categoryName}::${originName}`;
+      updates.push({
+        resource_name: ResourceNames.campaignConversionGoal(
+          ctx.customerId,
+          campaignId,
+          categoryEnum,
+          originEnum,
+        ),
+        biddable: wantKeys.has(key),
+      });
+    }
+
+    if (updates.length === 0) {
+      return;
+    }
+
+    try {
+      await ctx.customer.campaignConversionGoals.update(updates);
+      this.logger.log(
+        `Applied ${updates.length} campaign conversion goal(s) for campaign=${campaignId} (biddable=${[...wantKeys].join(',')})`,
+      );
+    } catch (err) {
+      throw new BadRequestException(
+        `[campaign/conversion_goals] ${formatGoogleAdsSdkError(
+          err,
+          'Could not apply conversion goals to the campaign.',
+        )}`,
+      );
+    }
+  }
+
+  private objectiveConversionGoalKeys(
+    goal: GoogleCampaignBuilderDraftData['goal'],
+    rows: Array<{
+      customerConversionGoal?: {
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+      customer_conversion_goal?: {
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+    }>,
+  ): string[] {
+    const allowedByGoal: Record<string, string[]> = {
+      SALES: [
+        'PURCHASE',
+        'ADD_TO_CART',
+        'BEGIN_CHECKOUT',
+        'SUBSCRIBE_PAID',
+        'STORE_SALE',
+      ],
+      LEADS: [
+        'LEAD',
+        'SIGNUP',
+        'CONTACT',
+        'SUBMIT_LEAD_FORM',
+        'BOOK_APPOINTMENT',
+        'REQUEST_QUOTE',
+        'PHONE_CALL_LEAD',
+        'IMPORTED_LEAD',
+        'QUALIFIED_LEAD',
+        'CONVERTED_LEAD',
+      ],
+      WEBSITE_TRAFFIC: ['PAGE_VIEW', 'OUTBOUND_CLICK', 'ENGAGEMENT'],
+      LOCAL_VISITS: [
+        'STORE_VISIT',
+        'GET_DIRECTIONS',
+        'STORE_SALE',
+        'PHONE_CALL_LEAD',
+        'CONTACT',
+        'LEAD',
+      ],
+      AWARENESS: ['ENGAGEMENT', 'PAGE_VIEW'],
+      APP_PROMOTION: ['DOWNLOAD', 'ENGAGEMENT', 'PURCHASE', 'SIGNUP'],
+    };
+
+    const allowed = new Set(allowedByGoal[goal ?? ''] ?? []);
+    const keys: string[] = [];
+    for (const row of rows) {
+      const item = row.customerConversionGoal ?? row.customer_conversion_goal;
+      const category = this.normalizeAdsEnumName(
+        item?.category,
+        enums.ConversionActionCategory as unknown as Record<
+          string,
+          string | number
+        >,
+      );
+      const origin = this.normalizeAdsEnumName(
+        item?.origin,
+        enums.ConversionOrigin as unknown as Record<string, string | number>,
+      );
+      if (!category || !origin) continue;
+      if (allowed.size > 0 && !allowed.has(category)) continue;
+      keys.push(`${category}::${origin}`);
+    }
+    return keys;
+  }
+
+  private normalizeAdsEnumName(
+    value: string | number | null | undefined,
+    enumObject: Record<string, string | number>,
+  ): string {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      for (const [key, enumValue] of Object.entries(enumObject)) {
+        if (enumValue === value && !/^\d+$/.test(key)) {
+          return key;
+        }
+      }
+      return '';
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return this.normalizeAdsEnumName(Number(trimmed), enumObject);
+      }
+      return trimmed.toUpperCase();
+    }
+    return '';
   }
 
   private async createCampaignCriteria(

@@ -539,7 +539,78 @@ export class BusinessService {
       actorUserId: user.id,
     });
 
-    await this.businessRepository.delete(businessId);
+    await this.businessRepository.manager.transaction(async (manager) => {
+      await manager.query(
+        `
+          DELETE FROM customer_visit_campaigns
+          WHERE customer_visit_id IN (
+            SELECT id FROM customer_visits WHERE business_id = $1
+          )
+        `,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM customer_visits WHERE business_id = $1`,
+        [businessId],
+      );
+
+      await manager.query(`DELETE FROM coupons WHERE business_id = $1`, [
+        businessId,
+      ]);
+
+      await manager.query(
+        `DELETE FROM funnel_payment WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(`DELETE FROM funnel_order WHERE business_id = $1`, [
+        businessId,
+      ]);
+
+      await manager.query(
+        `DELETE FROM facebook_campaigns WHERE business_id = $1`,
+        [businessId],
+      );
+
+      await manager.query(
+        `DELETE FROM meta_campaign_errors WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM meta_campaign_media WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM meta_publish_attempts WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM meta_campaign_drafts WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM google_campaign_drafts WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM meta_ad_campaign_stats_snapshots WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM meta_funnel_events WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM scanner_purchase_requests WHERE business_id = $1`,
+        [businessId],
+      );
+      await manager.query(
+        `DELETE FROM checkout_access_token WHERE business_id = $1`,
+        [businessId],
+      );
+
+      await manager.getRepository(Business).delete(businessId);
+    });
+
     return business;
   }
 
