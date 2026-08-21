@@ -22,6 +22,7 @@ export class GoogleOAuthService {
   private readonly clientSecret: string;
   private readonly callbackURL: string;
   private readonly authURI: string;
+  private readonly tokenURI: string;
   private readonly stateSecret: string;
 
   constructor(private readonly configService: ConfigService) {
@@ -34,6 +35,9 @@ export class GoogleOAuthService {
     this.authURI =
       this.configService.get<string>('GOOGLE_AUTH_URI')?.trim() ||
       'https://accounts.google.com/o/oauth2/auth';
+    this.tokenURI =
+      this.configService.get<string>('GOOGLE_TOKEN_URI')?.trim() ||
+      'https://oauth2.googleapis.com/token';
     this.stateSecret =
       this.configService.get<string>('JWT_SECRET')?.trim() ||
       this.configService.get<string>('SESSION_SECRET')?.trim() ||
@@ -129,7 +133,7 @@ export class GoogleOAuthService {
   }
 
   async exchangeCodeForProfile(code: string): Promise<GoogleAuthProfile> {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenRes = await fetch(this.tokenURI.replace(/\/$/, ''), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
