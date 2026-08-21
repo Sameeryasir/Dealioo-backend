@@ -161,10 +161,7 @@ export function AutomationEmailLayout({
               <Button
                 href={googleWalletSaveUrl.trim()}
                 target="_blank"
-                style={{
-                  ...automationCtaButton,
-                  backgroundColor: '#1f1f1f',
-                }}
+                style={automationCtaButton}
               >
                 Add to Google Wallet
               </Button>

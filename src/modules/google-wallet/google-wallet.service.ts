@@ -4,10 +4,20 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomBytes } from 'crypto';
+import { InjectRepository } from '@nestjs/typeorm';
 import * as jwt from 'jsonwebtoken';
+import { Repository } from 'typeorm';
+import { Coupon } from '../../db/entities/coupon.entity';
 import { CreateGoogleWalletSaveLinkDto } from './dto/create-google-wallet-save-link.dto';
 import { GoogleWalletSaveLinkResultDto } from './dto/google-wallet-save-link-result.dto';
+
+type GoogleWalletCallbackBody = {
+  eventType?: string;
+  objectId?: string;
+  classId?: string;
+  nonce?: string;
+  signedMessage?: string;
+};
 
 @Injectable()
 export class GoogleWalletService {
@@ -19,7 +29,11 @@ export class GoogleWalletService {
   private readonly privateKeyPem: string;
   private readonly origins: string[];
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(Coupon)
+    private readonly couponRepository: Repository<Coupon>,
+  ) {
     this.issuerId =
       this.configService.get<string>('GOOGLE_WALLET_ISSUER_ID')?.trim() || '';
     this.classSuffix =
@@ -45,9 +59,9 @@ export class GoogleWalletService {
     }
   }
 
-  createSaveLink(
+  async createSaveLink(
     pass: CreateGoogleWalletSaveLinkDto,
-  ): GoogleWalletSaveLinkResultDto {
+  ): Promise<GoogleWalletSaveLinkResultDto> {
     const passId = pass.passId?.trim();
     const offerName = pass.offerName?.trim();
     const businessName = pass.businessName?.trim();
@@ -60,11 +74,10 @@ export class GoogleWalletService {
       );
     }
 
-    const objectSuffix = this.buildUniqueObjectSuffix(passId);
     const classSuffix = this.classSuffix.includes('.')
       ? this.classSuffix.split('.').pop()!
       : this.classSuffix;
-    const objectId = `${this.issuerId}.${objectSuffix}`;
+    const objectId = await this.resolveStableObjectId(passId);
     const classId = `${this.issuerId}.${classSuffix}`;
 
     const couponIdNum = Number(passId);
@@ -73,7 +86,6 @@ export class GoogleWalletService {
       token: qrToken,
     });
 
-    // Env class is a Google Wallet genericClass (not offerClass).
     const genericObject = {
       id: objectId,
       classId,
@@ -144,6 +156,8 @@ export class GoogleWalletService {
 
     const saveUrl = `https://pay.google.com/gp/v/save/${signedJwt}`;
 
+    await this.persistObjectIdForCouponIfAbsent(passId, objectId);
+
     this.logger.log(
       `Google Wallet save link created objectId=${objectId} classId=${classId} passId=${passId}`,
     );
@@ -151,10 +165,207 @@ export class GoogleWalletService {
     return { saveUrl, objectId, classId };
   }
 
-  private buildUniqueObjectSuffix(passId: string): string {
+  async handleCallback(body: GoogleWalletCallbackBody) {
+    const parsed = this.parseCallbackBody(body);
+    const eventType = parsed.eventType;
+    const objectId = parsed.objectId;
+
+    this.logger.log(
+      `Google Wallet callback parsed eventType=${eventType || 'unknown'} objectId=${objectId || 'n/a'} classId=${parsed.classId || 'n/a'}`,
+    );
+
+    if (!objectId) {
+      this.logger.warn(
+        'Google Wallet callback: no objectId parsed — coupon flags not updated (check signed payload / delivery)',
+      );
+      return { success: true, updated: false, reason: 'missing_object_id' };
+    }
+
+    if (eventType === 'save') {
+      this.logger.log(`User added pass to Google Wallet: ${objectId}`);
+
+      const pass = await this.findCouponForWalletObjectId(objectId);
+
+      if (pass) {
+        await this.couponRepository.update(
+          { id: pass.id },
+          {
+            googleWalletObjectId: objectId,
+            googleWalletAdded: true,
+            googleWalletAddedAt: new Date(),
+            googleWalletRemovedAt: null,
+          },
+        );
+        this.logger.log(
+          `Google Wallet SAVE applied couponId=${pass.id} googleWalletAdded=true`,
+        );
+        return {
+          success: true,
+          updated: true,
+          eventType: 'save',
+          couponId: pass.id,
+        };
+      }
+
+      this.logger.warn(
+        `Google Wallet save callback: no coupon for objectId=${objectId}`,
+      );
+      return {
+        success: true,
+        updated: false,
+        reason: 'coupon_not_found',
+        eventType: 'save',
+      };
+    }
+
+    if (eventType === 'del') {
+      this.logger.log(`User removed pass from Google Wallet: ${objectId}`);
+
+      const pass = await this.findCouponForWalletObjectId(objectId);
+      if (!pass) {
+        this.logger.warn(
+          `Google Wallet del callback: no coupon for objectId=${objectId}`,
+        );
+        return {
+          success: true,
+          updated: false,
+          reason: 'coupon_not_found',
+          eventType: 'del',
+        };
+      }
+
+      await this.couponRepository.update(
+        { id: pass.id },
+        {
+          googleWalletAdded: false,
+          googleWalletRemovedAt: new Date(),
+        },
+      );
+      this.logger.log(
+        `Google Wallet DEL applied couponId=${pass.id} objectId=${objectId}`,
+      );
+      return {
+        success: true,
+        updated: true,
+        eventType: 'del',
+        couponId: pass.id,
+      };
+    }
+
+    this.logger.warn(
+      `Google Wallet callback: unhandled eventType=${eventType || '(empty)'} objectId=${objectId}`,
+    );
+    return {
+      success: true,
+      updated: false,
+      reason: 'unhandled_event_type',
+      eventType: eventType || null,
+    };
+  }
+
+  private parseCallbackBody(body: GoogleWalletCallbackBody): {
+    eventType: string;
+    objectId: string;
+    classId: string;
+  } {
+    let eventType = String(body?.eventType ?? '').trim().toLowerCase();
+    let objectId = String(body?.objectId ?? '').trim();
+    let classId = String(body?.classId ?? '').trim();
+
+    const signedMessage = body?.signedMessage?.trim();
+    if (signedMessage) {
+      try {
+        const decoded = JSON.parse(signedMessage) as GoogleWalletCallbackBody;
+        eventType =
+          eventType || String(decoded.eventType ?? '').trim().toLowerCase();
+        objectId = objectId || String(decoded.objectId ?? '').trim();
+        classId = classId || String(decoded.classId ?? '').trim();
+        this.logger.log(
+          `Google Wallet callback signedMessage parsed eventType=${eventType || '(empty)'} objectId=${objectId || '(empty)'}`,
+        );
+      } catch {
+        this.logger.warn(
+          'Google Wallet callback signedMessage was not plain JSON (may need signature unseal)',
+        );
+      }
+    }
+
+    return { eventType, objectId, classId };
+  }
+
+  private async resolveStableObjectId(passId: string): Promise<string> {
+    const couponId = Number(passId);
+    if (Number.isFinite(couponId) && couponId >= 1) {
+      const coupon = await this.couponRepository.findOne({
+        where: { id: couponId },
+        select: ['id', 'googleWalletObjectId'],
+      });
+      const existing = coupon?.googleWalletObjectId?.trim();
+      if (existing) {
+        this.logger.log(
+          `Google Wallet reusing objectId=${existing} for coupon ${couponId}`,
+        );
+        return existing;
+      }
+    }
+
     const safePassId = passId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 48);
-    const nonce = randomBytes(4).toString('hex');
-    return `dealioo_${safePassId}_${nonce}`;
+    return `${this.issuerId}.dealioo_${safePassId}`;
+  }
+
+  private async persistObjectIdForCouponIfAbsent(
+    passId: string,
+    objectId: string,
+  ): Promise<void> {
+    const couponId = Number(passId);
+    if (!Number.isFinite(couponId) || couponId < 1) {
+      return;
+    }
+
+    try {
+      await this.couponRepository
+        .createQueryBuilder()
+        .update(Coupon)
+        .set({ googleWalletObjectId: objectId })
+        .where('id = :id', { id: couponId })
+        .andWhere('google_wallet_object_id IS NULL')
+        .execute();
+    } catch (err) {
+      this.logger.warn(
+        `Could not store googleWalletObjectId for coupon ${couponId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private async findCouponForWalletObjectId(
+    objectId: string,
+  ): Promise<Coupon | null> {
+    const byExact = await this.couponRepository.findOne({
+      where: { googleWalletObjectId: objectId },
+    });
+    if (byExact) {
+      return byExact;
+    }
+
+    const match = objectId.match(/\.dealioo_(\d+)(?:_|$)/);
+    if (!match) {
+      return null;
+    }
+
+    const couponId = Number(match[1]);
+    if (!Number.isFinite(couponId) || couponId < 1) {
+      return null;
+    }
+
+    const byCouponId = await this.couponRepository.findOne({
+      where: { id: couponId },
+    });
+    if (byCouponId) {
+      this.logger.log(
+        `Google Wallet callback matched coupon ${couponId} via objectId suffix (exact objectId row missing)`,
+      );
+    }
+    return byCouponId;
   }
 
   private normalizePrivateKey(raw: string): string {

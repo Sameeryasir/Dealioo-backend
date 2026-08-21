@@ -240,6 +240,12 @@ export class AutomationEmailService {
     if (this.purposeUsesDirectEmailBody(purpose)) {
       return true;
     }
+    if (
+      prepared.templateProps.ctaUrl?.trim() ||
+      prepared.templateProps.googleWalletSaveUrl?.trim()
+    ) {
+      return true;
+    }
     return Boolean(prepared.templateProps.message?.trim());
   }
 

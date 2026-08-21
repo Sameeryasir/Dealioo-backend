@@ -1768,13 +1768,15 @@ export class AutomationEngineService {
     }
 
     try {
-      return this.googleWalletService.createSaveLink({
-        passId: String(coupon.id),
-        offerName,
-        businessName,
-        qrOrRedemptionUrl: passUrl,
-        qrToken: coupon.qrToken,
-      }).saveUrl;
+      return (
+        await this.googleWalletService.createSaveLink({
+          passId: String(coupon.id),
+          offerName,
+          businessName,
+          qrOrRedemptionUrl: passUrl,
+          qrToken: coupon.qrToken,
+        })
+      ).saveUrl;
     } catch (err) {
       this.logger.warn(
         `Google Wallet save link skipped for execution ${execution.id}: ${err instanceof Error ? err.message : String(err)}`,

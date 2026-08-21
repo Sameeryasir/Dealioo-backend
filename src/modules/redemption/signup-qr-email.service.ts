@@ -274,7 +274,7 @@ export class SignupQrEmailService {
 
     const passUrl = this.resolveGuestPassUrl(coupon);
     const businessName = await this.resolveBusinessName(coupon.businessId);
-    const googleWalletSaveUrl = this.tryCreateGoogleWalletSaveUrl({
+    const googleWalletSaveUrl = await this.tryCreateGoogleWalletSaveUrl({
       passId: String(coupon.id),
       offerName: campaignName,
       businessName,
@@ -385,7 +385,7 @@ export class SignupQrEmailService {
 
     const passUrl = buildGuestPassUrl(accessToken);
     const businessName = await this.resolveBusinessName(coupon.businessId);
-    const googleWalletSaveUrl = this.tryCreateGoogleWalletSaveUrl({
+    const googleWalletSaveUrl = await this.tryCreateGoogleWalletSaveUrl({
       passId: String(coupon.id),
       offerName: campaignName,
       businessName,
@@ -440,15 +440,15 @@ export class SignupQrEmailService {
     }
   }
 
-  private tryCreateGoogleWalletSaveUrl(params: {
+  private async tryCreateGoogleWalletSaveUrl(params: {
     passId: string;
     offerName: string;
     businessName: string;
     qrOrRedemptionUrl: string;
     qrToken: string;
-  }): string | undefined {
+  }): Promise<string | undefined> {
     try {
-      return this.googleWalletService.createSaveLink(params).saveUrl;
+      return (await this.googleWalletService.createSaveLink(params)).saveUrl;
     } catch (err) {
       this.logger.warn(
         `Google Wallet save link skipped for pass ${params.passId}: ${err instanceof Error ? err.message : String(err)}`,

@@ -2079,21 +2079,34 @@ export class AutomationService {
       }
 
       if (batchPhase === 'pass') {
+        const passRecipients: EmailRecipient[] = [];
         for (const recipient of batch.recipients) {
           if (!recipient.customerId) {
             continue;
           }
-          const coupon = await this.couponService.findByCustomerAndFunnel(
+
+          let coupon = await this.couponService.findByCustomerAndFunnel(
             recipient.customerId,
             batch.funnelId,
           );
+          if (!coupon?.qrToken?.trim()) {
+            coupon = await this.couponService.ensurePendingCouponForUnpaidFunnel(
+              batch.funnelId,
+              recipient.customerId,
+            );
+          }
+
           const token = coupon?.qrToken?.trim();
-          if (!token) {
+          if (!coupon || !token) {
+            this.logger.warn(
+              `QR pass email skipped for customer ${recipient.customerId} — no coupon/QR token`,
+            );
             continue;
           }
+
           const passUrl = buildGuestPassUrl(token);
           const offerName =
-            coupon?.campaign?.campaignName?.trim() || 'Dealioo offer';
+            coupon.campaign?.campaignName?.trim() || 'Dealioo offer';
           let businessName = 'Dealioo';
           if (batch.businessId) {
             const business = await this.businessRepository.findOne({
@@ -2101,31 +2114,48 @@ export class AutomationService {
             });
             businessName = business?.name?.trim() || businessName;
           }
+
           let googleWalletSaveUrl: string | undefined;
-          if (coupon) {
-            try {
-              googleWalletSaveUrl = this.googleWalletService.createSaveLink({
+          try {
+            googleWalletSaveUrl = (
+              await this.googleWalletService.createSaveLink({
                 passId: String(coupon.id),
                 offerName,
                 businessName,
                 qrOrRedemptionUrl: passUrl,
                 qrToken: token,
-              }).saveUrl;
-            } catch (error) {
-              const message =
-                error instanceof Error
-                  ? error.message
-                  : 'Could not create Google Wallet save link';
-              this.logger.warn(
-                `Google Wallet save link skipped for customer ${recipient.customerId}: ${message}`,
-              );
-            }
+              })
+            ).saveUrl;
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Could not create Google Wallet save link';
+            this.logger.warn(
+              `Google Wallet save link skipped for customer ${recipient.customerId}: ${message}`,
+            );
           }
+
           recipientTemplateOverrides.set(recipient.customerId, {
+            ctaLabel: 'View my pass',
             ctaUrl: passUrl,
             ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
           });
+          passRecipients.push(recipient);
         }
+
+        if (passRecipients.length === 0) {
+          this.logger.warn(
+            `Payment reminder pass chunk skipped execution=${batch.executionId} — no recipients with pass links`,
+          );
+          await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+            sent: [],
+            allowEmptySent: true,
+          });
+          return;
+        }
+
+        batch.recipients = passRecipients;
       }
 
       const sendResult = await this.automationEmailService.sendBulkToRecipients(

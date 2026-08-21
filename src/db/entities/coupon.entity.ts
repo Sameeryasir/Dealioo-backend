@@ -118,6 +118,27 @@ export class Coupon {
   @Column({ name: 'signup_pass_email_cancelled_at', type: 'timestamptz', nullable: true })
   signupPassEmailCancelledAt: Date | null;
 
+  @Column({
+    name: 'google_wallet_object_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  googleWalletObjectId: string | null;
+
+  @Column({ name: 'google_wallet_added', type: 'boolean', default: false })
+  googleWalletAdded: boolean;
+
+  @Column({ name: 'google_wallet_added_at', type: 'timestamptz', nullable: true })
+  googleWalletAddedAt: Date | null;
+
+  @Column({
+    name: 'google_wallet_removed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  googleWalletRemovedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
