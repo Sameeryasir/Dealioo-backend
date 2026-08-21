@@ -74,4 +74,24 @@ export type GoogleCampaignDraftResumeResponseDto = {
   publishStep?: string | null;
   publishProgress?: number | null;
   errorMessage?: string | null;
+  updatedAt?: Date | null;
+};
+
+export type GoogleCampaignDraftListItemDto = {
+  id: string;
+  businessId: number;
+  status: string;
+  currentStep: number;
+  completedSteps: number[];
+  version: number;
+  lastSavedAt: Date | null;
+  campaignName: string | null;
+  goal: GoogleCampaignGoalId | null;
+  publishStatus: string | null;
+  publishStep: string | null;
+  publishProgress: number | null;
+  errorMessage: string | null;
+  updatedAt: Date;
+  logoPreviewUrl: string | null;
+  selectedFunnelName: string | null;
 };

@@ -24,6 +24,7 @@ export type GoogleCampaignCreatePayload = {
     targetSearchNetwork: boolean;
     targetContentNetwork: boolean;
   };
+  containsEuPoliticalAdvertising: number;
   startDate?: string;
   endDate?: string;
 };
@@ -144,6 +145,8 @@ function mapBidding(draft: GoogleCampaignBuilderDraftData): Record<string, unkno
   switch (strategy) {
     case 'MAXIMIZE_CONVERSIONS':
       return { maximize_conversions: {} };
+    case 'MAXIMIZE_CONVERSION_VALUE':
+      return { maximize_conversion_value: {} };
     case 'MANUAL_CPC':
       return { manual_cpc: { enhanced_cpc_enabled: true } };
     case 'TARGET_CPA': {
@@ -164,6 +167,14 @@ function mapBidding(draft: GoogleCampaignBuilderDraftData): Record<string, unkno
       }
       return { target_roas: { target_roas: roas } };
     }
+    case 'TARGET_IMPRESSION_SHARE':
+      return {
+        target_impression_share: {
+          location: enums.TargetImpressionShareLocation.ANYWHERE_ON_PAGE,
+          location_fraction_micros: 500_000,
+          cpc_bid_ceiling_micros: toMicros(10),
+        },
+      };
     case 'MAXIMIZE_CLICKS':
     default:
       return { target_spend: {} };
@@ -212,6 +223,15 @@ export function buildCampaignPayloadFromDraft(
     /display|content/i.test(row),
   );
 
+  if (
+    draft.containsEuPoliticalAdvertising !== true &&
+    draft.containsEuPoliticalAdvertising !== false
+  ) {
+    throw new BadRequestException(
+      'Confirm if your campaign has EU political ads.',
+    );
+  }
+
   return {
     name,
     status: enums.CampaignStatus.PAUSED,
@@ -222,6 +242,10 @@ export function buildCampaignPayloadFromDraft(
       targetSearchNetwork,
       targetContentNetwork,
     },
+    containsEuPoliticalAdvertising: draft.containsEuPoliticalAdvertising
+      ? enums.EuPoliticalAdvertisingStatus.CONTAINS_EU_POLITICAL_ADVERTISING
+      : enums.EuPoliticalAdvertisingStatus
+          .DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING,
     startDate: yyyymmdd(draft.startDate),
     endDate: yyyymmdd(draft.endDate),
   };
@@ -251,7 +275,12 @@ export function buildKeywordPayloadsFromDraft(
 
   const unique = [...new Set([...suggested, ...custom])];
   if (unique.length === 0) {
-    throw new BadRequestException('Keep or add at least one keyword.');
+    const fallback =
+      draft.businessName?.trim() ||
+      draft.campaignName?.trim() ||
+      draft.productsServices?.find((row) => row.trim())?.trim() ||
+      'local business';
+    return [{ text: fallback, matchType }];
   }
 
   return unique.map((text) => ({ text, matchType }));

@@ -21,6 +21,7 @@ export class GoogleOAuthService {
   private readonly clientID: string;
   private readonly clientSecret: string;
   private readonly callbackURL: string;
+  private readonly authURI: string;
   private readonly stateSecret: string;
 
   constructor(private readonly configService: ConfigService) {
@@ -30,6 +31,9 @@ export class GoogleOAuthService {
       this.configService.get<string>('GOOGLE_CLIENT_SECRET')?.trim() || '';
     this.callbackURL =
       this.configService.get<string>('GOOGLE_CALLBACK_URL')?.trim() || '';
+    this.authURI =
+      this.configService.get<string>('GOOGLE_AUTH_URI')?.trim() ||
+      'https://accounts.google.com/o/oauth2/auth';
     this.stateSecret =
       this.configService.get<string>('JWT_SECRET')?.trim() ||
       this.configService.get<string>('SESSION_SECRET')?.trim() ||
@@ -64,7 +68,8 @@ export class GoogleOAuthService {
       prompt: 'select_account',
     });
 
-    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    const authBase = this.authURI.replace(/\/$/, '');
+    return `${authBase}?${params.toString()}`;
   }
 
   parseState(rawState: string | undefined): {

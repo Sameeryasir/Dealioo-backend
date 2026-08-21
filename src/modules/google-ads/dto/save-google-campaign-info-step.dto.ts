@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsArray, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class SaveGoogleCampaignInfoStepDto {
   @IsUUID()
@@ -37,4 +37,9 @@ export class SaveGoogleCampaignInfoStepDto {
   @IsOptional()
   @IsString()
   businessDescription?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  networkSelection?: string[];
 }

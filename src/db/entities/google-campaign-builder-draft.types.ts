@@ -46,9 +46,11 @@ export type GoogleKeywordMatchType = 'BROAD' | 'PHRASE' | 'EXACT';
 export type GoogleBidStrategyId =
   | 'MAXIMIZE_CLICKS'
   | 'MAXIMIZE_CONVERSIONS'
+  | 'MAXIMIZE_CONVERSION_VALUE'
   | 'MANUAL_CPC'
   | 'TARGET_CPA'
-  | 'TARGET_ROAS';
+  | 'TARGET_ROAS'
+  | 'TARGET_IMPRESSION_SHARE';
 
 export type GoogleCampaignTypeId = 'SEARCH' | 'DISPLAY' | 'PERFORMANCE_MAX';
 
@@ -198,6 +200,7 @@ export type GoogleCampaignBuilderDraftData = {
   adSchedule: string;
   deviceTargeting: string[];
   networkSelection: string[];
+  containsEuPoliticalAdvertising: boolean | null;
   ipExclusions: string;
   urlTrackingParams: string;
   conversionGoals: string;

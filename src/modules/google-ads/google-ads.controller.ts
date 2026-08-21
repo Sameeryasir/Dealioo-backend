@@ -28,6 +28,7 @@ import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
 import { SetGoogleAdsCustomerDto } from './dto/set-google-ads-customer.dto';
 import {
+  GoogleCampaignDraftListItemDto,
   GoogleCampaignDraftResumeResponseDto,
   SaveGoogleCampaignInfoStepResponseDto,
   SaveGoogleGoalDetailsStepResponseDto,
@@ -294,6 +295,15 @@ export class GoogleAdsController {
       businessId,
       draftId,
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/drafts')
+  async listDrafts(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+  ): Promise<GoogleCampaignDraftListItemDto[]> {
+    return this.googleCampaignDraftService.listDrafts(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))

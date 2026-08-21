@@ -507,8 +507,7 @@ export class GooglePublishService {
       advertising_channel_type: payload.advertisingChannelType,
       campaign_budget: ResourceNames.campaignBudget(ctx.customerId, budgetId),
       contains_eu_political_advertising:
-        enums.EuPoliticalAdvertisingStatus
-          .DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING,
+        payload.containsEuPoliticalAdvertising,
       network_settings: {
         target_google_search: payload.networkSettings.targetGoogleSearch,
         target_search_network: payload.networkSettings.targetSearchNetwork,
@@ -541,14 +540,6 @@ export class GooglePublishService {
     ctx: PublishContext,
     campaignId: string,
   ): Promise<void> {
-    const goalQuery = `
-      SELECT
-        customer_conversion_goal.category,
-        customer_conversion_goal.origin,
-        customer_conversion_goal.biddable
-      FROM customer_conversion_goal
-    `.trim();
-
     type GoalRow = {
       customerConversionGoal?: {
         category?: string | number;
@@ -562,17 +553,40 @@ export class GooglePublishService {
       };
     };
 
-    let rows: GoalRow[] = [];
+    type CampaignGoalRow = {
+      campaignConversionGoal?: {
+        resourceName?: string;
+        resource_name?: string;
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+      campaign_conversion_goal?: {
+        resourceName?: string;
+        resource_name?: string;
+        category?: string | number;
+        origin?: string | number;
+        biddable?: boolean;
+      };
+    };
+
+    let customerRows: GoalRow[] = [];
     try {
-      rows = (await ctx.customer.query(goalQuery)) as GoalRow[];
+      customerRows = (await ctx.customer.query(`
+        SELECT
+          customer_conversion_goal.category,
+          customer_conversion_goal.origin,
+          customer_conversion_goal.biddable
+        FROM customer_conversion_goal
+      `)) as GoalRow[];
     } catch (err) {
       this.logger.warn(
-        `Skipping conversion goals apply (query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
+        `Skipping conversion goals apply (customer goal query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
       );
       return;
     }
 
-    if (!Array.isArray(rows) || rows.length === 0) {
+    if (!Array.isArray(customerRows) || customerRows.length === 0) {
       this.logger.log(
         `No customer conversion goals found for customer=${ctx.customerId}; skipping apply.`,
       );
@@ -599,14 +613,14 @@ export class GooglePublishService {
     if (wantKeys.size === 0) {
       for (const key of this.objectiveConversionGoalKeys(
         ctx.draftData.goal,
-        rows,
+        customerRows,
       )) {
         wantKeys.add(key);
       }
     }
 
     if (wantKeys.size === 0) {
-      for (const row of rows) {
+      for (const row of customerRows) {
         const goal = row.customerConversionGoal ?? row.customer_conversion_goal;
         if (goal?.biddable !== true) continue;
         const category = this.normalizeAdsEnumName(
@@ -633,9 +647,58 @@ export class GooglePublishService {
       return;
     }
 
+    const campaignGoalQuery = `
+      SELECT
+        campaign_conversion_goal.resource_name,
+        campaign_conversion_goal.category,
+        campaign_conversion_goal.origin,
+        campaign_conversion_goal.biddable
+      FROM campaign_conversion_goal
+      WHERE campaign.id = ${Number(campaignId)}
+    `.trim();
+
+    let campaignRows: CampaignGoalRow[] = [];
+    try {
+      campaignRows = (await ctx.customer.query(
+        campaignGoalQuery,
+      )) as CampaignGoalRow[];
+    } catch (err) {
+      this.logger.warn(
+        `Skipping conversion goals apply (campaign goal query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
+      );
+      return;
+    }
+
+    if (!Array.isArray(campaignRows) || campaignRows.length === 0) {
+      // Goals can lag campaign creation briefly — retry once, then skip.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        campaignRows = (await ctx.customer.query(
+          campaignGoalQuery,
+        )) as CampaignGoalRow[];
+      } catch {
+        campaignRows = [];
+      }
+    }
+
+    if (!Array.isArray(campaignRows) || campaignRows.length === 0) {
+      this.logger.warn(
+        `No campaign conversion goals found yet for campaign=${campaignId}; leaving account defaults.`,
+      );
+      return;
+    }
+
     const updates: Array<{ resource_name: string; biddable: boolean }> = [];
-    for (const row of rows) {
-      const goal = row.customerConversionGoal ?? row.customer_conversion_goal;
+    for (const row of campaignRows) {
+      const goal =
+        row.campaignConversionGoal ?? row.campaign_conversion_goal;
+      const resourceName = (
+        goal?.resourceName ||
+        goal?.resource_name ||
+        ''
+      ).trim();
+      if (!resourceName) continue;
+
       const categoryName = this.normalizeAdsEnumName(
         goal?.category,
         enums.ConversionActionCategory as unknown as Record<
@@ -647,36 +710,22 @@ export class GooglePublishService {
         goal?.origin,
         enums.ConversionOrigin as unknown as Record<string, string | number>,
       );
-      if (!categoryName || !originName) {
-        continue;
-      }
-
-      const categoryEnum = (
-        enums.ConversionActionCategory as unknown as Record<string, number>
-      )[categoryName];
-      const originEnum = (
-        enums.ConversionOrigin as unknown as Record<string, number>
-      )[originName];
-      if (
-        typeof categoryEnum !== 'number' ||
-        typeof originEnum !== 'number'
-      ) {
-        continue;
-      }
+      if (!categoryName || !originName) continue;
 
       const key = `${categoryName}::${originName}`;
+      const nextBiddable = wantKeys.has(key);
+      if (goal?.biddable === nextBiddable) continue;
+
       updates.push({
-        resource_name: ResourceNames.campaignConversionGoal(
-          ctx.customerId,
-          campaignId,
-          categoryEnum,
-          originEnum,
-        ),
-        biddable: wantKeys.has(key),
+        resource_name: resourceName,
+        biddable: nextBiddable,
       });
     }
 
     if (updates.length === 0) {
+      this.logger.log(
+        `Campaign conversion goals already match desired biddable set for campaign=${campaignId}.`,
+      );
       return;
     }
 
@@ -686,11 +735,12 @@ export class GooglePublishService {
         `Applied ${updates.length} campaign conversion goal(s) for campaign=${campaignId} (biddable=${[...wantKeys].join(',')})`,
       );
     } catch (err) {
-      throw new BadRequestException(
-        `[campaign/conversion_goals] ${formatGoogleAdsSdkError(
+      // Do not fail the whole publish — campaign still works with account defaults.
+      this.logger.warn(
+        `Could not update campaign conversion goals for campaign=${campaignId}: ${formatGoogleAdsSdkError(
           err,
-          'Could not apply conversion goals to the campaign.',
-        )}`,
+          'update failed',
+        )}. Continuing publish with account defaults.`,
       );
     }
   }

@@ -15,6 +15,7 @@ import {
   type GoogleCampaignAccessAction,
 } from '../member/member.constants';
 import {
+  GoogleCampaignDraftListItemDto,
   GoogleCampaignDraftResumeResponseDto,
   SaveGoogleCampaignInfoStepResponseDto,
   SaveGoogleGoalDetailsStepResponseDto,
@@ -441,6 +442,16 @@ export class GoogleCampaignDraftService {
       logoPreviewUrl,
       businessDescription:
         dto.businessDescription?.trim() ?? base.businessDescription ?? '',
+      networkSelection: Array.isArray(dto.networkSelection)
+        ? [
+            ...new Set(
+              dto.networkSelection
+                .map((row) => row.trim())
+                .filter(Boolean)
+                .concat(['Google Search']),
+            ),
+          ]
+        : base.networkSelection,
       currentStep: Math.max(base.currentStep ?? 3, 4),
       savedAt: new Date().toISOString(),
     };
@@ -478,6 +489,40 @@ export class GoogleCampaignDraftService {
     });
   }
 
+  async listDrafts(
+    user: User,
+    businessId: number,
+  ): Promise<GoogleCampaignDraftListItemDto[]> {
+    await this.assertBusinessAccess(user, businessId, 'view');
+
+    const drafts = await this.draftRepository.find({
+      where: {
+        businessId,
+        userId: user.id,
+      },
+      order: { updatedAt: 'DESC' },
+    });
+
+    return drafts.map((draft) => ({
+      id: draft.id,
+      businessId: draft.businessId,
+      status: draft.status,
+      currentStep: draft.currentStep,
+      completedSteps: draft.completedSteps ?? [],
+      version: draft.version ?? 1,
+      lastSavedAt: draft.lastSavedAt,
+      campaignName: draft.campaignName,
+      goal: draft.goal,
+      publishStatus: draft.publishStatus ?? null,
+      publishStep: draft.publishStep ?? null,
+      publishProgress: draft.publishProgress ?? null,
+      errorMessage: draft.errorMessage ?? null,
+      updatedAt: draft.updatedAt,
+      logoPreviewUrl: draft.draftData?.logoPreviewUrl?.trim() || null,
+      selectedFunnelName: draft.draftData?.selectedFunnelName?.trim() || null,
+    }));
+  }
+
   async getDraft(
     user: User,
     businessId: number,
@@ -512,6 +557,7 @@ export class GoogleCampaignDraftService {
       publishStep: draft.publishStep ?? null,
       publishProgress: draft.publishProgress ?? null,
       errorMessage: draft.errorMessage ?? null,
+      updatedAt: draft.updatedAt ?? null,
     };
   }
 
@@ -725,6 +771,10 @@ export class GoogleCampaignDraftService {
       apply: (base) => ({
         ...base,
         languages: dto.languages.map((row) => row.trim()).filter(Boolean),
+        containsEuPoliticalAdvertising:
+          typeof dto.containsEuPoliticalAdvertising === 'boolean'
+            ? dto.containsEuPoliticalAdvertising
+            : base.containsEuPoliticalAdvertising,
       }),
       idempotencyKey,
     });
@@ -770,9 +820,19 @@ export class GoogleCampaignDraftService {
       suggested.filter((row) => row.enabled && row.text.trim()).length +
       custom.length;
 
-    if (enabledCount === 0) {
-      throw new BadRequestException('Keep or add at least one keyword.');
-    }
+    const resolvedSuggested =
+      enabledCount > 0
+        ? suggested
+        : [
+            {
+              id: `kw_fallback_${Date.now()}`,
+              text:
+                dto.businessType?.trim() ||
+                dto.productsServices?.find((row) => row.trim())?.trim() ||
+                'local business',
+              enabled: true,
+            },
+          ];
 
     return this.commitWizardStep(user, businessId, dto.draftId, {
       expectedVersion: dto.expectedVersion,
@@ -781,8 +841,8 @@ export class GoogleCampaignDraftService {
       apply: (base) => ({
         ...base,
         businessType: dto.businessType.trim(),
-        suggestedKeywords: suggested,
-        customKeywords: custom,
+        suggestedKeywords: resolvedSuggested,
+        customKeywords: enabledCount > 0 ? custom : [],
         negativeKeywords: (dto.negativeKeywords ?? base.negativeKeywords)
           .map((row) => row.trim())
           .filter(Boolean),
@@ -845,8 +905,8 @@ export class GoogleCampaignDraftService {
   ): Promise<GoogleCampaignStepSaveResponseDto> {
     return this.commitWizardStep(user, businessId, dto.draftId, {
       expectedVersion: dto.expectedVersion,
-      completedStep: 10,
-      nextStep: 11,
+      completedStep: 7,
+      nextStep: 8,
       apply: (base) => ({
         ...base,
         extensionBusinessName:

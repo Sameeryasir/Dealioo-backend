@@ -391,18 +391,6 @@ export function validateGoogleDraftForPublish(
       field: 'businessType',
       message: 'Choose your business type.',
     });
-  } else {
-    const enabledSuggested =
-      draft.suggestedKeywords?.filter((row) => row.enabled && row.text.trim())
-        .length ?? 0;
-    const custom = draft.customKeywords?.filter((row) => row.trim()).length ?? 0;
-    if (enabledSuggested + custom === 0) {
-      errors.push({
-        step: 8,
-        field: 'keywords',
-        message: 'Keep or add at least one keyword.',
-      });
-    }
   }
 
   const ad = draft.ads?.[0];
@@ -481,12 +469,22 @@ export function validateGoogleDraftForPublish(
       message: 'Enter a target ROAS for this bid strategy.',
     });
   }
+  if (
+    draft.containsEuPoliticalAdvertising !== true &&
+    draft.containsEuPoliticalAdvertising !== false
+  ) {
+    errors.push({
+      step: 4,
+      field: 'containsEuPoliticalAdvertising',
+      message: 'Confirm if your campaign has EU political ads.',
+    });
+  }
 
   for (const link of draft.sitelinks ?? []) {
     if (!link.enabled) continue;
     if (!link.text?.trim()) {
       errors.push({
-        step: 10,
+        step: 7,
         field: 'sitelinks',
         message: 'Enabled sitelinks need a link label.',
       });
@@ -495,7 +493,7 @@ export function validateGoogleDraftForPublish(
     const url = link.url?.trim() ?? '';
     if (!url.toLowerCase().startsWith('https://') || !isValidHttpsUrl(url)) {
       errors.push({
-        step: 10,
+        step: 7,
         field: 'sitelinks',
         message: 'Enabled sitelinks need a valid URL that begins with https://.',
       });

@@ -234,6 +234,10 @@ export class SaveGoogleLanguagesStepDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   languages: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  containsEuPoliticalAdvertising?: boolean;
 }
 
 export class SaveGoogleAudienceStepDto {
