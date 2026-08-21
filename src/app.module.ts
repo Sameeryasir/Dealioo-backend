@@ -16,6 +16,7 @@ import { StripeModule } from './modules/stripe/stripe.module';
 import { FacebookModule } from './modules/facebook/facebook.module';
 import { FacebookCampaignModule } from './modules/facebook-campaign/facebook-campaign.module';
 import { GoogleAdsModule } from './modules/google-ads/google-ads.module';
+import { GoogleWalletModule } from './modules/google-wallet/google-wallet.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
 import { AutomationModule } from './modules/automation/automation.module';
@@ -88,6 +89,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     FacebookModule,
     FacebookCampaignModule,
     GoogleAdsModule,
+    GoogleWalletModule,
     PaymentModule,
     FunnelEventModule,
     AutomationModule,

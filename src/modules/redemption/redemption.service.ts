@@ -231,10 +231,34 @@ export class RedemptionService {
           return sanitizeScanToken(parsed.token);
         }
       } catch {
-        // fall through to raw token
+        // fall through
       }
     }
+
+    const fromPassUrl = this.extractTokenFromGuestPassUrl(trimmed);
+    if (fromPassUrl) {
+      return fromPassUrl;
+    }
+
     return trimmed;
+  }
+
+  private extractTokenFromGuestPassUrl(raw: string): string | null {
+    try {
+      if (!raw.includes('/pass/')) {
+        return null;
+      }
+      const url = new URL(raw);
+      const parts = url.pathname.split('/').filter(Boolean);
+      const passIdx = parts.indexOf('pass');
+      const candidate = passIdx >= 0 ? parts[passIdx + 1] : undefined;
+      if (!candidate || candidate === 'guest') {
+        return null;
+      }
+      return sanitizeScanToken(decodeURIComponent(candidate));
+    } catch {
+      return null;
+    }
   }
 
   async verifyBusinessAccess(

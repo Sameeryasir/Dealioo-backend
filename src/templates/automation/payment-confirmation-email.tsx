@@ -14,6 +14,8 @@ export function PaymentConfirmationEmail({
   ctaLabel,
   ctaUrl,
   directBody,
+  qrImageDataUrl,
+  googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
   const body = message?.trim() || DEFAULT_PAYMENT_CONFIRMATION_MESSAGE;
   const paragraphs = splitAutomationEmailBody(body);
@@ -32,6 +34,8 @@ export function PaymentConfirmationEmail({
       paragraphs={paragraphs}
       ctaLabel={passLabel}
       ctaUrl={passUrl}
+      qrImageDataUrl={qrImageDataUrl}
+      googleWalletSaveUrl={googleWalletSaveUrl}
       skipTitle={useDirectBody}
       skipGreeting={useDirectBody}
     />

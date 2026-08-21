@@ -9,6 +9,8 @@ export function GenericAutomationEmail({
   message,
   ctaLabel,
   ctaUrl,
+  qrImageDataUrl,
+  googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
   const paragraphs = [
     message?.trim() || 'We have an update for you regarding your recent activity.',
@@ -22,6 +24,8 @@ export function GenericAutomationEmail({
       paragraphs={paragraphs}
       ctaLabel={ctaLabel}
       ctaUrl={ctaUrl}
+      qrImageDataUrl={qrImageDataUrl}
+      googleWalletSaveUrl={googleWalletSaveUrl}
     />
   );
 }

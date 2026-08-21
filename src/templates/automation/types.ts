@@ -9,6 +9,7 @@ export type AutomationEmailTemplateProps = {
   directBody?: boolean;
   /** Base64 data-URL for the guest coupon QR (prepaid / payment emails). */
   qrImageDataUrl?: string;
+  googleWalletSaveUrl?: string;
 };
 
 

@@ -34,6 +34,9 @@ export class AutomationEmailRendererService {
         props.ctaUrl
           ? `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`
           : null,
+        props.googleWalletSaveUrl?.trim()
+          ? `Add to Google Wallet: ${props.googleWalletSaveUrl.trim()}`
+          : null,
         '',
         'Best regards,',
         'Dealioo Team',
@@ -64,6 +67,14 @@ export class AutomationEmailRendererService {
         props.ctaUrl ? 4 : 3,
         0,
         'Your coupon QR code is included in the HTML version of this email.',
+      );
+    }
+
+    if (props.googleWalletSaveUrl?.trim()) {
+      lines.splice(
+        3,
+        0,
+        `Add to Google Wallet: ${props.googleWalletSaveUrl.trim()}`,
       );
     }
 

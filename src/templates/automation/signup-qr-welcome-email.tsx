@@ -7,6 +7,7 @@ export type SignupQrWelcomeEmailProps = {
   headline: string;
   campaignName: string;
   passUrl: string;
+  googleWalletSaveUrl?: string;
 };
 
 export function SignupQrWelcomeEmail({
@@ -15,6 +16,7 @@ export function SignupQrWelcomeEmail({
   headline,
   campaignName,
   passUrl,
+  googleWalletSaveUrl,
 }: SignupQrWelcomeEmailProps) {
   const paragraphs = [
     `Thank you for signing up for ${campaignName}! Your registration was successful.`,
@@ -29,6 +31,7 @@ export function SignupQrWelcomeEmail({
       paragraphs={paragraphs}
       ctaLabel="View your pass online"
       ctaUrl={passUrl}
+      googleWalletSaveUrl={googleWalletSaveUrl}
     />
   );
 }

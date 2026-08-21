@@ -16,6 +16,7 @@ import { AuthModule } from '../auth/auth.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
 import { CustomerJourneyModule } from '../customer-journey/customer-journey.module';
+import { GoogleWalletModule } from '../google-wallet/google-wallet.module';
 import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
 import { RedemptionValidationService } from './redemption-validation.service';
@@ -41,6 +42,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
       Order,
     ]),
     AuthModule,
+    GoogleWalletModule,
     // --- SWC circular import fix ---
     forwardRef(() => require('../activity/activity.module').ActivityModule),
     forwardRef(() => require('../automation/automation.module').AutomationModule),

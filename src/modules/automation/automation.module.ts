@@ -24,6 +24,7 @@ import { BusinessHistoryModule } from '../business-history/business-history.modu
 import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { PaymentModule } from '../payment/payment.module';
+import { GoogleWalletModule } from '../google-wallet/google-wallet.module';
 import { AutomationConditionRegistry } from './automation-condition.registry';
 import { CustomerVisitedConditionEvaluator } from './conditions/customer-visited.condition';
 import { AutomationController } from './automation.controller';
@@ -87,6 +88,7 @@ import { AutomationService } from './automation.service';
     BusinessHistoryModule,
     ChatModule,
     AuthModule,
+    GoogleWalletModule,
     forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
     forwardRef(() => PaymentModule),
   ],

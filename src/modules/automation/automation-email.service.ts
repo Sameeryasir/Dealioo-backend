@@ -86,6 +86,9 @@ export class AutomationEmailService {
         ...(String(config.qrImageDataUrl ?? '').trim()
           ? { qrImageDataUrl: String(config.qrImageDataUrl).trim() }
           : {}),
+        ...(String(config.googleWalletSaveUrl ?? '').trim()
+          ? { googleWalletSaveUrl: String(config.googleWalletSaveUrl).trim() }
+          : {}),
       },
     };
   }
@@ -136,6 +139,12 @@ export class AutomationEmailService {
     const qrImageDataUrl = String(emailNodeConfig.qrImageDataUrl ?? '').trim();
     if (qrImageDataUrl) {
       templateProps.qrImageDataUrl = qrImageDataUrl;
+    }
+    const googleWalletSaveUrl = String(
+      emailNodeConfig.googleWalletSaveUrl ?? '',
+    ).trim();
+    if (googleWalletSaveUrl) {
+      templateProps.googleWalletSaveUrl = googleWalletSaveUrl;
     }
 
     return { subject, templateKey, templateProps };

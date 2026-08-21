@@ -39,6 +39,7 @@ import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { CouponService } from '../redemption/coupon.service';
+import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { ActivityService } from '../activity/activity.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { ChatMessageService } from '../chat/chat-message.service';
@@ -138,6 +139,7 @@ export class AutomationService {
     private readonly chatMessageService: ChatMessageService,
     private readonly checkoutResumeService: CheckoutResumeService,
     private readonly couponService: CouponService,
+    private readonly googleWalletService: GoogleWalletService,
     private readonly sendAttemptService: AutomationSendAttemptService,
   ) {}
 
@@ -2089,8 +2091,39 @@ export class AutomationService {
           if (!token) {
             continue;
           }
+          const passUrl = buildGuestPassUrl(token);
+          const offerName =
+            coupon?.campaign?.campaignName?.trim() || 'Dealioo offer';
+          let businessName = 'Dealioo';
+          if (batch.businessId) {
+            const business = await this.businessRepository.findOne({
+              where: { id: batch.businessId },
+            });
+            businessName = business?.name?.trim() || businessName;
+          }
+          let googleWalletSaveUrl: string | undefined;
+          if (coupon) {
+            try {
+              googleWalletSaveUrl = this.googleWalletService.createSaveLink({
+                passId: String(coupon.id),
+                offerName,
+                businessName,
+                qrOrRedemptionUrl: passUrl,
+                qrToken: token,
+              }).saveUrl;
+            } catch (error) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : 'Could not create Google Wallet save link';
+              this.logger.warn(
+                `Google Wallet save link skipped for customer ${recipient.customerId}: ${message}`,
+              );
+            }
+          }
           recipientTemplateOverrides.set(recipient.customerId, {
-            ctaUrl: buildGuestPassUrl(token),
+            ctaUrl: passUrl,
+            ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
           });
         }
       }

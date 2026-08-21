@@ -11,6 +11,7 @@ import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type { AutomationExecution } from '../../db/entities/automation-execution.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
+import { Business } from '../../db/entities/business.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -25,6 +26,7 @@ import { ActivityService } from '../activity/activity.service';
 import { ChatMessageService } from '../chat/chat-message.service';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CouponService } from '../redemption/coupon.service';
+import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
@@ -80,7 +82,10 @@ export class AutomationEngineService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(CustomerVisit)
     private readonly customerVisitRepository: Repository<CustomerVisit>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly couponService: CouponService,
+    private readonly googleWalletService: GoogleWalletService,
     private readonly activityService: ActivityService,
     private readonly chatMessageService: ChatMessageService,
   ) {}
@@ -1634,10 +1639,16 @@ export class AutomationEngineService {
       return withoutQr;
     }
 
+    const googleWalletSaveUrl = await this.tryCreateGoogleWalletSaveUrlForExecution(
+      execution,
+      passUrl,
+    );
+
     return {
       ...withoutQr,
       ctaUrl: String(withoutQr.ctaUrl ?? '').trim() || passUrl,
       ctaLabel: String(withoutQr.ctaLabel ?? '').trim() || 'View my pass',
+      ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
     };
   }
 
@@ -1722,6 +1733,54 @@ export class AutomationEngineService {
     }
 
     return null;
+  }
+
+  private async tryCreateGoogleWalletSaveUrlForExecution(
+    execution: AutomationExecution,
+    passUrl: string,
+  ): Promise<string | undefined> {
+    const funnelId = execution.automation?.funnelId;
+    if (!funnelId) {
+      return undefined;
+    }
+
+    const coupon = await this.couponService.findByCustomerAndFunnel(
+      execution.customerId,
+      funnelId,
+    );
+    if (!coupon) {
+      return undefined;
+    }
+
+    const offerName =
+      coupon.campaign?.campaignName?.trim() ||
+      execution.automation?.campaign?.campaignName?.trim() ||
+      'Dealioo offer';
+
+    let businessName = 'Dealioo';
+    const businessId =
+      coupon.businessId || execution.automation?.businessId || null;
+    if (businessId) {
+      const business = await this.businessRepository.findOne({
+        where: { id: businessId },
+      });
+      businessName = business?.name?.trim() || businessName;
+    }
+
+    try {
+      return this.googleWalletService.createSaveLink({
+        passId: String(coupon.id),
+        offerName,
+        businessName,
+        qrOrRedemptionUrl: passUrl,
+        qrToken: coupon.qrToken,
+      }).saveUrl;
+    } catch (err) {
+      this.logger.warn(
+        `Google Wallet save link skipped for execution ${execution.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
   }
 
   async resolvePostVisitResumeNodeId(

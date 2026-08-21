@@ -16,6 +16,8 @@ export function QrPassGuideEmail({
   message,
   ctaLabel,
   ctaUrl,
+  qrImageDataUrl,
+  googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
   const body = message?.trim() || DEFAULT_QR_PASS_MESSAGE;
   const paragraphs = body.split(/\n\n+/).filter(Boolean);
@@ -28,6 +30,8 @@ export function QrPassGuideEmail({
       paragraphs={paragraphs}
       ctaLabel={ctaLabel ?? 'View my pass'}
       ctaUrl={ctaUrl}
+      qrImageDataUrl={qrImageDataUrl}
+      googleWalletSaveUrl={googleWalletSaveUrl}
     />
   );
 }

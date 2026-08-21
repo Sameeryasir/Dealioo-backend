@@ -9,6 +9,8 @@ export function SignupWelcomeEmail({
   message,
   ctaLabel,
   ctaUrl,
+  qrImageDataUrl,
+  googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
   const paragraphs = message?.trim()
     ? [message.trim()]
@@ -26,6 +28,8 @@ export function SignupWelcomeEmail({
       paragraphs={paragraphs}
       ctaLabel={ctaLabel}
       ctaUrl={ctaUrl}
+      qrImageDataUrl={qrImageDataUrl}
+      googleWalletSaveUrl={googleWalletSaveUrl}
     />
   );
 }

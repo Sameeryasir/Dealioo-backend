@@ -41,6 +41,7 @@ export type AutomationEmailLayoutProps = {
   skipTitle?: boolean;
   skipGreeting?: boolean;
   qrImageDataUrl?: string;
+  googleWalletSaveUrl?: string;
   children?: React.ReactNode;
 };
 
@@ -54,6 +55,7 @@ export function AutomationEmailLayout({
   skipTitle = false,
   skipGreeting = false,
   qrImageDataUrl,
+  googleWalletSaveUrl,
   children,
 }: AutomationEmailLayoutProps) {
   const greetingName = customerName?.trim() || 'there';
@@ -145,6 +147,26 @@ export function AutomationEmailLayout({
                 style={automationCtaButton}
               >
                 {ctaLabel}
+              </Button>
+            </Section>
+          ) : null}
+
+          {googleWalletSaveUrl?.trim() ? (
+            <Section
+              style={{
+                ...automationCtaWrap,
+                marginTop: ctaLabel && ctaUrl ? 0 : 28,
+              }}
+            >
+              <Button
+                href={googleWalletSaveUrl.trim()}
+                target="_blank"
+                style={{
+                  ...automationCtaButton,
+                  backgroundColor: '#1f1f1f',
+                }}
+              >
+                Add to Google Wallet
               </Button>
             </Section>
           ) : null}

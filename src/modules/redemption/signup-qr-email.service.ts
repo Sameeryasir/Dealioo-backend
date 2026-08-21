@@ -8,12 +8,14 @@ import { DataSource, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
+import { Business } from '../../db/entities/business.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import { getPurposeEmailDefaults } from '../automation/automation-email-catalog';
 import { PaymentConfirmationEmail } from '../../templates/automation/payment-confirmation-email';
 import { SignupQrWelcomeEmail } from '../../templates/automation/signup-qr-welcome-email';
 import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
+import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { CouponService } from './coupon.service';
 import {
   isBuiltinSignupPassEmailEnabled,
@@ -41,12 +43,15 @@ export class SignupQrEmailService {
     private readonly signupQrQueue: Queue<SendSignupQrEmailJob>,
     private readonly mailDeliveryService: MailDeliveryService,
     private readonly couponService: CouponService,
+    private readonly googleWalletService: GoogleWalletService,
     @InjectRepository(Coupon)
     private readonly couponRepository: Repository<Coupon>,
     @InjectRepository(Customer)
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {}
 
   handlesSignupWelcomeEmail(): boolean {
@@ -244,6 +249,7 @@ export class SignupQrEmailService {
 
     const coupon = await this.couponRepository.findOne({
       where: { id: params.couponId },
+      relations: ['campaign'],
     });
     if (!coupon) {
       this.logger.warn(
@@ -257,7 +263,9 @@ export class SignupQrEmailService {
       relations: ['campaign'],
     });
     const campaignName =
-      funnel?.campaign?.campaignName?.trim() || 'your campaign';
+      coupon.campaign?.campaignName?.trim() ||
+      funnel?.campaign?.campaignName?.trim() ||
+      'your campaign';
     const customerName = customer?.name?.trim() || 'Guest';
     const defaults = getPurposeEmailDefaults(
       AutomationPurpose.FUNNEL_PAYMENT,
@@ -265,6 +273,14 @@ export class SignupQrEmailService {
     );
 
     const passUrl = this.resolveGuestPassUrl(coupon);
+    const businessName = await this.resolveBusinessName(coupon.businessId);
+    const googleWalletSaveUrl = this.tryCreateGoogleWalletSaveUrl({
+      passId: String(coupon.id),
+      offerName: campaignName,
+      businessName,
+      qrOrRedemptionUrl: passUrl,
+      qrToken: coupon.qrToken,
+    });
 
     const qr = await this.couponService.buildQrPayload(coupon);
 
@@ -279,6 +295,7 @@ export class SignupQrEmailService {
         ctaLabel: 'View QR code online',
         ctaUrl: passUrl,
         qrImageDataUrl: qr.qrDataUrl,
+        googleWalletSaveUrl,
       }),
     );
 
@@ -291,6 +308,9 @@ export class SignupQrEmailService {
       'Your coupon QR code is included in this email. You can also open it online:',
       '',
       `View QR code: ${passUrl}`,
+      ...(googleWalletSaveUrl
+        ? ['', `Add to Google Wallet: ${googleWalletSaveUrl}`]
+        : []),
       '',
       'Best regards,',
       'Dealioo Team',
@@ -343,9 +363,10 @@ export class SignupQrEmailService {
 
     const coupon = await this.couponRepository.findOne({
       where: { id: params.couponId },
+      relations: ['campaign'],
     });
     const accessToken = coupon?.qrToken?.trim();
-    if (!accessToken) {
+    if (!coupon || !accessToken) {
       this.logger.warn(
         `Skipping signup pass email — missing access token for coupon ${params.couponId}`,
       );
@@ -357,10 +378,20 @@ export class SignupQrEmailService {
       relations: ['campaign'],
     });
     const campaignName =
-      funnel?.campaign?.campaignName?.trim() || 'your campaign';
+      coupon.campaign?.campaignName?.trim() ||
+      funnel?.campaign?.campaignName?.trim() ||
+      'your campaign';
     const customerName = customer?.name?.trim() || 'Guest';
 
     const passUrl = buildGuestPassUrl(accessToken);
+    const businessName = await this.resolveBusinessName(coupon.businessId);
+    const googleWalletSaveUrl = this.tryCreateGoogleWalletSaveUrl({
+      passId: String(coupon.id),
+      offerName: campaignName,
+      businessName,
+      qrOrRedemptionUrl: passUrl,
+      qrToken: accessToken,
+    });
 
     const subject = `Your QR pass for ${campaignName}`;
     const html = await render(
@@ -370,6 +401,7 @@ export class SignupQrEmailService {
         headline: 'Thanks for signing up!',
         campaignName,
         passUrl,
+        googleWalletSaveUrl,
       }),
     );
 
@@ -380,6 +412,9 @@ export class SignupQrEmailService {
       'Your QR pass is ready. Open the link below to view your pass anytime.',
       '',
       `View your pass: ${passUrl}`,
+      ...(googleWalletSaveUrl
+        ? ['', `Add to Google Wallet: ${googleWalletSaveUrl}`]
+        : []),
       '',
       'Best regards,',
       'Dealioo Team',
@@ -403,5 +438,29 @@ export class SignupQrEmailService {
       );
       return false;
     }
+  }
+
+  private tryCreateGoogleWalletSaveUrl(params: {
+    passId: string;
+    offerName: string;
+    businessName: string;
+    qrOrRedemptionUrl: string;
+    qrToken: string;
+  }): string | undefined {
+    try {
+      return this.googleWalletService.createSaveLink(params).saveUrl;
+    } catch (err) {
+      this.logger.warn(
+        `Google Wallet save link skipped for pass ${params.passId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+  }
+
+  private async resolveBusinessName(businessId: number): Promise<string> {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+    return business?.name?.trim() || 'Dealioo';
   }
 }
