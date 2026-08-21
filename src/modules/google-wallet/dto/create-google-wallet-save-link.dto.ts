@@ -13,13 +13,11 @@ export class CreateGoogleWalletSaveLinkDto {
   @IsNotEmpty()
   businessName: string;
 
-  /** Guest pass page URL (tappable link on the Wallet card). */
   @IsString()
   @IsNotEmpty()
   @IsUrl({ require_tld: false })
   qrOrRedemptionUrl: string;
 
-  /** Same token the Dealioo scanner QR uses. */
   @IsString()
   @IsNotEmpty()
   qrToken: string;

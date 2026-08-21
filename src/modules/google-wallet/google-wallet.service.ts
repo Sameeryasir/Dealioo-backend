@@ -9,15 +9,9 @@ import * as jwt from 'jsonwebtoken';
 import { Repository } from 'typeorm';
 import { Coupon } from '../../db/entities/coupon.entity';
 import { CreateGoogleWalletSaveLinkDto } from './dto/create-google-wallet-save-link.dto';
+import { GoogleWalletCallbackDto } from './dto/google-wallet-callback.dto';
+import { GoogleWalletCallbackResultDto } from './dto/google-wallet-callback-result.dto';
 import { GoogleWalletSaveLinkResultDto } from './dto/google-wallet-save-link-result.dto';
-
-type GoogleWalletCallbackBody = {
-  eventType?: string;
-  objectId?: string;
-  classId?: string;
-  nonce?: string;
-  signedMessage?: string;
-};
 
 @Injectable()
 export class GoogleWalletService {
@@ -165,8 +159,10 @@ export class GoogleWalletService {
     return { saveUrl, objectId, classId };
   }
 
-  async handleCallback(body: GoogleWalletCallbackBody) {
-    const parsed = this.parseCallbackBody(body);
+  async handleCallback(
+    dto: GoogleWalletCallbackDto,
+  ): Promise<GoogleWalletCallbackResultDto> {
+    const parsed = this.parseCallbackBody(dto);
     const eventType = parsed.eventType;
     const objectId = parsed.objectId;
 
@@ -263,19 +259,19 @@ export class GoogleWalletService {
     };
   }
 
-  private parseCallbackBody(body: GoogleWalletCallbackBody): {
+  private parseCallbackBody(dto: GoogleWalletCallbackDto): {
     eventType: string;
     objectId: string;
     classId: string;
   } {
-    let eventType = String(body?.eventType ?? '').trim().toLowerCase();
-    let objectId = String(body?.objectId ?? '').trim();
-    let classId = String(body?.classId ?? '').trim();
+    let eventType = String(dto.eventType ?? '').trim().toLowerCase();
+    let objectId = String(dto.objectId ?? '').trim();
+    let classId = String(dto.classId ?? '').trim();
 
-    const signedMessage = body?.signedMessage?.trim();
+    const signedMessage = dto.signedMessage?.trim();
     if (signedMessage) {
       try {
-        const decoded = JSON.parse(signedMessage) as GoogleWalletCallbackBody;
+        const decoded = JSON.parse(signedMessage) as GoogleWalletCallbackDto;
         eventType =
           eventType || String(decoded.eventType ?? '').trim().toLowerCase();
         objectId = objectId || String(decoded.objectId ?? '').trim();
