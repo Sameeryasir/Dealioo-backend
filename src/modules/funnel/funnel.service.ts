@@ -204,6 +204,9 @@ export class FunnelService {
     campaignType: CampaignType;
     pixelId: string | null;
     googleTagManagerId: string | null;
+    googleAdsSignupConversionLabel: string | null;
+    googleAdsPurchaseConversionLabel: string | null;
+    googleAdsLeadConversionLabel: string | null;
     step: string;
     pages: Record<string, unknown>;
   }> {
@@ -237,7 +240,13 @@ export class FunnelService {
         ? await this.businessTrackingService.getActivePublicIdsForBusiness(
             businessId,
           )
-        : { pixelId: null, googleTagManagerId: null };
+        : {
+            pixelId: null,
+            googleTagManagerId: null,
+            googleAdsSignupConversionLabel: null,
+            googleAdsPurchaseConversionLabel: null,
+            googleAdsLeadConversionLabel: null,
+          };
 
     const pageTypes = this.publicPagesForStep(step);
     const resolvedStep = pageTypes[0] ?? FunnelPageType.LANDING;
@@ -254,6 +263,10 @@ export class FunnelService {
       campaignType: campaign.campaignType ?? CampaignType.PREPAID,
       pixelId: tracking.pixelId,
       googleTagManagerId: tracking.googleTagManagerId,
+      googleAdsSignupConversionLabel: tracking.googleAdsSignupConversionLabel,
+      googleAdsPurchaseConversionLabel:
+        tracking.googleAdsPurchaseConversionLabel,
+      googleAdsLeadConversionLabel: tracking.googleAdsLeadConversionLabel,
       step: resolvedStep,
       pages,
     };

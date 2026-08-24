@@ -21,6 +21,21 @@ export class UpsertBusinessTrackingDto {
   googleTagManagerId?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  googleAdsSignupConversionLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  googleAdsPurchaseConversionLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  googleAdsLeadConversionLabel?: string;
+
+  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 }

@@ -14,10 +14,21 @@ export type BusinessTrackingResponse = {
   businessId: number;
   pixelId: string | null;
   googleTagManagerId: string | null;
+  googleAdsSignupConversionLabel: string | null;
+  googleAdsPurchaseConversionLabel: string | null;
+  googleAdsLeadConversionLabel: string | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
   hasAccessToken: boolean;
+};
+
+export type ActivePublicTrackingIds = {
+  pixelId: string | null;
+  googleTagManagerId: string | null;
+  googleAdsSignupConversionLabel: string | null;
+  googleAdsPurchaseConversionLabel: string | null;
+  googleAdsLeadConversionLabel: string | null;
 };
 
 @Injectable()
@@ -54,6 +65,9 @@ export class BusinessTrackingService {
       businessId: row.businessId,
       pixelId: row.pixelId,
       googleTagManagerId: row.googleTagManagerId,
+      googleAdsSignupConversionLabel: row.googleAdsSignupConversionLabel,
+      googleAdsPurchaseConversionLabel: row.googleAdsPurchaseConversionLabel,
+      googleAdsLeadConversionLabel: row.googleAdsLeadConversionLabel,
       isActive: row.isActive,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -78,12 +92,17 @@ export class BusinessTrackingService {
     return row ? this.toResponse(row) : null;
   }
 
-  async getActivePublicIdsForBusiness(businessId: number): Promise<{
-    pixelId: string | null;
-    googleTagManagerId: string | null;
-  }> {
+  async getActivePublicIdsForBusiness(
+    businessId: number,
+  ): Promise<ActivePublicTrackingIds> {
     if (!Number.isFinite(businessId) || businessId < 1) {
-      return { pixelId: null, googleTagManagerId: null };
+      return {
+        pixelId: null,
+        googleTagManagerId: null,
+        googleAdsSignupConversionLabel: null,
+        googleAdsPurchaseConversionLabel: null,
+        googleAdsLeadConversionLabel: null,
+      };
     }
 
     const row = await this.trackingRepository.findOne({
@@ -93,6 +112,12 @@ export class BusinessTrackingService {
     return {
       pixelId: row?.pixelId?.trim() || null,
       googleTagManagerId: row?.googleTagManagerId?.trim() || null,
+      googleAdsSignupConversionLabel:
+        row?.googleAdsSignupConversionLabel?.trim() || null,
+      googleAdsPurchaseConversionLabel:
+        row?.googleAdsPurchaseConversionLabel?.trim() || null,
+      googleAdsLeadConversionLabel:
+        row?.googleAdsLeadConversionLabel?.trim() || null,
     };
   }
 
@@ -113,6 +138,9 @@ export class BusinessTrackingService {
         pixelId: null,
         accessToken: null,
         googleTagManagerId: null,
+        googleAdsSignupConversionLabel: null,
+        googleAdsPurchaseConversionLabel: null,
+        googleAdsLeadConversionLabel: null,
         isActive: true,
       });
     }
@@ -122,6 +150,21 @@ export class BusinessTrackingService {
     }
     if (dto.googleTagManagerId !== undefined) {
       row.googleTagManagerId = this.normalizeOptionalId(dto.googleTagManagerId);
+    }
+    if (dto.googleAdsSignupConversionLabel !== undefined) {
+      row.googleAdsSignupConversionLabel = this.normalizeOptionalId(
+        dto.googleAdsSignupConversionLabel,
+      );
+    }
+    if (dto.googleAdsPurchaseConversionLabel !== undefined) {
+      row.googleAdsPurchaseConversionLabel = this.normalizeOptionalId(
+        dto.googleAdsPurchaseConversionLabel,
+      );
+    }
+    if (dto.googleAdsLeadConversionLabel !== undefined) {
+      row.googleAdsLeadConversionLabel = this.normalizeOptionalId(
+        dto.googleAdsLeadConversionLabel,
+      );
     }
     if (dto.isActive !== undefined) {
       row.isActive = dto.isActive;

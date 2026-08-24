@@ -38,6 +38,30 @@ export class BusinessTracking {
   })
   googleTagManagerId: string | null;
 
+  @Column({
+    name: 'google_ads_signup_conversion_label',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  googleAdsSignupConversionLabel: string | null;
+
+  @Column({
+    name: 'google_ads_purchase_conversion_label',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  googleAdsPurchaseConversionLabel: string | null;
+
+  @Column({
+    name: 'google_ads_lead_conversion_label',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  googleAdsLeadConversionLabel: string | null;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 

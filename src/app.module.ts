@@ -27,6 +27,7 @@ import { CustomerActivityModule } from './modules/customer-activity/customer-act
 import { BusinessHistoryModule } from './modules/business-history/business-history.module';
 import { BusinessTrackingModule } from './modules/business-tracking/business-tracking.module';
 import { FunnelMetaTrackingModule } from './modules/funnel-meta-tracking/funnel-meta-tracking.module';
+import { GoogleFunnelTrackingModule } from './modules/google-funnel-tracking/google-funnel-tracking.module';
 import { ProductMetaTrackingModule } from './modules/product-meta-tracking/product-meta-tracking.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MailModule } from './modules/mail/mail.module';
@@ -99,6 +100,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     BusinessHistoryModule,
     BusinessTrackingModule,
     FunnelMetaTrackingModule,
+    GoogleFunnelTrackingModule,
     ProductMetaTrackingModule,
     ChatModule,
     MemberModule,
