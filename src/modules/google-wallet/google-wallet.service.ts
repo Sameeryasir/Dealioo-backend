@@ -2,16 +2,27 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as jwt from 'jsonwebtoken';
-import { Repository } from 'typeorm';
+import { LessThan, Not, IsNull, Repository } from 'typeorm';
 import { Coupon } from '../../db/entities/coupon.entity';
+import { GoogleWalletEvent } from '../../db/entities/google-wallet-event.entity';
 import { CreateGoogleWalletSaveLinkDto } from './dto/create-google-wallet-save-link.dto';
 import { GoogleWalletCallbackDto } from './dto/google-wallet-callback.dto';
 import { GoogleWalletCallbackResultDto } from './dto/google-wallet-callback-result.dto';
 import { GoogleWalletSaveLinkResultDto } from './dto/google-wallet-save-link-result.dto';
+import { fetchGenericObjectState } from './google-wallet-api.client';
+import {
+  GoogleWalletStatus,
+  googleWalletAddedFromStatus,
+} from './google-wallet-status';
+import { buildGuestPassUrl } from '../../utils/guest-pass-url';
+
+const PENDING_RECONCILE_MIN_AGE_MS = 90_000;
 
 @Injectable()
 export class GoogleWalletService {
@@ -22,11 +33,14 @@ export class GoogleWalletService {
   private readonly serviceAccountEmail: string;
   private readonly privateKeyPem: string;
   private readonly origins: string[];
+  private readonly publicApiBase: string;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Coupon)
     private readonly couponRepository: Repository<Coupon>,
+    @InjectRepository(GoogleWalletEvent)
+    private readonly walletEventRepository: Repository<GoogleWalletEvent>,
   ) {
     this.issuerId =
       this.configService.get<string>('GOOGLE_WALLET_ISSUER_ID')?.trim() || '';
@@ -40,6 +54,7 @@ export class GoogleWalletService {
       this.configService.get<string>('GOOGLE_WALLET_PRIVATE_KEY') || '',
     );
     this.origins = this.resolveOrigins();
+    this.publicApiBase = this.resolvePublicApiBase();
 
     if (
       !this.issuerId ||
@@ -51,6 +66,35 @@ export class GoogleWalletService {
         'GOOGLE_WALLET_ISSUER_ID, GOOGLE_WALLET_CLASS_ID, GOOGLE_WALLET_SERVICE_ACCOUNT_EMAIL, and GOOGLE_WALLET_PRIVATE_KEY must be set.',
       );
     }
+  }
+
+  buildWalletOpenUrl(passId: string, qrToken: string): string {
+    const params = new URLSearchParams();
+    params.set('passId', passId.trim());
+    params.set('token', qrToken.trim());
+    return `${this.publicApiBase}/google-wallet/open?${params.toString()}`;
+  }
+
+  async openWalletSaveFlow(
+    passId: string,
+    qrToken: string,
+  ): Promise<{ googleSaveUrl: string; openUrl: string }> {
+    const coupon = await this.findCouponForOpenFlow(passId, qrToken);
+    const token = qrToken.trim();
+    const link = await this.createSaveLink({
+      passId: String(coupon.id),
+      offerName: coupon.campaign?.campaignName?.trim() || 'Your offer',
+      businessName: coupon.business?.name?.trim() || 'Dealioo',
+      qrOrRedemptionUrl: buildGuestPassUrl(token),
+      qrToken: token,
+    });
+
+    await this.markWalletPending(coupon.id);
+
+    return {
+      googleSaveUrl: link.saveUrl,
+      openUrl: link.openUrl,
+    };
   }
 
   async createSaveLink(
@@ -149,6 +193,7 @@ export class GoogleWalletService {
     }
 
     const saveUrl = `https://pay.google.com/gp/v/save/${signedJwt}`;
+    const openUrl = this.buildWalletOpenUrl(passId, qrToken);
 
     await this.persistObjectIdForCouponIfAbsent(passId, objectId);
 
@@ -156,18 +201,17 @@ export class GoogleWalletService {
       `Google Wallet save link created objectId=${objectId} classId=${classId} passId=${passId}`,
     );
 
-    return { saveUrl, objectId, classId };
+    return { saveUrl, openUrl, objectId, classId };
   }
 
   async handleCallback(
     dto: GoogleWalletCallbackDto,
   ): Promise<GoogleWalletCallbackResultDto> {
     const parsed = this.parseCallbackBody(dto);
-    const eventType = parsed.eventType;
-    const objectId = parsed.objectId;
+    const { eventType, objectId, classId, nonce } = parsed;
 
     this.logger.log(
-      `Google Wallet callback parsed eventType=${eventType || 'unknown'} objectId=${objectId || 'n/a'} classId=${parsed.classId || 'n/a'}`,
+      `Google Wallet callback parsed eventType=${eventType || 'unknown'} objectId=${objectId || 'n/a'} classId=${classId || 'n/a'} nonce=${nonce ? 'present' : 'none'}`,
     );
 
     if (!objectId) {
@@ -177,96 +221,225 @@ export class GoogleWalletService {
       return { success: true, updated: false, reason: 'missing_object_id' };
     }
 
-    if (eventType === 'save') {
-      this.logger.log(`User added pass to Google Wallet: ${objectId}`);
-
-      const pass = await this.findCouponForWalletObjectId(objectId);
-
-      if (pass) {
-        await this.couponRepository.update(
-          { id: pass.id },
-          {
-            googleWalletObjectId: objectId,
-            googleWalletAdded: true,
-            googleWalletAddedAt: new Date(),
-            googleWalletRemovedAt: null,
-          },
-        );
+    if (nonce) {
+      const duplicate = await this.walletEventRepository.findOne({
+        where: { nonce },
+      });
+      if (duplicate) {
         this.logger.log(
-          `Google Wallet SAVE applied couponId=${pass.id} googleWalletAdded=true`,
+          `Google Wallet callback duplicate nonce=${nonce} objectId=${objectId} — skipped`,
         );
         return {
           success: true,
-          updated: true,
-          eventType: 'save',
-          couponId: pass.id,
+          updated: false,
+          reason: 'duplicate_nonce',
+          eventType: eventType || null,
         };
       }
+    }
 
+    const pass = await this.findCouponForWalletObjectId(objectId);
+    const receivedAt = new Date();
+
+    try {
+      await this.walletEventRepository.save({
+        objectId,
+        couponId: pass?.id ?? null,
+        eventType: eventType || null,
+        nonce: nonce || null,
+        rawPayload: JSON.stringify(dto),
+        receivedAt,
+      });
+    } catch (err) {
       this.logger.warn(
-        `Google Wallet save callback: no coupon for objectId=${objectId}`,
+        `Google Wallet callback event persist failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (!pass) {
+      this.logger.warn(
+        `Google Wallet callback: no coupon for objectId=${objectId}`,
       );
       return {
         success: true,
         updated: false,
         reason: 'coupon_not_found',
-        eventType: 'save',
+        eventType: eventType || null,
       };
     }
 
-    if (eventType === 'del') {
-      this.logger.log(`User removed pass from Google Wallet: ${objectId}`);
+    const reconciled = await this.reconcileCouponWalletState(
+      pass.id,
+      objectId,
+      eventType || null,
+      receivedAt,
+    );
 
-      const pass = await this.findCouponForWalletObjectId(objectId);
-      if (!pass) {
-        this.logger.warn(
-          `Google Wallet del callback: no coupon for objectId=${objectId}`,
-        );
-        return {
-          success: true,
-          updated: false,
-          reason: 'coupon_not_found',
-          eventType: 'del',
-        };
-      }
-
-      await this.couponRepository.update(
-        { id: pass.id },
-        {
-          googleWalletAdded: false,
-          googleWalletRemovedAt: new Date(),
-        },
-      );
-      this.logger.log(
-        `Google Wallet DEL applied couponId=${pass.id} objectId=${objectId}`,
-      );
+    if (!reconciled) {
       return {
         success: true,
-        updated: true,
-        eventType: 'del',
+        updated: false,
+        reason: 'reconciliation_failed',
+        eventType: eventType || null,
         couponId: pass.id,
       };
     }
 
-    this.logger.warn(
-      `Google Wallet callback: unhandled eventType=${eventType || '(empty)'} objectId=${objectId}`,
-    );
     return {
       success: true,
-      updated: false,
-      reason: 'unhandled_event_type',
+      updated: true,
+      reconciled: true,
       eventType: eventType || null,
+      couponId: pass.id,
+      googleWalletAdded: googleWalletAddedFromStatus(reconciled.status),
+      googleWalletStatus: reconciled.status,
     };
+  }
+
+  async reconcileStalePendingCoupons(): Promise<number> {
+    const cutoff = new Date(Date.now() - PENDING_RECONCILE_MIN_AGE_MS);
+    const pending = await this.couponRepository.find({
+      where: {
+        googleWalletStatus: GoogleWalletStatus.PENDING,
+        googleWalletPendingAt: LessThan(cutoff),
+        googleWalletObjectId: Not(IsNull()),
+      },
+      take: 25,
+      order: { googleWalletPendingAt: 'ASC' },
+    });
+
+    let updated = 0;
+
+    for (const coupon of pending) {
+      const objectId = coupon.googleWalletObjectId?.trim();
+      if (!objectId) {
+        continue;
+      }
+      const result = await this.reconcileCouponWalletState(
+        coupon.id,
+        objectId,
+        'fallback_reconcile',
+        new Date(),
+      );
+      if (result) {
+        updated += 1;
+      }
+    }
+
+    return updated;
+  }
+
+  async markWalletPending(couponId: number): Promise<void> {
+    const now = new Date();
+    await this.couponRepository.update(
+      { id: couponId },
+      {
+        googleWalletStatus: GoogleWalletStatus.PENDING,
+        googleWalletPendingAt: now,
+        googleWalletLastEvent: 'open',
+        googleWalletLastEventAt: now,
+      },
+    );
+    this.logger.log(`Google Wallet status PENDING for couponId=${couponId}`);
+  }
+
+  private async reconcileCouponWalletState(
+    couponId: number,
+    objectId: string,
+    eventType: string | null,
+    receivedAt: Date,
+  ): Promise<{ status: GoogleWalletStatus } | null> {
+    const coupon = await this.couponRepository.findOne({
+      where: { id: couponId },
+    });
+    if (!coupon) {
+      return null;
+    }
+
+    let walletState: { hasUsers: boolean; found: boolean };
+    try {
+      walletState = await fetchGenericObjectState({
+        objectId,
+        serviceAccountEmail: this.serviceAccountEmail,
+        privateKeyPem: this.privateKeyPem,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Google Wallet reconciliation failed couponId=${couponId} objectId=${objectId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+
+    const nextStatus = walletState.hasUsers
+      ? GoogleWalletStatus.ADDED
+      : coupon.googleWalletStatus === GoogleWalletStatus.ADDED ||
+          coupon.googleWalletAdded
+        ? GoogleWalletStatus.REMOVED
+        : GoogleWalletStatus.NOT_ADDED;
+
+    const wasAdded =
+      coupon.googleWalletStatus === GoogleWalletStatus.ADDED ||
+      coupon.googleWalletAdded === true;
+
+    const updatePayload: Partial<Coupon> = {
+      googleWalletObjectId: objectId,
+      googleWalletStatus: nextStatus,
+      googleWalletAdded: googleWalletAddedFromStatus(nextStatus),
+      googleWalletLastEvent: eventType,
+      googleWalletLastEventAt: receivedAt,
+      googleWalletLastSyncedAt: receivedAt,
+      googleWalletPendingAt: null,
+    };
+
+    if (nextStatus === GoogleWalletStatus.ADDED) {
+      updatePayload.googleWalletAddedAt = receivedAt;
+      updatePayload.googleWalletRemovedAt = null;
+    } else if (
+      nextStatus === GoogleWalletStatus.REMOVED &&
+      wasAdded
+    ) {
+      updatePayload.googleWalletRemovedAt = receivedAt;
+    }
+
+    await this.couponRepository.update({ id: couponId }, updatePayload);
+
+    this.logger.log(
+      `Google Wallet reconciled couponId=${couponId} objectId=${objectId} eventType=${eventType || 'unknown'} status=${nextStatus} hasUsers=${walletState.hasUsers}`,
+    );
+
+    return { status: nextStatus };
+  }
+
+  private async findCouponForOpenFlow(
+    passId: string,
+    qrToken: string,
+  ): Promise<Coupon> {
+    const couponId = Number(passId);
+    const token = qrToken.trim();
+    if (!Number.isFinite(couponId) || couponId < 1 || !token) {
+      throw new NotFoundException('Pass not found');
+    }
+
+    const coupon = await this.couponRepository.findOne({
+      where: { id: couponId },
+      relations: ['campaign', 'business'],
+    });
+    if (!coupon || coupon.qrToken?.trim() !== token) {
+      throw new UnauthorizedException('Invalid pass access');
+    }
+    return coupon;
   }
 
   private parseCallbackBody(dto: GoogleWalletCallbackDto): {
     eventType: string;
     objectId: string;
     classId: string;
+    nonce: string;
   } {
     let eventType = String(dto.eventType ?? '').trim().toLowerCase();
     let objectId = String(dto.objectId ?? '').trim();
     let classId = String(dto.classId ?? '').trim();
+    let nonce = String(dto.nonce ?? '').trim();
 
     const signedMessage = dto.signedMessage?.trim();
     if (signedMessage) {
@@ -276,8 +449,9 @@ export class GoogleWalletService {
           eventType || String(decoded.eventType ?? '').trim().toLowerCase();
         objectId = objectId || String(decoded.objectId ?? '').trim();
         classId = classId || String(decoded.classId ?? '').trim();
+        nonce = nonce || String(decoded.nonce ?? '').trim();
         this.logger.log(
-          `Google Wallet callback signedMessage parsed eventType=${eventType || '(empty)'} objectId=${objectId || '(empty)'}`,
+          `Google Wallet callback signedMessage parsed eventType=${eventType || '(empty)'} objectId=${objectId || '(empty)'} nonce=${nonce ? 'present' : 'none'}`,
         );
       } catch {
         this.logger.warn(
@@ -286,7 +460,7 @@ export class GoogleWalletService {
       }
     }
 
-    return { eventType, objectId, classId };
+    return { eventType, objectId, classId, nonce };
   }
 
   private async resolveStableObjectId(passId: string): Promise<string> {
@@ -362,6 +536,14 @@ export class GoogleWalletService {
       );
     }
     return byCouponId;
+  }
+
+  private resolvePublicApiBase(): string {
+    const configured =
+      this.configService.get<string>('PUBLIC_BASE_URL')?.trim() ||
+      this.configService.get<string>('NEXT_PUBLIC_API_URL')?.trim() ||
+      'http://localhost:4001/api';
+    return configured.replace(/\/$/, '');
   }
 
   private normalizePrivateKey(raw: string): string {

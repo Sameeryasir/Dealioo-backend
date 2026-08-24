@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpException,
   HttpStatus,
@@ -506,6 +507,7 @@ export class GoogleAdsController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Header('Cache-Control', 'no-store')
   @Get('gtm-containers/:businessId')
   async listGtmContainers(
     @Req() req,

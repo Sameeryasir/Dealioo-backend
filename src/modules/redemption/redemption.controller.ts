@@ -20,6 +20,7 @@ import { CouponService } from './coupon.service';
 import { ScanQrDto } from './dto/scan-qr.dto';
 import { redemptionChannelToVisitSource } from './redemption-channel.util';
 import { RedemptionService } from './redemption.service';
+import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 
 type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
@@ -38,6 +39,7 @@ export class RedemptionController {
   constructor(
     private readonly redemptionService: RedemptionService,
     private readonly couponService: CouponService,
+    private readonly googleWalletService: GoogleWalletService,
   ) {}
 
   /** Staff previews a customer QR before confirming redemption (read-only). */
@@ -196,6 +198,12 @@ export class RedemptionController {
     }
 
     const qr = await this.couponService.buildQrPayload(liveCoupon);
+    const walletOpenUrl = liveCoupon.qrToken?.trim()
+      ? this.googleWalletService.buildWalletOpenUrl(
+          String(liveCoupon.id),
+          liveCoupon.qrToken.trim(),
+        )
+      : null;
     return {
       id: liveCoupon.id,
       status: liveCoupon.status,
@@ -208,6 +216,8 @@ export class RedemptionController {
       passAvailable: true,
       passUnavailableReason: null,
       passMessage: null,
+      googleWalletStatus: liveCoupon.googleWalletStatus ?? 'NOT_ADDED',
+      googleWalletOpenUrl: walletOpenUrl,
       qr,
     };
   }

@@ -80,6 +80,7 @@ export type PlatformAdminOverview = {
     createdAt: Date;
     ownerName: string | null;
     ownerEmail: string | null;
+    ownerAvatar: string | null;
     planName: string | null;
     planSlug: string | null;
   }>;
@@ -539,6 +540,7 @@ export class PlatformAdminService {
           createdAt: business.createdAt,
           ownerName: business.owner?.name ?? null,
           ownerEmail: business.owner?.email ?? null,
+          ownerAvatar: business.owner?.avatar ?? null,
           planName: plan?.planName ?? null,
           planSlug: plan?.planSlug ?? null,
         };

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -189,6 +190,7 @@ export class FacebookController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Header('Cache-Control', 'no-store')
   @Get('ad-pixels/:businessId')
   async listAdPixels(
     @Req() req,

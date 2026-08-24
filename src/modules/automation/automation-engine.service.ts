@@ -1776,7 +1776,7 @@ export class AutomationEngineService {
           qrOrRedemptionUrl: passUrl,
           qrToken: coupon.qrToken,
         })
-      ).saveUrl;
+      ).openUrl;
     } catch (err) {
       this.logger.warn(
         `Google Wallet save link skipped for execution ${execution.id}: ${err instanceof Error ? err.message : String(err)}`,

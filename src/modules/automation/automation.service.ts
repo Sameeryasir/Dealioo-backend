@@ -2125,7 +2125,7 @@ export class AutomationService {
                 qrOrRedemptionUrl: passUrl,
                 qrToken: token,
               })
-            ).saveUrl;
+            ).openUrl;
           } catch (error) {
             const message =
               error instanceof Error

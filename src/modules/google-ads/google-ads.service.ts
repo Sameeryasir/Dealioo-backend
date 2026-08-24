@@ -574,11 +574,19 @@ export class GoogleAdsService {
       .filter(Boolean);
     this.tokenService.assertTagManagerScope(scopes);
 
-    const containers = await this.fetchGtmContainers(accessToken);
+    const containers = await this.fetchGtmContainers(accessToken, businessId);
+
+    this.logger.log(
+      `GTM containers businessId=${businessId} googleUserId=${business.googleUserId ?? 'unknown'} count=${containers.length} scopes=${scopes.join(',')}`,
+    );
 
     await this.auditService.log(businessId, 'gtm_containers_fetched', {
       status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
-      metadata: { count: containers.length },
+      metadata: {
+        count: containers.length,
+        googleUserId: business.googleUserId ?? null,
+        scopes,
+      },
     });
 
     return containers;
@@ -1670,25 +1678,58 @@ export class GoogleAdsService {
 
   private async fetchGtmContainers(
     accessToken: string,
+    businessId?: number,
   ): Promise<GoogleTagManagerContainerDto[]> {
     const auth = createGoogleOAuth2Client();
     auth.setCredentials({ access_token: accessToken });
     const tagmanager = google.tagmanager({ version: 'v2', auth });
 
     try {
-      const accountsRes = await tagmanager.accounts.list();
+      const accountsRes = await tagmanager.accounts.list({
+        includeGoogleTags: true,
+      });
       const accounts = accountsRes.data.account ?? [];
       const byPublicId = new Map<string, GoogleTagManagerContainerDto>();
 
+      this.logger.log(
+        `GTM accounts.list businessId=${businessId ?? 'unknown'} accountCount=${accounts.length}`,
+      );
+
+      if (accounts.length === 0) {
+        this.logger.warn(
+          `GTM accounts.list returned no accounts for businessId=${businessId ?? 'unknown'}. The connected Google user may have no Tag Manager access, or no GTM accounts exist yet.`,
+        );
+      }
+
       for (const account of accounts) {
+        const accountPath =
+          account.path?.trim() ||
+          (account.accountId != null
+            ? `accounts/${String(account.accountId).trim()}`
+            : '');
         const accountId = String(account.accountId ?? '').trim();
-        if (!accountId) continue;
+
+        if (!accountPath || !accountId) {
+          this.logger.warn(
+            `GTM account skipped businessId=${businessId ?? 'unknown'} missing accountId/path`,
+          );
+          continue;
+        }
+
+        this.logger.log(
+          `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} accountName=${account.name ?? 'unknown'}`,
+        );
 
         const containersRes = await tagmanager.accounts.containers.list({
-          parent: `accounts/${accountId}`,
+          parent: accountPath,
         });
+        const containerRows = containersRes.data.container ?? [];
 
-        for (const container of containersRes.data.container ?? []) {
+        this.logger.log(
+          `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} containerCount=${containerRows.length}`,
+        );
+
+        for (const container of containerRows) {
           const publicId = container.publicId?.trim();
           if (!publicId) continue;
 
@@ -1696,6 +1737,7 @@ export class GoogleAdsService {
             id: publicId,
             name: container.name?.trim() || null,
             accountId,
+            accountName: account.name?.trim() || null,
             containerId: container.containerId
               ? String(container.containerId)
               : null,
@@ -1703,18 +1745,38 @@ export class GoogleAdsService {
         }
       }
 
-      return [...byPublicId.values()].sort((a, b) =>
+      const containers = [...byPublicId.values()].sort((a, b) =>
         (a.name ?? a.id).localeCompare(b.name ?? b.id),
       );
+
+      if (containers.length === 0 && accounts.length > 0) {
+        this.logger.warn(
+          `GTM returned accounts but no containers for businessId=${businessId ?? 'unknown'}. Create a container at tagmanager.google.com for the connected Google account.`,
+        );
+      }
+
+      return containers;
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
 
+      const gaxios = err as {
+        response?: { status?: number; data?: unknown };
+        message?: string;
+      };
+      const status = gaxios.response?.status;
+      const responseData = gaxios.response?.data;
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`GTM containers list failed: ${message}`);
 
-      if (/insufficient|ACCESS_TOKEN_SCOPE|403|PERMISSION/i.test(message)) {
+      this.logger.error(
+        `GTM containers list failed businessId=${businessId ?? 'unknown'} status=${status ?? 'unknown'} message=${message} response=${JSON.stringify(responseData ?? null)}`,
+      );
+
+      if (
+        status === 403 ||
+        /insufficient|ACCESS_TOKEN_SCOPE|403|PERMISSION/i.test(message)
+      ) {
         throw new BadRequestException(
-          'Could not list Google Tag Manager containers. Reconnect Google Ads and approve Tag Manager access, and enable Tag Manager API in Google Cloud Console.',
+          'Could not list Google Tag Manager containers. Disconnect and reconnect Google Ads in Settings → Integrations, approve Tag Manager access on the consent screen, and enable Tag Manager API in Google Cloud Console.',
         );
       }
 

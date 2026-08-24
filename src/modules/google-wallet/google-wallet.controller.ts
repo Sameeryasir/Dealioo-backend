@@ -1,15 +1,18 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   Logger,
   Post,
+  Query,
   Req,
+  Res,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { GoogleWalletCallbackDto } from './dto/google-wallet-callback.dto';
 import { GoogleWalletCallbackResultDto } from './dto/google-wallet-callback-result.dto';
 import { GoogleWalletService } from './google-wallet.service';
@@ -19,6 +22,19 @@ export class GoogleWalletController {
   private readonly logger = new Logger(GoogleWalletController.name);
 
   constructor(private readonly googleWalletService: GoogleWalletService) {}
+
+  @Get('open')
+  async openWalletSave(
+    @Query('passId') passId?: string,
+    @Query('token') token?: string,
+    @Res() res?: Response,
+  ): Promise<void> {
+    const { googleSaveUrl } = await this.googleWalletService.openWalletSaveFlow(
+      passId?.trim() ?? '',
+      token?.trim() ?? '',
+    );
+    res!.redirect(302, googleSaveUrl);
+  }
 
   @Post('callback')
   @HttpCode(200)

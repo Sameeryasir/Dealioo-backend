@@ -127,17 +127,54 @@ export class Coupon {
   googleWalletObjectId: string | null;
 
   @Column({ name: 'google_wallet_added', type: 'boolean', default: false })
-  googleWalletAdded: boolean;
+  googleWalletAdded!: boolean;
+
+  @Column({
+    name: 'google_wallet_status',
+    type: 'varchar',
+    length: 32,
+    default: 'NOT_ADDED',
+  })
+  googleWalletStatus!: string;
+
+  @Column({
+    name: 'google_wallet_pending_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  googleWalletPendingAt!: Date | null;
 
   @Column({ name: 'google_wallet_added_at', type: 'timestamptz', nullable: true })
-  googleWalletAddedAt: Date | null;
+  googleWalletAddedAt!: Date | null;
 
   @Column({
     name: 'google_wallet_removed_at',
     type: 'timestamptz',
     nullable: true,
   })
-  googleWalletRemovedAt: Date | null;
+  googleWalletRemovedAt!: Date | null;
+
+  @Column({
+    name: 'google_wallet_last_event',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
+  googleWalletLastEvent!: string | null;
+
+  @Column({
+    name: 'google_wallet_last_event_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  googleWalletLastEventAt!: Date | null;
+
+  @Column({
+    name: 'google_wallet_last_synced_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  googleWalletLastSyncedAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

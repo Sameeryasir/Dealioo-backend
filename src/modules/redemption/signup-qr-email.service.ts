@@ -448,7 +448,7 @@ export class SignupQrEmailService {
     qrToken: string;
   }): Promise<string | undefined> {
     try {
-      return (await this.googleWalletService.createSaveLink(params)).saveUrl;
+      return (await this.googleWalletService.createSaveLink(params)).openUrl;
     } catch (err) {
       this.logger.warn(
         `Google Wallet save link skipped for pass ${params.passId}: ${err instanceof Error ? err.message : String(err)}`,
