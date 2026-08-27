@@ -48,6 +48,7 @@ export enum MetaOptimizationGoal {
 
 export enum MetaDestinationType {
   WEBSITE = 'WEBSITE',
+  FACEBOOK_PAGE = 'FACEBOOK_PAGE',
   MESSENGER = 'MESSENGER',
   WHATSAPP = 'WHATSAPP',
   INSTAGRAM_DIRECT = 'INSTAGRAM_DIRECT',

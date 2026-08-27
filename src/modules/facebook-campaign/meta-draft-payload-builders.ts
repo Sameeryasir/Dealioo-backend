@@ -558,6 +558,13 @@ export async function buildAdSetPayloadFromDraft(
       custom_event_type: adSet.promotedObject.customEventType || undefined,
       page_id: adSet.promotedObject.pageId || undefined,
     };
+  } else if (
+    adSet.destinationType === 'FACEBOOK_PAGE' &&
+    adSet.promotedObject?.pageId
+  ) {
+    body.promoted_object = {
+      page_id: adSet.promotedObject.pageId,
+    };
   }
 
   return body;

@@ -76,6 +76,7 @@ type FacebookAdAccountMetaResponse = {
   id?: string;
   name?: string;
   currency?: string;
+  timezone_name?: string;
   error?: { message?: string };
 };
 
@@ -86,6 +87,7 @@ type FacebookAdAccountsResponse = {
     name?: string;
     account_status?: number;
     currency?: string;
+    timezone_name?: string;
   }>;
   error?: { message?: string };
 };
@@ -1881,23 +1883,24 @@ export class FacebookService {
   private async fetchAdAccountMeta(
     adAccountId: string,
     accessToken: string,
-  ): Promise<{ name: string | null; currency: string | null }> {
+  ): Promise<{ name: string | null; currency: string | null; timezoneName: string | null }> {
     try {
       const response = await this.graphGetWithToken<FacebookAdAccountMetaResponse>(
         `/${adAccountId}`,
         accessToken,
-        { fields: 'name,currency' },
+        { fields: 'name,currency,timezone_name' },
       );
 
       return {
         name: response.name ?? null,
         currency: response.currency ?? null,
+        timezoneName: response.timezone_name?.trim() || null,
       };
     } catch (err) {
       this.logger.warn(
         `Ad account meta skipped for ${adAccountId}: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return { name: null, currency: null };
+      return { name: null, currency: null, timezoneName: null };
     }
   }
 
@@ -1908,7 +1911,7 @@ export class FacebookService {
       '/me/adaccounts',
       accessToken,
       {
-        fields: 'id,account_id,name,account_status,currency',
+        fields: 'id,account_id,name,account_status,currency,timezone_name',
         limit: '50',
       },
     );
@@ -1921,6 +1924,7 @@ export class FacebookService {
         name: row.name ?? null,
         accountStatus: row.account_status ?? null,
         currency: row.currency ?? null,
+        timezoneName: row.timezone_name?.trim() || null,
       }));
   }
 

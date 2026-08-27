@@ -4,4 +4,5 @@ export class FacebookAdAccountDto {
   name: string | null;
   accountStatus: number | null;
   currency: string | null;
+  timezoneName: string | null;
 }
