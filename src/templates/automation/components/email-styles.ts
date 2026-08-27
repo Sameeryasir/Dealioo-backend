@@ -26,7 +26,7 @@ export const automationEmailContainer = {
 };
 
 export const automationBrandRow = {
-  marginBottom: '28px',
+  marginBottom: '20px',
   padding: '0',
 };
 
@@ -57,11 +57,11 @@ export const automationBody = {
   color: DEALIOO_EMAIL_MUTED,
   fontSize: '16px',
   lineHeight: '26px',
-  margin: '0 0 20px',
+  margin: '0 0 16px',
 };
 
 export const automationCtaWrap = {
-  margin: '28px 0 24px',
+  margin: '20px 0 16px',
 };
 
 export const automationCtaButton = {
@@ -80,7 +80,7 @@ export const automationSignoffBold = {
   fontSize: '15px',
   fontWeight: 700,
   lineHeight: '24px',
-  margin: '32px 0 4px',
+  margin: '20px 0 4px',
 };
 
 export const automationSignoffTeam = {

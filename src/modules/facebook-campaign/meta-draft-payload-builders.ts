@@ -549,7 +549,8 @@ export async function buildAdSetPayloadFromDraft(
   }
 
   if (
-    adSet.optimizationGoal === 'OFFSITE_CONVERSIONS' &&
+    (adSet.optimizationGoal === 'OFFSITE_CONVERSIONS' ||
+      adSet.optimizationGoal === 'VALUE') &&
     adSet.promotedObject?.pixelId
   ) {
     body.promoted_object = {

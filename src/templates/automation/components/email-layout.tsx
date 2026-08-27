@@ -30,6 +30,7 @@ import {
   automationSignoffTeam,
   automationTitle,
 } from './email-styles';
+import { shouldShowPassLinkCta } from '../../../modules/automation/automation-email-cta.util';
 
 export type AutomationEmailLayoutProps = {
   preview: string;
@@ -59,6 +60,13 @@ export function AutomationEmailLayout({
   children,
 }: AutomationEmailLayoutProps) {
   const greetingName = customerName?.trim() || 'there';
+  const walletUrl = googleWalletSaveUrl?.trim() || '';
+  const showPassLink = shouldShowPassLinkCta({
+    ctaLabel,
+    ctaUrl,
+    googleWalletSaveUrl: walletUrl,
+  });
+  const showWalletCta = Boolean(walletUrl);
 
   return (
     <Html>
@@ -139,32 +147,29 @@ export function AutomationEmailLayout({
 
           {children}
 
-          {ctaLabel && ctaUrl ? (
+          {showPassLink || showWalletCta ? (
             <Section style={automationCtaWrap}>
-              <Button
-                href={ctaUrl}
-                target="_blank"
-                style={automationCtaButton}
-              >
-                {ctaLabel}
-              </Button>
-            </Section>
-          ) : null}
-
-          {googleWalletSaveUrl?.trim() ? (
-            <Section
-              style={{
-                ...automationCtaWrap,
-                marginTop: ctaLabel && ctaUrl ? 0 : 28,
-              }}
-            >
-              <Button
-                href={googleWalletSaveUrl.trim()}
-                target="_blank"
-                style={automationCtaButton}
-              >
-                Add to Google Wallet
-              </Button>
+              {showPassLink ? (
+                <Button
+                  href={ctaUrl}
+                  target="_blank"
+                  style={automationCtaButton}
+                >
+                  {ctaLabel}
+                </Button>
+              ) : null}
+              {showWalletCta ? (
+                <Button
+                  href={walletUrl}
+                  target="_blank"
+                  style={{
+                    ...automationCtaButton,
+                    marginTop: showPassLink ? '12px' : 0,
+                  }}
+                >
+                  Add to Google Wallet
+                </Button>
+              ) : null}
             </Section>
           ) : null}
 

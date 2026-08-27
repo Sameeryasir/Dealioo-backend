@@ -204,7 +204,8 @@ export class MetaCampaignDraftService {
       optimizationGoal: dto.optimizationGoal,
       destinationType: dto.destinationType,
       promotedObject:
-        dto.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS
+        dto.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
+        dto.optimizationGoal === MetaOptimizationGoal.VALUE
           ? dto.promotedObject
           : undefined,
       audience: {

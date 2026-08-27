@@ -15,8 +15,8 @@ import {
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
 
-/** Default pass validity after issuance (90 days). */
-const COUPON_VALIDITY_DAYS = 90;
+/** Default pass validity after issuance (15 days). */
+const COUPON_VALIDITY_DAYS = 15;
 
 export type IssueSignupCouponResult = {
   coupon: Coupon | null;
@@ -47,10 +47,23 @@ export class CouponService {
       funnelId,
     );
     if (pending) {
-      return { coupon: pending, created: false };
+      const refreshed = await this.refreshSignupCouponValidity(pending);
+      return { coupon: refreshed, created: false };
     }
 
     return this.createPendingSignupCoupon(funnelId, customerId);
+  }
+
+  private async refreshSignupCouponValidity(coupon: Coupon): Promise<Coupon> {
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt);
+    expiresAt.setDate(expiresAt.getDate() + COUPON_VALIDITY_DAYS);
+
+    await this.couponRepository.update(coupon.id, { issuedAt, expiresAt });
+
+    coupon.issuedAt = issuedAt;
+    coupon.expiresAt = expiresAt;
+    return coupon;
   }
 
   /**

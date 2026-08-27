@@ -7,7 +7,9 @@ import {
 import {
   collectSignupFilterConditions,
   parseSignupFilterCondition,
+  shouldSkipSignupBranchOutboundEmail,
 } from './automation-signup-filter.util';
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 
 describe('automation-wait.util', () => {
   it('resolves relative delay minutes', () => {
@@ -190,5 +192,70 @@ describe('automation-signup-filter.util', () => {
       amount: 6,
       unit: 'days',
     });
+  });
+});
+
+describe('shouldSkipSignupBranchOutboundEmail', () => {
+  it('allows enabled signup branches and skips the rest', () => {
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        message: 'Complete your signup — add your pass to your wallet.',
+        linkLabel: 'Pass Link',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'wallet_reminder',
+        message: 'Reminder',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'follow_up',
+        message: 'Follow up',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'offer_expiry',
+        message: 'Expiry',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'offer_expiry_3d',
+        message: 'Expiry in 3 days',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'offer_expiry_tomorrow',
+        message: 'Expires tomorrow',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'extend_offer',
+        message: 'Extended',
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'why_didnt_come',
+        message: 'Feedback',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_SIGNUP, {
+        flowBranch: 'weekend_pass',
+        message: 'Weekend',
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipSignupBranchOutboundEmail(
+        AutomationPurpose.FUNNEL_PAYMENT,
+        { flowBranch: 'wallet_reminder' },
+      ),
+    ).toBe(false);
   });
 });

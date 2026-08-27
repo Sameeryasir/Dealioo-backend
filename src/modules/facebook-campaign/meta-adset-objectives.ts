@@ -20,6 +20,10 @@ export const OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   ],
   [MetaCampaignObjective.OUTCOME_SALES]: [
     MetaOptimizationGoal.OFFSITE_CONVERSIONS,
+    MetaOptimizationGoal.LANDING_PAGE_VIEWS,
+    MetaOptimizationGoal.LINK_CLICKS,
+    MetaOptimizationGoal.REACH,
+    MetaOptimizationGoal.IMPRESSIONS,
   ],
   [MetaCampaignObjective.OUTCOME_ENGAGEMENT]: [
     MetaOptimizationGoal.THRUPLAY,

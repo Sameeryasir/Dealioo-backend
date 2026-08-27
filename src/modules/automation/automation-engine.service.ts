@@ -27,6 +27,7 @@ import { ChatMessageService } from '../chat/chat-message.service';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
+import { GoogleWalletStatus } from '../google-wallet/google-wallet-status';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
@@ -41,11 +42,15 @@ import {
   isUnpaidGuestCondition,
 } from './automation-payment-condition.util';
 import { isCustomerVisitedCondition } from './automation-visit.util';
-import { interpolateAutomationEmailMessage } from './automation-email-merge.util';
+import {
+  interpolateAutomationEmailMessage,
+  isSignupPassLinkActionConfig,
+} from './automation-email-merge.util';
 import {
   collectSignupFilterConditions,
   msSince,
   parseSignupFilterCondition,
+  shouldSkipSignupBranchOutboundEmail,
   signupDelayToMs,
 } from './automation-signup-filter.util';
 
@@ -536,6 +541,23 @@ export class AutomationEngineService {
           execution.automation?.campaign?.campaignName?.trim() ||
           'the campaign';
         const purpose = execution.automation.purpose;
+
+        if (
+          shouldSkipSignupBranchOutboundEmail(
+            purpose,
+            (config ?? {}) as Record<string, unknown>,
+          )
+        ) {
+          await this.logService.createLog({
+            executionId: execution.id,
+            nodeId: node.id,
+            customerId: execution.customerId,
+            message:
+              'Signup branch email skipped (only initial Actions block sends email)',
+          });
+          return 'advance';
+        }
+
         const to = execution.customer?.email?.trim();
 
         this.logger.log(
@@ -1007,8 +1029,24 @@ export class AutomationEngineService {
   private async customerHasAddedPass(
     execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
   ): Promise<boolean> {
-    const raw = execution.executionContext ?? {};
-    return raw.passAdded === true || raw.walletPassAdded === true;
+    const funnelId = execution.automation?.funnelId ?? null;
+    if (!funnelId) {
+      return false;
+    }
+
+    // Always read live wallet state from the coupon row — never trust execution context flags.
+    const coupon = await this.couponService.findByCustomerAndFunnel(
+      execution.customerId,
+      funnelId,
+    );
+    if (!coupon) {
+      return false;
+    }
+
+    return (
+      coupon.googleWalletStatus === GoogleWalletStatus.ADDED ||
+      coupon.googleWalletAdded === true
+    );
   }
 
   private async shouldStopAfterCondition(
@@ -1172,6 +1210,18 @@ export class AutomationEngineService {
     config: Record<string, unknown>,
   ): Promise<NodeRunResult> {
     const purpose = execution.automation.purpose;
+
+    if (shouldSkipSignupBranchOutboundEmail(purpose, config)) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message:
+          'Signup branch reward email skipped (only initial Actions block sends email)',
+      });
+      return 'advance';
+    }
+
     const campaignName =
       execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
     const rewardName = String(config.rewardName ?? 'Return visit offer').trim();
@@ -1395,6 +1445,18 @@ export class AutomationEngineService {
       return 'advance';
     }
 
+    const purpose = execution.automation.purpose;
+    if (shouldSkipSignupBranchOutboundEmail(purpose, config)) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message:
+          'Signup branch message skipped (only initial Actions block sends email)',
+      });
+      return 'advance';
+    }
+
     const chatIdempotencyKey = this.resolveAutomationChatIdempotencyKey(
       execution,
       node.id,
@@ -1417,10 +1479,14 @@ export class AutomationEngineService {
       return 'advance';
     }
 
-    const purpose = execution.automation.purpose;
     const campaignName =
       execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
-    const passLink = (await this.resolvePassUrlForExecution(execution)) ?? '';
+    const isPassLinkStep =
+      purpose === AutomationPurpose.FUNNEL_SIGNUP &&
+      isSignupPassLinkActionConfig(config);
+    const passLink = isPassLinkStep
+      ? (await this.resolvePassUrlForExecution(execution)) ?? ''
+      : '';
     const body = interpolateAutomationEmailMessage(rawMessage, {
       customerName: execution.customer?.name ?? '',
       passLink,
@@ -1439,7 +1505,8 @@ export class AutomationEngineService {
       {
         subject,
         message: body,
-        ...(passLink
+        linkLabel: config.linkLabel,
+        ...(isPassLinkStep && passLink
           ? {
               ctaUrl: passLink,
               ctaLabel: linkLabel,
@@ -1634,6 +1701,13 @@ export class AutomationEngineService {
       }
     }
 
+    if (
+      purpose === AutomationPurpose.FUNNEL_SIGNUP &&
+      !isSignupPassLinkActionConfig(config)
+    ) {
+      return withoutQr;
+    }
+
     const passUrl = await this.resolvePassUrlForExecution(execution);
     if (!passUrl) {
       return withoutQr;
@@ -1776,7 +1850,7 @@ export class AutomationEngineService {
           qrOrRedemptionUrl: passUrl,
           qrToken: coupon.qrToken,
         })
-      ).openUrl;
+      ).saveUrl;
     } catch (err) {
       this.logger.warn(
         `Google Wallet save link skipped for execution ${execution.id}: ${err instanceof Error ? err.message : String(err)}`,

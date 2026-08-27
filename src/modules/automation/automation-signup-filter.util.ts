@@ -1,3 +1,5 @@
+import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
+
 export type SignupFilterCondition = {
   value?: unknown;
   negated?: unknown;
@@ -305,4 +307,28 @@ export function msSince(from: Date, to: Date = new Date()): number {
 
 export function hoursSince(from: Date, to: Date = new Date()): number {
   return msSince(from, to) / 3_600_000;
+}
+
+const SIGNUP_BRANCHES_WITH_OUTBOUND_EMAIL = new Set([
+  'wallet_reminder',
+  'follow_up',
+  'offer_expiry',
+  'offer_expiry_3d',
+  'offer_expiry_tomorrow',
+  'why_didnt_come',
+  'weekend_pass',
+]);
+
+export function shouldSkipSignupBranchOutboundEmail(
+  purpose: AutomationPurpose,
+  config: Record<string, unknown>,
+): boolean {
+  if (purpose !== AutomationPurpose.FUNNEL_SIGNUP) {
+    return false;
+  }
+  const flowBranch = String(config.flowBranch ?? '').trim();
+  if (!flowBranch) {
+    return false;
+  }
+  return !SIGNUP_BRANCHES_WITH_OUTBOUND_EMAIL.has(flowBranch);
 }

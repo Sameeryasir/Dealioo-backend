@@ -3,7 +3,7 @@ export function resolveAutomationFirstName(customerName: string): string {
   if (!trimmed) {
     return 'there';
   }
-  return trimmed.split(/\s+/)[0] || trimmed;
+  return (trimmed.split(/\s+/)[0] || trimmed).trim();
 }
 
 export function resolveAutomationLastName(customerName: string): string {
@@ -21,6 +21,17 @@ export function resolveAutomationLastName(customerName: string): string {
 export function resolveAutomationFullName(customerName: string): string {
   const trimmed = customerName.trim();
   return trimmed || 'there';
+}
+
+export function isSignupPassLinkActionConfig(
+  config: Record<string, unknown>,
+): boolean {
+  const linkLabel = String(config.linkLabel ?? '').trim().toLowerCase();
+  if (linkLabel === 'pass link') {
+    return true;
+  }
+
+  return /\[Pass Link\]/i.test(String(config.message ?? ''));
 }
 
 export function interpolateAutomationEmailMessage(
@@ -42,7 +53,8 @@ export function interpolateAutomationEmailMessage(
     .replace(/\[First Name\]/gi, firstName)
     .replace(/\[Last Name\]/gi, lastName || fullName)
     .replace(/\[Payment Link\]/gi, paymentLink)
-    .replace(/\[Pass Link\]/gi, passLink);
+    .replace(/\[Pass Link\]/gi, passLink)
+    .replace(/\s+,/g, ',');
 }
 
 export function splitAutomationEmailBody(message: string): string[] {

@@ -10,6 +10,7 @@ import type {
   AutomationEmailTemplateProps,
 } from '../../templates/automation/types';
 import { splitAutomationEmailBody } from './automation-email-merge.util';
+import { shouldShowPassLinkCta } from './automation-email-cta.util';
 
 @Injectable()
 export class AutomationEmailRendererService {
@@ -27,16 +28,21 @@ export class AutomationEmailRendererService {
 
   private buildPlainText(props: AutomationEmailTemplateProps): string {
     const message = props.message?.trim();
+    const walletUrl = props.googleWalletSaveUrl?.trim() || '';
+    const showPassLink = shouldShowPassLinkCta({
+      ctaLabel: props.ctaLabel,
+      ctaUrl: props.ctaUrl,
+      googleWalletSaveUrl: walletUrl,
+    });
+
     if (props.directBody && message) {
       const lines = [
         ...splitAutomationEmailBody(message),
         '',
-        props.ctaUrl
+        showPassLink && props.ctaUrl
           ? `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`
           : null,
-        props.googleWalletSaveUrl?.trim()
-          ? `Add to Google Wallet: ${props.googleWalletSaveUrl.trim()}`
-          : null,
+        walletUrl ? `Add to Google Wallet: ${walletUrl}` : null,
         '',
         'Best regards,',
         'Dealioo Team',
@@ -58,24 +64,20 @@ export class AutomationEmailRendererService {
       'Dealioo Team',
     ].filter((line): line is string => line !== null);
 
-    if (props.ctaUrl) {
+    if (showPassLink && props.ctaUrl) {
       lines.splice(3, 0, `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`);
     }
 
     if (props.qrImageDataUrl?.trim()) {
       lines.splice(
-        props.ctaUrl ? 4 : 3,
+        showPassLink && props.ctaUrl ? 4 : 3,
         0,
         'Your coupon QR code is included in the HTML version of this email.',
       );
     }
 
-    if (props.googleWalletSaveUrl?.trim()) {
-      lines.splice(
-        3,
-        0,
-        `Add to Google Wallet: ${props.googleWalletSaveUrl.trim()}`,
-      );
+    if (walletUrl) {
+      lines.splice(3, 0, `Add to Google Wallet: ${walletUrl}`);
     }
 
     return lines.join('\n');
