@@ -141,6 +141,34 @@ export class AutomationLogService {
       .getExists();
   }
 
+  async hasWalletFollowUpScheduled(executionId: number): Promise<boolean> {
+    return this.automationLogRepository
+      .createQueryBuilder('log')
+      .where('log.executionId = :executionId', { executionId })
+      .andWhere(
+        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
+        {
+          wait: 'Wait % minute(s) before checking Google Wallet / sending wallet reminder',
+          schedule: 'Scheduling wallet reminder email',
+        },
+      )
+      .getExists();
+  }
+
+  async hasExpiryFollowUpScheduled(executionId: number): Promise<boolean> {
+    return this.automationLogRepository
+      .createQueryBuilder('log')
+      .where('log.executionId = :executionId', { executionId })
+      .andWhere(
+        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
+        {
+          wait: 'Wait % minute(s) before checking offer expiry / sending expiry reminder',
+          schedule: 'Scheduling offer expiry reminder email',
+        },
+      )
+      .getExists();
+  }
+
   async countDistinctEmailRecipientsForAutomation(
     automationId: number,
   ): Promise<number> {

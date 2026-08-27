@@ -5,7 +5,7 @@ import type {
   PreparedAutomationEmail,
 } from './automation-email.types';
 
-export type UnpaidReminderBatchPhase = 'payment' | 'pass';
+export type UnpaidReminderBatchPhase = 'payment' | 'pass' | 'wallet' | 'expiry';
 
 export function unpaidReminderBatchJobId(
   executionId: number,
@@ -46,6 +46,18 @@ export type UnpaidReminderBatchJob = {
   passEmailNodeId?: number | null;
   waitBeforePassNodeId?: number | null;
   waitDelayMs?: number;
+  walletPrepared?: PreparedAutomationEmail | null;
+  walletEmailNodeId?: number | null;
+  waitBeforeWalletNodeId?: number | null;
+  waitBeforeWalletDelayMs?: number;
+  walletFilterNodeId?: number | null;
+  expiryPrepared?: PreparedAutomationEmail | null;
+  expiryEmailNodeId?: number | null;
+  waitBeforeExpiryNodeId?: number | null;
+  waitBeforeExpiryDelayMs?: number;
+  expiryFilterNodeId?: number | null;
+  expiryWithinAmount?: number | null;
+  expiryWithinUnit?: string | null;
 };
 
 export type ProcessExecutionJob = {

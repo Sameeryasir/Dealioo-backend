@@ -112,7 +112,12 @@ export function AutomationEmailLayout({
               className="dealioo-email-body"
               style={automationBody}
             >
-              {paragraph}
+              {paragraph.split('\n').map((line, lineIndex, lines) => (
+                <React.Fragment key={`p-${index}-line-${lineIndex}`}>
+                  {line}
+                  {lineIndex < lines.length - 1 ? <br /> : null}
+                </React.Fragment>
+              ))}
             </Text>
           ))}
 
@@ -153,7 +158,11 @@ export function AutomationEmailLayout({
                 <Button
                   href={ctaUrl}
                   target="_blank"
-                  style={automationCtaButton}
+                  style={{
+                    ...automationCtaButton,
+                    marginRight: showWalletCta ? '10px' : 0,
+                    marginBottom: '8px',
+                  }}
                 >
                   {ctaLabel}
                 </Button>
@@ -164,7 +173,7 @@ export function AutomationEmailLayout({
                   target="_blank"
                   style={{
                     ...automationCtaButton,
-                    marginTop: showPassLink ? '12px' : 0,
+                    marginBottom: '8px',
                   }}
                 >
                   Add to Google Wallet

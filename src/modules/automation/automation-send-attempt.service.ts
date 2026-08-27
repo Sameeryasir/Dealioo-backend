@@ -5,6 +5,8 @@ import { AutomationSendAttempt } from '../../db/entities/automation-send-attempt
 
 export const PAYMENT_REMINDER_EMAIL_ACTION = 'payment_reminder_email';
 export const PAYMENT_REMINDER_PASS_ACTION = 'payment_reminder_pass';
+export const PAYMENT_REMINDER_WALLET_ACTION = 'payment_reminder_wallet';
+export const PAYMENT_REMINDER_EXPIRY_ACTION = 'payment_reminder_expiry';
 
 @Injectable()
 export class AutomationSendAttemptService {

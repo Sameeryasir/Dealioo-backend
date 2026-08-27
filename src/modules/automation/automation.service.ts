@@ -40,6 +40,7 @@ import { requireAdminRole } from '../../utils/require-admin-role';
 import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
+import { GoogleWalletStatus } from '../google-wallet/google-wallet-status';
 import { ActivityService } from '../activity/activity.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { ChatMessageService } from '../chat/chat-message.service';
@@ -72,6 +73,8 @@ import {
   AutomationSendAttemptService,
   PAYMENT_REMINDER_EMAIL_ACTION,
   PAYMENT_REMINDER_PASS_ACTION,
+  PAYMENT_REMINDER_WALLET_ACTION,
+  PAYMENT_REMINDER_EXPIRY_ACTION,
 } from './automation-send-attempt.service';
 import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationExecutionRecoveryService } from './automation-execution-recovery.service';
@@ -100,6 +103,10 @@ import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.
 import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
 import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
+import {
+  signupDelayToMs,
+  normalizeSignupDelayUnit,
+} from './automation-signup-filter.util';
 
 @Injectable()
 export class AutomationService {
@@ -1309,6 +1316,12 @@ export class AutomationService {
 
     let passPrepared: PreparedAutomationEmail | null = null;
     let waitDelayMs = 0;
+    let walletPrepared: PreparedAutomationEmail | null = null;
+    let waitBeforeWalletDelayMs = 0;
+    let expiryPrepared: PreparedAutomationEmail | null = null;
+    let waitBeforeExpiryDelayMs = 0;
+    let expiryWithinAmount: number | null = null;
+    let expiryWithinUnit: string | null = null;
     if (plan.passEmailNode) {
       passPrepared = this.automationEmailService.prepareFromActionNode(
         plan.passEmailNode,
@@ -1323,6 +1336,43 @@ export class AutomationService {
           resolveWaitDelayMinutes(plan.waitBeforePassNode.config ?? {}) *
           60_000;
       }
+    }
+    if (plan.walletEmailNode) {
+      walletPrepared = this.automationEmailService.prepareFromActionNode(
+        plan.walletEmailNode,
+        automation.purpose,
+        { requireSubject: false, campaignName },
+      );
+      if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
+        walletPrepared.templateProps.ctaLabel = 'View my pass';
+      }
+      if (plan.waitBeforeWalletNode) {
+        waitBeforeWalletDelayMs =
+          resolveWaitDelayMinutes(plan.waitBeforeWalletNode.config ?? {}) *
+          60_000;
+      }
+    }
+    if (plan.expiryEmailNode) {
+      expiryPrepared = this.automationEmailService.prepareFromActionNode(
+        plan.expiryEmailNode,
+        automation.purpose,
+        { requireSubject: false, campaignName },
+      );
+      if (!String(expiryPrepared.templateProps.ctaLabel ?? '').trim()) {
+        expiryPrepared.templateProps.ctaLabel = 'Complete payment';
+      }
+      if (plan.waitBeforeExpiryNode) {
+        waitBeforeExpiryDelayMs =
+          resolveWaitDelayMinutes(plan.waitBeforeExpiryNode.config ?? {}) *
+          60_000;
+      }
+      const parsed = plan.expiryFilterNode
+        ? this.flowService.parseOfferExpiresWithin(
+            plan.expiryFilterNode.config ?? {},
+          )
+        : null;
+      expiryWithinAmount = parsed?.amount ?? 3;
+      expiryWithinUnit = parsed?.unit ?? 'days';
     }
 
     const unpaidCount =
@@ -1430,6 +1480,18 @@ export class AutomationService {
       passEmailNodeId: plan.passEmailNode?.id ?? null,
       waitBeforePassNodeId: plan.waitBeforePassNode?.id ?? null,
       waitDelayMs,
+      walletPrepared,
+      walletEmailNodeId: plan.walletEmailNode?.id ?? null,
+      waitBeforeWalletNodeId: plan.waitBeforeWalletNode?.id ?? null,
+      waitBeforeWalletDelayMs,
+      walletFilterNodeId: plan.walletFilterNode?.id ?? null,
+      expiryPrepared,
+      expiryEmailNodeId: plan.expiryEmailNode?.id ?? null,
+      waitBeforeExpiryNodeId: plan.waitBeforeExpiryNode?.id ?? null,
+      waitBeforeExpiryDelayMs,
+      expiryFilterNodeId: plan.expiryFilterNode?.id ?? null,
+      expiryWithinAmount,
+      expiryWithinUnit,
     };
 
     const { totalChunks, firstQueueJobId } =
@@ -1822,6 +1884,126 @@ export class AutomationService {
         });
         return;
       }
+    } else if (batchPhase === 'wallet') {
+      const beforeUnpaidCount = batch.recipients.length;
+      batch.recipients =
+        await this.recipientsService.filterStillUnpaidRecipients(
+          batch.funnelId,
+          batch.recipients,
+        );
+      const paidFiltered = Math.max(
+        0,
+        beforeUnpaidCount - batch.recipients.length,
+      );
+      if (paidFiltered > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsFiltered: paidFiltered,
+          recipientsSkipped: paidFiltered,
+        });
+      }
+
+      const beforeWalletCount = batch.recipients.length;
+      batch.recipients = await this.filterRecipientsWithoutGoogleWalletPass(
+        batch.funnelId,
+        batch.recipients,
+      );
+      const walletAlreadyAdded = Math.max(
+        0,
+        beforeWalletCount - batch.recipients.length,
+      );
+      if (walletAlreadyAdded > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsFiltered: walletAlreadyAdded,
+          recipientsSkipped: walletAlreadyAdded,
+        });
+      }
+
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.walletFilterNodeId ?? batch.emailNodeId,
+        customerId: firstCustomerId,
+        message: `Pass-added filter checked — ${batch.recipients.length} guest(s) still missing Google Wallet (skipped ${walletAlreadyAdded} already added). Next: send wallet reminder email.`,
+      });
+      this.logger.log(
+        `Payment reminder wallet filter execution=${batch.executionId} remaining=${batch.recipients.length} skippedAdded=${walletAlreadyAdded} next=wallet_email`,
+      );
+
+      if (batch.recipients.length === 0) {
+        await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+          sent: [],
+          allowEmptySent: true,
+        });
+        return;
+      }
+
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+    } else if (batchPhase === 'expiry') {
+      const beforeUnpaidCount = batch.recipients.length;
+      batch.recipients =
+        await this.recipientsService.filterStillUnpaidRecipients(
+          batch.funnelId,
+          batch.recipients,
+        );
+      const paidFiltered = Math.max(
+        0,
+        beforeUnpaidCount - batch.recipients.length,
+      );
+      if (paidFiltered > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsFiltered: paidFiltered,
+          recipientsSkipped: paidFiltered,
+        });
+      }
+
+      const beforeExpiryCount = batch.recipients.length;
+      const amount = batch.expiryWithinAmount ?? 3;
+      const unit = batch.expiryWithinUnit ?? 'days';
+      batch.recipients = await this.filterRecipientsOfferExpiresWithin(
+        batch.funnelId,
+        batch.recipients,
+        amount,
+        unit,
+      );
+      const skippedNotExpiring = Math.max(
+        0,
+        beforeExpiryCount - batch.recipients.length,
+      );
+      if (skippedNotExpiring > 0) {
+        void this.observabilityService.incrementMetrics(batch.executionId, {
+          recipientsFiltered: skippedNotExpiring,
+          recipientsSkipped: skippedNotExpiring,
+        });
+      }
+
+      await this.logService.createLog({
+        executionId: batch.executionId,
+        nodeId: batch.expiryFilterNodeId ?? batch.emailNodeId,
+        customerId: firstCustomerId,
+        message: `Offer-expiry filter checked (within ${amount} ${unit}) — ${batch.recipients.length} guest(s) match (skipped ${skippedNotExpiring}). Next: send expiry reminder email.`,
+      });
+      this.logger.log(
+        `Payment reminder expiry filter execution=${batch.executionId} remaining=${batch.recipients.length} skipped=${skippedNotExpiring} window=${amount}${unit}`,
+      );
+
+      if (batch.recipients.length === 0) {
+        await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
+          sent: [],
+          allowEmptySent: true,
+        });
+        return;
+      }
+
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
     } else {
       const beforeFilterCount = batch.recipients.length;
       batch.recipients =
@@ -1843,7 +2025,11 @@ export class AutomationService {
     const sendActionType =
       batchPhase === 'pass'
         ? PAYMENT_REMINDER_PASS_ACTION
-        : PAYMENT_REMINDER_EMAIL_ACTION;
+        : batchPhase === 'wallet'
+          ? PAYMENT_REMINDER_WALLET_ACTION
+          : batchPhase === 'expiry'
+            ? PAYMENT_REMINDER_EXPIRY_ACTION
+            : PAYMENT_REMINDER_EMAIL_ACTION;
     for (const recipient of batch.recipients) {
       if (recipient.customerId == null) {
         continue;
@@ -1904,8 +2090,15 @@ export class AutomationService {
 
     await this.executionService.markProcessing(batch.executionId);
 
-    const stepKey = batchPhase === 'pass' ? 'pass_email' : 'payment_email';
-    const stepLabel = batchPhase === 'pass' ? 'Pass Email' : 'Payment Email';
+    const stepKey = this.unpaidReminderStepKey(batchPhase);
+    const stepLabel =
+      batchPhase === 'pass'
+        ? 'Pass Email'
+        : batchPhase === 'wallet'
+          ? 'Wallet Reminder Email'
+          : batchPhase === 'expiry'
+            ? 'Offer Expiry Email'
+            : 'Payment Email';
     void this.observabilityService.startStep({
       executionId: batch.executionId,
       stepKey,
@@ -1953,6 +2146,49 @@ export class AutomationService {
       );
     }
 
+    if (batchPhase === 'wallet' && chunkIndex === 0) {
+      if (batch.walletFilterNodeId) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.walletFilterNodeId,
+          AutomationExecutionStatus.RUNNING,
+          null,
+        );
+        this.logger.log(
+          `Payment reminder on pass-added filter execution=${batch.executionId} node=${batch.walletFilterNodeId}`,
+        );
+      }
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      this.logger.log(
+        `Payment reminder sending wallet reminder email execution=${batch.executionId} node=${batch.emailNodeId} subject="${batch.prepared?.subject ?? ''}"`,
+      );
+    }
+
+    if (batchPhase === 'expiry' && chunkIndex === 0) {
+      if (batch.expiryFilterNodeId) {
+        await this.executionService.updateCurrentNode(
+          batch.executionId,
+          batch.expiryFilterNodeId,
+          AutomationExecutionStatus.RUNNING,
+          null,
+        );
+      }
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        batch.emailNodeId,
+        AutomationExecutionStatus.RUNNING,
+        null,
+      );
+      this.logger.log(
+        `Payment reminder sending expiry email execution=${batch.executionId} node=${batch.emailNodeId} subject="${batch.prepared?.subject ?? ''}"`,
+      );
+    }
+
     const sent: { customerId: number; email: string }[] = [];
     const pathSummary = batch.plan.nodes
       .map((node) => `order ${node.order}:${node.type}`)
@@ -1987,7 +2223,7 @@ export class AutomationService {
       executionId: batch.executionId,
       nodeId: batch.emailNodeId,
       customerId: firstCustomerId,
-      message: `${batchPhase === 'pass' ? 'Pass' : 'Payment'} reminder chunk ${chunkIndex + 1}/${totalChunks}: sending to ${batch.recipients.length} guest(s)`,
+      message: `${this.unpaidReminderPhaseLabel(batchPhase)} reminder chunk ${chunkIndex + 1}/${totalChunks}: sending to ${batch.recipients.length} guest(s)`,
     });
 
     if (isSmsBatch && !sendAsEmail) {
@@ -2049,7 +2285,7 @@ export class AutomationService {
       >();
 
       if (
-        batchPhase === 'payment' &&
+        (batchPhase === 'payment' || batchPhase === 'expiry') &&
         batch.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
       ) {
         for (const recipient of batch.recipients) {
@@ -2078,7 +2314,7 @@ export class AutomationService {
         }
       }
 
-      if (batchPhase === 'pass') {
+      if (batchPhase === 'pass' || batchPhase === 'wallet') {
         const passRecipients: EmailRecipient[] = [];
         for (const recipient of batch.recipients) {
           if (!recipient.customerId) {
@@ -2099,7 +2335,7 @@ export class AutomationService {
           const token = coupon?.qrToken?.trim();
           if (!coupon || !token) {
             this.logger.warn(
-              `QR pass email skipped for customer ${recipient.customerId} — no coupon/QR token`,
+              `${batchPhase} email skipped for customer ${recipient.customerId} — no coupon/QR token`,
             );
             continue;
           }
@@ -2146,7 +2382,7 @@ export class AutomationService {
 
         if (passRecipients.length === 0) {
           this.logger.warn(
-            `Payment reminder pass chunk skipped execution=${batch.executionId} — no recipients with pass links`,
+            `Payment reminder ${batchPhase} chunk skipped execution=${batch.executionId} — no recipients with pass links`,
           );
           await this.completeUnpaidReminderChunk(batch, batchPhase, totalChunks, {
             sent: [],
@@ -2267,7 +2503,7 @@ export class AutomationService {
       });
       void this.observabilityService.completeStep({
         executionId: batch.executionId,
-        stepKey: batchPhase === 'pass' ? 'pass_email' : 'payment_email',
+        stepKey: this.unpaidReminderStepKey(batchPhase),
         status: AutomationExecutionStepStatus.FAILED,
         error: message,
         recipientsFailed: batch.recipients.length,
@@ -2286,6 +2522,79 @@ export class AutomationService {
       sent,
       allowEmptySent: true,
     });
+  }
+
+  private unpaidReminderPhaseLabel(
+    batchPhase: UnpaidReminderBatchPhase,
+  ): string {
+    if (batchPhase === 'pass') return 'Pass';
+    if (batchPhase === 'wallet') return 'Wallet';
+    if (batchPhase === 'expiry') return 'Expiry';
+    return 'Payment';
+  }
+
+  private unpaidReminderStepKey(
+    batchPhase: UnpaidReminderBatchPhase,
+  ): string {
+    if (batchPhase === 'pass') return 'pass_email';
+    if (batchPhase === 'wallet') return 'wallet_email';
+    if (batchPhase === 'expiry') return 'expiry_email';
+    return 'payment_email';
+  }
+
+  private async filterRecipientsWithoutGoogleWalletPass(
+    funnelId: number,
+    recipients: EmailRecipient[],
+  ): Promise<EmailRecipient[]> {
+    const kept: EmailRecipient[] = [];
+    for (const recipient of recipients) {
+      if (recipient.customerId == null) {
+        continue;
+      }
+      const coupon = await this.couponService.findByCustomerAndFunnel(
+        recipient.customerId,
+        funnelId,
+      );
+      const alreadyAdded =
+        coupon != null &&
+        (coupon.googleWalletStatus === GoogleWalletStatus.ADDED ||
+          coupon.googleWalletAdded === true);
+      if (!alreadyAdded) {
+        kept.push(recipient);
+      }
+    }
+    return kept;
+  }
+
+  private async filterRecipientsOfferExpiresWithin(
+    funnelId: number,
+    recipients: EmailRecipient[],
+    amount: number,
+    unitRaw: string,
+  ): Promise<EmailRecipient[]> {
+    const unit = normalizeSignupDelayUnit(unitRaw) ?? 'days';
+    const thresholdMs = signupDelayToMs(amount, unit);
+    if (thresholdMs <= 0) {
+      return [];
+    }
+    const kept: EmailRecipient[] = [];
+    for (const recipient of recipients) {
+      if (recipient.customerId == null) {
+        continue;
+      }
+      const coupon = await this.couponService.findByCustomerAndFunnel(
+        recipient.customerId,
+        funnelId,
+      );
+      if (!coupon?.expiresAt) {
+        continue;
+      }
+      const msLeft = coupon.expiresAt.getTime() - Date.now();
+      if (msLeft > 0 && msLeft < thresholdMs) {
+        kept.push(recipient);
+      }
+    }
+    return kept;
   }
 
   private async completeUnpaidReminderChunk(
@@ -2318,7 +2627,7 @@ export class AutomationService {
         executionId: batch.executionId,
         nodeId: batch.emailNodeId,
         customerId: logCustomerId,
-        message: `${batchPhase === 'pass' ? 'Pass' : 'Payment'} reminder chunk ${chunkIndex + 1}/${total} finished (sent ${options.sent.length}, progress ${done}/${total})`,
+        message: `${this.unpaidReminderPhaseLabel(batchPhase)} reminder chunk ${chunkIndex + 1}/${total} finished (sent ${options.sent.length}, progress ${done}/${total})`,
       });
     }
 
@@ -2353,6 +2662,44 @@ export class AutomationService {
         batch.customerIds?.[0];
       if (logCustomerId != null) {
         await this.schedulePassFollowUpIfNeeded(batch, logCustomerId);
+      } else {
+        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+          allowEmptySent: true,
+        });
+      }
+      return;
+    }
+
+    if (
+      batchPhase === 'pass' &&
+      batch.walletPrepared &&
+      batch.walletEmailNodeId
+    ) {
+      const logCustomerId =
+        sent[0]?.customerId ??
+        batch.recipients[0]?.customerId ??
+        batch.customerIds?.[0];
+      if (logCustomerId != null) {
+        await this.scheduleWalletReminderIfNeeded(batch, logCustomerId);
+      } else {
+        await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
+          allowEmptySent: true,
+        });
+      }
+      return;
+    }
+
+    if (
+      batchPhase === 'wallet' &&
+      batch.expiryPrepared &&
+      batch.expiryEmailNodeId
+    ) {
+      const logCustomerId =
+        sent[0]?.customerId ??
+        batch.recipients[0]?.customerId ??
+        batch.customerIds?.[0];
+      if (logCustomerId != null) {
+        await this.scheduleExpiryReminderIfNeeded(batch, logCustomerId);
       } else {
         await this.finishUnpaidReminderBatchExecution(batch, batchPhase, [], {
           allowEmptySent: true,
@@ -2481,11 +2828,26 @@ export class AutomationService {
       message: 'Wait completed',
     });
 
+    const resume =
+      execution.executionContext?.paymentReminderResume ?? 'pass_after_wait';
+
     try {
-      await this.enqueuePaymentReminderPassPhaseFromExecution(
-        execution,
-        automation,
-      );
+      if (resume === 'expiry_after_wait') {
+        await this.enqueuePaymentReminderExpiryPhaseFromExecution(
+          execution,
+          automation,
+        );
+      } else if (resume === 'wallet_after_wait') {
+        await this.enqueuePaymentReminderWalletPhaseFromExecution(
+          execution,
+          automation,
+        );
+      } else {
+        await this.enqueuePaymentReminderPassPhaseFromExecution(
+          execution,
+          automation,
+        );
+      }
     } catch (error) {
       await this.executionService.updateCurrentNode(
         executionId,
@@ -2518,6 +2880,24 @@ export class AutomationService {
       passPrepared.templateProps.ctaLabel = 'View my pass';
     }
 
+    let walletPrepared: PreparedAutomationEmail | null = null;
+    let waitBeforeWalletDelayMs = 0;
+    if (plan.walletEmailNode) {
+      walletPrepared = this.automationEmailService.prepareFromActionNode(
+        plan.walletEmailNode,
+        automation.purpose,
+        { requireSubject: false, campaignName },
+      );
+      if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
+        walletPrepared.templateProps.ctaLabel = 'View my pass';
+      }
+      if (plan.waitBeforeWalletNode) {
+        waitBeforeWalletDelayMs =
+          resolveWaitDelayMinutes(plan.waitBeforeWalletNode.config ?? {}) *
+          60_000;
+      }
+    }
+
     await this.enqueuePaymentReminderPassPhase({
       executionId: execution.id,
       automationId: automation.id,
@@ -2536,6 +2916,11 @@ export class AutomationService {
       passEmailNodeId: plan.passEmailNode.id,
       waitBeforePassNodeId: plan.waitBeforePassNode?.id ?? null,
       waitDelayMs: 0,
+      walletPrepared,
+      walletEmailNodeId: plan.walletEmailNode?.id ?? null,
+      waitBeforeWalletNodeId: plan.waitBeforeWalletNode?.id ?? null,
+      waitBeforeWalletDelayMs,
+      walletFilterNodeId: plan.walletFilterNode?.id ?? null,
     });
   }
 
@@ -2581,6 +2966,18 @@ export class AutomationService {
       passEmailNodeId: batch.passEmailNodeId,
       waitBeforePassNodeId: batch.waitBeforePassNodeId,
       waitDelayMs: 0,
+      walletPrepared: batch.walletPrepared ?? null,
+      walletEmailNodeId: batch.walletEmailNodeId ?? null,
+      waitBeforeWalletNodeId: batch.waitBeforeWalletNodeId ?? null,
+      waitBeforeWalletDelayMs: batch.waitBeforeWalletDelayMs ?? 0,
+      walletFilterNodeId: batch.walletFilterNodeId ?? null,
+      expiryPrepared: batch.expiryPrepared ?? null,
+      expiryEmailNodeId: batch.expiryEmailNodeId ?? null,
+      waitBeforeExpiryNodeId: batch.waitBeforeExpiryNodeId ?? null,
+      waitBeforeExpiryDelayMs: batch.waitBeforeExpiryDelayMs ?? 0,
+      expiryFilterNodeId: batch.expiryFilterNodeId ?? null,
+      expiryWithinAmount: batch.expiryWithinAmount ?? null,
+      expiryWithinUnit: batch.expiryWithinUnit ?? null,
     };
 
     const { totalChunks } = await this.enqueueUnpaidReminderChunksFromPages({
@@ -2617,6 +3014,508 @@ export class AutomationService {
     });
   }
 
+  private async scheduleWalletReminderIfNeeded(
+    batch: UnpaidReminderBatchJob,
+    customerId: number,
+  ): Promise<void> {
+    if (!batch.walletPrepared || !batch.walletEmailNodeId) {
+      await this.finishUnpaidReminderBatchExecution(batch, 'pass', [], {
+        allowEmptySent: true,
+      });
+      return;
+    }
+
+    const execution = await this.executionService.findById(batch.executionId);
+    if (this.executionService.isTerminalExecutionStatus(execution.status)) {
+      return;
+    }
+
+    if (await this.logService.hasWalletFollowUpScheduled(batch.executionId)) {
+      if (execution.status === AutomationExecutionStatus.WAITING) {
+        return;
+      }
+      const waitNodeId =
+        batch.waitBeforeWalletNodeId ??
+        batch.walletFilterNodeId ??
+        batch.walletEmailNodeId;
+      if ((batch.waitBeforeWalletDelayMs ?? 0) > 0) {
+        await this.executionService.updateExecutionContext(batch.executionId, {
+          ...(execution.executionContext ?? {}),
+          paymentReminderResume: 'wallet_after_wait',
+        });
+      }
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        batch.waitBeforeWalletDelayMs && batch.waitBeforeWalletDelayMs > 0
+          ? new Date(Date.now() + batch.waitBeforeWalletDelayMs)
+          : null,
+      );
+      return;
+    }
+
+    const waitDelayMs = batch.waitBeforeWalletDelayMs ?? 0;
+    const waitMinutes = Math.round(waitDelayMs / 60_000);
+    await this.logService.createLog({
+      executionId: batch.executionId,
+      nodeId:
+        batch.waitBeforeWalletNodeId ??
+        batch.walletFilterNodeId ??
+        batch.walletEmailNodeId,
+      customerId,
+      message:
+        waitMinutes > 0
+          ? `Wait ${waitMinutes} minute(s) before checking Google Wallet / sending wallet reminder`
+          : 'Scheduling wallet reminder email',
+    });
+
+    if (waitDelayMs > 0) {
+      const waitNodeId =
+        batch.waitBeforeWalletNodeId ??
+        batch.walletFilterNodeId ??
+        batch.walletEmailNodeId;
+      await this.executionService.updateExecutionContext(batch.executionId, {
+        ...(execution.executionContext ?? {}),
+        paymentReminderResume: 'wallet_after_wait',
+      });
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        new Date(Date.now() + waitDelayMs),
+      );
+      void this.observabilityService.onWaiting({
+        executionId: batch.executionId,
+        nodeId: waitNodeId,
+        waitDelayMs,
+      });
+      void this.observabilityService.completeStep({
+        executionId: batch.executionId,
+        stepKey: 'pass_email',
+        status: AutomationExecutionStepStatus.COMPLETED,
+      });
+      return;
+    }
+
+    await this.enqueuePaymentReminderWalletPhase(batch);
+  }
+
+  private async enqueuePaymentReminderWalletPhaseFromExecution(
+    execution: AutomationExecution,
+    automation: Automation,
+  ): Promise<void> {
+    const plan = await this.flowService.buildExecutionPlan(automation.id);
+    if (!plan.walletEmailNode) {
+      await this.executionService.markCompleted(execution.id);
+      return;
+    }
+
+    const campaignName =
+      automation.campaign?.campaignName?.trim() || 'the campaign';
+    const walletPrepared = this.automationEmailService.prepareFromActionNode(
+      plan.walletEmailNode,
+      automation.purpose,
+      { requireSubject: false, campaignName },
+    );
+    if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
+      walletPrepared.templateProps.ctaLabel = 'View my pass';
+    }
+
+    let passPrepared: PreparedAutomationEmail | null = null;
+    if (plan.passEmailNode) {
+      passPrepared = this.automationEmailService.prepareFromActionNode(
+        plan.passEmailNode,
+        automation.purpose,
+        { requireSubject: false, campaignName },
+      );
+    }
+
+    await this.enqueuePaymentReminderWalletPhase({
+      executionId: execution.id,
+      automationId: automation.id,
+      businessId: automation.businessId,
+      funnelId: automation.funnelId!,
+      campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
+      emailNodeId: plan.walletEmailNode.id,
+      conditionNodeId:
+        plan.walletFilterNode?.id ??
+        plan.conditionNode?.id ??
+        plan.walletEmailNode.id,
+      purpose: automation.purpose,
+      prepared: walletPrepared,
+      plan,
+      recipients: [],
+      anchorStepOnTrigger: true,
+      batchPhase: 'wallet',
+      passPrepared,
+      passEmailNodeId: plan.passEmailNode?.id ?? null,
+      waitBeforePassNodeId: plan.waitBeforePassNode?.id ?? null,
+      waitDelayMs: 0,
+      walletPrepared,
+      walletEmailNodeId: plan.walletEmailNode.id,
+      waitBeforeWalletNodeId: plan.waitBeforeWalletNode?.id ?? null,
+      waitBeforeWalletDelayMs: 0,
+      walletFilterNodeId: plan.walletFilterNode?.id ?? null,
+      expiryPrepared: (() => {
+        if (!plan.expiryEmailNode) return null;
+        const prepared = this.automationEmailService.prepareFromActionNode(
+          plan.expiryEmailNode,
+          automation.purpose,
+          { requireSubject: false, campaignName },
+        );
+        if (!String(prepared.templateProps.ctaLabel ?? '').trim()) {
+          prepared.templateProps.ctaLabel = 'Complete payment';
+        }
+        return prepared;
+      })(),
+      expiryEmailNodeId: plan.expiryEmailNode?.id ?? null,
+      waitBeforeExpiryNodeId: plan.waitBeforeExpiryNode?.id ?? null,
+      waitBeforeExpiryDelayMs: plan.waitBeforeExpiryNode
+        ? resolveWaitDelayMinutes(plan.waitBeforeExpiryNode.config ?? {}) * 60_000
+        : 0,
+      expiryFilterNodeId: plan.expiryFilterNode?.id ?? null,
+      expiryWithinAmount: plan.expiryFilterNode
+        ? this.flowService.parseOfferExpiresWithin(
+            plan.expiryFilterNode.config ?? {},
+          )?.amount ?? 3
+        : null,
+      expiryWithinUnit: plan.expiryFilterNode
+        ? this.flowService.parseOfferExpiresWithin(
+            plan.expiryFilterNode.config ?? {},
+          )?.unit ?? 'days'
+        : null,
+    });
+  }
+
+  private async enqueuePaymentReminderWalletPhase(
+    batch: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'chunkIndex' | 'totalChunks'
+    >,
+  ): Promise<void> {
+    if (!batch.walletPrepared || !batch.walletEmailNodeId) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'pass',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    const unpaidCount =
+      await this.recipientsService.countUnpaidCustomersForFunnel(batch.funnelId);
+    if (unpaidCount === 0) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'wallet',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    const walletBase: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
+    > = {
+      executionId: batch.executionId,
+      automationId: batch.automationId,
+      businessId: batch.businessId,
+      funnelId: batch.funnelId,
+      campaignId: batch.campaignId,
+      emailNodeId: batch.walletEmailNodeId,
+      conditionNodeId:
+        batch.walletFilterNodeId ?? batch.conditionNodeId,
+      purpose: batch.purpose,
+      prepared: batch.walletPrepared,
+      plan: batch.plan,
+      anchorStepOnTrigger: batch.anchorStepOnTrigger,
+      batchPhase: 'wallet',
+      passPrepared: batch.passPrepared,
+      passEmailNodeId: batch.passEmailNodeId,
+      waitBeforePassNodeId: batch.waitBeforePassNodeId,
+      waitDelayMs: 0,
+      walletPrepared: batch.walletPrepared,
+      walletEmailNodeId: batch.walletEmailNodeId,
+      waitBeforeWalletNodeId: batch.waitBeforeWalletNodeId ?? null,
+      waitBeforeWalletDelayMs: 0,
+      walletFilterNodeId: batch.walletFilterNodeId,
+      expiryPrepared: batch.expiryPrepared ?? null,
+      expiryEmailNodeId: batch.expiryEmailNodeId ?? null,
+      waitBeforeExpiryNodeId: batch.waitBeforeExpiryNodeId ?? null,
+      waitBeforeExpiryDelayMs: batch.waitBeforeExpiryDelayMs ?? 0,
+      expiryFilterNodeId: batch.expiryFilterNodeId ?? null,
+      expiryWithinAmount: batch.expiryWithinAmount ?? null,
+      expiryWithinUnit: batch.expiryWithinUnit ?? null,
+    };
+
+    const { totalChunks } = await this.enqueueUnpaidReminderChunksFromPages({
+      funnelId: batch.funnelId,
+      baseBatch: walletBase,
+      delayMs: 0,
+      predictedTotalChunks: predictSendChunkCount(
+        unpaidCount,
+        AUTOMATION_SEND_CHUNK_SIZE,
+      ),
+    });
+
+    if (totalChunks === 0) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'wallet',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    await this.executionService.updateCurrentNode(
+      batch.executionId,
+      batch.walletEmailNodeId,
+      AutomationExecutionStatus.RUNNING,
+      null,
+    );
+    void this.observabilityService.completeStep({
+      executionId: batch.executionId,
+      stepKey: 'pass_email',
+      status: AutomationExecutionStepStatus.COMPLETED,
+    });
+    this.logger.log(
+      `Payment reminder wallet phase queued execution=${batch.executionId} chunks=${totalChunks} emailNode=${batch.walletEmailNodeId}`,
+    );
+  }
+
+  private async scheduleExpiryReminderIfNeeded(
+    batch: UnpaidReminderBatchJob,
+    customerId: number,
+  ): Promise<void> {
+    if (!batch.expiryPrepared || !batch.expiryEmailNodeId) {
+      await this.finishUnpaidReminderBatchExecution(batch, 'wallet', [], {
+        allowEmptySent: true,
+      });
+      return;
+    }
+
+    const execution = await this.executionService.findById(batch.executionId);
+    if (this.executionService.isTerminalExecutionStatus(execution.status)) {
+      return;
+    }
+
+    if (await this.logService.hasExpiryFollowUpScheduled(batch.executionId)) {
+      if (execution.status === AutomationExecutionStatus.WAITING) {
+        return;
+      }
+      const waitNodeId =
+        batch.waitBeforeExpiryNodeId ??
+        batch.expiryFilterNodeId ??
+        batch.expiryEmailNodeId;
+      if ((batch.waitBeforeExpiryDelayMs ?? 0) > 0) {
+        await this.executionService.updateExecutionContext(batch.executionId, {
+          ...(execution.executionContext ?? {}),
+          paymentReminderResume: 'expiry_after_wait',
+        });
+      }
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        batch.waitBeforeExpiryDelayMs && batch.waitBeforeExpiryDelayMs > 0
+          ? new Date(Date.now() + batch.waitBeforeExpiryDelayMs)
+          : null,
+      );
+      return;
+    }
+
+    const waitDelayMs = batch.waitBeforeExpiryDelayMs ?? 0;
+    const waitMinutes = Math.round(waitDelayMs / 60_000);
+    await this.logService.createLog({
+      executionId: batch.executionId,
+      nodeId:
+        batch.waitBeforeExpiryNodeId ??
+        batch.expiryFilterNodeId ??
+        batch.expiryEmailNodeId,
+      customerId,
+      message:
+        waitMinutes > 0
+          ? `Wait ${waitMinutes} minute(s) before checking offer expiry / sending expiry reminder`
+          : 'Scheduling offer expiry reminder email',
+    });
+
+    if (waitDelayMs > 0) {
+      const waitNodeId =
+        batch.waitBeforeExpiryNodeId ??
+        batch.expiryFilterNodeId ??
+        batch.expiryEmailNodeId;
+      await this.executionService.updateExecutionContext(batch.executionId, {
+        ...(execution.executionContext ?? {}),
+        paymentReminderResume: 'expiry_after_wait',
+      });
+      await this.executionService.updateCurrentNode(
+        batch.executionId,
+        waitNodeId,
+        AutomationExecutionStatus.WAITING,
+        new Date(Date.now() + waitDelayMs),
+      );
+      void this.observabilityService.onWaiting({
+        executionId: batch.executionId,
+        nodeId: waitNodeId,
+        waitDelayMs,
+      });
+      void this.observabilityService.completeStep({
+        executionId: batch.executionId,
+        stepKey: 'wallet_email',
+        status: AutomationExecutionStepStatus.COMPLETED,
+      });
+      return;
+    }
+
+    await this.enqueuePaymentReminderExpiryPhase(batch);
+  }
+
+  private async enqueuePaymentReminderExpiryPhaseFromExecution(
+    execution: AutomationExecution,
+    automation: Automation,
+  ): Promise<void> {
+    const plan = await this.flowService.buildExecutionPlan(automation.id);
+    if (!plan.expiryEmailNode) {
+      await this.executionService.markCompleted(execution.id);
+      return;
+    }
+
+    const campaignName =
+      automation.campaign?.campaignName?.trim() || 'the campaign';
+    const expiryPrepared = this.automationEmailService.prepareFromActionNode(
+      plan.expiryEmailNode,
+      automation.purpose,
+      { requireSubject: false, campaignName },
+    );
+    if (!String(expiryPrepared.templateProps.ctaLabel ?? '').trim()) {
+      expiryPrepared.templateProps.ctaLabel = 'Complete payment';
+    }
+    const parsed = plan.expiryFilterNode
+      ? this.flowService.parseOfferExpiresWithin(
+          plan.expiryFilterNode.config ?? {},
+        )
+      : null;
+
+    await this.enqueuePaymentReminderExpiryPhase({
+      executionId: execution.id,
+      automationId: automation.id,
+      businessId: automation.businessId,
+      funnelId: automation.funnelId!,
+      campaignId: automation.campaignId ?? automation.campaign?.id ?? null,
+      emailNodeId: plan.expiryEmailNode.id,
+      conditionNodeId:
+        plan.expiryFilterNode?.id ??
+        plan.conditionNode?.id ??
+        plan.expiryEmailNode.id,
+      purpose: automation.purpose,
+      prepared: expiryPrepared,
+      plan,
+      recipients: [],
+      anchorStepOnTrigger: true,
+      batchPhase: 'expiry',
+      expiryPrepared,
+      expiryEmailNodeId: plan.expiryEmailNode.id,
+      waitBeforeExpiryNodeId: plan.waitBeforeExpiryNode?.id ?? null,
+      waitBeforeExpiryDelayMs: 0,
+      expiryFilterNodeId: plan.expiryFilterNode?.id ?? null,
+      expiryWithinAmount: parsed?.amount ?? 3,
+      expiryWithinUnit: parsed?.unit ?? 'days',
+    });
+  }
+
+  private async enqueuePaymentReminderExpiryPhase(
+    batch: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'chunkIndex' | 'totalChunks'
+    >,
+  ): Promise<void> {
+    if (!batch.expiryPrepared || !batch.expiryEmailNodeId) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'wallet',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    const unpaidCount =
+      await this.recipientsService.countUnpaidCustomersForFunnel(batch.funnelId);
+    if (unpaidCount === 0) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'expiry',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    const expiryBase: Omit<
+      UnpaidReminderBatchJob,
+      'customerIds' | 'recipients' | 'chunkIndex' | 'totalChunks'
+    > = {
+      executionId: batch.executionId,
+      automationId: batch.automationId,
+      businessId: batch.businessId,
+      funnelId: batch.funnelId,
+      campaignId: batch.campaignId,
+      emailNodeId: batch.expiryEmailNodeId,
+      conditionNodeId: batch.expiryFilterNodeId ?? batch.conditionNodeId,
+      purpose: batch.purpose,
+      prepared: batch.expiryPrepared,
+      plan: batch.plan,
+      anchorStepOnTrigger: batch.anchorStepOnTrigger,
+      batchPhase: 'expiry',
+      expiryPrepared: batch.expiryPrepared,
+      expiryEmailNodeId: batch.expiryEmailNodeId,
+      waitBeforeExpiryNodeId: batch.waitBeforeExpiryNodeId ?? null,
+      waitBeforeExpiryDelayMs: 0,
+      expiryFilterNodeId: batch.expiryFilterNodeId ?? null,
+      expiryWithinAmount: batch.expiryWithinAmount ?? 3,
+      expiryWithinUnit: batch.expiryWithinUnit ?? 'days',
+    };
+
+    const { totalChunks } = await this.enqueueUnpaidReminderChunksFromPages({
+      funnelId: batch.funnelId,
+      baseBatch: expiryBase,
+      delayMs: 0,
+      predictedTotalChunks: predictSendChunkCount(
+        unpaidCount,
+        AUTOMATION_SEND_CHUNK_SIZE,
+      ),
+    });
+
+    if (totalChunks === 0) {
+      await this.finishUnpaidReminderBatchExecution(
+        batch as UnpaidReminderBatchJob,
+        'expiry',
+        [],
+        { allowEmptySent: true },
+      );
+      return;
+    }
+
+    await this.executionService.updateCurrentNode(
+      batch.executionId,
+      batch.expiryEmailNodeId,
+      AutomationExecutionStatus.RUNNING,
+      null,
+    );
+    void this.observabilityService.completeStep({
+      executionId: batch.executionId,
+      stepKey: 'wallet_email',
+      status: AutomationExecutionStepStatus.COMPLETED,
+    });
+    this.logger.log(
+      `Payment reminder expiry phase queued execution=${batch.executionId} chunks=${totalChunks} emailNode=${batch.expiryEmailNodeId} window=${batch.expiryWithinAmount ?? 3}${batch.expiryWithinUnit ?? 'days'}`,
+    );
+  }
+
   private async finishUnpaidReminderBatchExecution(
     batch: UnpaidReminderBatchJob,
     batchPhase: UnpaidReminderBatchPhase,
@@ -2634,7 +3533,11 @@ export class AutomationService {
         message:
           batchPhase === 'pass'
             ? `Flow completed (node_order end). QR pass emails sent to ${sent.length} customer(s): ${summary}`
-            : `Flow completed (node_order end). Emails sent to ${sent.length} customer(s): ${summary}`,
+            : batchPhase === 'wallet'
+              ? `Flow completed (node_order end). Wallet reminder emails sent to ${sent.length} customer(s): ${summary}`
+              : batchPhase === 'expiry'
+                ? `Flow completed (node_order end). Offer expiry emails sent to ${sent.length} customer(s): ${summary}`
+                : `Flow completed (node_order end). Emails sent to ${sent.length} customer(s): ${summary}`,
       });
     } else if (!options?.allowEmptySent && batch.recipients[0]?.customerId) {
       await this.logService.createLog({
@@ -2670,7 +3573,7 @@ export class AutomationService {
 
     void this.observabilityService.completeStep({
       executionId: batch.executionId,
-      stepKey: batchPhase === 'pass' ? 'pass_email' : 'payment_email',
+      stepKey: this.unpaidReminderStepKey(batchPhase),
       status: AutomationExecutionStepStatus.COMPLETED,
     });
     void this.observabilityService.onExecutionFinished({
