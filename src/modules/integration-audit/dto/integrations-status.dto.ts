@@ -8,6 +8,7 @@ export type PublicFacebookIntegrationStatus = {
   status: string | null;
   metaOauthScopes: string[];
   missingRequiredScopes: string[];
+  metaAdAccountId: string | null;
 };
 
 export type PublicGoogleAdsIntegrationStatus = {

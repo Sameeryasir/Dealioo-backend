@@ -40,6 +40,7 @@ export class IntegrationsStatusService {
         status: facebook.status,
         metaOauthScopes: facebook.metaOauthScopes,
         missingRequiredScopes: facebook.missingRequiredScopes,
+        metaAdAccountId: facebook.metaAdAccountId?.trim() || null,
       },
       googleAds: {
         connected: googleAds.connected,
