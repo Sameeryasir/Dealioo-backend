@@ -131,6 +131,21 @@ export class FacebookCampaignController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Delete('business/:businessId/drafts/:draftId')
+  @HttpCode(HttpStatus.OK)
+  async deleteDraft(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<{ deleted: true; draftId: string }> {
+    return this.metaCampaignDraftService.deleteDraft(
+      req.user,
+      businessId,
+      draftId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/drafts/:draftId/publish-status')
   async getPublishStatus(
     @Req() req,

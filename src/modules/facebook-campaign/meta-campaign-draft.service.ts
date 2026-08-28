@@ -409,6 +409,54 @@ export class MetaCampaignDraftService {
     return drafts.map((draft) => this.toResponse(draft));
   }
 
+  async deleteDraft(
+    user: User,
+    businessId: number,
+    draftId: string,
+  ): Promise<{ deleted: true; draftId: string }> {
+    await this.loadOwnedBusiness(user, businessId, 'create');
+
+    const draft = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        businessId,
+        userId: user.id,
+      },
+    });
+
+    if (!draft) {
+      throw new NotFoundException('Campaign draft not found.');
+    }
+
+    const status = (draft.status ?? '').toLowerCase();
+    const publishStatus = (draft.publishStatus ?? '').toUpperCase();
+    const isPublishing =
+      status === 'publishing' ||
+      publishStatus === 'QUEUED' ||
+      publishStatus === 'PUBLISHING' ||
+      publishStatus === 'RUNNING';
+    const isPublished =
+      status === 'published' ||
+      publishStatus === 'PUBLISHED' ||
+      Boolean(draft.metaAdId);
+
+    if (isPublishing) {
+      throw new BadRequestException(
+        'This campaign is publishing. Wait for it to finish before deleting.',
+      );
+    }
+
+    if (isPublished) {
+      throw new BadRequestException(
+        'Published campaigns cannot be deleted here. Delete them from Meta Ads instead.',
+      );
+    }
+
+    await this.draftRepository.remove(draft);
+
+    return { deleted: true, draftId: draft.id };
+  }
+
   private mergeCompletedSteps(
     existing: number[] | null | undefined,
     next: number[],

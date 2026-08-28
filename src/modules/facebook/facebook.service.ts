@@ -1377,14 +1377,22 @@ export class FacebookService {
       await this.metaTokenService.assertBusinessMetaToken(business);
 
     const response = await this.graphGetWithToken<{
-      data?: Array<{ id?: string; name?: string }>;
-    }>('/me/accounts', accessToken, { fields: 'id,name', limit: '50' });
+      data?: Array<{
+        id?: string;
+        name?: string;
+        picture?: { data?: { url?: string } };
+      }>;
+    }>('/me/accounts', accessToken, {
+      fields: 'id,name,picture.type(large)',
+      limit: '50',
+    });
 
     return (response.data ?? [])
       .filter((row) => row.id?.trim())
       .map((row) => ({
         id: row.id!.trim(),
         name: row.name?.trim() ?? null,
+        pictureUrl: row.picture?.data?.url?.trim() || null,
       }));
   }
 

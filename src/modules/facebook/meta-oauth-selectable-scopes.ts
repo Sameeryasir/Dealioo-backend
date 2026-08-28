@@ -2,6 +2,8 @@ import { SELECTABLE_META_OAUTH_SCOPES } from './dto/connect-facebook.dto';
 
 export const META_IDENTITY_SCOPE = 'public_profile';
 
+export const META_ADS_MANAGEMENT_PAGE_SCOPE = 'pages_read_engagement';
+
 export function normalizeSelectableMetaScopes(raw: string[]): string[] {
   const allowed = new Set<string>(SELECTABLE_META_OAUTH_SCOPES);
   return [
@@ -25,7 +27,13 @@ export function assertRequestedMetaScopesSelected(selected: string[]): string[] 
 
 export function buildMetaOAuthDialogScopes(selected: string[]): string[] {
   const selectable = assertRequestedMetaScopesSelected(selected);
-  return [...new Set([META_IDENTITY_SCOPE, ...selectable])];
+  const scopes = new Set<string>([META_IDENTITY_SCOPE, ...selectable]);
+
+  if (selectable.includes('ads_management')) {
+    scopes.add(META_ADS_MANAGEMENT_PAGE_SCOPE);
+  }
+
+  return [...scopes];
 }
 
 export function filterGrantedSelectableScopes(
@@ -50,6 +58,7 @@ export function findMissingRequestedScopes(
     granted.map((scope) => scope.trim()).filter(Boolean),
   );
   return normalizeSelectableMetaScopes(requestedSelectable).filter(
-    (scope) => !grantedSet.has(scope),
+    (scope) =>
+      scope !== META_ADS_MANAGEMENT_PAGE_SCOPE && !grantedSet.has(scope),
   );
 }

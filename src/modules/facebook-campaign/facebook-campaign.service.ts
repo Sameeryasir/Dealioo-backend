@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
+import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
 import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
@@ -77,6 +78,8 @@ export class FacebookCampaignService {
   constructor(
     @InjectRepository(FacebookCampaign)
     private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
+    @InjectRepository(MetaCampaignDraft)
+    private readonly metaCampaignDraftRepository: Repository<MetaCampaignDraft>,
     @InjectRepository(MetaCampaignError)
     private readonly metaCampaignErrorRepository: Repository<MetaCampaignError>,
     @InjectRepository(Business)
@@ -380,6 +383,11 @@ export class FacebookCampaignService {
     await deleteMetaObject(campaignId, accessToken);
 
     await this.facebookCampaignRepository.delete({
+      businessId,
+      metaCampaignId: campaignId,
+    });
+
+    await this.metaCampaignDraftRepository.delete({
       businessId,
       metaCampaignId: campaignId,
     });
