@@ -2590,7 +2590,7 @@ export class AutomationService {
         continue;
       }
       const msLeft = coupon.expiresAt.getTime() - Date.now();
-      if (msLeft > 0 && msLeft < thresholdMs) {
+      if (msLeft > 0 && msLeft <= thresholdMs) {
         kept.push(recipient);
       }
     }

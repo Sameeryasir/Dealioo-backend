@@ -1020,7 +1020,7 @@ export class AutomationEngineService {
         return false;
       }
       const msLeft = coupon.expiresAt.getTime() - Date.now();
-      return msLeft > 0 && msLeft < signupDelayToMs(amount, unit);
+      return msLeft > 0 && msLeft <= signupDelayToMs(amount, unit);
     }
 
     return true;
