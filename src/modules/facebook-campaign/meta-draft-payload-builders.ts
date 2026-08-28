@@ -4,6 +4,7 @@ import { AdSetPlacementsDto, AdSetStepDataDto } from './dto/adset-step-data.dto'
 import { CampaignStepDataDto } from './dto/meta-campaign-draft-response.dto';
 import {
   MetaCreativeFormat,
+  MetaDestinationType,
   MetaGender,
 } from './meta-campaign.constants';
 import { budgetToMetaMinorUnits } from './meta-adset-draft-validation';
@@ -29,6 +30,21 @@ type DraftLocationTarget = {
   metaKey?: string;
   metaType?: 'country' | 'region' | 'city';
 };
+
+/** Meta rejects FACEBOOK_PAGE for Awareness and several other outcomes. */
+export function resolveMetaAdSetDestinationType(
+  destinationType: string | null | undefined,
+): string {
+  const normalized = destinationType?.trim().toUpperCase() || '';
+  if (
+    normalized === MetaDestinationType.WEBSITE ||
+    normalized === MetaDestinationType.MESSENGER ||
+    normalized === 'APP'
+  ) {
+    return normalized;
+  }
+  return MetaDestinationType.WEBSITE;
+}
 
 export function draftDateTimeToUnix(dateTime: string): number {
   const iso = dateTime.split(' (')[0].trim();
@@ -519,13 +535,17 @@ export async function buildAdSetPayloadFromDraft(
     targeting.genders = genders;
   }
 
+  // Meta only allows WEBSITE / APP / MESSENGER for many outcome objectives.
+  // Older drafts stored FACEBOOK_PAGE for Awareness — coerce on publish.
+  const destinationType = resolveMetaAdSetDestinationType(adSet.destinationType);
+
   const body: Record<string, unknown> = {
     name: adSet.name,
     campaign_id: metaCampaignId,
     billing_event: adSet.billingEvent,
     optimization_goal: adSet.optimizationGoal,
     bid_strategy: adSet.bidStrategy,
-    destination_type: adSet.destinationType,
+    destination_type: destinationType,
     is_adset_budget_sharing_enabled: false,
     targeting,
     start_time: draftDateTimeToUnix(adSet.startDateTime),
@@ -557,13 +577,6 @@ export async function buildAdSetPayloadFromDraft(
       pixel_id: adSet.promotedObject.pixelId,
       custom_event_type: adSet.promotedObject.customEventType || undefined,
       page_id: adSet.promotedObject.pageId || undefined,
-    };
-  } else if (
-    adSet.destinationType === 'FACEBOOK_PAGE' &&
-    adSet.promotedObject?.pageId
-  ) {
-    body.promoted_object = {
-      page_id: adSet.promotedObject.pageId,
     };
   }
 
