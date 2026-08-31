@@ -4,6 +4,13 @@ export const META_IDENTITY_SCOPE = 'public_profile';
 
 export const META_ADS_MANAGEMENT_PAGE_SCOPE = 'pages_read_engagement';
 
+export const META_ADS_MANAGEMENT_PAGES_SHOW_LIST_SCOPE = 'pages_show_list';
+
+export const META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES = [
+  META_ADS_MANAGEMENT_PAGES_SHOW_LIST_SCOPE,
+  META_ADS_MANAGEMENT_PAGE_SCOPE,
+] as const;
+
 export function normalizeSelectableMetaScopes(raw: string[]): string[] {
   const allowed = new Set<string>(SELECTABLE_META_OAUTH_SCOPES);
   return [
@@ -30,7 +37,9 @@ export function buildMetaOAuthDialogScopes(selected: string[]): string[] {
   const scopes = new Set<string>([META_IDENTITY_SCOPE, ...selectable]);
 
   if (selectable.includes('ads_management')) {
-    scopes.add(META_ADS_MANAGEMENT_PAGE_SCOPE);
+    for (const scope of META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES) {
+      scopes.add(scope);
+    }
   }
 
   return [...scopes];
@@ -57,8 +66,8 @@ export function findMissingRequestedScopes(
   const grantedSet = new Set(
     granted.map((scope) => scope.trim()).filter(Boolean),
   );
+  const softFail = new Set<string>(META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES);
   return normalizeSelectableMetaScopes(requestedSelectable).filter(
-    (scope) =>
-      scope !== META_ADS_MANAGEMENT_PAGE_SCOPE && !grantedSet.has(scope),
+    (scope) => !softFail.has(scope) && !grantedSet.has(scope),
   );
 }

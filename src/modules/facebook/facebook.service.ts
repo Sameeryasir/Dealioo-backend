@@ -55,7 +55,7 @@ import {
   findMissingRequestedScopes,
   assertRequestedMetaScopesSelected,
   normalizeSelectableMetaScopes,
-  META_ADS_MANAGEMENT_PAGE_SCOPE,
+  META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES,
 } from './meta-oauth-selectable-scopes';
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
@@ -1324,10 +1324,12 @@ export class FacebookService {
 
     const requiredScopes = [...requestedScopes];
 
+    const softFailPageScopes = new Set<string>(
+      META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES,
+    );
     const missingRequiredScopes = requiredScopes.filter(
       (scope) =>
-        scope !== META_ADS_MANAGEMENT_PAGE_SCOPE &&
-        !grantedScopes.includes(scope),
+        !softFailPageScopes.has(scope) && !grantedScopes.includes(scope),
     );
 
     const hasAdsScope =
