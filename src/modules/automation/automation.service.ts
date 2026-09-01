@@ -103,6 +103,7 @@ import { UpdateAutomationNodeDto } from './automationDto/update-automation-node.
 import { BootstrapAutomationGraphDto } from './automationDto/bootstrap-automation-graph.dto';
 import { resolveWaitDelayMinutes } from './automation-wait.util';
 import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
+import { AutomationGraphValidatorService } from './engine/automation-graph-validator.service';
 import {
   signupDelayToMs,
   normalizeSignupDelayUnit,
@@ -148,6 +149,7 @@ export class AutomationService {
     private readonly couponService: CouponService,
     private readonly googleWalletService: GoogleWalletService,
     private readonly sendAttemptService: AutomationSendAttemptService,
+    private readonly graphValidator: AutomationGraphValidatorService,
   ) {}
 
   async createAutomation(
@@ -429,6 +431,7 @@ export class AutomationService {
   async publishAutomation(id: number, user: User): Promise<Automation> {
     requireAdminRole(user, 'You do not have permission to publish automations.');
     const automation = await this.findAutomationById(id);
+    await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     automation.published = true;
     const saved = await this.automationRepository.save(automation);
     await this.bumpAutomationGraphVersion(saved.id);
@@ -439,6 +442,7 @@ export class AutomationService {
   async activateAutomation(id: number, user: User): Promise<Automation> {
     requireAdminRole(user, 'You do not have permission to activate automations.');
     const automation = await this.findAutomationById(id);
+    await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     await this.assertPaymentReminderScheduleForAutomation(automation);
     const wasActive = automation.isActive;
     automation.isActive = true;
@@ -879,6 +883,7 @@ export class AutomationService {
       automationId: dto.automationId,
       sourceNodeId: dto.sourceNodeId,
       targetNodeId: dto.targetNodeId,
+      branch: dto.branch?.trim() || null,
     });
 
     const saved = await this.connectionRepository.save(connection);
@@ -939,6 +944,7 @@ export class AutomationService {
             automationId,
             sourceNodeId: source.id,
             targetNodeId: target.id,
+            branch: connectionDef.branch?.trim() || null,
           }),
         );
       }
@@ -1306,14 +1312,6 @@ export class AutomationService {
       },
     );
 
-    if (
-      automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER
-    ) {
-      if (!String(prepared.templateProps.ctaLabel ?? '').trim()) {
-        prepared.templateProps.ctaLabel = 'Complete payment';
-      }
-    }
-
     let passPrepared: PreparedAutomationEmail | null = null;
     let waitDelayMs = 0;
     let walletPrepared: PreparedAutomationEmail | null = null;
@@ -1328,9 +1326,6 @@ export class AutomationService {
         automation.purpose,
         { requireSubject: false, campaignName },
       );
-      if (!String(passPrepared.templateProps.ctaLabel ?? '').trim()) {
-        passPrepared.templateProps.ctaLabel = 'View my pass';
-      }
       if (plan.waitBeforePassNode) {
         waitDelayMs =
           resolveWaitDelayMinutes(plan.waitBeforePassNode.config ?? {}) *
@@ -1343,9 +1338,6 @@ export class AutomationService {
         automation.purpose,
         { requireSubject: false, campaignName },
       );
-      if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
-        walletPrepared.templateProps.ctaLabel = 'View my pass';
-      }
       if (plan.waitBeforeWalletNode) {
         waitBeforeWalletDelayMs =
           resolveWaitDelayMinutes(plan.waitBeforeWalletNode.config ?? {}) *
@@ -1358,9 +1350,6 @@ export class AutomationService {
         automation.purpose,
         { requireSubject: false, campaignName },
       );
-      if (!String(expiryPrepared.templateProps.ctaLabel ?? '').trim()) {
-        expiryPrepared.templateProps.ctaLabel = 'Complete payment';
-      }
       if (plan.waitBeforeExpiryNode) {
         waitBeforeExpiryDelayMs =
           resolveWaitDelayMinutes(plan.waitBeforeExpiryNode.config ?? {}) *
@@ -2876,9 +2865,6 @@ export class AutomationService {
       automation.purpose,
       { requireSubject: false, campaignName },
     );
-    if (!String(passPrepared.templateProps.ctaLabel ?? '').trim()) {
-      passPrepared.templateProps.ctaLabel = 'View my pass';
-    }
 
     let walletPrepared: PreparedAutomationEmail | null = null;
     let waitBeforeWalletDelayMs = 0;
@@ -2888,9 +2874,6 @@ export class AutomationService {
         automation.purpose,
         { requireSubject: false, campaignName },
       );
-      if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
-        walletPrepared.templateProps.ctaLabel = 'View my pass';
-      }
       if (plan.waitBeforeWalletNode) {
         waitBeforeWalletDelayMs =
           resolveWaitDelayMinutes(plan.waitBeforeWalletNode.config ?? {}) *
@@ -3118,9 +3101,6 @@ export class AutomationService {
       automation.purpose,
       { requireSubject: false, campaignName },
     );
-    if (!String(walletPrepared.templateProps.ctaLabel ?? '').trim()) {
-      walletPrepared.templateProps.ctaLabel = 'View my pass';
-    }
 
     let passPrepared: PreparedAutomationEmail | null = null;
     if (plan.passEmailNode) {
@@ -3164,9 +3144,6 @@ export class AutomationService {
           automation.purpose,
           { requireSubject: false, campaignName },
         );
-        if (!String(prepared.templateProps.ctaLabel ?? '').trim()) {
-          prepared.templateProps.ctaLabel = 'Complete payment';
-        }
         return prepared;
       })(),
       expiryEmailNodeId: plan.expiryEmailNode?.id ?? null,
@@ -3391,9 +3368,6 @@ export class AutomationService {
       automation.purpose,
       { requireSubject: false, campaignName },
     );
-    if (!String(expiryPrepared.templateProps.ctaLabel ?? '').trim()) {
-      expiryPrepared.templateProps.ctaLabel = 'Complete payment';
-    }
     const parsed = plan.expiryFilterNode
       ? this.flowService.parseOfferExpiresWithin(
           plan.expiryFilterNode.config ?? {},

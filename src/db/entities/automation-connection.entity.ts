@@ -29,6 +29,9 @@ export class AutomationConnection {
   @Column({ name: 'target_node_id' })
   targetNodeId: number;
 
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  branch: string | null;
+
   @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'target_node_id' })
   targetNode: AutomationNode;

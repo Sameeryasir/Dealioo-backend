@@ -6,6 +6,8 @@ import {
   IsInt,
   IsObject,
   IsOptional,
+  IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -45,6 +47,11 @@ export class BootstrapAutomationGraphConnectionDto {
   @IsInt()
   @Min(0)
   targetIndex!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  branch?: string;
 }
 
 export class BootstrapAutomationGraphDto {

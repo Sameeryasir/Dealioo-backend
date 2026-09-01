@@ -36,18 +36,11 @@ export class AutomationEmailRendererService {
     });
 
     if (props.directBody && message) {
-      const lines = [
-        ...splitAutomationEmailBody(message),
-        '',
-        showPassLink && props.ctaUrl
-          ? `${props.ctaLabel ?? 'Open link'}: ${props.ctaUrl}`
-          : null,
-        walletUrl ? `Add to Google Wallet: ${walletUrl}` : null,
-        '',
-        'Best regards,',
-        'Dealioo Team',
-      ].filter((line): line is string => line !== null);
-      return lines.join('\n');
+      return splitAutomationEmailBody(message).join('\n\n');
+    }
+
+    if (props.directBody) {
+      return '';
     }
 
     const name = props.customerName?.trim() || 'there';

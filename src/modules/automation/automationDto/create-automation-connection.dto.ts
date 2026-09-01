@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class CreateAutomationConnectionDto {
   @Type(() => Number)
@@ -16,4 +16,9 @@ export class CreateAutomationConnectionDto {
   @IsInt()
   @Min(1)
   targetNodeId: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  branch?: string;
 }

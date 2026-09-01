@@ -9,6 +9,7 @@ export type AutomationExecutionContext = {
   pausedFromStatus?: string;
   pausedAt?: string;
   paymentReminderResume?: string;
+  nodeOutputs?: Record<string, Record<string, unknown>>;
 };
 
 export type AutomationExecutionSnapshot = {
@@ -64,6 +65,9 @@ export function normalizeExecutionContext(
     ...(typeof raw.pausedAt === 'string' ? { pausedAt: raw.pausedAt } : {}),
     ...(typeof raw.paymentReminderResume === 'string'
       ? { paymentReminderResume: raw.paymentReminderResume }
+      : {}),
+    ...(raw.nodeOutputs && typeof raw.nodeOutputs === 'object'
+      ? { nodeOutputs: raw.nodeOutputs as Record<string, Record<string, unknown>> }
       : {}),
   };
 }

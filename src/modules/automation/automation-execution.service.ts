@@ -913,20 +913,46 @@ export class AutomationExecutionService {
   async getNextNodeId(
     automationId: number,
     sourceNodeId: number,
+    branchKey?: string | null,
   ): Promise<number | null> {
-    const ids = await this.getNextNodeIds(automationId, sourceNodeId);
+    const ids = await this.getNextNodeIds(
+      automationId,
+      sourceNodeId,
+      branchKey,
+    );
     return ids[0] ?? null;
   }
 
   async getNextNodeIds(
     automationId: number,
     sourceNodeId: number,
+    branchKey?: string | null,
   ): Promise<number[]> {
     const connections = await this.connectionRepository.find({
       where: { automationId, sourceNodeId },
       order: { id: 'ASC' },
     });
 
+    const normalizedBranch = branchKey?.trim().toUpperCase() ?? null;
+    if (normalizedBranch) {
+      const matched = connections.filter(
+        (connection) =>
+          connection.branch?.trim().toUpperCase() === normalizedBranch,
+      );
+      if (matched.length > 0) {
+        return this.collectTargetNodeIds(matched, sourceNodeId);
+      }
+    }
+
+    const unlabeled = connections.filter((connection) => !connection.branch?.trim());
+    const pool = unlabeled.length > 0 ? unlabeled : connections;
+    return this.collectTargetNodeIds(pool, sourceNodeId);
+  }
+
+  private collectTargetNodeIds(
+    connections: AutomationConnection[],
+    sourceNodeId: number,
+  ): number[] {
     const ids: number[] = [];
     for (const connection of connections) {
       if (!connection?.targetNodeId) {

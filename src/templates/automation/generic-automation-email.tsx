@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { splitAutomationEmailBody } from '../../modules/automation/automation-email-merge.util';
 import { AutomationEmailLayout } from './components/email-layout';
 import type { AutomationEmailTemplateProps } from './types';
 
@@ -12,9 +13,8 @@ export function GenericAutomationEmail({
   qrImageDataUrl,
   googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
-  const paragraphs = [
-    message?.trim() || 'We have an update for you regarding your recent activity.',
-  ];
+  const body = message?.trim() ?? '';
+  const paragraphs = body ? splitAutomationEmailBody(body) : [];
 
   return (
     <AutomationEmailLayout

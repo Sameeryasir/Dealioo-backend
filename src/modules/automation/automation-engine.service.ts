@@ -47,6 +47,16 @@ import {
   isSignupPassLinkActionConfig,
 } from './automation-email-merge.util';
 import {
+  normalizeNodeResult,
+  nodeResult,
+  BRANCH_FALSE,
+  BRANCH_TRUE,
+  type NodeExecutionResult,
+  type NodeExecutionStatus,
+} from './engine/automation-node-result.types';
+import { AutomationNodeRegistry } from './engine/automation-node-registry.service';
+import { AutomationExecutionRecorderService } from './automation-execution-recorder.service';
+import {
   collectSignupFilterConditions,
   msSince,
   parseSignupFilterCondition,
@@ -54,7 +64,7 @@ import {
   signupDelayToMs,
 } from './automation-signup-filter.util';
 
-type NodeRunResult = 'advance' | 'wait' | 'complete' | 'failed';
+type LegacyNodeRunResult = NodeExecutionResult | NodeExecutionStatus;
 
 const ACTION_MESSAGE_GAP_MS = 3_000;
 
@@ -93,6 +103,8 @@ export class AutomationEngineService {
     private readonly googleWalletService: GoogleWalletService,
     private readonly activityService: ActivityService,
     private readonly chatMessageService: ChatMessageService,
+    private readonly nodeRegistry: AutomationNodeRegistry,
+    private readonly recorder: AutomationExecutionRecorderService,
   ) {}
 
   async processExecution(executionId: number, nodeId: number): Promise<void> {
@@ -167,21 +179,24 @@ export class AutomationEngineService {
     const startedAt = Date.now();
 
     try {
-      const result = await this.runNode(execution, node);
+      const rawResult = await this.runNode(execution, node);
+      const result = normalizeNodeResult(rawResult);
       this.metricsService.recordNodeExecution(
         node.type,
-        result,
+        result.status,
         Date.now() - startedAt,
       );
       await this.recordExecutionEvent(
         execution,
         AutomationExecutionEventType.NODE_COMPLETED,
         node.id,
-        { nodeType: node.type, result },
+        { nodeType: node.type, result: result.status, branchKey: result.branchKey ?? null },
       );
       await this.handleNodeResult(executionId, execution, node.id, result);
       this.logger.log(
-        `Execution ${executionId}: finished node ${node.id} (${node.type}) → ${result}`,
+        `Execution ${executionId}: finished node ${node.id} (${node.type}) → ${result.status}${
+          result.branchKey ? ` [${result.branchKey}]` : ''
+        }`,
       );
     } catch (error) {
       const message =
@@ -285,13 +300,23 @@ export class AutomationEngineService {
     executionId: number,
     execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
     nodeId: number,
-    result: NodeRunResult,
+    result: NodeExecutionResult,
   ): Promise<void> {
-    if (result === 'wait') {
+    if (result.status === 'wait') {
       return;
     }
 
-    if (result === 'complete') {
+    if (result.loopTargetNodeId != null && result.loopTargetNodeId >= 1) {
+      await this.jumpToLoopTargetNode(
+        executionId,
+        execution,
+        nodeId,
+        result.loopTargetNodeId,
+      );
+      return;
+    }
+
+    if (result.status === 'complete') {
       await this.logService.createLog({
         executionId,
         nodeId,
@@ -308,7 +333,7 @@ export class AutomationEngineService {
       return;
     }
 
-    if (result === 'failed') {
+    if (result.status === 'failed') {
       await this.recordExecutionEvent(
         execution,
         AutomationExecutionEventType.EXECUTION_FAILED,
@@ -317,6 +342,20 @@ export class AutomationEngineService {
       await this.executionService.markFailed(executionId);
       this.metricsService.recordExecutionFailed();
       return;
+    }
+
+    if (result.outputs && Object.keys(result.outputs).length > 0) {
+      const context = this.eventService.mergeContext(execution.executionContext, {
+        nodeOutputs: {
+          ...(normalizeExecutionContext(execution.executionContext).nodeOutputs ?? {}),
+          [String(nodeId)]: result.outputs,
+        },
+      });
+      await this.executionService.updateExecutionContext(
+        executionId,
+        context as Record<string, unknown>,
+      );
+      execution.executionContext = context as Record<string, unknown>;
     }
 
     const advanced = await this.advanceToNextNode(
@@ -329,6 +368,7 @@ export class AutomationEngineService {
           execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT,
         paceOutboundActions:
           execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP,
+        branchKey: result.branchKey,
       },
     );
     if (!advanced) {
@@ -357,11 +397,16 @@ export class AutomationEngineService {
     automationId: number,
     currentNodeId: number,
     customerId: number,
-    options?: { skipCycleCheck?: boolean; paceOutboundActions?: boolean },
+    options?: {
+      skipCycleCheck?: boolean;
+      paceOutboundActions?: boolean;
+      branchKey?: string | null;
+    },
   ): Promise<boolean> {
     const nextNodeId = await this.executionService.getNextNodeId(
       automationId,
       currentNodeId,
+      options?.branchKey,
     );
 
     if (!nextNodeId) {
@@ -456,31 +501,21 @@ export class AutomationEngineService {
     node: NonNullable<
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
+    const handlerResult = await this.nodeRegistry.execute(node.type, {
+      execution,
+      node,
+      executionContext: normalizeExecutionContext(execution.executionContext),
+    });
+    if (handlerResult) {
+      return handlerResult;
+    }
+
     const config = node.config ?? {};
 
     switch (node.type) {
       case AutomationNodeType.TRIGGER: {
-        const triggerLabel = String(
-          config.trigger ??
-            config.triggerType ??
-            config.event ??
-            execution.automation?.trigger ??
-            'trigger',
-        );
-        await this.recordExecutionEvent(
-          execution,
-          AutomationExecutionEventType.EXECUTION_STARTED,
-          node.id,
-          { automationVersion: execution.automationVersion },
-        );
-        await this.logService.createLog({
-          executionId: execution.id,
-          nodeId: node.id,
-          customerId: execution.customerId,
-          message: `Trigger fired (${triggerLabel}) — starting workflow`,
-        });
-        return 'advance';
+        return nodeResult('advance');
       }
 
       case AutomationNodeType.WAIT: {
@@ -687,7 +722,7 @@ export class AutomationEngineService {
               customerId: execution.customerId,
               message: 'Customer visited and redeemed — continuing workflow',
             });
-            return 'advance';
+            return nodeResult('advance', { branchKey: BRANCH_TRUE });
           }
 
           const loopConfig = {
@@ -792,6 +827,12 @@ export class AutomationEngineService {
           execution,
           conditionType,
         );
+        await this.recordExecutionEvent(
+          execution,
+          AutomationExecutionEventType.CONDITION_EVALUATED,
+          node.id,
+          { conditionType, stopFlow },
+        );
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
@@ -801,9 +842,11 @@ export class AutomationEngineService {
             : 'Condition not met — continue to next step',
         });
         if (stopFlow) {
-          return 'complete';
+          return nodeResult('complete');
         }
-        return 'advance';
+        return nodeResult('advance', {
+          branchKey: BRANCH_FALSE,
+        });
       }
 
       case AutomationNodeType.COUPON:
@@ -844,7 +887,7 @@ export class AutomationEngineService {
     node: NonNullable<
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     const nextNodeIds = await this.executionService.getNextNodeIds(
       execution.automationId,
       node.id,
@@ -1106,7 +1149,7 @@ export class AutomationEngineService {
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
     config: Record<string, unknown>,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     if (!(await this.ensureExecutionStillRunnable(execution.id))) {
       return 'complete';
     }
@@ -1208,7 +1251,7 @@ export class AutomationEngineService {
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
     config: Record<string, unknown>,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     const purpose = execution.automation.purpose;
 
     if (shouldSkipSignupBranchOutboundEmail(purpose, config)) {
@@ -1314,7 +1357,7 @@ export class AutomationEngineService {
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
     config: Record<string, unknown>,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     const actions = Array.isArray(config.actions) ? config.actions : [];
     const purpose = execution.automation.purpose;
     const campaignName =
@@ -1429,7 +1472,7 @@ export class AutomationEngineService {
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
     config: Record<string, unknown>,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     if (!(await this.ensureExecutionStillRunnable(execution.id))) {
       return 'complete';
     }
@@ -1896,7 +1939,7 @@ export class AutomationEngineService {
       Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
     >,
     loopNode: AutomationNode,
-  ): Promise<NodeRunResult> {
+  ): Promise<LegacyNodeRunResult> {
     const loopContext = this.eventService.mergeContext(
       execution.executionContext,
       {
@@ -1931,7 +1974,24 @@ export class AutomationEngineService {
       nodeId: loopNode.id,
       nodeType: loopNode.type,
     });
-    return 'wait';
+    return nodeResult('wait');
+  }
+
+  private async jumpToLoopTargetNode(
+    executionId: number,
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    fromNodeId: number,
+    loopTargetNodeId: number,
+  ): Promise<void> {
+    const loopNode = await this.executionService.findNodeForAutomation(
+      execution.automationId,
+      loopTargetNodeId,
+    );
+    const fromNode = await this.executionService.findNodeForAutomation(
+      execution.automationId,
+      fromNodeId,
+    );
+    await this.restartExecutionAtLoopNode(execution, fromNode, loopNode);
   }
 
   private async customerHasVisitedForAutomation(

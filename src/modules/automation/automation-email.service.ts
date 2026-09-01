@@ -6,11 +6,9 @@ import { BrevoService } from '../mail/brevo.service';
 import {
   customerDisplayName,
   getBrevoTemplateIdForPurpose,
-  getPurposeEmailDefaults,
   getTagsForPurpose,
   parseEmailNodeConfig,
   resolveEmailTemplateKey,
-  resolveSubjectForPurpose,
 } from './automation-email-catalog';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import { AutomationEmailRendererService } from './automation-email-renderer.service';
@@ -51,34 +49,27 @@ export class AutomationEmailService {
     }
 
     const campaignName = options?.campaignName?.trim() || 'the campaign';
-    const defaults = getPurposeEmailDefaults(purpose, campaignName);
     const message = String(config.message ?? '').trim();
     const ctaLabel = String(
-      config.ctaLabel ?? config.linkLabel ?? defaults.ctaLabel ?? 'Complete payment',
+      config.ctaLabel ?? config.linkLabel ?? '',
     ).trim();
-
-    const subject = resolveSubjectForPurpose(
-      purpose,
-      String(config.subject ?? '').trim(),
-      campaignName,
-      String(config.template ?? config.templateId ?? '').trim(),
-    );
+    const subject = String(config.subject ?? '').trim();
 
     if (options?.requireSubject && !subject) {
       throw new BadRequestException(
-        'Action step must include a subject or use a template with a default subject.',
+        'Action step must include a subject before sending.',
       );
     }
 
     return {
-      subject: subject || defaults.subject || 'Complete your payment',
+      subject,
       templateKey: resolveEmailTemplateKey(
         purpose,
         String(config.template ?? config.templateId ?? 'Payment reminder').trim(),
       ),
       templateProps: {
-        message: message || defaults.message,
-        headline: String(config.headline ?? defaults.headline ?? '').trim() || undefined,
+        message: message || undefined,
+        headline: String(config.headline ?? '').trim() || undefined,
         ctaLabel: ctaLabel || undefined,
         ...(String(config.ctaUrl ?? '').trim()
           ? { ctaUrl: String(config.ctaUrl).trim() }
@@ -99,13 +90,7 @@ export class AutomationEmailService {
     options?: { requireSubject?: boolean; campaignName?: string },
   ): PreparedAutomationEmail {
     const parsed = parseEmailNodeConfig(emailNodeConfig);
-    const campaignName = options?.campaignName?.trim() || 'the campaign';
-    const subject = resolveSubjectForPurpose(
-      purpose,
-      parsed.subject,
-      campaignName,
-      parsed.rawTemplate,
-    );
+    const subject = parsed.subject;
 
     if (options?.requireSubject && !subject) {
       throw new BadRequestException(
@@ -114,24 +99,16 @@ export class AutomationEmailService {
     }
 
     const templateKey = resolveEmailTemplateKey(purpose, parsed.rawTemplate);
-    const defaults = getPurposeEmailDefaults(purpose, campaignName);
     const templateProps: Partial<AutomationEmailTemplateProps> = {};
-    const useAutomationCopyOnly = purpose === AutomationPurpose.FUNNEL_PAYMENT;
 
-    if (parsed.message) {
-      templateProps.message = parsed.message;
-    } else if (!useAutomationCopyOnly && defaults.message) {
-      templateProps.message = defaults.message;
+    if (parsed.message !== undefined) {
+      templateProps.message = parsed.message.trim();
     }
     if (parsed.headline) {
       templateProps.headline = parsed.headline;
-    } else if (!useAutomationCopyOnly && defaults.headline) {
-      templateProps.headline = defaults.headline;
     }
     if (parsed.ctaLabel) {
       templateProps.ctaLabel = parsed.ctaLabel;
-    } else if (!useAutomationCopyOnly && defaults.ctaLabel) {
-      templateProps.ctaLabel = defaults.ctaLabel;
     }
     if (parsed.ctaUrl) {
       templateProps.ctaUrl = parsed.ctaUrl;

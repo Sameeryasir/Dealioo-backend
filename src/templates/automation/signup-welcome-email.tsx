@@ -14,14 +14,10 @@ export function SignupWelcomeEmail({
   qrImageDataUrl,
   googleWalletSaveUrl,
 }: AutomationEmailTemplateProps) {
-  const body = message?.trim();
+  const body = message?.trim() ?? '';
   const paragraphs = body
     ? splitAutomationEmailBody(body)
-    : [
-        'Thank you for signing up! Your registration was successful.',
-        'We are excited to have you with us and will keep you updated on what happens next.',
-        'If you have any questions, just reply to this email.',
-      ];
+    : [];
   const useDirectBody = directBody || Boolean(body);
 
   return (

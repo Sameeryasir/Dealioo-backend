@@ -46,6 +46,11 @@ import { AutomationQueueService } from './automation-queue.service';
 import { AutomationSendAttemptService } from './automation-send-attempt.service';
 import { AutomationWaitSchedulerService } from './automation-wait-scheduler.service';
 import { AutomationService } from './automation.service';
+import { AutomationNodeRegistry } from './engine/automation-node-registry.service';
+import { AutomationGraphValidatorService } from './engine/automation-graph-validator.service';
+import { AutomationNodeRegistryBootstrap } from './engine/automation-node-registry.bootstrap';
+import { AutomationExecutionRecorderService } from './automation-execution-recorder.service';
+import { TriggerNodeHandler } from './handlers/trigger-node.handler';
 
 @Module({
   imports: [
@@ -114,6 +119,11 @@ import { AutomationService } from './automation.service';
     AutomationQueueProcessor,
     AutomationCronSchedulerService,
     AutomationWaitSchedulerService,
+    AutomationNodeRegistry,
+    AutomationGraphValidatorService,
+    AutomationNodeRegistryBootstrap,
+    AutomationExecutionRecorderService,
+    TriggerNodeHandler,
   ],
   exports: [AutomationService, AutomationQueueService],
 })
