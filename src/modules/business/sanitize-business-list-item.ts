@@ -6,6 +6,8 @@ export type PublicBusinessListItem = {
   slug: string;
   description: string | null;
   logoUrl: string | null;
+  businessType: string | null;
+  currency: string | null;
   websiteUrl: string | null;
   email: string | null;
   phoneNumber: string | null;
@@ -55,6 +57,8 @@ export function sanitizeBusinessListItem(
     slug: business.slug,
     description: business.description,
     logoUrl: business.logoUrl,
+    businessType: business.businessType ?? null,
+    currency: business.currency ?? null,
     websiteUrl: business.websiteUrl,
     email: business.email,
     phoneNumber: business.phoneNumber,

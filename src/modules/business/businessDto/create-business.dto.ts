@@ -28,6 +28,16 @@ export class CreateBusinessDto {
   @IsString()
   logoUrl?: string;
 
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  businessType: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(3)
+  currency: string;
+
   @IsOptional()
   @IsUrl(
     { protocols: ['https'], require_protocol: true },

@@ -41,6 +41,8 @@ export type BusinessOnboardingDraftPayload = {
   state?: string;
   postalCode?: string;
   country?: string;
+  businessType?: string;
+  currency?: string;
   branchCount?: number;
 };
 

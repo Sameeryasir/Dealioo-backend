@@ -57,6 +57,16 @@ export class BusinessDraftPayloadDto {
   country?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  businessType?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   @Max(500)

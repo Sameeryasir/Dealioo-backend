@@ -173,6 +173,8 @@ export class BusinessService {
       slug: slugInput,
       description,
       logoUrl: dtoLogoUrl,
+      businessType,
+      currency,
       websiteUrl,
       email,
       phoneNumber,
@@ -234,6 +236,8 @@ export class BusinessService {
       slug,
       description,
       logoUrl,
+      businessType: businessType.trim(),
+      currency: currency.trim().toUpperCase(),
       websiteUrl,
       email,
       phoneNumber,
@@ -476,6 +480,8 @@ export class BusinessService {
       name,
       description,
       logoUrl,
+      businessType,
+      currency,
       websiteUrl,
       email,
       phoneNumber,
@@ -496,6 +502,12 @@ export class BusinessService {
       );
     } else if (logoUrl !== undefined) {
       business.logoUrl = logoUrl;
+    }
+    if (businessType !== undefined) {
+      business.businessType = businessType.trim();
+    }
+    if (currency !== undefined) {
+      business.currency = currency.trim().toUpperCase();
     }
     if (websiteUrl !== undefined) business.websiteUrl = websiteUrl;
     if (email !== undefined) business.email = email;

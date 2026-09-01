@@ -28,6 +28,14 @@ export class Business {
   @Column({ name: 'logo_url', type: 'text', nullable: true })
   logoUrl: string | null;
 
+  /** Industry / business type (e.g. Restaurant, Retail). */
+  @Column({ name: 'business_type', type: 'varchar', length: 64, nullable: true })
+  businessType: string | null;
+
+  /** ISO currency code the business deals in (e.g. USD, PKR). */
+  @Column({ name: 'currency', type: 'varchar', length: 3, nullable: true })
+  currency: string | null;
+
   @Column({ name: 'website_url', type: 'varchar', length: 2048, nullable: true })
   websiteUrl: string | null;
 

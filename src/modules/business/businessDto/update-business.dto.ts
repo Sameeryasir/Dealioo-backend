@@ -25,6 +25,18 @@ export class UpdateBusinessDto {
   logoUrl?: string;
 
   @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  businessType?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(3)
+  currency?: string;
+
+  @IsOptional()
   @IsUrl(
     { protocols: ['https'], require_protocol: true },
     { message: 'websiteUrl must be a valid https URL' },
