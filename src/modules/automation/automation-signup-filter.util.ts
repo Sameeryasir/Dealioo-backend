@@ -322,7 +322,11 @@ const SIGNUP_BRANCHES_WITH_OUTBOUND_EMAIL = new Set([
 export function shouldSkipSignupBranchOutboundEmail(
   purpose: AutomationPurpose,
   config: Record<string, unknown>,
+  options?: { graphDriven?: boolean },
 ): boolean {
+  if (options?.graphDriven) {
+    return false;
+  }
   if (purpose !== AutomationPurpose.FUNNEL_SIGNUP) {
     return false;
   }

@@ -63,6 +63,7 @@ import {
   shouldSkipSignupBranchOutboundEmail,
   signupDelayToMs,
 } from './automation-signup-filter.util';
+import { isGraphDrivenAutomationNodes } from './automation-graph-driven.util';
 
 type LegacyNodeRunResult = NodeExecutionResult | NodeExecutionStatus;
 
@@ -99,6 +100,8 @@ export class AutomationEngineService {
     private readonly customerVisitRepository: Repository<CustomerVisit>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectRepository(AutomationNode)
+    private readonly nodeRepository: Repository<AutomationNode>,
     private readonly couponService: CouponService,
     private readonly googleWalletService: GoogleWalletService,
     private readonly activityService: ActivityService,
@@ -581,6 +584,11 @@ export class AutomationEngineService {
           shouldSkipSignupBranchOutboundEmail(
             purpose,
             (config ?? {}) as Record<string, unknown>,
+            {
+              graphDriven: await this.isGraphDrivenAutomation(
+                execution.automationId,
+              ),
+            },
           )
         ) {
           await this.logService.createLog({
@@ -1254,7 +1262,11 @@ export class AutomationEngineService {
   ): Promise<LegacyNodeRunResult> {
     const purpose = execution.automation.purpose;
 
-    if (shouldSkipSignupBranchOutboundEmail(purpose, config)) {
+    if (
+      shouldSkipSignupBranchOutboundEmail(purpose, config, {
+        graphDriven: await this.isGraphDrivenAutomation(execution.automationId),
+      })
+    ) {
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
@@ -1489,7 +1501,11 @@ export class AutomationEngineService {
     }
 
     const purpose = execution.automation.purpose;
-    if (shouldSkipSignupBranchOutboundEmail(purpose, config)) {
+    if (
+      shouldSkipSignupBranchOutboundEmail(purpose, config, {
+        graphDriven: await this.isGraphDrivenAutomation(execution.automationId),
+      })
+    ) {
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
@@ -2038,6 +2054,14 @@ export class AutomationEngineService {
         campaignId,
       },
     });
+  }
+
+  private async isGraphDrivenAutomation(automationId: number): Promise<boolean> {
+    const triggers = await this.nodeRepository.find({
+      where: { automationId, type: AutomationNodeType.TRIGGER },
+      select: ['id', 'type', 'config'],
+    });
+    return isGraphDrivenAutomationNodes(triggers);
   }
 
   private async recordExecutionEvent(

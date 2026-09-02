@@ -108,6 +108,7 @@ import {
   signupDelayToMs,
   normalizeSignupDelayUnit,
 } from './automation-signup-filter.util';
+import { isGraphDrivenAutomationNodes } from './automation-graph-driven.util';
 
 @Injectable()
 export class AutomationService {
@@ -1157,6 +1158,18 @@ export class AutomationService {
       throw new BadRequestException('Automation has no funnel linked');
     }
 
+    if (isGraphDrivenAutomationNodes(automation.nodes ?? [])) {
+      const result = await this.enqueueGraphDrivenBatch(automation, {
+        skipIfNoRecipients: false,
+      });
+      if (!result) {
+        throw new BadRequestException(
+          'No eligible customers found for this automation',
+        );
+      }
+      return result;
+    }
+
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       const result = await this.enqueuePrepaidOfferBatch(automation, {
         skipIfNoRecipients: false,
@@ -1212,6 +1225,34 @@ export class AutomationService {
       this.logger.warn(
         `Cron tick skipped for automation ${automationId}: no funnel linked`,
       );
+      return;
+    }
+
+    const cronNodes = await this.nodeRepository.find({
+      where: { automationId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+    if (isGraphDrivenAutomationNodes(cronNodes)) {
+      try {
+        const result = await this.enqueueGraphDrivenBatch(automation, {
+          skipIfNoRecipients: true,
+        });
+        if (!result) {
+          this.logger.log(
+            `Cron tick for graph-driven automation ${automationId}: no eligible recipients`,
+          );
+        } else {
+          this.logger.log(
+            `Cron tick started graph-driven batch for automation ${automationId} (execution=${result.status.executionId}, recipients≈${result.status.totalRecipients ?? '?'})`,
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Graph batch enqueue failed';
+        this.logger.warn(
+          `Cron tick failed for graph-driven automation ${automationId}: ${message}`,
+        );
+      }
       return;
     }
 
@@ -1634,6 +1675,147 @@ export class AutomationService {
     }
 
     return { totalChunks, firstQueueJobId };
+  }
+
+  private async enqueueGraphDrivenBatch(
+    automation: Automation,
+    options: { skipIfNoRecipients: boolean },
+  ): Promise<StartAutomationExecutionResponseDto | null> {
+    if (!automation.funnelId) {
+      throw new BadRequestException('Automation has no funnel linked');
+    }
+
+    const startNodeId = await this.executionService.resolveStartNodeId(
+      automation.id,
+    );
+    if (!startNodeId) {
+      throw new BadRequestException(
+        'Automation flow has no start node configured',
+      );
+    }
+
+    const startNode = await this.executionService.findNodeForAutomation(
+      automation.id,
+      startNodeId,
+    );
+
+    const usePaidRecipients =
+      automation.trigger === AutomationTrigger.PAYMENT ||
+      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT;
+
+    const recipientCount = usePaidRecipients
+      ? await this.recipientsService.countPaidCustomersForFunnel(
+          automation.funnelId,
+        )
+      : await this.recipientsService.countUnpaidCustomersForFunnel(
+          automation.funnelId,
+        );
+
+    if (recipientCount === 0) {
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        usePaidRecipients
+          ? 'No paid customers found for this funnel'
+          : 'No unpaid customers found for this funnel',
+      );
+    }
+
+    const predictedTotalChunks = predictSendChunkCount(
+      recipientCount,
+      AUTOMATION_SEND_CHUNK_SIZE,
+    );
+
+    this.logger.log(
+      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} predictedChunks=${predictedTotalChunks}`,
+    );
+
+    let started = 0;
+    let firstExecutionId: number | null = null;
+    let skipped = 0;
+
+    const { totalChunks } = await forEachRecipientPageChunks({
+      pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
+      chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
+      fetchPage: (afterCustomerId, limit) =>
+        usePaidRecipients
+          ? this.recipientsService.getPaidCustomersForFunnelPage(
+              automation.funnelId!,
+              { afterCustomerId, limit },
+            )
+          : this.recipientsService.getUnpaidCustomersForFunnelPage(
+              automation.funnelId!,
+              { afterCustomerId, limit },
+            ),
+      onChunk: async (chunk, meta) => {
+        this.logger.log(
+          `[Graph Driven] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,
+        );
+
+        for (const recipient of chunk) {
+          const customerId = recipient.customerId;
+          if (customerId == null || customerId <= 0) {
+            continue;
+          }
+
+          const hasActive = await this.executionService.hasActiveExecution(
+            automation.id,
+            customerId,
+          );
+          if (hasActive) {
+            skipped += 1;
+            continue;
+          }
+
+          const execution = await this.executionService.createExecution(
+            {
+              automationId: automation.id,
+              currentNodeId: startNodeId,
+              purpose: automation.purpose,
+            },
+            customerId,
+          );
+
+          await this.queueService.addProcessExecution({
+            executionId: execution.id,
+            nodeId: startNodeId,
+            nodeType: startNode.type,
+          });
+
+          if (firstExecutionId == null) {
+            firstExecutionId = execution.id;
+          }
+          started += 1;
+        }
+      },
+    });
+
+    this.logger.log(
+      `[Graph Driven] Batch enqueue done automation=${automation.id} chunks=${totalChunks} started=${started} skipped=${skipped}`,
+    );
+
+    if (started === 0 || firstExecutionId == null) {
+      if (options.skipIfNoRecipients) {
+        return null;
+      }
+      throw new BadRequestException(
+        'No eligible customers to start (all already have an active journey)',
+      );
+    }
+
+    await this.logService.createLog({
+      executionId: firstExecutionId,
+      nodeId: startNodeId,
+      customerId: (
+        await this.executionService.findById(firstExecutionId)
+      ).customerId,
+      message: `Graph-driven batch: started ${started} journey(s) from ${recipientCount} guest(s) (${totalChunks} chunk(s), skipped ${skipped})`,
+    });
+
+    return {
+      status: await this.getExecutionStatus(firstExecutionId),
+    };
   }
 
   private async enqueuePrepaidOfferBatch(
@@ -3807,6 +3989,12 @@ export class AutomationService {
       return;
     }
 
+    const automationNodes = await this.nodeRepository.find({
+      where: { automationId: automation.id },
+      select: ['id', 'type', 'config'],
+    });
+    const graphDriven = isGraphDrivenAutomationNodes(automationNodes);
+
     if (
       automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
       automation.funnelId
@@ -3815,12 +4003,14 @@ export class AutomationService {
         return;
       }
 
-      const eligible = await this.recipientsService.isSignedUpAndUnpaidOnFunnel(
-        automation.funnelId,
-        event.customerId,
-      );
-      if (!eligible) {
-        return;
+      if (!graphDriven) {
+        const eligible = await this.recipientsService.isSignedUpAndUnpaidOnFunnel(
+          automation.funnelId,
+          event.customerId,
+        );
+        if (!eligible) {
+          return;
+        }
       }
     }
 
@@ -3867,6 +4057,7 @@ export class AutomationService {
     }
 
     const allowsRepeatRuns =
+      graphDriven ||
       automation.purpose === AutomationPurpose.FUNNEL_SIGNUP ||
       automation.purpose === AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
       automation.purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER ||

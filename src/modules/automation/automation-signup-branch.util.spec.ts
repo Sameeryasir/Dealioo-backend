@@ -258,4 +258,14 @@ describe('shouldSkipSignupBranchOutboundEmail', () => {
       ),
     ).toBe(false);
   });
+
+  it('does not skip custom branch emails for graph-driven automations', () => {
+    expect(
+      shouldSkipSignupBranchOutboundEmail(
+        AutomationPurpose.FUNNEL_SIGNUP,
+        { flowBranch: 'path_1_abc', message: 'Custom path' },
+        { graphDriven: true },
+      ),
+    ).toBe(false);
+  });
 });
