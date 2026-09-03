@@ -102,6 +102,7 @@ export class CampaignService {
       websiteUrl,
       imageUrl: dtoImageUrl,
       offer,
+      description,
       price,
       status,
     } = createCampaignDto;
@@ -142,6 +143,7 @@ export class CampaignService {
       websiteUrl,
       imageUrl,
       offer: offer.trim(),
+      description: createCampaignDto.description.trim(),
       price: price ?? null,
       status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
@@ -310,6 +312,9 @@ export class CampaignService {
     }
     if (updateCampaignDto.offer !== undefined) {
       campaign.offer = updateCampaignDto.offer;
+    }
+    if (updateCampaignDto.description !== undefined) {
+      campaign.description = updateCampaignDto.description.trim();
     }
     if (updateCampaignDto.price !== undefined) {
       campaign.price = updateCampaignDto.price;

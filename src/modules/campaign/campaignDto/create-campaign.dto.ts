@@ -63,6 +63,14 @@ export class CreateCampaignDto {
   @MaxLength(255)
   offer!: string;
 
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2000)
+  description!: string;
+
   @IsOptional()
   @Transform(({ value }) => {
     if (value === '' || value === null || value === undefined) {

@@ -416,6 +416,7 @@ export class BusinessService {
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
+
   /**
    * Business rule: detail payload includes summary counts for the Settings profile card.
    * Counts run in parallel after access check.

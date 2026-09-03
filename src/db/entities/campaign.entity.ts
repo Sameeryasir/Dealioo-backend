@@ -64,6 +64,9 @@ export class Campaign {
   imageUrl!: string | null;
 
   @Column({ type: 'text', nullable: true })
+  description!: string | null;
+
+  @Column({ type: 'text', nullable: true })
   offer!: string | null;
 
   @Column({
