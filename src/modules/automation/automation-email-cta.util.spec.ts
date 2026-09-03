@@ -1,5 +1,8 @@
 import {
+  isCompletePaymentCtaLabel,
+  isGoogleWalletCtaLabel,
   isPassLinkCtaLabel,
+  isViewPassCtaLabel,
   normalizeEmailLinkUrl,
   shouldShowPassLinkCta,
 } from './automation-email-cta.util';
@@ -44,5 +47,17 @@ describe('automation-email-cta.util', () => {
     ).toBe(true);
     expect(isPassLinkCtaLabel('Pass Link')).toBe(true);
     expect(isPassLinkCtaLabel('Complete payment')).toBe(false);
+  });
+
+  it('detects complete payment and google wallet CTA labels', () => {
+    expect(isCompletePaymentCtaLabel('Complete payment')).toBe(true);
+    expect(isCompletePaymentCtaLabel('Complete Your Payment')).toBe(true);
+    expect(isCompletePaymentCtaLabel('Pay now')).toBe(true);
+    expect(isCompletePaymentCtaLabel('View my pass')).toBe(false);
+    expect(isGoogleWalletCtaLabel('Add to Google Wallet')).toBe(true);
+    expect(isGoogleWalletCtaLabel('Google Wallet')).toBe(true);
+    expect(isGoogleWalletCtaLabel('Complete payment')).toBe(false);
+    expect(isViewPassCtaLabel('View my pass')).toBe(true);
+    expect(isViewPassCtaLabel('View Your Pass')).toBe(true);
   });
 });

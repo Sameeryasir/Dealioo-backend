@@ -24,6 +24,7 @@ import { AutomationLog } from '../../db/entities/automation-log.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { AutomationService } from './automation.service';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
+import { SyncAutomationConnectionsDto } from './automationDto/sync-automation-connections.dto';
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
 import {
@@ -83,6 +84,14 @@ export class AutomationController {
     @Body() dto: CreateAutomationConnectionDto,
   ): Promise<AutomationConnection> {
     return this.automationService.createConnection(dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('connection/sync')
+  syncConnections(
+    @Body() dto: SyncAutomationConnectionsDto,
+  ): Promise<AutomationConnection[]> {
+    return this.automationService.syncConnections(dto);
   }
 
   @UseGuards(AuthGuard('jwt'))

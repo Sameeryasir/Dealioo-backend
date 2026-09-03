@@ -61,11 +61,13 @@ export function AutomationEmailLayout({
 }: AutomationEmailLayoutProps) {
   const greetingName = customerName?.trim() || 'there';
   const walletUrl = googleWalletSaveUrl?.trim() || '';
-  const showPassLink = shouldShowPassLinkCta({
-    ctaLabel,
-    ctaUrl,
-    googleWalletSaveUrl: walletUrl,
-  });
+  const showPassLink = Boolean(ctaLabel?.trim() && ctaUrl?.trim())
+    ? shouldShowPassLinkCta({
+        ctaLabel,
+        ctaUrl,
+        googleWalletSaveUrl: walletUrl,
+      })
+    : false;
   const showWalletCta = Boolean(walletUrl);
 
   return (

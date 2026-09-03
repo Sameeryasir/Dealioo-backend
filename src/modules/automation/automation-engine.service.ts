@@ -28,7 +28,13 @@ import { ConversationMessageChannel } from '../../db/entities/conversation-messa
 import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { GoogleWalletStatus } from '../google-wallet/google-wallet-status';
+import { CheckoutResumeService } from '../payment/checkout-resume.service';
 import { AutomationExecutionService } from './automation-execution.service';
+import {
+  isCompletePaymentCtaLabel,
+  isGoogleWalletCtaLabel,
+  isViewPassCtaLabel,
+} from './automation-email-cta.util';
 import { AutomationLogService } from './automation-log.service';
 import { AutomationEmailService } from './automation-email.service';
 import { AutomationQueueService } from './automation-queue.service';
@@ -67,7 +73,7 @@ import { isGraphDrivenAutomationNodes } from './automation-graph-driven.util';
 
 type LegacyNodeRunResult = NodeExecutionResult | NodeExecutionStatus;
 
-const ACTION_MESSAGE_GAP_MS = 3_000;
+const ACTION_MESSAGE_GAP_MS = 30_000;
 
 function isOutboundActionNodeType(type: AutomationNodeType): boolean {
   return (
@@ -104,6 +110,7 @@ export class AutomationEngineService {
     private readonly nodeRepository: Repository<AutomationNode>,
     private readonly couponService: CouponService,
     private readonly googleWalletService: GoogleWalletService,
+    private readonly checkoutResumeService: CheckoutResumeService,
     private readonly activityService: ActivityService,
     private readonly chatMessageService: ChatMessageService,
     private readonly nodeRegistry: AutomationNodeRegistry,
@@ -369,8 +376,7 @@ export class AutomationEngineService {
       {
         skipCycleCheck:
           execution.automation?.purpose === AutomationPurpose.FUNNEL_PAYMENT,
-        paceOutboundActions:
-          execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP,
+        paceOutboundActions: true,
         branchKey: result.branchKey,
       },
     );
@@ -1495,7 +1501,7 @@ export class AutomationEngineService {
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
-        message: 'Action message skipped (empty message)',
+        message: 'SMS skipped (empty message)',
       });
       return 'advance';
     }
@@ -1511,7 +1517,7 @@ export class AutomationEngineService {
         nodeId: node.id,
         customerId: execution.customerId,
         message:
-          'Signup branch message skipped (only initial Actions block sends email)',
+          'Signup branch SMS skipped (only initial Actions block sends)',
       });
       return 'advance';
     }
@@ -1522,24 +1528,22 @@ export class AutomationEngineService {
     );
     if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
       this.logger.log(
-        `Execution ${execution.id}: skipping duplicate action email for key ${chatIdempotencyKey}`,
+        `Execution ${execution.id}: skipping duplicate SMS for key ${chatIdempotencyKey}`,
       );
       return 'advance';
     }
 
-    const to = execution.customer?.email?.trim() ?? '';
-    if (!to) {
+    const phone = execution.customer?.phone?.trim() ?? '';
+    if (!phone) {
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
-        message: 'Action message skipped (missing customer email)',
+        message: 'SMS skipped (missing customer phone)',
       });
       return 'advance';
     }
 
-    const campaignName =
-      execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
     const isPassLinkStep =
       purpose === AutomationPurpose.FUNNEL_SIGNUP &&
       isSignupPassLinkActionConfig(config);
@@ -1551,73 +1555,41 @@ export class AutomationEngineService {
       passLink,
       paymentLink: passLink,
     });
-    const linkLabel = String(config.linkLabel ?? '').trim() || 'View my pass';
-    const subject =
-      String(config.subject ?? '').trim() ||
-      (String(config.linkLabel ?? '').trim().toLowerCase() === 'pass link'
-        ? `Complete your signup — ${campaignName}`
-        : `Welcome — ${campaignName}`);
 
-    const emailConfig = await this.enrichPaymentEmailConfig(
-      purpose,
-      execution,
-      {
-        subject,
-        message: body,
-        linkLabel: config.linkLabel,
-        ...(isPassLinkStep && passLink
-          ? {
-              ctaUrl: passLink,
-              ctaLabel: linkLabel,
-            }
-          : {}),
+    const sendResult = await this.chatMessageService.sendAutomationSms({
+      businessId: execution.automation.businessId,
+      customerId: execution.customerId,
+      phone,
+      body,
+      automationId: execution.automationId,
+      executionId: execution.id,
+      nodeId: node.id,
+      idempotencyKey: chatIdempotencyKey,
+      metadata: {
+        purpose,
+        automationName: execution.automation?.name ?? null,
       },
-      node.id,
-    );
-
-    const prepared = this.automationEmailService.prepareFromEmailNode(
-      emailConfig,
-      purpose,
-      { campaignName },
-    );
-
-    const sendResult = await this.automationEmailService.sendToCustomer(
-      purpose,
-      {
-        customerId: execution.customerId,
-        email: to,
-        name: execution.customer?.name ?? '',
-      },
-      emailConfig,
-      campaignName,
-    );
+    });
 
     if (!sendResult.sent) {
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
-        message: `Action email failed: ${sendResult.error ?? 'unknown error'}`,
+        message: `SMS failed: ${sendResult.error ?? 'unknown error'}`,
         error: sendResult.error,
       });
-      return 'advance';
+      return 'failed';
     }
 
     await this.logService.createLog({
       executionId: execution.id,
       nodeId: node.id,
       customerId: execution.customerId,
-      message: `Action email sent to ${to}`,
+      message: `SMS sent to ${phone}`,
     });
 
     await this.executionService.incrementEmailsSent(execution.id);
-    await this.recordAutomationEmailInChat(
-      execution,
-      node.id,
-      purpose,
-      prepared,
-      to,
-    );
     return 'advance';
   }
 
@@ -1741,22 +1713,63 @@ export class AutomationEngineService {
     config: Record<string, unknown>,
     nodeId: number,
   ): Promise<Record<string, unknown>> {
-    if (
-      purpose !== AutomationPurpose.FUNNEL_PAYMENT &&
-      purpose !== AutomationPurpose.FUNNEL_SIGNUP
-    ) {
-      return config;
-    }
-
     const {
       qrImageDataUrl: _qrImageDataUrl,
       ...withoutQr
     } = config;
 
+    const ctaLabel = String(
+      withoutQr.ctaLabel ?? withoutQr.linkLabel ?? '',
+    ).trim();
+    let next: Record<string, unknown> = { ...withoutQr };
+
+    if (ctaLabel) {
+      const ctaLink = await this.resolveCustomerCtaLinkForLabel(
+        execution,
+        ctaLabel,
+      );
+      if (ctaLink) {
+        return {
+          ...next,
+          ctaLabel,
+          ...ctaLink,
+        };
+      }
+
+      const fallbackPassUrl = await this.resolvePassUrlForExecution(execution, {
+        ensurePendingCoupon: true,
+      });
+      if (fallbackPassUrl) {
+        this.logger.warn(
+          `CTA "${ctaLabel}" link build failed for execution ${execution.id}; using pass URL fallback`,
+        );
+        return {
+          ...next,
+          ctaLabel,
+          ctaUrl: fallbackPassUrl,
+        };
+      }
+
+      this.logger.warn(
+        `CTA "${ctaLabel}" link build failed for execution ${execution.id}; sending without button URL`,
+      );
+      return {
+        ...next,
+        ctaLabel,
+      };
+    }
+
+    if (
+      purpose !== AutomationPurpose.FUNNEL_PAYMENT &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP
+    ) {
+      return next;
+    }
+
     if (purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       const attachPassLink = await this.shouldAttachPassLink(execution, nodeId);
       if (!attachPassLink) {
-        return withoutQr;
+        return next;
       }
     }
 
@@ -1764,12 +1777,12 @@ export class AutomationEngineService {
       purpose === AutomationPurpose.FUNNEL_SIGNUP &&
       !isSignupPassLinkActionConfig(config)
     ) {
-      return withoutQr;
+      return next;
     }
 
     const passUrl = await this.resolvePassUrlForExecution(execution);
     if (!passUrl) {
-      return withoutQr;
+      return next;
     }
 
     const googleWalletSaveUrl = await this.tryCreateGoogleWalletSaveUrlForExecution(
@@ -1778,11 +1791,79 @@ export class AutomationEngineService {
     );
 
     return {
-      ...withoutQr,
-      ctaUrl: String(withoutQr.ctaUrl ?? '').trim() || passUrl,
-      ctaLabel: String(withoutQr.ctaLabel ?? '').trim() || 'View my pass',
+      ...next,
+      ctaUrl: String(next.ctaUrl ?? '').trim() || passUrl,
+      ctaLabel: String(next.ctaLabel ?? '').trim() || 'View my pass',
       ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
     };
+  }
+
+  private async resolveCustomerCtaLinkForLabel(
+    execution: AutomationExecution,
+    ctaLabel: string,
+  ): Promise<Record<string, string> | null> {
+    if (isCompletePaymentCtaLabel(ctaLabel)) {
+      const checkoutUrl = await this.tryCreateCheckoutUrlForExecution(execution);
+      if (checkoutUrl) {
+        return { ctaUrl: checkoutUrl };
+      }
+      const passFallback = await this.resolvePassUrlForExecution(execution, {
+        ensurePendingCoupon: true,
+      });
+      return passFallback ? { ctaUrl: passFallback } : null;
+    }
+
+    if (isGoogleWalletCtaLabel(ctaLabel)) {
+      const passUrl = await this.resolvePassUrlForExecution(execution, {
+        ensurePendingCoupon: true,
+      });
+      if (!passUrl) {
+        return null;
+      }
+      const googleWalletSaveUrl =
+        await this.tryCreateGoogleWalletSaveUrlForExecution(execution, passUrl);
+      return { ctaUrl: googleWalletSaveUrl || passUrl };
+    }
+
+    if (isViewPassCtaLabel(ctaLabel)) {
+      const passUrl = await this.resolvePassUrlForExecution(execution, {
+        ensurePendingCoupon: true,
+      });
+      if (!passUrl) {
+        return null;
+      }
+      return { ctaUrl: passUrl };
+    }
+
+    return null;
+  }
+
+  private async tryCreateCheckoutUrlForExecution(
+    execution: AutomationExecution,
+  ): Promise<string | null> {
+    const automation = execution.automation;
+    const funnelId = automation?.funnelId;
+    const businessId = automation?.businessId;
+    if (!funnelId || !businessId) {
+      return null;
+    }
+
+    try {
+      const issued = await this.checkoutResumeService.createSession({
+        customerId: execution.customerId,
+        funnelId,
+        businessId,
+        campaignId: automation.campaignId ?? null,
+      });
+      return issued.checkoutUrl;
+    } catch (err) {
+      this.logger.warn(
+        `Checkout link skipped for execution ${execution.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   private async shouldAttachPassLink(
@@ -1806,6 +1887,7 @@ export class AutomationEngineService {
 
   private async resolvePassUrlForExecution(
     execution: AutomationExecution,
+    options?: { ensurePendingCoupon?: boolean },
   ): Promise<string | null> {
     const funnelId = execution.automation?.funnelId;
     if (!funnelId) {
@@ -1856,10 +1938,16 @@ export class AutomationEngineService {
       }
     }
 
-    const signupCoupon = await this.couponService.findByCustomerAndFunnel(
+    let signupCoupon = await this.couponService.findByCustomerAndFunnel(
       execution.customerId,
       funnelId,
     );
+    if (!signupCoupon?.qrToken?.trim() && options?.ensurePendingCoupon) {
+      signupCoupon = await this.couponService.ensurePendingCouponForUnpaidFunnel(
+        funnelId,
+        execution.customerId,
+      );
+    }
     const signupToken = signupCoupon?.qrToken?.trim();
     if (signupToken) {
       return buildGuestPassUrl(signupToken);

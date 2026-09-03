@@ -95,6 +95,7 @@ import {
 } from './automationDto/paginated-executions.dto';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { CreateAutomationConnectionDto } from './automationDto/create-automation-connection.dto';
+import { SyncAutomationConnectionsDto } from './automationDto/sync-automation-connections.dto';
 import { CreateAutomationDto } from './automationDto/create-automation.dto';
 import { CreateAutomationNodeDto } from './automationDto/create-automation-node.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
@@ -890,6 +891,130 @@ export class AutomationService {
     const saved = await this.connectionRepository.save(connection);
     await this.bumpAutomationGraphVersion(saved.automationId);
     return saved;
+  }
+
+  async syncConnections(
+    dto: SyncAutomationConnectionsDto,
+  ): Promise<AutomationConnection[]> {
+    await this.findAutomationById(dto.automationId);
+    await this.assertAutomationEditable(dto.automationId);
+
+    const nodeIds = await this.nodeRepository.find({
+      where: { automationId: dto.automationId },
+      select: ['id'],
+    });
+    const validNodeIds = new Set(nodeIds.map((node) => node.id));
+
+    const desiredKeys = new Set<string>();
+    const desiredPairs: {
+      sourceNodeId: number;
+      targetNodeId: number;
+      branch: string | null;
+    }[] = [];
+    for (const pair of dto.pairs ?? []) {
+      if (
+        !validNodeIds.has(pair.sourceNodeId) ||
+        !validNodeIds.has(pair.targetNodeId)
+      ) {
+        throw new BadRequestException(
+          'Source and target nodes must belong to this automation',
+        );
+      }
+      const branch =
+        typeof pair.branch === 'string' && pair.branch.trim()
+          ? pair.branch.trim().toUpperCase()
+          : null;
+      const key = `${pair.sourceNodeId}->${pair.targetNodeId}`;
+      if (desiredKeys.has(key)) {
+        continue;
+      }
+      desiredKeys.add(key);
+      desiredPairs.push({
+        sourceNodeId: pair.sourceNodeId,
+        targetNodeId: pair.targetNodeId,
+        branch,
+      });
+    }
+
+    const existing = await this.connectionRepository.find({
+      where: { automationId: dto.automationId },
+    });
+    const existingByEndpoint = new Map(
+      existing.map((connection) => [
+        `${connection.sourceNodeId}->${connection.targetNodeId}`,
+        connection,
+      ]),
+    );
+
+    if (dto.pruneStale === true) {
+      const stale = existing.filter((connection) => {
+        const key = `${connection.sourceNodeId}->${connection.targetNodeId}`;
+        if (desiredKeys.has(key)) {
+          return false;
+        }
+        // Keep routed edges that are not modeled by the desired-pair builder
+        // only when they are not superseded by a desired unlabeled/labeled pair.
+        if (String(connection.branch ?? '').trim()) {
+          return false;
+        }
+        return true;
+      });
+      if (stale.length > 0) {
+        await this.connectionRepository.remove(stale);
+      }
+    }
+
+    const toCreate: {
+      sourceNodeId: number;
+      targetNodeId: number;
+      branch: string | null;
+    }[] = [];
+    const toUpdate: AutomationConnection[] = [];
+
+    for (const pair of desiredPairs) {
+      const key = `${pair.sourceNodeId}->${pair.targetNodeId}`;
+      const current = existingByEndpoint.get(key);
+      if (!current) {
+        toCreate.push(pair);
+        continue;
+      }
+      const currentBranch = String(current.branch ?? '')
+        .trim()
+        .toUpperCase() || null;
+      if (currentBranch !== pair.branch) {
+        current.branch = pair.branch;
+        toUpdate.push(current);
+      }
+    }
+
+    if (toCreate.length > 0) {
+      await this.connectionRepository.save(
+        toCreate.map((pair) =>
+          this.connectionRepository.create({
+            automationId: dto.automationId,
+            sourceNodeId: pair.sourceNodeId,
+            targetNodeId: pair.targetNodeId,
+            branch: pair.branch,
+          }),
+        ),
+      );
+    }
+    if (toUpdate.length > 0) {
+      await this.connectionRepository.save(toUpdate);
+    }
+
+    if (
+      dto.pruneStale === true ||
+      toCreate.length > 0 ||
+      toUpdate.length > 0
+    ) {
+      await this.bumpAutomationGraphVersion(dto.automationId);
+    }
+
+    return this.connectionRepository.find({
+      where: { automationId: dto.automationId },
+      order: { id: 'ASC' },
+    });
   }
 
   async bootstrapAutomationGraph(

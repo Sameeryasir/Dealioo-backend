@@ -105,6 +105,65 @@ export class ChatMessageService {
     return this.chatService.mapStoredMessageToDto(message);
   }
 
+  async sendAutomationSms(params: {
+    businessId: number;
+    customerId: number;
+    phone: string;
+    body: string;
+    automationId?: number | null;
+    executionId?: number | null;
+    nodeId?: number | null;
+    idempotencyKey: string;
+    metadata?: Record<string, unknown> | null;
+  }): Promise<{ sent: boolean; error?: string }> {
+    const trimmed = params.body.trim();
+    if (!trimmed) {
+      return { sent: false, error: 'Message cannot be empty.' };
+    }
+
+    const phone = params.phone.trim();
+    if (!phone) {
+      return { sent: false, error: 'Customer phone number is missing.' };
+    }
+
+    if (!this.twilioService.isConfigured()) {
+      return { sent: false, error: 'Twilio SMS is not configured on the server.' };
+    }
+
+    if (await this.hasOutboundMessage(params.idempotencyKey)) {
+      return { sent: true };
+    }
+
+    try {
+      await this.twilioService.sendSms(phone, trimmed);
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio rejected this SMS.';
+      this.logger.warn(
+        `Automation SMS failed for customer ${params.customerId}: ${detail}`,
+      );
+      return { sent: false, error: detail };
+    }
+
+    await this.recordOutboundMessage({
+      businessId: params.businessId,
+      customerId: params.customerId,
+      automationId: params.automationId,
+      executionId: params.executionId,
+      nodeId: params.nodeId,
+      channel: ConversationMessageChannel.SMS,
+      bodyPreview: trimmed,
+      idempotencyKey: params.idempotencyKey,
+      metadata: {
+        ...(params.metadata ?? {}),
+        channel: 'sms',
+        source: 'automation_engine',
+      },
+    });
+
+    return { sent: true };
+  }
+
   async recordOutboundMessage(params: RecordOutboundMessageDto): Promise<void> {
     const idempotencyKey = params.idempotencyKey.trim();
     if (!idempotencyKey) {

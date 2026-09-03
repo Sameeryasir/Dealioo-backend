@@ -217,6 +217,9 @@ export class AutomationEmailService {
     if (this.purposeUsesDirectEmailBody(purpose)) {
       return true;
     }
+    if (prepared.templateProps.ctaLabel?.trim()) {
+      return true;
+    }
     if (
       prepared.templateProps.ctaUrl?.trim() ||
       prepared.templateProps.googleWalletSaveUrl?.trim()
