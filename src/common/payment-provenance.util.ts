@@ -2,7 +2,6 @@ import {
   FunnelCollectionChannel,
   FunnelPayment,
   FunnelPaymentSource,
-  FunnelPaymentStatus,
 } from '../db/entities/funnel-payment.entity';
 
 export type GuestDealPaymentBadge =
@@ -34,16 +33,16 @@ export function isScannerFunnelPayment(
   if (!payment) {
     return false;
   }
-  if (isOnlineFunnelPayment(payment)) {
-    return false;
-  }
   if (payment.paymentSource === FunnelPaymentSource.SCANNER) {
     return true;
   }
   if (payment.collectionChannel === FunnelCollectionChannel.IN_STORE) {
     return true;
   }
-  return payment.status === FunnelPaymentStatus.PAID;
+  if (isOnlineFunnelPayment(payment)) {
+    return false;
+  }
+  return false;
 }
 
 export function resolveGuestDealPaymentBadge(params: {

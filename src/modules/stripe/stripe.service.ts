@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
@@ -661,7 +662,7 @@ export class StripeService {
       stripeCustomerId = customer.id;
     }
 
-    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}`;
+    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}:${randomUUID()}`;
 
     const session = await this.stripe.checkout.sessions.create(
       {
@@ -901,6 +902,30 @@ export class StripeService {
       newPriceId,
       paymentIntentClientSecret,
     };
+  }
+
+  async cancelPlatformSubscriptionImmediately(
+    stripeSubscriptionId: string,
+  ): Promise<void> {
+    const subscriptionId = stripeSubscriptionId?.trim();
+    if (!subscriptionId) return;
+
+    try {
+      await this.stripe.subscriptions.cancel(subscriptionId, {
+        invoice_now: false,
+        prorate: false,
+      });
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'type' in err &&
+        (err as { type?: string }).type === 'StripeInvalidRequestError'
+      ) {
+        return;
+      }
+      throw err;
+    }
   }
 
   async cancelPlatformSubscription(opts: {

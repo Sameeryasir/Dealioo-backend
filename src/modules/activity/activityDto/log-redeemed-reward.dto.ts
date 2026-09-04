@@ -30,5 +30,11 @@ export class LogRedeemedRewardDto {
   occurredAt: Date;
 
   @IsOptional()
+  paymentStatusOverride?: string | null;
+
+  @IsOptional()
+  paidAtCounter?: boolean;
+
+  @IsOptional()
   manager?: EntityManager;
 }

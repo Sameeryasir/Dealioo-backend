@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { DataSource, MoreThan, Repository } from 'typeorm';
 import {
@@ -309,11 +310,13 @@ export class PaymentService implements OnModuleInit {
             sessionId,
           );
         const paymentIntentId = this.paymentIntentIdFromSession(session);
+        const trulyPaid = await this.isStripeCheckoutSessionTrulyPaid({
+          session,
+          stripeAccountId: accountId,
+          paymentIntentId,
+        });
 
-        if (
-          session.status === 'complete' ||
-          session.payment_status === 'paid'
-        ) {
+        if (trulyPaid) {
           await this.paymentFinalizeService.finalizeSuccessfulPayment({
             paymentId: payment.id,
             source,
@@ -582,8 +585,7 @@ export class PaymentService implements OnModuleInit {
         currency: opts.currency,
         description: opts.productName,
         metadata,
-        // Same payment id always maps to the same Stripe session under concurrency.
-        idempotencyKey: `checkout-session-${payment.id}-pm-v5`,
+        idempotencyKey: `checkout-session-${payment.id}-pm-v6-${randomUUID()}`,
         paymentId: payment.id,
         funnelId: payment.funnelId,
         businessId: payment.businessId,
@@ -591,6 +593,48 @@ export class PaymentService implements OnModuleInit {
       });
 
     const paymentIntentId = this.paymentIntentIdFromSession(session);
+    const trulyPaid = await this.isStripeCheckoutSessionTrulyPaid({
+      session,
+      stripeAccountId: opts.stripeAccountId,
+      paymentIntentId,
+    });
+
+    if (trulyPaid) {
+      await this.paymentFinalizeService.finalizeSuccessfulPayment({
+        paymentId: payment.id,
+        source: 'checkout_reuse',
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: paymentIntentId ?? null,
+        stripeConnectedAccountId: opts.stripeAccountId,
+      });
+      await this.linkSignupPassToPayment(
+        opts.customerId,
+        opts.funnelId,
+        payment.id,
+      );
+      await this.attachCheckoutSessionPayment(
+        opts.checkoutSessionToken,
+        payment.id,
+      );
+      return {
+        checkoutSessionId: session.id,
+        paymentIntentId,
+        paymentId: payment.id,
+        stripeAccountId: opts.stripeAccountId,
+        reused: false,
+        alreadyCompleted: true,
+      };
+    }
+
+    if (session.status === 'complete' || !session.client_secret) {
+      await this.funnelPaymentRepository.update(payment.id, {
+        stripeCheckoutSessionId: null,
+        stripePaymentIntentId: null,
+      });
+      throw new BadRequestException(
+        'Checkout session could not be started. Please try again.',
+      );
+    }
 
     await this.funnelPaymentRepository.update(payment.id, {
       stripeCheckoutSessionId: session.id,
@@ -610,7 +654,7 @@ export class PaymentService implements OnModuleInit {
     );
 
     return {
-      clientSecret: session.client_secret!,
+      clientSecret: session.client_secret,
       checkoutSessionId: session.id,
       paymentIntentId,
       paymentId: payment.id,
@@ -635,8 +679,13 @@ export class PaymentService implements OnModuleInit {
           sessionId,
         );
       const paymentIntentId = this.paymentIntentIdFromSession(session);
+      const trulyPaid = await this.isStripeCheckoutSessionTrulyPaid({
+        session,
+        stripeAccountId: opts.stripeAccountId,
+        paymentIntentId,
+      });
 
-      if (session.status === 'complete' || session.payment_status === 'paid') {
+      if (trulyPaid) {
         await this.paymentFinalizeService.finalizeSuccessfulPayment({
           paymentId: payment.id,
           source: 'checkout_reuse',
@@ -657,6 +706,14 @@ export class PaymentService implements OnModuleInit {
           reused: true,
           alreadyCompleted: true,
         };
+      }
+
+      if (session.status === 'complete') {
+        await this.funnelPaymentRepository.update(payment.id, {
+          stripeCheckoutSessionId: null,
+          stripePaymentIntentId: null,
+        });
+        return 'create_new_attempt';
       }
 
       if (session.status === 'expired') {
@@ -747,9 +804,42 @@ export class PaymentService implements OnModuleInit {
     if (opts.checkoutSessionToken?.trim()) {
       params.set('checkoutToken', opts.checkoutSessionToken.trim());
     }
-    params.set('redirect_status', 'succeeded');
-    params.set('payment_confirmed', '1');
     return `${getFrontendBaseUrl().replace(/\/$/, '')}/funnel/${opts.funnelId}/confirmation?${params.toString()}`;
+  }
+
+  private async isStripeCheckoutSessionTrulyPaid(opts: {
+    session: {
+      status?: string | null;
+      payment_status?: string | null;
+    };
+    stripeAccountId: string;
+    paymentIntentId?: string | null;
+  }): Promise<boolean> {
+    if (opts.session.payment_status !== 'paid') {
+      return false;
+    }
+
+    const paymentIntentId = opts.paymentIntentId?.trim();
+    if (!paymentIntentId) {
+      return true;
+    }
+
+    try {
+      const paymentIntent =
+        await this.stripeService.retrievePaymentIntentOnConnectedAccount(
+          opts.stripeAccountId,
+          paymentIntentId,
+        );
+      return paymentIntent.status === 'succeeded';
+    } catch (err) {
+      warnStripePayment({
+        phase: 'checkout_session_paid_verify',
+        outcome: 'payment_intent_retrieve_failed',
+        paymentIntentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   private paymentIntentIdFromSession(session: {

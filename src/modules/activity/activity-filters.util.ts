@@ -7,17 +7,9 @@ export const ACTIVITY_IN_PERSON_FILTER = 'in_person' as const;
 
 export const ACTIVITY_IN_STORE_PREPAID_SQL = `(
   COALESCE(activity.metadata->>'paymentPlace', '') = '${ACTIVITY_PAYMENT_PLACE.IN_STORE}'
-  OR (
-    COALESCE(activity.metadata->>'paymentPlace', '') = ''
-    AND (
-      COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
-      OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
-      OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
-    )
-    AND COALESCE(activity.metadata->>'source', '') <> 'online_payment'
-    AND COALESCE(activity.metadata->>'paymentSource', '') <> 'STRIPE'
-    AND COALESCE(activity.metadata->>'collectionChannel', '') <> 'ONLINE'
-  )
+  OR COALESCE(activity.metadata->>'paymentSource', '') = 'SCANNER'
+  OR COALESCE(activity.metadata->>'collectionChannel', '') = 'IN_STORE'
+  OR COALESCE(activity.metadata->>'source', '') = 'scanner_purchase'
 )`;
 
 export const ACTIVITY_EVENT_TYPE_FILTERS = [

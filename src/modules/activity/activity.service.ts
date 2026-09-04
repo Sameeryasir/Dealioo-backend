@@ -252,15 +252,7 @@ export class ActivityService {
   async logSignedUp(params: LogSignedUpDto): Promise<void> {
     const campaignName = params.campaignName?.trim() || 'Campaign';
     const campaignTypeRaw = params.campaignType?.trim().toLowerCase() || '';
-    const campaignTypeLabel =
-      campaignTypeRaw === CampaignType.POSTPAID
-        ? 'Postpaid'
-        : campaignTypeRaw === CampaignType.PREPAID
-          ? 'Prepaid'
-          : null;
-    const description = campaignTypeLabel
-      ? `Signed up · ${campaignTypeLabel} · ${campaignName}`
-      : `Signed up · ${campaignName}`;
+    const description = `Signed up · ${campaignName}`;
     const occurredAt = params.occurredAt ?? new Date();
     const idempotencyKey = `signup:funnel:${params.funnelId}:customer:${params.customerId}`;
 
@@ -307,14 +299,18 @@ export class ActivityService {
       params.coupon.campaign?.campaignName?.trim() ||
       'Reward';
     const businessName = params.businessName.trim() || 'Business';
+    const paymentStatus =
+      params.paymentStatusOverride ?? params.coupon.paymentStatus ?? null;
+    const paidAtCounter = params.paidAtCounter === true;
     const paymentLabel =
-      params.coupon.campaign?.campaignType === CampaignType.POSTPAID
-        ? 'Postpaid'
-        : params.coupon.campaign?.campaignType === CampaignType.PREPAID
-          ? 'Prepaid'
-          : params.coupon.paymentStatus === CouponPaymentStatus.PENDING
-            ? 'pay at counter'
-            : 'paid';
+      paymentStatus === CouponPaymentStatus.PENDING ||
+      paymentStatus === CouponPaymentStatus.FAILED
+        ? 'Unpaid'
+        : paidAtCounter
+          ? 'Paid at counter'
+          : paymentStatus === CouponPaymentStatus.PAID
+            ? 'Paid'
+            : 'Paid';
     const description = `Redeemed ${offerName} · ${paymentLabel} at ${businessName}`;
 
     const payload: CreateActivityEventDto = {
@@ -330,7 +326,8 @@ export class ActivityService {
         offerName,
         businessName,
         campaignType: params.coupon.campaign?.campaignType ?? null,
-        paymentStatus: params.coupon.paymentStatus ?? null,
+        paymentStatus,
+        ...(paidAtCounter ? { paidAtCounter: true } : {}),
       },
     };
 
@@ -399,18 +396,20 @@ export class ActivityService {
 
     let campaignName =
       payment.funnel?.campaign?.campaignName?.trim() || null;
+    let offerName = payment.funnel?.campaign?.offer?.trim() || null;
     let campaignType =
       payment.funnel?.campaign?.campaignType === CampaignType.POSTPAID
         ? CampaignType.POSTPAID
         : payment.funnel?.campaign?.campaignType === CampaignType.PREPAID
           ? CampaignType.PREPAID
           : null;
-    if ((!campaignName || !campaignType) && payment.campaignId) {
+    if ((!campaignName || !offerName || !campaignType) && payment.campaignId) {
       const campaign = await manager.findOne(Campaign, {
         where: { id: payment.campaignId },
-        select: ['id', 'campaignName', 'campaignType'],
+        select: ['id', 'campaignName', 'campaignType', 'offer'],
       });
       campaignName = campaignName || campaign?.campaignName?.trim() || null;
+      offerName = offerName || campaign?.offer?.trim() || null;
       if (!campaignType) {
         campaignType =
           campaign?.campaignType === CampaignType.POSTPAID
@@ -439,13 +438,11 @@ export class ActivityService {
     const offerCents = counterExtrasOnly
       ? 0
       : Math.max(0, Math.round(payment.amount ?? 0));
-    const campaignTypeLabel =
-      campaignType === CampaignType.POSTPAID
-        ? 'Postpaid'
-        : campaignType === CampaignType.PREPAID
-          ? 'Prepaid'
-          : null;
-    const campaignLabel = campaignName || 'Campaign';
+    const offerLabel = offerName || campaignName || 'Offer';
+    const paymentPlaceLabel =
+      paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE
+        ? 'Paid at counter'
+        : 'Paid online';
 
     let moneyLabel = '';
     if (counterExtrasOnly && extraItemsCents > 0) {
@@ -460,11 +457,7 @@ export class ActivityService {
       moneyLabel = amountLabel;
     }
 
-    const detailParts = [
-      moneyLabel,
-      ...(campaignTypeLabel ? [campaignTypeLabel] : []),
-      campaignLabel,
-    ];
+    const detailParts = [moneyLabel, paymentPlaceLabel, offerLabel];
     const description =
       paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE
         ? `${detailParts.join(' · ')} at ${businessName}`
@@ -486,6 +479,7 @@ export class ActivityService {
         funnelId: payment.funnelId,
         campaignId: payment.campaignId,
         campaignName: campaignName || null,
+        offerName: offerName || null,
         campaignType,
         businessName,
         paymentPlace,
@@ -602,16 +596,21 @@ export class ActivityService {
     );
 
     const campaignNameById = new Map<number, string>();
+    const campaignOfferById = new Map<number, string>();
     const campaignTypeById = new Map<number, CampaignType>();
     if (prepaidCampaignIds.length > 0) {
       const campaigns = await this.campaignRepository.find({
         where: { id: In(prepaidCampaignIds) },
-        select: ['id', 'campaignName', 'campaignType'],
+        select: ['id', 'campaignName', 'campaignType', 'offer'],
       });
       for (const campaign of campaigns) {
         const name = campaign.campaignName?.trim();
         if (name) {
           campaignNameById.set(campaign.id, name);
+        }
+        const offer = campaign.offer?.trim();
+        if (offer) {
+          campaignOfferById.set(campaign.id, offer);
         }
         if (
           campaign.campaignType === CampaignType.POSTPAID ||
@@ -633,6 +632,7 @@ export class ActivityService {
           row,
           campaignNameById,
           campaignTypeById,
+          campaignOfferById,
         ),
         paymentChannel: this.resolvePaymentChannel(row),
         campaignType: this.resolveCampaignType(row, campaignTypeById),
@@ -716,26 +716,28 @@ export class ActivityService {
       typeof metadata.paymentPlace === 'string'
         ? metadata.paymentPlace.trim().toUpperCase()
         : '';
-
-    if (paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE) {
-      return 'in_store';
-    }
-    if (paymentPlace === ACTIVITY_PAYMENT_PLACE.ONLINE) {
-      return 'online';
-    }
-
     const source =
       typeof metadata.source === 'string' ? metadata.source.trim() : '';
     const paymentSource =
       typeof metadata.paymentSource === 'string'
-        ? metadata.paymentSource.trim()
+        ? metadata.paymentSource.trim().toUpperCase()
         : '';
     const collectionChannel =
       typeof metadata.collectionChannel === 'string'
-        ? metadata.collectionChannel.trim()
+        ? metadata.collectionChannel.trim().toUpperCase()
         : '';
 
     if (
+      paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE ||
+      source === 'scanner_purchase' ||
+      paymentSource === 'SCANNER' ||
+      collectionChannel === 'IN_STORE'
+    ) {
+      return 'in_store';
+    }
+
+    if (
+      paymentPlace === ACTIVITY_PAYMENT_PLACE.ONLINE ||
       source === 'online_payment' ||
       paymentSource === 'STRIPE' ||
       collectionChannel === 'ONLINE'
@@ -743,13 +745,6 @@ export class ActivityService {
       return 'online';
     }
 
-    if (
-      source === 'scanner_purchase' ||
-      paymentSource === 'SCANNER' ||
-      collectionChannel === 'IN_STORE'
-    ) {
-      return 'in_store';
-    }
     return 'online';
   }
 
@@ -768,14 +763,66 @@ export class ActivityService {
     ) {
       return 'scanned';
     }
+    if (
+      visitSource === CustomerVisitSource.STAFF_LOOKUP ||
+      row.description.trim().toLowerCase().startsWith('checked in')
+    ) {
+      return 'in_store';
+    }
     return null;
+  }
+
+  private redeemedActivityDescription(row: ActivityEvent): string {
+    const metadata = row.metadata ?? {};
+    const paymentStatusRaw =
+      typeof metadata.paymentStatus === 'string'
+        ? metadata.paymentStatus.trim().toUpperCase()
+        : '';
+    const paidAtCounter = metadata.paidAtCounter === true;
+    const offerName =
+      typeof metadata.offerName === 'string' && metadata.offerName.trim()
+        ? metadata.offerName.trim()
+        : null;
+    const businessName =
+      typeof metadata.businessName === 'string' && metadata.businessName.trim()
+        ? metadata.businessName.trim()
+        : null;
+
+    let paymentLabel: string | null = null;
+    if (
+      paymentStatusRaw === CouponPaymentStatus.PENDING ||
+      paymentStatusRaw === CouponPaymentStatus.FAILED
+    ) {
+      paymentLabel = 'Unpaid';
+    } else if (paidAtCounter) {
+      paymentLabel = 'Paid at counter';
+    } else if (paymentStatusRaw === CouponPaymentStatus.PAID) {
+      paymentLabel = 'Paid';
+    }
+
+    if (offerName && businessName && paymentLabel) {
+      return `Redeemed ${offerName} · ${paymentLabel} at ${businessName}`;
+    }
+
+    const raw = row.description?.trim() || '';
+    return raw
+      .replace(/\s*·\s*Prepaid\s*/gi, ' · ')
+      .replace(/\s*·\s*Postpaid\s*/gi, ' · ')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/\s·\s·/g, ' · ')
+      .trim();
   }
 
   private prepaidActivityDescription(
     row: ActivityEvent,
     campaignNameById: Map<number, string>,
-    campaignTypeById: Map<number, CampaignType>,
+    _campaignTypeById: Map<number, CampaignType>,
+    campaignOfferById: Map<number, string> = new Map(),
   ): string {
+    if (row.eventType === ActivityEventType.REDEEMED_REWARD) {
+      return this.redeemedActivityDescription(row);
+    }
+
     if (row.eventType !== ActivityEventType.PREPAID_FOR_OFFER) {
       return row.description;
     }
@@ -810,51 +857,32 @@ export class ActivityService {
       moneyLabel = formatMoney(amountCents, currency);
     }
 
+    const storedOfferName =
+      typeof metadata.offerName === 'string' ? metadata.offerName.trim() : '';
     const storedCampaignName =
       typeof metadata.campaignName === 'string'
         ? metadata.campaignName.trim()
         : '';
     const campaignId =
       typeof metadata.campaignId === 'number' ? metadata.campaignId : null;
-    const campaignName =
+    const offerLabel =
+      storedOfferName ||
+      (campaignId != null ? campaignOfferById.get(campaignId) : undefined) ||
       storedCampaignName ||
       (campaignId != null ? campaignNameById.get(campaignId) : undefined) ||
       '';
-
-    const campaignTypeRaw =
-      typeof metadata.campaignType === 'string'
-        ? metadata.campaignType.trim().toLowerCase()
-        : '';
-    const resolvedType =
-      campaignTypeRaw === CampaignType.POSTPAID ||
-      campaignTypeRaw === CampaignType.PREPAID
-        ? campaignTypeRaw
-        : campaignId != null
-          ? (campaignTypeById.get(campaignId) ?? null)
-          : null;
-    const campaignTypeLabel =
-      resolvedType === CampaignType.POSTPAID
-        ? 'Postpaid'
-        : resolvedType === CampaignType.PREPAID
-          ? 'Prepaid'
-          : null;
 
     const businessName =
       typeof metadata.businessName === 'string'
         ? metadata.businessName.trim()
         : '';
-    const paymentPlace =
-      typeof metadata.paymentPlace === 'string'
-        ? metadata.paymentPlace.trim().toUpperCase()
-        : '';
-    const isInStore =
-      paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE ||
-      this.resolvePaymentChannel(row) === 'in_store';
+    const isInStore = this.resolvePaymentChannel(row) === 'in_store';
+    const paymentPlaceLabel = isInStore ? 'Paid at counter' : 'Paid online';
 
     const detailParts = [
       ...(moneyLabel ? [moneyLabel] : []),
-      ...(campaignTypeLabel ? [campaignTypeLabel] : []),
-      ...(campaignName ? [campaignName] : []),
+      paymentPlaceLabel,
+      ...(offerLabel ? [offerLabel] : []),
     ];
 
     if (detailParts.length === 0) {

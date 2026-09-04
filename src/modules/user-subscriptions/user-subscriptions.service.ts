@@ -51,6 +51,7 @@ type StripeCheckoutSession = {
   id: string;
   status?: string | null;
   mode?: string | null;
+  payment_status?: string | null;
   customer?: string | { id?: string } | null;
   subscription?: string | { id?: string } | null;
   metadata?: Record<string, string> | null;
@@ -296,9 +297,21 @@ export class UserSubscriptionsService {
     userId: number,
     sessionId: string,
   ): Promise<UserSubscriptionResponse> {
-    // Confirm Stripe checkout is paid. Activation itself is webhook-only.
-    await this.loadCompletedCheckoutSession(userId, sessionId);
-    const subscription = await this.getActiveSubscriptionForUser(userId);
+    const session = await this.loadCompletedCheckoutSession(userId, sessionId);
+    const resolved = await this.resolveCheckoutSession(session);
+    await this.activateFromCheckoutSession(resolved);
+
+    const stripeSubscriptionId = this.extractStripeId(resolved.subscription);
+    if (!stripeSubscriptionId) {
+      throw new BadRequestException(
+        'Stripe checkout did not include a subscription yet.',
+      );
+    }
+
+    const subscription = await this.getSubscriptionResponseForStripeId(
+      userId,
+      stripeSubscriptionId,
+    );
     if (!subscription) {
       throw new BadRequestException(
         'Stripe webhook has not activated this subscription yet.',
@@ -307,7 +320,6 @@ export class UserSubscriptionsService {
     return subscription;
   }
 
-  /** Primary activation path: Stripe webhook `checkout.session.completed`. */
   async handleStripeWebhookEvent(event: {
     type: string;
     data: { object: unknown };
@@ -405,6 +417,16 @@ export class UserSubscriptionsService {
       throw new BadRequestException('Stripe checkout is not complete yet.');
     }
 
+    if (
+      session.payment_status &&
+      session.payment_status !== 'paid' &&
+      session.payment_status !== 'no_payment_required'
+    ) {
+      throw new BadRequestException(
+        'Stripe checkout payment is not completed yet.',
+      );
+    }
+
     return session;
   }
 
@@ -420,7 +442,7 @@ export class UserSubscriptionsService {
 
   private async activateFromCheckoutSession(
     session: StripeCheckoutSession,
-  ): Promise<UserSubscription> {
+  ): Promise<UserSubscription | null> {
     const userId = this.parseUserId(session.metadata?.userId);
     const planSlug = session.metadata?.planSlug?.trim().toLowerCase();
     const billingCycle = this.parseBillingCycle(session.metadata?.billingCycle);
@@ -431,21 +453,52 @@ export class UserSubscriptionsService {
       throw new BadRequestException('Invalid Stripe checkout session.');
     }
 
+    if (
+      session.payment_status &&
+      session.payment_status !== 'paid' &&
+      session.payment_status !== 'no_payment_required'
+    ) {
+      return null;
+    }
+
+    const stripeSubscription =
+      await this.stripeService.retrievePlatformSubscription({
+        stripeSubscriptionId,
+      });
+    const mappedStatus = this.mapStripeSubscriptionStatus(
+      stripeSubscription.status,
+    );
+    if (mappedStatus !== 'active' && mappedStatus !== 'trialing') {
+      return null;
+    }
+
     const existing = await this.subscriptionRepository.findOne({
       where: { stripeSubscriptionId },
       relations: { plan: true },
     });
 
     if (existing?.plan) {
+      if (existing.status !== mappedStatus) {
+        await this.subscriptionRepository.update(existing.id, {
+          status: mappedStatus,
+        });
+        existing.status = mappedStatus;
+      }
       return existing;
     }
 
     const activeForUser = await this.subscriptionRepository.findOne({
-      where: { userId, status: 'active' },
+      where: { userId, status: In(PAID_SUBSCRIPTION_STATUSES) },
       relations: { plan: true },
+      order: { createdAt: 'DESC' },
     });
 
     if (activeForUser?.plan) {
+      if (activeForUser.stripeSubscriptionId !== stripeSubscriptionId) {
+        await this.stripeService.cancelPlatformSubscriptionImmediately(
+          stripeSubscriptionId,
+        );
+      }
       return activeForUser;
     }
 
@@ -462,7 +515,7 @@ export class UserSubscriptionsService {
         userId,
         planId: plan.id,
         billingCycle,
-        status: 'active',
+        status: mappedStatus,
         startedAt: new Date(),
         stripeCustomerId,
         stripeSubscriptionId,
@@ -488,7 +541,6 @@ export class UserSubscriptionsService {
       metadata: { planSlug, billingCycle, subscriptionId: saved.id },
     });
 
-    // Super Admin live alert: "Jane Doe has subscribed to the Growth plan."
     const buyer = await this.userRepository.findOne({ where: { id: userId } });
     await this.adminNotificationWriter.notifySubscriptionPurchased({
       userId,
@@ -500,6 +552,32 @@ export class UserSubscriptionsService {
     });
 
     return saved;
+  }
+
+  private async getSubscriptionResponseForStripeId(
+    userId: number,
+    stripeSubscriptionId: string,
+  ): Promise<UserSubscriptionResponse | null> {
+    const row = await this.subscriptionRepository.findOne({
+      where: {
+        userId,
+        stripeSubscriptionId,
+        status: In(PAID_SUBSCRIPTION_STATUSES),
+      },
+      relations: { plan: true },
+    });
+    if (!row?.plan) return null;
+    return {
+      id: row.id,
+      planId: row.planId,
+      planSlug: row.plan.slug,
+      planName: row.plan.name,
+      billingCycle: row.billingCycle,
+      status: row.status,
+      startedAt: row.startedAt?.toISOString() ?? null,
+      cancelAtPeriodEnd: Boolean(row.cancelAtPeriodEnd),
+      cancellationDate: row.cancelsAt?.toISOString() ?? null,
+    };
   }
 
   private async markSubscriptionCancelled(
@@ -529,6 +607,13 @@ export class UserSubscriptionsService {
     });
     if (!record) {
       return;
+    }
+
+    if (record.status === 'cancelled') {
+      const status = this.mapStripeSubscriptionStatus(subscription.status);
+      if (status !== 'active' && status !== 'trialing') {
+        return;
+      }
     }
 
     const priceId = this.extractStripeId(

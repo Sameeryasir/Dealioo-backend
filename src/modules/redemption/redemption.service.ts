@@ -870,6 +870,7 @@ export class RedemptionService {
           if (settled != null) {
             settledOrderIdByCouponId.set(coupon.id, settled.orderId);
             settledOfferCents = settled.amountCents;
+            coupon.paymentStatus = CouponPaymentStatus.PAID;
             const extraItemsCents =
               extraItemsAmount != null &&
               Number.isFinite(extraItemsAmount) &&
@@ -915,6 +916,10 @@ export class RedemptionService {
           coupon,
           businessName,
           occurredAt: redeemedAt,
+          paymentStatusOverride: walkInPayment
+            ? CouponPaymentStatus.PAID
+            : coupon.paymentStatus,
+          paidAtCounter: walkInPayment,
           manager,
         });
 
@@ -1359,6 +1364,25 @@ export class RedemptionService {
 
     const visitSource =
       params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
+
+    const offerName =
+      params.coupon.campaign?.offer?.trim() ||
+      params.coupon.campaign?.campaignName?.trim() ||
+      null;
+    try {
+      await this.activityService.logVisited({
+        businessId: params.businessId,
+        customerId: params.coupon.customerId,
+        couponId: params.coupon.id,
+        businessName: params.businessName?.trim() || 'Business',
+        occurredAt: params.activityOccurredAt ?? visitedAt,
+        visitSource,
+        offerName,
+        manager,
+      });
+    } catch (error) {
+      console.error('Failed to write visited activity from scanner redeem', error);
+    }
 
     if (visitSource !== CustomerVisitSource.STAFF_LOOKUP) {
       await this.customerJourneyService.recordQrRedeemed({

@@ -116,6 +116,19 @@ export class BillingService {
       }
     }
 
+    if (localSub?.id && stripeSubscription?.status) {
+      const mapped = this.mapStripeStatus(stripeSubscription.status);
+      if (mapped && mapped !== localSub.status) {
+        await this.subscriptionRepository.update(localSub.id, {
+          status: mapped,
+          ...(typeof stripeSubscription.cancel_at_period_end === 'boolean'
+            ? { cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end }
+            : {}),
+        });
+        localSub.status = mapped;
+      }
+    }
+
     const billingDetails = this.mapBillingDetails(customer, fallbackDetails);
     const paymentMethod = this.resolvePaymentMethod(
       stripeSubscription,
@@ -490,10 +503,15 @@ export class BillingService {
     });
 
     const mappedStatus = this.mapStripeStatus(updated.subscription.status);
+    const requiresAction = Boolean(updated.paymentIntentClientSecret);
     await this.subscriptionRepository.update(localSub.id, {
       planId: targetPlan.id,
       billingCycle,
-      ...(mappedStatus ? { status: mappedStatus } : {}),
+      ...(mappedStatus
+        ? { status: requiresAction ? 'past_due' : mappedStatus }
+        : requiresAction
+          ? { status: 'past_due' }
+          : {}),
       cancelAtPeriodEnd: false,
       cancelRequestedAt: null,
       cancellationReason: null,
