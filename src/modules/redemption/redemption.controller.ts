@@ -96,6 +96,8 @@ export class RedemptionController {
       dto.couponIds,
       dto.orderSubtotal,
       dto.extraItemsAmount,
+      dto.extraItemNames,
+      dto.extraItems,
     );
   }
 

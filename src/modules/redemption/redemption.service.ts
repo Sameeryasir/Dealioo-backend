@@ -56,6 +56,12 @@ import {
   dollarsEqualInCents,
   dollarsToCents,
 } from '../../common/money.util';
+import {
+  ExtraItemsMismatchError,
+  resolveCounterExtras,
+  type ResolvedCounterExtras,
+  type StoredExtraItem,
+} from '../../utils/normalize-extra-items';
 import { CouponService } from './coupon.service';
 import {
   isOnlineFunnelPayment,
@@ -531,6 +537,8 @@ export class RedemptionService {
     couponIds?: number[],
     orderSubtotal?: number,
     extraItemsAmount?: number,
+    extraItemNames?: string[],
+    extraItems?: Array<{ name: string; unitPrice: number; qty: number }>,
   ): Promise<ScanResult> {
     if (audit.idempotencyKey?.trim()) {
       const cached = await this.findIdempotentRedemption(
@@ -615,6 +623,8 @@ export class RedemptionService {
       audit,
       orderSubtotal,
       extraItemsAmount,
+      extraItemNames,
+      extraItems,
     );
   }
 
@@ -624,11 +634,40 @@ export class RedemptionService {
     audit: ScanAuditContext,
     orderSubtotal?: number,
     extraItemsAmount?: number,
+    extraItemNames?: string[],
+    extraItems?: Array<{ name: string; unitPrice: number; qty: number }>,
   ): Promise<ScanResult> {
     const uniqueIds = [...new Set(couponIds)].sort((a, b) => a - b);
     if (uniqueIds.length === 0) {
       return { success: false, message: 'Select at least one reward' };
     }
+
+    const resolveExtrasOrFail = (
+      amountDollars?: number | null,
+    ): ResolvedCounterExtras | ScanResult => {
+      try {
+        return resolveCounterExtras({
+          amountDollars,
+          items: extraItems,
+          names: extraItemNames,
+        });
+      } catch (error) {
+        if (error instanceof ExtraItemsMismatchError) {
+          return {
+            success: false,
+            message: error.message,
+            errorCode: ScannerErrorCode.INVALID_AMOUNT,
+          };
+        }
+        throw error;
+      }
+    };
+
+    const initialExtras = resolveExtrasOrFail(extraItemsAmount);
+    if ('success' in initialExtras && initialExtras.success === false) {
+      return initialExtras;
+    }
+    let resolvedExtras = initialExtras as ResolvedCounterExtras;
 
     if (uniqueIds.length > 1) {
       return {
@@ -871,17 +910,16 @@ export class RedemptionService {
             settledOrderIdByCouponId.set(coupon.id, settled.orderId);
             settledOfferCents = settled.amountCents;
             coupon.paymentStatus = CouponPaymentStatus.PAID;
-            const extraItemsCents =
-              extraItemsAmount != null &&
-              Number.isFinite(extraItemsAmount) &&
-              extraItemsAmount > 0
-                ? dollarsToCents(extraItemsAmount)
-                : 0;
+            const extraItemsCents = resolvedExtras.cents;
             await this.activityService.logPrepaidForOffer({
               paymentId: settled.paymentId,
               customerId: coupon.customerId,
               occurredAt: redeemedAt,
               extraItemsCents,
+              extraItemNames:
+                extraItemsCents > 0 ? resolvedExtras.labels : [],
+              extraItems:
+                extraItemsCents > 0 ? resolvedExtras.items : [],
               manager,
             });
             await this.customerActivityService.recordInStorePurchase({
@@ -950,13 +988,20 @@ export class RedemptionService {
       }
 
       const primaryCoupon = lockedCoupons[0];
-      const visitOrderSubtotal = await this.resolveVisitOrderSubtotal(
-        manager,
-        lockedCoupons,
-        orderSubtotal,
-        hasPrepaid && !hasUnpaid,
-        extraItemsAmount,
-      );
+      if (hasPrepaid && !hasUnpaid) {
+        const prepaidExtras = resolveExtrasOrFail(
+          orderSubtotal ?? extraItemsAmount ?? 0,
+        );
+        if ('success' in prepaidExtras && prepaidExtras.success === false) {
+          return prepaidExtras;
+        }
+        resolvedExtras = prepaidExtras as ResolvedCounterExtras;
+      }
+
+      const visitOrderSubtotal =
+        resolvedExtras.cents > 0
+          ? centsToDollars(resolvedExtras.cents)
+          : null;
 
       if (
         hasPrepaid &&
@@ -964,7 +1009,7 @@ export class RedemptionService {
         visitOrderSubtotal != null &&
         visitOrderSubtotal > 0
       ) {
-        const extrasCents = dollarsToCents(visitOrderSubtotal);
+        const extrasCents = resolvedExtras.cents;
         const customerEmail =
           primaryCoupon.customer?.email?.trim().toLowerCase() || '';
         const extrasOrder = await manager.save(
@@ -1006,6 +1051,8 @@ export class RedemptionService {
           customerId: primaryCoupon.customerId,
           occurredAt: redeemedAt,
           counterExtrasOnly: true,
+          extraItemNames: resolvedExtras.labels,
+          extraItems: resolvedExtras.items,
           manager,
         });
         await this.customerActivityService.recordInStorePurchase({
@@ -1032,6 +1079,12 @@ export class RedemptionService {
         activityOccurredAt: new Date(redeemedAt.getTime() + 1),
         orderSubtotal: visitOrderSubtotal,
         orderId: settledOrderIdByCouponId.get(primaryCoupon.id) ?? null,
+        extraItems:
+          visitOrderSubtotal != null &&
+          Number.isFinite(visitOrderSubtotal) &&
+          visitOrderSubtotal > 0
+            ? resolvedExtras.items
+            : [],
         manager,
         businessName,
       });
@@ -1315,11 +1368,16 @@ export class RedemptionService {
     activityOccurredAt?: Date;
     orderSubtotal?: number | null;
     orderId?: number | null;
+    extraItems?: StoredExtraItem[];
     manager?: EntityManager;
     businessName?: string;
   }): Promise<CustomerVisitRecordResult> {
     const visitedAt = params.visitedAt ?? new Date();
     const manager = params.manager ?? this.dataSource.manager;
+    const extraItems =
+      Array.isArray(params.extraItems) && params.extraItems.length > 0
+        ? params.extraItems
+        : null;
 
     const existingVisit = await manager.findOne(CustomerVisit, {
       where: { couponId: params.coupon.id },
@@ -1335,6 +1393,10 @@ export class RedemptionService {
       }
       if (params.orderId != null && existingVisit.orderId == null) {
         existingVisit.orderId = params.orderId;
+        changed = true;
+      }
+      if (extraItems != null) {
+        existingVisit.extraItems = extraItems;
         changed = true;
       }
       if (changed) {
@@ -1358,6 +1420,7 @@ export class RedemptionService {
       source:
         params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION,
       orderSubtotal: params.orderSubtotal ?? null,
+      extraItems,
       visitCampaigns: [{ campaignId: params.coupon.campaignId }],
     });
     await manager.save(visit);
@@ -1882,34 +1945,6 @@ export class RedemptionService {
       success: params.success,
       failureReason: params.failureReason,
     });
-  }
-
-  private async resolveVisitOrderSubtotal(
-    _manager: EntityManager,
-    _lockedCoupons: Coupon[],
-    orderSubtotal: number | undefined,
-    allPrepaid: boolean,
-    extraItemsAmount?: number,
-  ): Promise<number | null> {
-    const extraCents =
-      extraItemsAmount != null &&
-      Number.isFinite(extraItemsAmount) &&
-      extraItemsAmount >= 0
-        ? dollarsToCents(extraItemsAmount)
-        : 0;
-
-    if (allPrepaid) {
-      const prepaidExtraCents =
-        orderSubtotal != null &&
-        Number.isFinite(orderSubtotal) &&
-        orderSubtotal >= 0
-          ? dollarsToCents(orderSubtotal)
-          : 0;
-      const combined = prepaidExtraCents + extraCents;
-      return combined > 0 ? centsToDollars(combined) : null;
-    }
-
-    return extraCents > 0 ? centsToDollars(extraCents) : null;
   }
 
   private async lockCouponForRedemption(

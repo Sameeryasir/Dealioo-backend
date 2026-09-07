@@ -96,6 +96,13 @@ export class CustomerVisit {
   })
   orderSubtotal: number | null;
 
+  @Column({ name: 'extra_items', type: 'jsonb', nullable: true })
+  extraItems: Array<{
+    name: string;
+    unitPriceCents: number;
+    qty: number;
+  }> | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

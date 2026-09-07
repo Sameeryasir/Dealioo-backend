@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsEnum,
@@ -10,14 +11,10 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { ExtraItemDto } from '../../redemption/dto/scan-qr.dto';
 
-/**
- * How staff recorded the deal purchase at the scanner.
- * IN_PERSON = paid/collected at the counter
- * REDEEMED = deal was redeemed (pass used) rather than a fresh counter sale
- * SCANNED = deal was recorded via QR / code scan
- */
 export enum ScannerPurchaseMeans {
   IN_PERSON = 'IN_PERSON',
   REDEEMED = 'REDEEMED',
@@ -32,22 +29,34 @@ export class ScannerPurchaseDealsDto {
   @Min(1, { each: true })
   funnelIds: number[];
 
-  // --- Purchase means (required) ---
-  // Caller must say whether this attach-deals action was in-person, redeemed, or scanned.
   @IsEnum(ScannerPurchaseMeans)
   purchaseMeans: ScannerPurchaseMeans;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   orderSubtotal?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   extraItemsAmount?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  extraItemNames?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ExtraItemDto)
+  extraItems?: ExtraItemDto[];
 
   @IsOptional()
   @IsString()

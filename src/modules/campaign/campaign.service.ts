@@ -349,29 +349,13 @@ export class CampaignService {
     const saved = await this.campaignRepository.save(campaign);
 
     if (updateCampaignDto.status !== undefined) {
-      const funnel = await this.funnelRepository.findOne({
-        where: { campaignId: saved.id },
-        select: {
-          id: true,
-          contentRevision: true,
-          publishedContentRevision: true,
+      await this.funnelRepository.update(
+        { campaignId: saved.id },
+        {
+          published:
+            saved.status === CampaignPublicationStatus.PUBLISHED,
         },
-      });
-      if (funnel) {
-        if (saved.status === CampaignPublicationStatus.PUBLISHED) {
-          await this.funnelRepository.update(funnel.id, {
-            published: true,
-            publishedContentRevision:
-              funnel.contentRevision > 0
-                ? funnel.contentRevision
-                : funnel.publishedContentRevision,
-          });
-        } else {
-          await this.funnelRepository.update(funnel.id, {
-            published: false,
-          });
-        }
-      }
+      );
     }
 
     await this.businessHistoryService.logCampaignUpdated({

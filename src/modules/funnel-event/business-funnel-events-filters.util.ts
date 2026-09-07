@@ -290,6 +290,7 @@ export function mergeBusinessOrderRowsByCheckout<
     onlineAmountCents?: number | null;
     businessAmount?: number | null;
     businessVisitedAt?: Date | string | null;
+    extraItems?: Array<{ name: string; unitPrice: number; qty: number }> | null;
     paidAt?: Date | string | null;
     funnelPaymentId?: number | null;
     paymentCollectedAt?: Date | string | null;
@@ -343,6 +344,12 @@ export function mergeBusinessOrderRowsByCheckout<
     const campaignTypes: Array<'prepaid' | 'postpaid'> = [];
     const seenCampaignTypes = new Set<string>();
     let campaignImageUrl: string | null = primary.campaignImageUrl?.trim() || null;
+    const mergedExtraItems: Array<{
+      name: string;
+      unitPrice: number;
+      qty: number;
+    }> = [];
+    const seenExtraKeys = new Set<string>();
 
     for (const row of sorted) {
       totalCampaignCents += businessOrderCampaignPriceCents(row);
@@ -387,6 +394,13 @@ export function mergeBusinessOrderRowsByCheckout<
           campaignImageUrl = imageUrl;
         }
       }
+
+      for (const item of row.extraItems ?? []) {
+        const key = `${item.name.toLowerCase()}|${item.unitPrice}|${item.qty}`;
+        if (seenExtraKeys.has(key)) continue;
+        seenExtraKeys.add(key);
+        mergedExtraItems.push(item);
+      }
     }
 
     merged.push({
@@ -408,6 +422,7 @@ export function mergeBusinessOrderRowsByCheckout<
           ? Math.round(totalVisitNetDollars * 100) / 100
           : null,
       businessVisitedAt,
+      extraItems: mergedExtraItems,
       paidAt,
       paymentCollectedAt,
     });

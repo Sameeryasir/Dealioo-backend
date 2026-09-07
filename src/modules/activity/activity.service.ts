@@ -435,6 +435,33 @@ export class ActivityService {
           params.extraItemsCents > 0
         ? Math.round(params.extraItemsCents)
         : 0;
+    const extraItemNames = Array.isArray(params.extraItemNames)
+      ? params.extraItemNames
+          .map((name) =>
+            typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : '',
+          )
+          .filter(Boolean)
+          .slice(0, 20)
+      : [];
+    const extraItems = Array.isArray(params.extraItems)
+      ? params.extraItems
+          .filter(
+            (item) =>
+              item &&
+              typeof item.name === 'string' &&
+              item.name.trim() &&
+              typeof item.unitPriceCents === 'number' &&
+              item.unitPriceCents > 0 &&
+              typeof item.qty === 'number' &&
+              item.qty > 0,
+          )
+          .map((item) => ({
+            name: item.name.trim().replace(/\s+/g, ' ').slice(0, 120),
+            unitPriceCents: Math.round(item.unitPriceCents),
+            qty: Math.min(99, Math.max(1, Math.round(item.qty))),
+          }))
+          .slice(0, 20)
+      : [];
     const offerCents = counterExtrasOnly
       ? 0
       : Math.max(0, Math.round(payment.amount ?? 0));
@@ -457,6 +484,10 @@ export class ActivityService {
       moneyLabel = amountLabel;
     }
 
+    if (extraItemNames.length > 0 && extraItemsCents > 0) {
+      moneyLabel = `${moneyLabel} (${extraItemNames.join(', ')})`;
+    }
+
     const detailParts = [moneyLabel, paymentPlaceLabel, offerLabel];
     const description =
       paymentPlace === ACTIVITY_PAYMENT_PLACE.IN_STORE
@@ -474,6 +505,8 @@ export class ActivityService {
         funnelPaymentId: payment.id,
         amountCents: offerCents,
         ...(extraItemsCents > 0 ? { extraItemsCents } : {}),
+        ...(extraItemNames.length > 0 ? { extraItemNames } : {}),
+        ...(extraItems.length > 0 ? { extraItems } : {}),
         ...(counterExtrasOnly ? { counterExtrasOnly: true } : {}),
         currency: payment.currency,
         funnelId: payment.funnelId,
@@ -839,6 +872,12 @@ export class ActivityService {
       metadata.extraItemsCents > 0
         ? Math.round(metadata.extraItemsCents)
         : 0;
+    const extraItemNames = Array.isArray(metadata.extraItemNames)
+      ? metadata.extraItemNames
+          .filter((name): name is string => typeof name === 'string')
+          .map((name) => name.trim())
+          .filter(Boolean)
+      : [];
 
     let moneyLabel = '';
     if (counterExtrasOnly && extraItemsCents > 0) {
@@ -855,6 +894,10 @@ export class ActivityService {
       moneyLabel = `${formatMoney(extraItemsCents, currency)} extras`;
     } else if (amountCents != null) {
       moneyLabel = formatMoney(amountCents, currency);
+    }
+
+    if (extraItemNames.length > 0 && extraItemsCents > 0) {
+      moneyLabel = `${moneyLabel} (${extraItemNames.join(', ')})`;
     }
 
     const storedOfferName =

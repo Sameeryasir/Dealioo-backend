@@ -97,7 +97,6 @@ export class FunnelService {
         businessId: campaign.businessId,
         published: dto.published === true,
         contentRevision: 0,
-        publishedContentRevision: null,
         updatedBy: { id: user.id } as User,
       });
 
@@ -130,11 +129,6 @@ export class FunnelService {
         versionNumber: 1,
         createdById: user.id,
       });
-      if (dto.published === true) {
-        await this.funnelRepository.update(saved.id, {
-          publishedContentRevision: 1,
-        });
-      }
       return this.getFunnelById(saved.id);
     }
 
@@ -169,26 +163,6 @@ export class FunnelService {
         versionNumber: latest.contentRevision,
         createdById: user.id,
       });
-    }
-
-    if (dto.published === true) {
-      const revision =
-        latest.contentRevision > 0
-          ? latest.contentRevision
-          : await this.getLatestLegacyVersionNumber(latest.id);
-      if (revision > 0) {
-        await this.ensureFunnelVersionSnapshot({
-          funnelId: latest.id,
-          businessId: campaign.businessId,
-          schema: assembledPages,
-          versionNumber: revision,
-          createdById: user.id,
-        });
-        await this.funnelRepository.update(latest.id, {
-          publishedContentRevision: revision,
-        });
-        latest.publishedContentRevision = revision;
-      }
     }
 
     await this.businessHistoryService.logFunnelUpdated({
@@ -260,8 +234,6 @@ export class FunnelService {
         campaignId: true,
         businessId: true,
         published: true,
-        publishedContentRevision: true,
-        contentRevision: true,
       },
     });
     if (!funnel) {
@@ -316,9 +288,10 @@ export class FunnelService {
     const pageTypes = this.publicPagesForStep(step);
     const resolvedStep = pageTypes[0] ?? FunnelPageType.LANDING;
 
-    const pages = previewAuthorized
-      ? await this.funnelPagesService.loadSubsetPages(funnel.id, pageTypes)
-      : await this.loadPublishedSubsetPages(funnel, pageTypes);
+    const pages = await this.funnelPagesService.loadSubsetPages(
+      funnel.id,
+      pageTypes,
+    );
 
     return {
       id: funnel.id,
@@ -566,30 +539,6 @@ export class FunnelService {
       await this.funnelRepository.save(saved);
     }
 
-    if (dto.published === true) {
-      const latest = await this.funnelRepository.findOne({
-        where: { id: saved.id },
-      });
-      const revision =
-        latest?.contentRevision && latest.contentRevision > 0
-          ? latest.contentRevision
-          : currentVersion;
-      const schema =
-        dto.pages !== undefined
-          ? await this.funnelPagesService.loadAssembledPages(saved.id)
-          : await this.funnelPagesService.loadAssembledPages(saved.id);
-      await this.ensureFunnelVersionSnapshot({
-        funnelId: saved.id,
-        businessId: funnel.campaign.businessId,
-        schema,
-        versionNumber: revision,
-        createdById: user.id,
-      });
-      await this.funnelRepository.update(saved.id, {
-        publishedContentRevision: revision,
-      });
-    }
-
     await this.businessHistoryService.logFunnelUpdated({
       businessId: funnel.campaign.businessId,
       funnelId: saved.id,
@@ -633,55 +582,6 @@ export class FunnelService {
 
     const max = result?.max != null ? Number(result.max) : 0;
     return Number.isFinite(max) ? max : 0;
-  }
-
-  private async ensureFunnelVersionSnapshot(input: {
-    funnelId: number;
-    businessId: number | null;
-    schema: Record<string, unknown>;
-    versionNumber: number;
-    createdById?: number | null;
-  }): Promise<void> {
-    const existing = await this.funnelVersionRepository.findOne({
-      where: {
-        funnelId: input.funnelId,
-        versionNumber: input.versionNumber,
-      },
-      select: { id: true },
-    });
-    if (existing) return;
-    await this.appendFunnelVersion(input);
-  }
-
-  private async loadPublishedSubsetPages(
-    funnel: Pick<Funnel, 'id' | 'publishedContentRevision'>,
-    pageTypes: FunnelPageType[],
-  ): Promise<Record<string, unknown>> {
-    const revision = funnel.publishedContentRevision;
-    if (revision == null || revision < 1) {
-      return this.funnelPagesService.loadSubsetPages(funnel.id, pageTypes);
-    }
-
-    const version = await this.funnelVersionRepository.findOne({
-      where: {
-        funnelId: funnel.id,
-        versionNumber: revision,
-      },
-      select: { id: true, schema: true },
-    });
-
-    if (!version?.schema || typeof version.schema !== 'object') {
-      return this.funnelPagesService.loadSubsetPages(funnel.id, pageTypes);
-    }
-
-    const pages: Record<string, unknown> = {};
-    for (const pageType of pageTypes) {
-      const page = version.schema[pageType];
-      if (page != null && typeof page === 'object') {
-        pages[pageType] = page;
-      }
-    }
-    return pages;
   }
 
   private async assertGuestStepAccess(input: {

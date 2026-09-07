@@ -3,6 +3,7 @@ import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 import {
   buildBusinessOrderPaymentSummary,
   isConfirmedOnlinePayment,
+  isCounterExtrasOnlyScannerPayment,
 } from './business-order-payment.util';
 import {
   matchesBusinessEventStatusFilter,
@@ -85,6 +86,79 @@ describe('business order payment summary', () => {
     expect(summary.orderStatus).toBe('not_paid');
     expect(summary.businessAmount).toBeNull();
     expect(summary.businessVisitedAt).toBeNull();
+  });
+
+  it('prefers add-on line totals over visit order_subtotal', () => {
+    const visitedAt = new Date('2026-07-22T14:52:00.000Z');
+    const summary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.PAYMENT,
+        amount: 1200,
+        paymentStatus: FunnelPaymentStatus.PAID,
+      },
+      {
+        orderSubtotal: 99,
+        visitedAt,
+        extraItems: [
+          { name: 'Fries', unitPrice: 5, qty: 1 },
+          { name: 'Drink', unitPrice: 3, qty: 2 },
+        ],
+      },
+      { paidAt: visitedAt },
+    );
+
+    expect(summary.businessAmount).toBe(11);
+    expect(summary.orderStatus).toBe('paid_both');
+  });
+
+  it('does not double-count scanner counter-extras-only as offer + add-on', () => {
+    const visitedAt = new Date('2026-07-22T14:52:00.000Z');
+    const summary = buildBusinessOrderPaymentSummary(
+      {
+        eventType: FunnelEventType.PAYMENT,
+        amount: 1100,
+        paymentStatus: FunnelPaymentStatus.PAID,
+      },
+      {
+        orderSubtotal: 11,
+        visitedAt,
+        extraItems: [
+          { name: 'Fries', unitPrice: 5, qty: 1 },
+          { name: 'Drink', unitPrice: 3, qty: 2 },
+        ],
+      },
+      {
+        paidAt: visitedAt,
+        paymentSource: 'SCANNER',
+        collectionChannel: 'IN_STORE',
+        orderSource: 'SCANNER',
+      },
+    );
+
+    expect(summary.onlineAmountCents).toBeNull();
+    expect(summary.businessAmount).toBe(11);
+    expect(summary.orderStatus).toBe('paid_walk_in');
+  });
+
+  it('detects counter-extras-only scanner payments', () => {
+    expect(
+      isCounterExtrasOnlyScannerPayment({
+        onlineAmountCents: 1100,
+        businessAmountDollars: 11,
+        paymentSource: 'SCANNER',
+        collectionChannel: 'IN_STORE',
+        orderSource: 'SCANNER',
+      }),
+    ).toBe(true);
+    expect(
+      isCounterExtrasOnlyScannerPayment({
+        onlineAmountCents: 2200,
+        businessAmountDollars: 11,
+        paymentSource: 'STRIPE',
+        collectionChannel: 'ONLINE',
+        orderSource: 'STRIPE',
+      }),
+    ).toBe(false);
   });
 });
 

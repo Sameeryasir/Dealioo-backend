@@ -22,6 +22,13 @@ import {
   dollarsToCents,
 } from '../../common/money.util';
 import {
+  ExtraItemsMismatchError,
+  extraItemsFingerprint,
+  extraItemsForApi,
+  resolveCounterExtras,
+  visitAddOnAmountDollars,
+} from '../../utils/normalize-extra-items';
+import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
@@ -65,6 +72,7 @@ import {
 import { isOnlineFunnelPayment } from '../../common/payment-provenance.util';
 import {
   customerCampaignVisitKey,
+  isCounterExtrasOnlyScannerPayment,
   type BusinessOrderPaymentStatus,
   type BusinessVisitSnapshot,
 } from './business-order-payment.util';
@@ -365,6 +373,8 @@ export class FunnelEventService {
     purchaseMeans: ScannerPurchaseMeans;
     orderSubtotal?: number;
     extraItemsAmount?: number;
+    extraItemNames?: string[];
+    extraItems?: Array<{ name: string; unitPrice: number; qty: number }>;
     staffUserId: number;
     idempotencyKey?: string;
   }): Promise<ScannerPurchasedDeal[]> {
@@ -385,12 +395,25 @@ export class FunnelEventService {
       throw new BadRequestException('Select at least one deal.');
     }
 
-    const extraItemsCents =
-      params.extraItemsAmount != null &&
-      Number.isFinite(params.extraItemsAmount) &&
-      params.extraItemsAmount > 0
-        ? dollarsToCents(params.extraItemsAmount)
-        : 0;
+    let resolvedExtras;
+    try {
+      resolvedExtras = resolveCounterExtras({
+        amountDollars: params.extraItemsAmount,
+        items: params.extraItems,
+        names: params.extraItemNames,
+      });
+    } catch (error) {
+      if (error instanceof ExtraItemsMismatchError) {
+        throw new BadRequestException({
+          code: ScannerErrorCode.INVALID_AMOUNT,
+          message: error.message,
+        });
+      }
+      throw error;
+    }
+    const extraItemsCents = resolvedExtras.cents;
+    const normalizedExtraItems = resolvedExtras.items;
+    const normalizedExtraItemNames = resolvedExtras.labels;
     if (extraItemsCents < 0) {
       throw new BadRequestException({
         code: ScannerErrorCode.INVALID_AMOUNT,
@@ -399,13 +422,14 @@ export class FunnelEventService {
     }
 
     const idempotencyKey = params.idempotencyKey?.trim() || null;
-    // Include purchaseMeans so replay with a different means is treated as a different request.
+    // Include purchaseMeans + extras fingerprint so replay with different lines is a different request.
     const requestHash = createHash('sha256')
       .update(
         JSON.stringify({
           customerId,
           funnelIds: uniqueFunnelIds,
           extraItemsCents,
+          extraItemsFingerprint: extraItemsFingerprint(normalizedExtraItems),
           purchaseMeans,
         }),
       )
@@ -910,10 +934,26 @@ export class FunnelEventService {
               visitedAt: collectedAt,
               source: CustomerVisitSource.STAFF_LOOKUP,
               orderSubtotal: visitOrderSubtotalDollars,
+              extraItems:
+                visitOrderSubtotalDollars != null &&
+                visitOrderSubtotalDollars > 0
+                  ? normalizedExtraItems
+                  : null,
               visitCampaigns: visitCampaignIds.map((campaignId) => ({
                 campaignId,
               })),
             });
+          } else if (
+            visitOrderSubtotalDollars != null &&
+            visitOrderSubtotalDollars > 0
+          ) {
+            existingVisit.orderSubtotal = visitOrderSubtotalDollars;
+            existingVisit.extraItems =
+              normalizedExtraItems.length > 0 ? normalizedExtraItems : null;
+            if (existingVisit.orderId == null && orderId != null) {
+              existingVisit.orderId = orderId;
+            }
+            await this.customerVisitRepository.save(existingVisit);
           }
         } else {
           const primaryCampaignId = visitCampaignIds[0]!;
@@ -927,6 +967,11 @@ export class FunnelEventService {
             visitedAt: collectedAt,
             source: CustomerVisitSource.STAFF_LOOKUP,
             orderSubtotal: visitOrderSubtotalDollars,
+            extraItems:
+              visitOrderSubtotalDollars != null &&
+              visitOrderSubtotalDollars > 0
+                ? normalizedExtraItems
+                : null,
             visitCampaigns: visitCampaignIds.map((campaignId) => ({
               campaignId,
             })),
@@ -955,7 +1000,11 @@ export class FunnelEventService {
           dealNames,
           amountLabel:
             extraItemsCents > 0
-              ? `$${expectedTotalDollars.toFixed(2)} (+ $${centsToDollars(extraItemsCents).toFixed(2)} extras)`
+              ? `$${expectedTotalDollars.toFixed(2)} (+ $${centsToDollars(extraItemsCents).toFixed(2)} extras${
+                  normalizedExtraItemNames.length > 0
+                    ? `: ${normalizedExtraItemNames.join(', ')}`
+                    : ''
+                })`
               : `$${expectedTotalDollars.toFixed(2)}`,
           couponIds: purchased
             .map((row) => row.couponId)
@@ -979,6 +1028,12 @@ export class FunnelEventService {
             customerId,
             occurredAt: collectedAt,
             extraItemsCents: index === 0 ? extraItemsCents : 0,
+            extraItemNames:
+              index === 0 && extraItemsCents > 0
+                ? normalizedExtraItemNames
+                : [],
+            extraItems:
+              index === 0 && extraItemsCents > 0 ? normalizedExtraItems : [],
           });
         } catch (activityError) {
           this.logger.warn(
@@ -1588,6 +1643,7 @@ export class FunnelEventService {
       onlineAmountCents: number | null;
       businessAmount: number | null;
       businessVisitedAt: Date | null;
+      extraItems?: Array<{ name: string; unitPrice: number; qty: number }>;
       paidAt: Date | null;
       funnelPaymentId: number | null;
       paymentCollectedAt: Date | null;
@@ -1944,14 +2000,25 @@ export class FunnelEventService {
     let paymentCollectedAt: Date | null = order.paidAt;
     let anyPaid = order.status === OrderStatus.PAID;
     const seenVisitIds = new Set<number>();
+    let visitExtraItems: Array<{
+      name: string;
+      unitPrice: number;
+      qty: number;
+    }> = [];
 
-    if (
-      visitForOrder?.orderSubtotal != null &&
-      Number(visitForOrder.orderSubtotal) > 0
-    ) {
-      totalVisitNetDollars = Number(visitForOrder.orderSubtotal);
-      if (visitForOrder.visitId != null) {
-        seenVisitIds.add(visitForOrder.visitId);
+    if (visitForOrder) {
+      const addOn = visitAddOnAmountDollars({
+        orderSubtotal: visitForOrder.orderSubtotal,
+        extraItems: visitForOrder.extraItems,
+      });
+      if (addOn != null && addOn > 0) {
+        totalVisitNetDollars = addOn;
+        if (visitForOrder.visitId != null) {
+          seenVisitIds.add(visitForOrder.visitId);
+        }
+        if (visitForOrder.extraItems?.length) {
+          visitExtraItems = [...visitForOrder.extraItems];
+        }
       }
     }
 
@@ -1983,14 +2050,22 @@ export class FunnelEventService {
       if (totalVisitNetDollars <= 0) {
         const visit = visitByPaymentId.get(payment.id) ?? null;
         if (
-          visit?.orderSubtotal != null &&
-          Number(visit.orderSubtotal) > 0 &&
+          visit &&
           (visit.visitId == null || !seenVisitIds.has(visit.visitId))
         ) {
-          if (visit.visitId != null) {
-            seenVisitIds.add(visit.visitId);
+          const addOn = visitAddOnAmountDollars({
+            orderSubtotal: visit.orderSubtotal,
+            extraItems: visit.extraItems,
+          });
+          if (addOn != null && addOn > 0) {
+            if (visit.visitId != null) {
+              seenVisitIds.add(visit.visitId);
+            }
+            totalVisitNetDollars += addOn;
+            if (visit.extraItems?.length && visitExtraItems.length === 0) {
+              visitExtraItems = [...visit.extraItems];
+            }
           }
-          totalVisitNetDollars += Number(visit.orderSubtotal);
         }
       }
 
@@ -2016,7 +2091,7 @@ export class FunnelEventService {
           order.createdAt,
         )
       : null;
-    const onlineAmountCents =
+    const rawOnlineAmountCents =
       order.totalAmount > 0
         ? order.totalAmount
         : sortedPayments.reduce(
@@ -2026,6 +2101,14 @@ export class FunnelEventService {
                 : sum,
             0,
           );
+    const counterExtrasOnly = isCounterExtrasOnlyScannerPayment({
+      onlineAmountCents: anyPaid ? rawOnlineAmountCents : null,
+      businessAmountDollars: totalVisitNetDollars > 0 ? totalVisitNetDollars : null,
+      paymentSource: primary?.paymentSource ?? null,
+      collectionChannel: primary?.collectionChannel ?? null,
+      orderSource: order.source ?? null,
+    });
+    const onlineAmountCents = counterExtrasOnly ? 0 : rawOnlineAmountCents;
     const hasOnline = anyPaid && onlineAmountCents > 0;
     const hasBusiness = totalVisitNetDollars > 0;
     let orderStatus: BusinessOrderPaymentStatus = 'not_paid';
@@ -2073,7 +2156,7 @@ export class FunnelEventService {
         : null,
       customerEmail:
         customer?.email ?? primary?.customerEmail ?? null,
-      amount: onlineAmountCents > 0 ? onlineAmountCents : null,
+      amount: hasOnline ? onlineAmountCents : null,
       currency: order.currency || primary?.currency || 'usd',
       paymentStatus: anyPaid
         ? FunnelPaymentStatus.PAID
@@ -2091,6 +2174,7 @@ export class FunnelEventService {
               .find((value) => value != null) ??
             null)
         : null,
+      extraItems: hasBusiness && visitExtraItems.length > 0 ? visitExtraItems : [],
       paidAt: anyPaid ? paidAt : null,
       funnelPaymentId: primary?.id ?? null,
       paymentCollectedAt,
@@ -2239,6 +2323,7 @@ export class FunnelEventService {
         orderSubtotal:
           visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
+        extraItems: extraItemsForApi(visit.extraItems),
       });
     }
 
@@ -2273,6 +2358,7 @@ export class FunnelEventService {
         orderSubtotal:
           visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
+        extraItems: extraItemsForApi(visit.extraItems),
       });
     }
 
@@ -2318,6 +2404,7 @@ export class FunnelEventService {
           orderSubtotal:
             visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
           visitedAt: visit.visitedAt,
+          extraItems: extraItemsForApi(visit.extraItems),
         });
       }
     }
