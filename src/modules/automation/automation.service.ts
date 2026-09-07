@@ -27,7 +27,10 @@ import {
   FunnelPayment,
   FunnelPaymentStatus,
 } from '../../db/entities/funnel-payment.entity';
-import { Campaign } from '../../db/entities/campaign.entity';
+import {
+  Campaign,
+  CampaignPublicationStatus,
+} from '../../db/entities/campaign.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -81,6 +84,7 @@ import { AutomationExecutionRecoveryService } from './automation-execution-recov
 import { AutomationMetricsService } from './automation-metrics.service';
 import type { EmailRecipient, PreparedAutomationEmail } from './automation-email.types';
 import type {
+  HandleFunnelEventJob,
   UnpaidReminderBatchJob,
   UnpaidReminderBatchPhase,
 } from './automation-queue.types';
@@ -132,6 +136,8 @@ export class AutomationService {
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(FunnelEvent)
+    private readonly funnelEventRepository: Repository<FunnelEvent>,
     private readonly executionService: AutomationExecutionService,
     private readonly engineService: AutomationEngineService,
     private readonly logService: AutomationLogService,
@@ -247,6 +253,14 @@ export class AutomationService {
       automation.businessId = scope.businessId;
       automation.campaignId = scope.campaignId;
       automation.funnelId = scope.funnelId;
+    }
+
+    if (!wasActive && willBeActive) {
+      await this.assertCampaignPublishedForActivation(automation);
+    }
+
+    if (wasActive && !willBeActive) {
+      automation.published = false;
     }
 
     const saved = await this.automationRepository.save(automation);
@@ -398,6 +412,24 @@ export class AutomationService {
     await this.automationRepository.remove(automation);
   }
 
+  async assertNoActiveAutomationsForCampaign(
+    campaignId: number,
+  ): Promise<void> {
+    const activeCount = await this.automationRepository.count({
+      where: {
+        campaignId,
+        isActive: true,
+      },
+    });
+    if (activeCount > 0) {
+      throw new BadRequestException(
+        activeCount === 1
+          ? 'Deactivate the active automation for this campaign before unpublishing.'
+          : `Deactivate all ${activeCount} active automations for this campaign before unpublishing.`,
+      );
+    }
+  }
+
   async deleteAutomationsForCampaign(
     campaignId: number,
     funnelId?: number | null,
@@ -446,6 +478,7 @@ export class AutomationService {
     const automation = await this.findAutomationById(id);
     await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     await this.assertPaymentReminderScheduleForAutomation(automation);
+    await this.assertCampaignPublishedForActivation(automation);
     const wasActive = automation.isActive;
     automation.isActive = true;
     if (!automation.published) {
@@ -499,6 +532,7 @@ export class AutomationService {
     const automation = await this.findAutomationById(id);
     const wasActive = automation.isActive;
     automation.isActive = false;
+    automation.published = false;
     const saved = await this.automationRepository.save(automation);
     await this.cronScheduler.syncAutomationCron(saved.id);
     await this.pauseAutomationExecutions(saved.id);
@@ -683,6 +717,29 @@ export class AutomationService {
     if (automation.isActive) {
       throw new BadRequestException(
         'Deactivate this automation before editing it.',
+      );
+    }
+  }
+
+  private async assertCampaignPublishedForActivation(
+    automation: Automation,
+  ): Promise<void> {
+    if (automation.campaignId == null || automation.campaignId < 1) {
+      return;
+    }
+
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: automation.campaignId },
+      select: ['id', 'status'],
+    });
+    if (!campaign) {
+      throw new BadRequestException(
+        'This automation is linked to a campaign that no longer exists.',
+      );
+    }
+    if (campaign.status !== CampaignPublicationStatus.PUBLISHED) {
+      throw new BadRequestException(
+        'Publish the campaign before activating this automation.',
       );
     }
   }
@@ -3964,6 +4021,59 @@ export class AutomationService {
     );
   }
 
+  async enqueueHandleEvent(
+    event: FunnelEvent,
+    options?: {
+      skipCancelPendingOnPayment?: boolean;
+      onlyIfNoExecutionForPayment?: boolean;
+    },
+  ): Promise<void> {
+    if (!event?.id || event.id < 1) {
+      await this.handleEvent(event, options);
+      return;
+    }
+
+    try {
+      await this.queueService.addHandleFunnelEvent({
+        funnelEventId: event.id,
+        ...(options?.skipCancelPendingOnPayment
+          ? { skipCancelPendingOnPayment: true }
+          : {}),
+        ...(options?.onlyIfNoExecutionForPayment
+          ? { onlyIfNoExecutionForPayment: true }
+          : {}),
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Enqueue handleEvent failed';
+      this.logger.warn(
+        `Falling back to inline handleEvent for funnelEvent=${event.id}: ${message}`,
+      );
+      await this.handleEvent(event, options);
+    }
+  }
+
+  async handleQueuedFunnelEvent(job: HandleFunnelEventJob): Promise<void> {
+    const event = await this.funnelEventRepository.findOne({
+      where: { id: job.funnelEventId },
+    });
+    if (!event) {
+      this.logger.warn(
+        `HANDLE_FUNNEL_EVENT skipped — funnel_event ${job.funnelEventId} not found`,
+      );
+      return;
+    }
+
+    await this.handleEvent(event, {
+      ...(job.skipCancelPendingOnPayment
+        ? { skipCancelPendingOnPayment: true }
+        : {}),
+      ...(job.onlyIfNoExecutionForPayment
+        ? { onlyIfNoExecutionForPayment: true }
+        : {}),
+    });
+  }
+
   async handleEvent(
     event: FunnelEvent,
     options?: {
@@ -4005,7 +4115,7 @@ export class AutomationService {
       );
     }
 
-    const automations = await this.findAutomationsForFunnelEvent(event);
+    const automations = await this.findAutomationsForFunnelEvent(event, funnel);
     if (
       event.eventType === FunnelEventType.PAYMENT &&
       this.isPaidFunnelEvent(event)
@@ -4064,35 +4174,63 @@ export class AutomationService {
 
   private async findAutomationsForFunnelEvent(
     event: FunnelEvent,
+    funnel: Funnel,
   ): Promise<Automation[]> {
+    const businessId = funnel.campaign?.businessId ?? null;
+    const campaignId = funnel.campaignId ?? null;
+
+    const qb = this.automationRepository
+      .createQueryBuilder('automation')
+      .where('automation.isActive = true');
+
     if (event.eventType === FunnelEventType.SIGNUP) {
-      return this.automationRepository.find({
-        where: {
-          isActive: true,
-          trigger: In([
-            AutomationTrigger.SIGNUP,
-            AutomationTrigger.ABANDONED_CHECKOUT,
-          ]),
-          purpose: In([
-            AutomationPurpose.FUNNEL_SIGNUP,
-            AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
-            AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
-          ]),
-        },
+      qb.andWhere('automation.trigger IN (:...triggers)', {
+        triggers: [
+          AutomationTrigger.SIGNUP,
+          AutomationTrigger.ABANDONED_CHECKOUT,
+          AutomationTrigger.FUNNEL_COMPLETED,
+        ],
+      }).andWhere('automation.purpose IN (:...purposes)', {
+        purposes: [
+          AutomationPurpose.FUNNEL_SIGNUP,
+          AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
+          AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
+        ],
       });
+    } else if (event.eventType === FunnelEventType.PAYMENT) {
+      qb.andWhere('automation.trigger IN (:...triggers)', {
+        triggers: [
+          AutomationTrigger.PAYMENT,
+          AutomationTrigger.FIRST_PURCHASE,
+          AutomationTrigger.FUNNEL_COMPLETED,
+        ],
+      }).andWhere('automation.purpose IN (:...purposes)', {
+        purposes: [
+          AutomationPurpose.FUNNEL_PAYMENT,
+          AutomationPurpose.FUNNEL_SIGNUP,
+        ],
+      });
+    } else {
+      return [];
     }
 
-    if (event.eventType === FunnelEventType.PAYMENT) {
-      return this.automationRepository.find({
-        where: {
-          isActive: true,
-          trigger: AutomationTrigger.PAYMENT,
-          purpose: AutomationPurpose.FUNNEL_PAYMENT,
-        },
-      });
+    qb.andWhere(
+      '(automation.funnelId IS NULL OR automation.funnelId = :funnelId)',
+      { funnelId: event.funnelId },
+    );
+
+    if (campaignId != null) {
+      qb.andWhere(
+        '(automation.campaignId IS NULL OR automation.campaignId = :campaignId)',
+        { campaignId },
+      );
     }
 
-    return [];
+    if (businessId != null) {
+      qb.andWhere('automation.businessId = :businessId', { businessId });
+    }
+
+    return qb.getMany();
   }
 
   private async tryStartAutomationForEvent(
@@ -4111,6 +4249,29 @@ export class AutomationService {
     }
 
     if (!event.customerId) {
+      return;
+    }
+
+    if (automation.trigger === AutomationTrigger.FIRST_PURCHASE) {
+      const isFirst = await this.isCustomerFirstPaidPurchase(
+        event.customerId,
+        event.funnelId,
+        event.funnelPaymentId,
+      );
+      if (!isFirst) {
+        return;
+      }
+    }
+
+    if (
+      automation.trigger === AutomationTrigger.FUNNEL_COMPLETED &&
+      event.eventType === FunnelEventType.PAYMENT &&
+      !this.isPaidFunnelEvent(event)
+    ) {
+      return;
+    }
+
+    if (automation.trigger === AutomationTrigger.NO_VISIT) {
       return;
     }
 
@@ -4215,6 +4376,20 @@ export class AutomationService {
       return;
     }
 
+    const startLockKey =
+      funnelPaymentId != null
+        ? `payment:${funnelPaymentId}`
+        : `event:${event.id ?? 0}:${event.eventType}`;
+    const startLockAcquired =
+      await this.queueService.tryAcquireAutomationStartLock(
+        automation.id,
+        event.customerId,
+        startLockKey,
+      );
+    if (!startLockAcquired) {
+      return;
+    }
+
     const execution =
       automation.purpose === AutomationPurpose.FUNNEL_PAYMENT
         ? await this.executionService.createPrepaidExecutionForPayment(
@@ -4233,9 +4408,18 @@ export class AutomationService {
               purpose: automation.purpose,
             },
             event.customerId,
-            funnelPaymentId != null
-              ? { executionContext: { funnelPaymentId } }
-              : undefined,
+            {
+              ...(funnelPaymentId != null
+                ? { executionContext: { funnelPaymentId } }
+                : {}),
+              allowParallelActive:
+                graphDriven ||
+                automation.purpose === AutomationPurpose.FUNNEL_SIGNUP ||
+                automation.purpose ===
+                  AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+                automation.purpose ===
+                  AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER,
+            },
           );
 
     if (!execution) {
@@ -4354,7 +4538,16 @@ export class AutomationService {
 
     if (
       eventType === FunnelEventType.SIGNUP &&
-      automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT
+      (automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT ||
+        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED)
+    ) {
+      return true;
+    }
+
+    if (
+      eventType === FunnelEventType.PAYMENT &&
+      (automation.trigger === AutomationTrigger.FIRST_PURCHASE ||
+        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED)
     ) {
       return true;
     }
@@ -4374,19 +4567,52 @@ export class AutomationService {
       .toLowerCase();
 
     if (!configured) {
-      return automation.trigger === expectedTrigger;
+      return (
+        automation.trigger === expectedTrigger ||
+        automation.trigger === AutomationTrigger.FIRST_PURCHASE ||
+        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED ||
+        automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT
+      );
     }
 
     if (eventType === FunnelEventType.SIGNUP) {
       return (
-        configured.includes('signup') || configured.includes('abandoned')
+        configured.includes('signup') ||
+        configured.includes('abandoned') ||
+        configured.includes('funnel_complete')
       );
     }
     if (eventType === FunnelEventType.PAYMENT) {
-      return configured.includes('payment');
+      return (
+        configured.includes('payment') ||
+        configured.includes('first_purchase') ||
+        configured.includes('funnel_complete')
+      );
     }
 
     return false;
+  }
+
+  private async isCustomerFirstPaidPurchase(
+    customerId: number,
+    funnelId: number,
+    funnelPaymentId: number | null | undefined,
+  ): Promise<boolean> {
+    if (funnelPaymentId == null || funnelPaymentId < 1) {
+      return false;
+    }
+
+    const priorPaid = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.customer_id = :customerId', { customerId })
+      .andWhere('payment.funnel_id = :funnelId', { funnelId })
+      .andWhere('payment.status = :status', {
+        status: FunnelPaymentStatus.PAID,
+      })
+      .andWhere('payment.id != :paymentId', { paymentId: funnelPaymentId })
+      .getCount();
+
+    return priorPaid === 0;
   }
 
   private mapFunnelEventToTrigger(
@@ -4421,19 +4647,23 @@ export class AutomationService {
     if (
       signupPurposes.has(purpose) &&
       trigger !== AutomationTrigger.SIGNUP &&
-      trigger !== AutomationTrigger.CRON
+      trigger !== AutomationTrigger.CRON &&
+      trigger !== AutomationTrigger.FUNNEL_COMPLETED &&
+      trigger !== AutomationTrigger.NO_VISIT
     ) {
       throw new BadRequestException(
-        'Signup payment reminder automations require trigger "signup" or "cron".',
+        'Signup payment reminder automations require trigger "signup", "cron", "funnel_completed", or "no_visit".',
       );
     }
 
     if (
       purpose === AutomationPurpose.FUNNEL_PAYMENT &&
-      trigger !== AutomationTrigger.PAYMENT
+      trigger !== AutomationTrigger.PAYMENT &&
+      trigger !== AutomationTrigger.FIRST_PURCHASE &&
+      trigger !== AutomationTrigger.FUNNEL_COMPLETED
     ) {
       throw new BadRequestException(
-        'Post-payment automations require trigger "payment".',
+        'Post-payment automations require trigger "payment", "first_purchase", or "funnel_completed".',
       );
     }
 
@@ -4443,6 +4673,16 @@ export class AutomationService {
     ) {
       throw new BadRequestException(
         'Abandoned checkout automations require trigger "abandoned_checkout".',
+      );
+    }
+
+    if (
+      trigger === AutomationTrigger.NO_VISIT &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP
+    ) {
+      throw new BadRequestException(
+        'No-visit automations require a signup or payment-reminder purpose (usually with a cron schedule).',
       );
     }
   }
@@ -4687,9 +4927,12 @@ export class AutomationService {
       user,
       'You do not have permission to recover automations.',
     );
-    const recovered =
-      await this.observabilityService.recoverStuckExecutions();
-    return { recovered };
+    const result = await this.observabilityService.recoverStuckExecutions();
+    return {
+      recovered: result.requeued + result.timedOut,
+      requeued: result.requeued,
+      timedOut: result.timedOut,
+    };
   }
 
   async recoverExecution(id: number, user: User) {

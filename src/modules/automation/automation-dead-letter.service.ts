@@ -8,6 +8,7 @@ import {
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import type { ProcessExecutionJob } from './automation-queue.types';
 import { AutomationJobName } from './automation-queue.constants';
+import { isLikelyProviderOutageError } from './automation-node-retry.policy';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationQueueService } from './automation-queue.service';
 
@@ -55,6 +56,23 @@ export class AutomationDeadLetterService {
       order: { createdAt: 'DESC' },
       take: limit,
     });
+  }
+
+  async listRetryableProviderOutages(limit = 25): Promise<AutomationDeadLetter[]> {
+    const rows = await this.deadLetterRepository.find({
+      where: { status: AutomationDeadLetterStatus.PENDING },
+      order: { createdAt: 'ASC' },
+      take: Math.max(1, limit) * 3,
+    });
+    const cutoff = Date.now() - 15 * 60_000;
+    return rows
+      .filter(
+        (row) =>
+          row.createdAt.getTime() <= cutoff &&
+          isLikelyProviderOutageError(row.error) &&
+          row.attempts < 12,
+      )
+      .slice(0, limit);
   }
 
   async retryDeadLetter(id: number): Promise<{ jobId: string }> {

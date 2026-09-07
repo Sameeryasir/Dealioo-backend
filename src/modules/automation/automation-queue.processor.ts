@@ -5,11 +5,13 @@ import {
   AUTOMATION_QUEUE,
   AutomationJobName,
   resolveAutomationQueueConcurrency,
+  resolveAutomationQueueLimiter,
 } from './automation-queue.constants';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type {
   CronTickJob,
+  HandleFunnelEventJob,
   ProcessExecutionJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
@@ -18,11 +20,19 @@ import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationMetricsService } from './automation-metrics.service';
+import { AutomationQueueService } from './automation-queue.service';
 import { AutomationService } from './automation.service';
-import { resolveJobAttempts } from './automation-node-retry.policy';
+import {
+  isLikelyProviderOutageError,
+  resolveJobAttempts,
+  resolveProviderOutageRetryDelayMs,
+} from './automation-node-retry.policy';
+
+const queueLimiter = resolveAutomationQueueLimiter();
 
 @Processor(AUTOMATION_QUEUE, {
   concurrency: resolveAutomationQueueConcurrency(),
+  ...(queueLimiter ? { limiter: queueLimiter } : {}),
 })
 export class AutomationQueueProcessor extends WorkerHost {
   private readonly logger = new Logger(AutomationQueueProcessor.name);
@@ -33,6 +43,7 @@ export class AutomationQueueProcessor extends WorkerHost {
     private readonly executionService: AutomationExecutionService,
     private readonly deadLetterService: AutomationDeadLetterService,
     private readonly metricsService: AutomationMetricsService,
+    private readonly queueService: AutomationQueueService,
   ) {
     super();
   }
@@ -43,6 +54,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | HandleFunnelEventJob
     >,
   ): number | null {
     const data = job.data;
@@ -58,6 +70,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | HandleFunnelEventJob
     >,
   ): Promise<void> {
     const executionId = this.resolveExecutionId(job);
@@ -81,6 +94,12 @@ export class AutomationQueueProcessor extends WorkerHost {
             job.data as UnpaidReminderBatchJob,
           );
           break;
+
+        case AutomationJobName.HANDLE_FUNNEL_EVENT: {
+          const payload = job.data as HandleFunnelEventJob;
+          await this.automationService.handleQueuedFunnelEvent(payload);
+          break;
+        }
 
         case AutomationJobName.PROCESS_EXECUTION: {
           const payload = job.data as ProcessExecutionJob;
@@ -137,24 +156,78 @@ export class AutomationQueueProcessor extends WorkerHost {
       const maxAttempts = this.resolveMaxAttempts(job);
       const isFinalAttempt = job.attemptsMade >= maxAttempts;
 
+      if (
+        executionId &&
+        isFinalAttempt &&
+        job.name === AutomationJobName.PROCESS_EXECUTION &&
+        isLikelyProviderOutageError(message)
+      ) {
+        const deferred = await this.tryDeferProviderOutageRetry(
+          job as Job<ProcessExecutionJob>,
+          executionId,
+          message,
+        );
+        if (deferred) {
+          return;
+        }
+      }
+
       if (executionId && isFinalAttempt) {
         await this.recordDeadLetter(job, executionId, message);
       } else if (executionId && !isFinalAttempt) {
         try {
           await this.executionService.markProcessing(executionId);
         } catch {
-          // Execution may have been deleted before markProcessing runs.
         }
       } else if (executionId) {
         try {
           await this.executionService.markFailed(executionId, message);
           this.metricsService.recordExecutionFailed();
         } catch {
-          // Execution may have been deleted before markFailed runs.
         }
       }
 
       throw error;
+    }
+  }
+
+  private async tryDeferProviderOutageRetry(
+    job: Job<ProcessExecutionJob>,
+    executionId: number,
+    message: string,
+  ): Promise<boolean> {
+    try {
+      const execution = await this.executionService.findById(executionId);
+      const nextAttempt = (execution.attemptNumber ?? 1) + 1;
+      if (nextAttempt > 10) {
+        return false;
+      }
+
+      const delayMs = resolveProviderOutageRetryDelayMs(nextAttempt);
+      await this.executionService.scheduleProviderOutageRetry(
+        executionId,
+        nextAttempt,
+        delayMs,
+        message,
+      );
+
+      const payload = job.data;
+      await this.queueService.addProcessExecution(
+        {
+          executionId: payload.executionId,
+          nodeId: payload.nodeId,
+          nodeType: payload.nodeType,
+        },
+        delayMs,
+        { jobIdSuffix: `outage-${nextAttempt}` },
+      );
+
+      this.logger.warn(
+        `Deferred provider-outage retry for execution=${executionId} attempt=${nextAttempt} delayMs=${delayMs}`,
+      );
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -164,6 +237,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | HandleFunnelEventJob
     >,
   ): number {
     if (job.name === AutomationJobName.PROCESS_EXECUTION) {
@@ -176,6 +250,9 @@ export class AutomationQueueProcessor extends WorkerHost {
     if (job.name === AutomationJobName.RESUME_EXECUTION) {
       return resolveJobAttempts(undefined, 'resume-execution');
     }
+    if (job.name === AutomationJobName.HANDLE_FUNNEL_EVENT) {
+      return 5;
+    }
     return job.opts.attempts ?? 1;
   }
 
@@ -185,6 +262,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | HandleFunnelEventJob
     >,
     executionId: number,
     message: string,
@@ -208,7 +286,6 @@ export class AutomationQueueProcessor extends WorkerHost {
       this.metricsService.recordDeadLetter();
       this.metricsService.recordExecutionFailed();
     } catch {
-      // Execution may have been deleted before DLQ write runs.
     }
   }
 }

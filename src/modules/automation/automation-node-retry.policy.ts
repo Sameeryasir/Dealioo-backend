@@ -17,16 +17,16 @@ const NODE_RETRY_POLICIES: Partial<
   Record<AutomationNodeType, AutomationJobRetryPolicy>
 > = {
   [AutomationNodeType.EMAIL]: {
-    attempts: 5,
-    backoff: { type: 'exponential', delay: 5000 },
+    attempts: 8,
+    backoff: { type: 'exponential', delay: 15_000 },
   },
   [AutomationNodeType.SMS]: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 4000 },
+    attempts: 6,
+    backoff: { type: 'exponential', delay: 12_000 },
   },
   [AutomationNodeType.WHATSAPP]: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 4000 },
+    attempts: 6,
+    backoff: { type: 'exponential', delay: 12_000 },
   },
   [AutomationNodeType.CONDITION]: {
     attempts: 2,
@@ -51,7 +51,38 @@ export function resolveProcessExecutionRetryPolicy(
 }
 
 export function resolveResumeExecutionRetryPolicy(): AutomationJobRetryPolicy {
-  return { attempts: 1 };
+  return {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 5000 },
+  };
+}
+
+export function isLikelyProviderOutageError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('timeout') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('socket') ||
+    normalized.includes('rate limit') ||
+    normalized.includes('too many requests') ||
+    normalized.includes('429') ||
+    normalized.includes('503') ||
+    normalized.includes('502') ||
+    normalized.includes('unavailable') ||
+    normalized.includes('twilio') ||
+    normalized.includes('smtp') ||
+    normalized.includes('ses') ||
+    normalized.includes('sendgrid') ||
+    normalized.includes('provider')
+  );
+}
+
+export function resolveProviderOutageRetryDelayMs(attempt: number): number {
+  const base = 60_000;
+  const cappedAttempt = Math.min(Math.max(attempt, 1), 8);
+  return Math.min(base * 2 ** (cappedAttempt - 1), 60 * 60_000);
 }
 
 export function resolveJobAttempts(

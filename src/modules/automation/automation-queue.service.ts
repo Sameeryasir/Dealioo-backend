@@ -15,6 +15,7 @@ import {
 import { shouldUseDbWaitScheduler } from './automation-wait-scheduler.constants';
 import type {
   CronTickJob,
+  HandleFunnelEventJob,
   ProcessExecutionJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
@@ -198,18 +199,37 @@ export class AutomationQueueService {
   async addProcessExecution(
     data: ProcessExecutionJob,
     delayMs = 0,
+    options?: { jobIdSuffix?: string },
   ): Promise<string> {
     const nodeType = data.nodeType as AutomationNodeType | undefined;
     const retry = resolveProcessExecutionRetryPolicy(nodeType);
     const safeDelay = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0;
+    const suffix = options?.jobIdSuffix?.trim()
+      ? `-${options.jobIdSuffix.trim()}`
+      : '';
+    const jobId = `process-execution-${data.executionId}-${data.nodeId}${suffix}`;
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'prioritized'
+      ) {
+        return jobId;
+      }
+      await this.safeRemoveJob(existing);
+    }
+
     const job = await this.queue.add(AutomationJobName.PROCESS_EXECUTION, data, {
-      jobId: `process-execution-${data.executionId}-${data.nodeId}`,
+      jobId,
       attempts: retry.attempts,
       ...(retry.backoff ? { backoff: retry.backoff } : {}),
       ...(safeDelay > 0 ? { delay: safeDelay } : {}),
       ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
-    return job.id ?? '';
+    return job.id ?? jobId;
   }
 
   async addResumeExecution(
@@ -221,14 +241,29 @@ export class AutomationQueueService {
     }
 
     const retry = resolveResumeExecutionRetryPolicy();
+    const jobId = `resume-execution-${data.executionId}`;
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'prioritized'
+      ) {
+        return jobId;
+      }
+      await this.safeRemoveJob(existing);
+    }
+
     const job = await this.queue.add(AutomationJobName.RESUME_EXECUTION, data, {
-      jobId: `resume-execution-${data.executionId}`,
+      jobId,
       delay: 0,
       attempts: retry.attempts,
       ...(retry.backoff ? { backoff: retry.backoff } : {}),
       ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
-    return job.id ?? '';
+    return job.id ?? jobId;
   }
 
   async hasPendingResumeJob(executionId: number): Promise<boolean> {
@@ -254,6 +289,66 @@ export class AutomationQueueService {
     if (job) {
       await job.remove();
     }
+  }
+
+  async addHandleFunnelEvent(data: HandleFunnelEventJob): Promise<string> {
+    const flags = [
+      data.skipCancelPendingOnPayment ? 'skipCancel' : 'cancel',
+      data.onlyIfNoExecutionForPayment ? 'onlyIfNone' : 'always',
+    ].join('-');
+    const jobId = `handle-funnel-event-${data.funnelEventId}-${flags}`;
+    const existing = await this.queue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'prioritized' ||
+        state === 'completed'
+      ) {
+        return jobId;
+      }
+      await this.safeRemoveJob(existing);
+    }
+
+    const job = await this.queue.add(AutomationJobName.HANDLE_FUNNEL_EVENT, data, {
+      jobId,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 2000 },
+      ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+    });
+    return job.id ?? jobId;
+  }
+
+  async tryClaimWaitPollLeadership(
+    ownerId: string,
+    ttlSec = 15,
+  ): Promise<boolean> {
+    const client = await this.queue.client;
+    const key = 'automation:wait-poll-leader';
+    const claimed = await client.set(key, ownerId, 'EX', ttlSec, 'NX');
+    if (claimed === 'OK') {
+      return true;
+    }
+    const current = await client.get(key);
+    if (current === ownerId) {
+      await client.expire(key, ttlSec);
+      return true;
+    }
+    return false;
+  }
+
+  async tryAcquireAutomationStartLock(
+    automationId: number,
+    customerId: number,
+    dedupeKey: string,
+    ttlSec = 60,
+  ): Promise<boolean> {
+    const client = await this.queue.client;
+    const key = `automation-start:${automationId}:${customerId}:${dedupeKey}`;
+    const result = await client.set(key, '1', 'EX', ttlSec, 'NX');
+    return result === 'OK';
   }
 
   /** Drop queued cron-tick jobs so a reschedule does not fire an early rerun. */

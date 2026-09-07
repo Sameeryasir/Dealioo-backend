@@ -43,51 +43,87 @@ export class AutomationExecutionService {
       status?: AutomationExecutionStatus;
       totalRecipients?: number;
       executionContext?: Record<string, unknown>;
+      allowParallelActive?: boolean;
     },
   ): Promise<AutomationExecution> {
-    const node = await this.nodeRepository.findOne({
-      where: { id: dto.currentNodeId, automationId: dto.automationId },
-    });
-    if (!node) {
-      throw new NotFoundException('Start node not found for this automation');
-    }
+    return this.executionRepository.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
+        dto.automationId,
+        customerId,
+      ]);
 
-    const automation = await this.automationRepository.findOne({
-      where: { id: dto.automationId },
-      select: ['id', 'version'],
-    });
+      if (!options?.allowParallelActive) {
+        const active = await manager
+          .createQueryBuilder(AutomationExecution, 'execution')
+          .select('execution.id', 'id')
+          .where('execution.automation_id = :automationId', {
+            automationId: dto.automationId,
+          })
+          .andWhere('execution.customer_id = :customerId', { customerId })
+          .andWhere('execution.status IN (:...statuses)', {
+            statuses: [
+              AutomationExecutionStatus.QUEUED,
+              AutomationExecutionStatus.RUNNING,
+              AutomationExecutionStatus.WAITING,
+            ],
+          })
+          .limit(1)
+          .getRawOne<{ id: string | number }>();
 
-    const execution = this.executionRepository.create({
-      automationId: dto.automationId,
-      customerId,
-      currentNodeId: dto.currentNodeId,
-      purpose: dto.purpose,
-      status: options?.status ?? AutomationExecutionStatus.RUNNING,
-      scheduledAt: null,
-      totalRecipients: options?.totalRecipients ?? 0,
-      emailsSentCount: 0,
-      queueJobId: null,
-      lastError: null,
-      automationVersion: automation?.version ?? 1,
-      executionContext: options?.executionContext ?? {},
-      lastEventId: null,
-      startedAt: new Date(),
-      completedAt: null,
-      attemptNumber: 1,
-      nextRetryAt: null,
-      recipientsFound: options?.totalRecipients ?? 0,
-      recipientsEligible: options?.totalRecipients ?? 0,
-      recipientsFiltered: 0,
-      recipientsSent: 0,
-      recipientsFailed: 0,
-      recipientsSkipped: 0,
-      recipientsBounced: 0,
-      recipientsPaidDuringWait: 0,
-      passEmailsSent: 0,
-      summary: null,
-    });
+        if (active?.id != null) {
+          const existing = await manager.findOne(AutomationExecution, {
+            where: { id: Number(active.id) },
+          });
+          if (existing) {
+            return existing;
+          }
+        }
+      }
 
-    return this.executionRepository.save(execution);
+      const node = await manager.findOne(AutomationNode, {
+        where: { id: dto.currentNodeId, automationId: dto.automationId },
+      });
+      if (!node) {
+        throw new NotFoundException('Start node not found for this automation');
+      }
+
+      const automation = await manager.findOne(Automation, {
+        where: { id: dto.automationId },
+        select: ['id', 'version'],
+      });
+
+      const execution = manager.create(AutomationExecution, {
+        automationId: dto.automationId,
+        customerId,
+        currentNodeId: dto.currentNodeId,
+        purpose: dto.purpose,
+        status: options?.status ?? AutomationExecutionStatus.RUNNING,
+        scheduledAt: null,
+        totalRecipients: options?.totalRecipients ?? 0,
+        emailsSentCount: 0,
+        queueJobId: null,
+        lastError: null,
+        automationVersion: automation?.version ?? 1,
+        executionContext: options?.executionContext ?? {},
+        lastEventId: null,
+        startedAt: new Date(),
+        completedAt: null,
+        attemptNumber: 1,
+        nextRetryAt: null,
+        recipientsFound: options?.totalRecipients ?? 0,
+        recipientsEligible: options?.totalRecipients ?? 0,
+        recipientsFiltered: 0,
+        recipientsSent: 0,
+        recipientsFailed: 0,
+        recipientsSkipped: 0,
+        recipientsBounced: 0,
+        recipientsPaidDuringWait: 0,
+        passEmailsSent: 0,
+        summary: null,
+      });
+
+      return manager.save(execution);
+    });
   }
 
   async createPrepaidExecutionForPayment(
@@ -239,6 +275,22 @@ export class AutomationExecutionService {
       execution.startedAt = new Date();
     }
     return this.executionRepository.save(execution);
+  }
+
+  async scheduleProviderOutageRetry(
+    executionId: number,
+    attemptNumber: number,
+    delayMs: number,
+    error: string,
+  ): Promise<void> {
+    await this.executionRepository.update(executionId, {
+      status: AutomationExecutionStatus.QUEUED,
+      attemptNumber,
+      nextRetryAt: new Date(Date.now() + Math.max(0, delayMs)),
+      lastError: error.slice(0, 2000),
+      completedAt: null,
+      scheduledAt: null,
+    });
   }
 
   async incrementEmailsSent(executionId: number): Promise<void> {
@@ -980,6 +1032,39 @@ export class AutomationExecutionService {
       scheduledAt,
     });
     return this.findById(executionId);
+  }
+
+  async tryClaimExecutionNode(
+    executionId: number,
+    nodeId: number,
+  ): Promise<boolean> {
+    const result = await this.executionRepository
+      .createQueryBuilder()
+      .update(AutomationExecution)
+      .set({
+        currentNodeId: nodeId,
+        status: AutomationExecutionStatus.RUNNING,
+        scheduledAt: null,
+        updatedAt: new Date(),
+      })
+      .where('id = :executionId', { executionId })
+      .andWhere('(current_node_id IS NULL OR current_node_id = :nodeId)', {
+        nodeId,
+      })
+      .andWhere('status IN (:...statuses)', {
+        statuses: [
+          AutomationExecutionStatus.QUEUED,
+          AutomationExecutionStatus.RUNNING,
+          AutomationExecutionStatus.WAITING,
+        ],
+      })
+      .andWhere(
+        `(status != :waitingStatus OR scheduled_at IS NULL OR scheduled_at <= NOW())`,
+        { waitingStatus: AutomationExecutionStatus.WAITING },
+      )
+      .execute();
+
+    return (result.affected ?? 0) > 0;
   }
 
   async updateCustomerId(

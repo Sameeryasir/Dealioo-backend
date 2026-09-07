@@ -16,6 +16,7 @@ import {
 } from '../../db/entities/automation-execution-step.entity';
 import { AutomationExecutionEventService } from './automation-execution-event.service';
 import { AutomationExecutionService } from './automation-execution.service';
+import { AutomationQueueService } from './automation-queue.service';
 
 type EnsureStepInput = {
   executionId: number;
@@ -54,6 +55,7 @@ export class AutomationExecutionObservabilityService {
     private readonly recipientRepository: Repository<AutomationExecutionRecipient>,
     private readonly executionService: AutomationExecutionService,
     private readonly eventService: AutomationExecutionEventService,
+    private readonly queueService: AutomationQueueService,
   ) {}
 
   async safe<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
@@ -415,11 +417,11 @@ export class AutomationExecutionObservabilityService {
     runningOlderThanMs?: number;
     waitingPastScheduledByMs?: number;
     limit?: number;
-  }): Promise<number> {
+  }): Promise<{ requeued: number; timedOut: number }> {
     const runningOlderThanMs = params?.runningOlderThanMs ?? 6 * 60 * 60_000;
     const waitingPastScheduledByMs =
       params?.waitingPastScheduledByMs ?? 2 * 60 * 60_000;
-    const limit = params?.limit ?? 50;
+    const limit = params?.limit ?? 100;
     const now = Date.now();
 
     const stuckRunning = await this.executionRepository.find({
@@ -427,6 +429,7 @@ export class AutomationExecutionObservabilityService {
         status: AutomationExecutionStatus.RUNNING,
         updatedAt: LessThan(new Date(now - runningOlderThanMs)),
       },
+      relations: { currentNode: true },
       take: limit,
       order: { updatedAt: 'ASC' },
     });
@@ -440,23 +443,87 @@ export class AutomationExecutionObservabilityService {
       order: { scheduledAt: 'ASC' },
     });
 
-    let recovered = 0;
-    for (const execution of [...stuckRunning, ...stuckWaiting]) {
-      await this.executionService.markTimedOut(
-        execution.id,
-        `Auto-recovered stuck ${execution.status} execution (no progress)`,
-      );
-      await this.eventService.appendEvent({
-        executionId: execution.id,
-        eventType: AutomationExecutionEventType.EXECUTION_TIMED_OUT,
-        nodeId: execution.currentNodeId,
-        snapshot: this.eventService.buildSnapshotFromExecution(execution),
-        details: { previousStatus: execution.status },
-      });
-      recovered += 1;
+    let requeued = 0;
+    let timedOut = 0;
+
+    for (const execution of stuckWaiting) {
+      try {
+        await this.queueService.addResumeExecution(
+          { executionId: execution.id },
+          0,
+        );
+        await this.eventService.appendEvent({
+          executionId: execution.id,
+          eventType: AutomationExecutionEventType.RECOVERY_APPLIED,
+          nodeId: execution.currentNodeId,
+          snapshot: this.eventService.buildSnapshotFromExecution(execution),
+          details: { previousStatus: execution.status, action: 'requeue_wait' },
+        });
+        requeued += 1;
+      } catch (error) {
+        await this.executionService.markTimedOut(
+          execution.id,
+          `Auto-recovered stuck waiting execution (resume enqueue failed: ${
+            error instanceof Error ? error.message : 'unknown'
+          })`,
+        );
+        await this.eventService.appendEvent({
+          executionId: execution.id,
+          eventType: AutomationExecutionEventType.EXECUTION_TIMED_OUT,
+          nodeId: execution.currentNodeId,
+          snapshot: this.eventService.buildSnapshotFromExecution(execution),
+          details: { previousStatus: execution.status },
+        });
+        timedOut += 1;
+      }
     }
 
-    return recovered;
+    for (const execution of stuckRunning) {
+      const nodeId = execution.currentNodeId;
+      if (nodeId == null) {
+        await this.executionService.markTimedOut(
+          execution.id,
+          'Auto-recovered stuck running execution (missing current node)',
+        );
+        timedOut += 1;
+        continue;
+      }
+      try {
+        await this.queueService.addProcessExecution({
+          executionId: execution.id,
+          nodeId,
+          nodeType: execution.currentNode?.type ?? undefined,
+        });
+        await this.eventService.appendEvent({
+          executionId: execution.id,
+          eventType: AutomationExecutionEventType.RECOVERY_APPLIED,
+          nodeId,
+          snapshot: this.eventService.buildSnapshotFromExecution(execution),
+          details: {
+            previousStatus: execution.status,
+            action: 'requeue_process',
+          },
+        });
+        requeued += 1;
+      } catch (error) {
+        await this.executionService.markTimedOut(
+          execution.id,
+          `Auto-recovered stuck running execution (requeue failed: ${
+            error instanceof Error ? error.message : 'unknown'
+          })`,
+        );
+        await this.eventService.appendEvent({
+          executionId: execution.id,
+          eventType: AutomationExecutionEventType.EXECUTION_TIMED_OUT,
+          nodeId,
+          snapshot: this.eventService.buildSnapshotFromExecution(execution),
+          details: { previousStatus: execution.status },
+        });
+        timedOut += 1;
+      }
+    }
+
+    return { requeued, timedOut };
   }
 
   async findRecipientOutcomes(params: {

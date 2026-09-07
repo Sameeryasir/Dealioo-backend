@@ -272,7 +272,7 @@ export class FunnelEventService {
           `[Prepaid Offer] Triggering automation from payment track — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
         );
       }
-      await this.automationService.handleEvent(tracked.event);
+      await this.automationService.enqueueHandleEvent(tracked.event);
     } else if (
       dto.eventType === FunnelEventType.PAYMENT &&
       tracked.event.customerId &&
@@ -281,7 +281,7 @@ export class FunnelEventService {
       this.logger.log(
         `[Prepaid Offer] Ensuring prepaid start for existing paid payment — paymentId=${tracked.event.funnelPaymentId ?? 'none'} customerId=${tracked.event.customerId} funnelId=${dto.funnelId}`,
       );
-      await this.automationService.handleEvent(tracked.event, {
+      await this.automationService.enqueueHandleEvent(tracked.event, {
         skipCancelPendingOnPayment: true,
         onlyIfNoExecutionForPayment: true,
       });

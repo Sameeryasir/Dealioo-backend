@@ -73,3 +73,9 @@ export type ResumeExecutionJob = {
 export type CronTickJob = {
   automationId: number;
 };
+
+export type HandleFunnelEventJob = {
+  funnelEventId: number;
+  skipCancelPendingOnPayment?: boolean;
+  onlyIfNoExecutionForPayment?: boolean;
+};

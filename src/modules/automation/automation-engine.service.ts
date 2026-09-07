@@ -70,6 +70,10 @@ import {
   signupDelayToMs,
 } from './automation-signup-filter.util';
 import { isGraphDrivenAutomationNodes } from './automation-graph-driven.util';
+import {
+  AutomationRetryableError,
+  isAutomationRetryableError,
+} from './automation-retryable.error';
 
 type LegacyNodeRunResult = NodeExecutionResult | NodeExecutionStatus;
 
@@ -131,8 +135,17 @@ export class AutomationEngineService {
 
     if (
       execution.status === AutomationExecutionStatus.COMPLETED ||
-      execution.status === AutomationExecutionStatus.FAILED
+      execution.status === AutomationExecutionStatus.FAILED ||
+      execution.status === AutomationExecutionStatus.CANCELLED ||
+      execution.status === AutomationExecutionStatus.TIMED_OUT
     ) {
+      return;
+    }
+
+    if (execution.currentNodeId != null && execution.currentNodeId !== nodeId) {
+      this.logger.warn(
+        `Execution ${executionId}: ignoring stale process job for node ${nodeId} (current=${execution.currentNodeId})`,
+      );
       return;
     }
 
@@ -143,28 +156,19 @@ export class AutomationEngineService {
       ) {
         return;
       }
-      if (execution.currentNodeId !== nodeId) {
-        this.logger.warn(
-          `Execution ${executionId}: ignoring stale process job for node ${nodeId} while waiting on ${execution.currentNodeId}`,
-        );
-        return;
-      }
-      await this.executionService.updateCurrentNode(
-        executionId,
-        nodeId,
-        AutomationExecutionStatus.RUNNING,
-        null,
-      );
-      execution = await this.executionService.findById(executionId);
-    } else if (execution.currentNodeId !== nodeId) {
-      await this.executionService.updateCurrentNode(
-        executionId,
-        nodeId,
-        AutomationExecutionStatus.RUNNING,
-        null,
-      );
-      execution = await this.executionService.findById(executionId);
     }
+
+    const claimed = await this.executionService.tryClaimExecutionNode(
+      executionId,
+      nodeId,
+    );
+    if (!claimed) {
+      this.logger.warn(
+        `Execution ${executionId}: could not claim node ${nodeId} (status/node moved)`,
+      );
+      return;
+    }
+    execution = await this.executionService.findById(executionId);
 
     const node = await this.executionService.findNodeForAutomation(
       execution.automationId,
@@ -216,7 +220,9 @@ export class AutomationEngineService {
         executionId,
         nodeId: node.id,
         customerId: execution.customerId,
-        message: 'Node execution failed',
+        message: isAutomationRetryableError(error)
+          ? 'Node execution failed (will retry)'
+          : 'Node execution failed',
         error: message,
       });
       this.metricsService.recordNodeFailure(node.type);
@@ -224,8 +230,17 @@ export class AutomationEngineService {
         execution,
         AutomationExecutionEventType.NODE_FAILED,
         node.id,
-        { nodeType: node.type, error: message },
+        {
+          nodeType: node.type,
+          error: message,
+          retryable: isAutomationRetryableError(error),
+        },
       );
+
+      if (isAutomationRetryableError(error)) {
+        throw error;
+      }
+
       await this.executionService.markFailed(executionId, message);
       this.metricsService.recordExecutionFailed();
     }
@@ -675,7 +690,9 @@ export class AutomationEngineService {
 
         if (to && sendResult.error) {
           this.metricsService.recordEmailSend(false);
-          return 'failed';
+          throw new AutomationRetryableError(
+            sendResult.error || 'Email send failed',
+          );
         }
 
         return 'advance';
@@ -689,7 +706,7 @@ export class AutomationEngineService {
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: 'WhatsApp message sent',
+          message: 'WhatsApp skipped (channel not configured)',
         });
         return 'advance';
 
@@ -879,7 +896,7 @@ export class AutomationEngineService {
           executionId: execution.id,
           nodeId: node.id,
           customerId: execution.customerId,
-          message: `Tag applied (${String(config.tag ?? 'default')})`,
+          message: `Tag skipped (${String(config.tag ?? 'default')}; tagging not configured)`,
         });
         return 'advance';
       }
@@ -1178,6 +1195,7 @@ export class AutomationEngineService {
       execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
     const to = execution.customer?.email?.trim() ?? '';
     let emailFailed = false;
+    let lastEmailError: string | undefined;
 
     for (const rawAction of actions) {
       if (!rawAction || typeof rawAction !== 'object') {
@@ -1253,10 +1271,16 @@ export class AutomationEngineService {
         );
       } else if (to && sendResult.error) {
         emailFailed = true;
+        lastEmailError = sendResult.error;
       }
     }
 
-    return emailFailed ? 'failed' : 'advance';
+    if (emailFailed) {
+      throw new AutomationRetryableError(
+        lastEmailError || 'Email send failed',
+      );
+    }
+    return 'advance';
   }
 
   private async runRewardCouponNode(
@@ -1366,7 +1390,9 @@ export class AutomationEngineService {
       return 'advance';
     }
 
-    return 'failed';
+    throw new AutomationRetryableError(
+      sendResult.error || 'Reward email send failed',
+    );
   }
 
   private async runBundledActionsNode(
@@ -1441,7 +1467,7 @@ export class AutomationEngineService {
     });
 
     if (lastError && sentCount === 0) {
-      return 'failed';
+      throw new AutomationRetryableError(lastError);
     }
 
     return 'advance';
@@ -1579,7 +1605,9 @@ export class AutomationEngineService {
         message: `SMS failed: ${sendResult.error ?? 'unknown error'}`,
         error: sendResult.error,
       });
-      return 'failed';
+      throw new AutomationRetryableError(
+        sendResult.error || 'SMS send failed',
+      );
     }
 
     await this.logService.createLog({

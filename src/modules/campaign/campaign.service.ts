@@ -319,6 +319,16 @@ export class CampaignService {
     if (updateCampaignDto.price !== undefined) {
       campaign.price = updateCampaignDto.price;
     }
+
+    const becomingUnpublished =
+      updateCampaignDto.status === CampaignPublicationStatus.UNPUBLISHED &&
+      campaign.status !== CampaignPublicationStatus.UNPUBLISHED;
+    if (becomingUnpublished) {
+      await this.automationService.assertNoActiveAutomationsForCampaign(
+        campaign.id,
+      );
+    }
+
     if (updateCampaignDto.status !== undefined) {
       campaign.status = updateCampaignDto.status;
     }
@@ -337,6 +347,16 @@ export class CampaignService {
     }
 
     const saved = await this.campaignRepository.save(campaign);
+
+    if (updateCampaignDto.status !== undefined) {
+      await this.funnelRepository.update(
+        { campaignId: saved.id },
+        {
+          published:
+            saved.status === CampaignPublicationStatus.PUBLISHED,
+        },
+      );
+    }
 
     await this.businessHistoryService.logCampaignUpdated({
       businessId: saved.businessId,

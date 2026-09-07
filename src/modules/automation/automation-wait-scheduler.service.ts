@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { hostname } from 'os';
 import { Repository } from 'typeorm';
 import {
   AutomationExecution,
@@ -12,8 +13,12 @@ import {
 } from '../../db/entities/automation-execution.entity';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationExecutionObservabilityService } from './automation-execution-observability.service';
+import { AutomationDeadLetterService } from './automation-dead-letter.service';
 import { AutomationQueueService } from './automation-queue.service';
-import { resolveWaitPollIntervalMs } from './automation-wait-scheduler.constants';
+import {
+  resolveWaitPollBatchSize,
+  resolveWaitPollIntervalMs,
+} from './automation-wait-scheduler.constants';
 
 @Injectable()
 export class AutomationWaitSchedulerService
@@ -22,6 +27,10 @@ export class AutomationWaitSchedulerService
   private readonly logger = new Logger(AutomationWaitSchedulerService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
   private stuckSweepCounter = 0;
+  private pollInFlight = false;
+  private readonly ownerId = `${hostname()}:${process.pid}:${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 
   constructor(
     @InjectRepository(AutomationExecution)
@@ -29,6 +38,7 @@ export class AutomationWaitSchedulerService
     private readonly executionService: AutomationExecutionService,
     private readonly queueService: AutomationQueueService,
     private readonly observabilityService: AutomationExecutionObservabilityService,
+    private readonly deadLetterService: AutomationDeadLetterService,
   ) {}
 
   onModuleInit(): void {
@@ -41,24 +51,15 @@ export class AutomationWaitSchedulerService
       });
       this.stuckSweepCounter += 1;
       if (this.stuckSweepCounter % 10 === 0) {
-        void this.observabilityService
-          .recoverStuckExecutions()
-          .then((recovered) => {
-            if (recovered > 0) {
-              this.logger.warn(
-                `Marked ${recovered} stuck automation execution(s) as timed_out`,
-              );
-            }
-          })
-          .catch((error) => {
-            const message =
-              error instanceof Error ? error.message : 'Stuck sweep failed';
-            this.logger.error(`Stuck execution sweep failed: ${message}`);
-          });
+        void this.runStuckSweepIfLeader().catch((error) => {
+          const message =
+            error instanceof Error ? error.message : 'Stuck sweep failed';
+          this.logger.error(`Stuck execution sweep failed: ${message}`);
+        });
       }
     }, intervalMs);
     this.logger.log(
-      `DB wait scheduler polling every ${intervalMs}ms for due executions`,
+      `DB wait scheduler polling every ${intervalMs}ms (leader=${this.ownerId})`,
     );
   }
 
@@ -69,51 +70,108 @@ export class AutomationWaitSchedulerService
     }
   }
 
+  private async runStuckSweepIfLeader(): Promise<void> {
+    const isLeader = await this.queueService.tryClaimWaitPollLeadership(
+      this.ownerId,
+      Math.max(15, Math.ceil(resolveWaitPollIntervalMs() / 1000) * 2),
+    );
+    if (!isLeader) {
+      return;
+    }
+    const result = await this.observabilityService.recoverStuckExecutions();
+    if (result.requeued > 0 || result.timedOut > 0) {
+      this.logger.warn(
+        `Stuck sweep requeued=${result.requeued} timed_out=${result.timedOut}`,
+      );
+    }
+
+    const deadLetters =
+      await this.deadLetterService.listRetryableProviderOutages(20);
+    for (const entry of deadLetters) {
+      try {
+        await this.deadLetterService.retryDeadLetter(entry.id);
+        this.logger.warn(
+          `Auto-retried provider dead-letter id=${entry.id} job=${entry.jobName}`,
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Dead-letter retry failed';
+        this.logger.warn(
+          `Auto-retry failed for dead-letter id=${entry.id}: ${message}`,
+        );
+      }
+    }
+  }
+
   async pollDueWaits(): Promise<number> {
-    const now = new Date();
-    return this.executionRepository.manager.transaction(async (manager) => {
-      const due = await manager
-        .createQueryBuilder(AutomationExecution, 'execution')
-        .innerJoinAndSelect('execution.automation', 'automation')
-        .where('execution.status = :status', {
-          status: AutomationExecutionStatus.WAITING,
-        })
-        .andWhere('execution.scheduledAt IS NOT NULL')
-        .andWhere('execution.scheduledAt <= :now', { now })
-        .orderBy('execution.scheduledAt', 'ASC')
-        .take(100)
-        .setLock('pessimistic_partial_write')
-        .getMany();
+    if (this.pollInFlight) {
+      return 0;
+    }
+    this.pollInFlight = true;
+    try {
+      const isLeader = await this.queueService.tryClaimWaitPollLeadership(
+        this.ownerId,
+        Math.max(15, Math.ceil(resolveWaitPollIntervalMs() / 1000) * 2),
+      );
+      if (!isLeader) {
+        return 0;
+      }
 
-      let enqueued = 0;
-      for (const execution of due) {
-        if (!execution.automation?.isActive || !execution.automation.published) {
-          await this.executionService.pauseExecution(execution.id);
-          continue;
-        }
-        try {
-          if (await this.queueService.hasPendingResumeJob(execution.id)) {
-            continue;
+      const now = new Date();
+      const batchSize = resolveWaitPollBatchSize();
+      return await this.executionRepository.manager.transaction(
+        async (manager) => {
+          const due = await manager
+            .createQueryBuilder(AutomationExecution, 'execution')
+            .innerJoinAndSelect('execution.automation', 'automation')
+            .where('execution.status = :status', {
+              status: AutomationExecutionStatus.WAITING,
+            })
+            .andWhere('execution.scheduledAt IS NOT NULL')
+            .andWhere('execution.scheduledAt <= :now', { now })
+            .orderBy('execution.scheduledAt', 'ASC')
+            .take(batchSize)
+            .setLock('pessimistic_partial_write')
+            .getMany();
+
+          let enqueued = 0;
+          for (const execution of due) {
+            if (
+              !execution.automation?.isActive ||
+              !execution.automation.published
+            ) {
+              await this.executionService.pauseExecution(execution.id);
+              continue;
+            }
+            try {
+              if (await this.queueService.hasPendingResumeJob(execution.id)) {
+                continue;
+              }
+              await this.queueService.addResumeExecution(
+                { executionId: execution.id },
+                0,
+              );
+              enqueued += 1;
+            } catch (error) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : 'Resume enqueue failed';
+              this.logger.warn(
+                `Left execution ${execution.id} WAITING in Postgres (queue unavailable): ${message}`,
+              );
+            }
           }
-          await this.queueService.addResumeExecution(
-            { executionId: execution.id },
-            0,
-          );
-          enqueued += 1;
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : 'Resume enqueue failed';
-          this.logger.warn(
-            `Left execution ${execution.id} WAITING in Postgres (queue unavailable): ${message}`,
-          );
-        }
-      }
 
-      if (enqueued > 0) {
-        this.logger.log(`Enqueued ${enqueued} due wait resume job(s)`);
-      }
+          if (enqueued > 0) {
+            this.logger.log(`Enqueued ${enqueued} due wait resume job(s)`);
+          }
 
-      return enqueued;
-    });
+          return enqueued;
+        },
+      );
+    } finally {
+      this.pollInFlight = false;
+    }
   }
 }
