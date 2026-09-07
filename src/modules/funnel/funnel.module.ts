@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelVersion } from '../../db/entities/funnel-version.entity';
@@ -20,6 +21,7 @@ import { FunnelService } from './funnel.service';
       FunnelVersion,
       Campaign,
       FunnelPayment,
+      CheckoutAccessToken,
       Business,
     ]),
     AuthModule,

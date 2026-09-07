@@ -112,15 +112,34 @@ export class FunnelController {
     @Param('id', ParseIntPipe) id: number,
     @Query('businessId') businessIdRaw?: string,
     @Query('step') step?: string,
+    @Query('preview') previewRaw?: string,
+    @Query('previewToken') previewToken?: string,
+    @Query('checkoutToken') checkoutToken?: string,
   ) {
     const parsed = Number.parseInt(businessIdRaw ?? '', 10);
     const trackingBusinessId =
       Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    const allowPreview =
+      previewRaw === '1' || previewRaw?.toLowerCase() === 'true';
     return this.funnelService.getPublicFunnelById(
       id,
       trackingBusinessId,
       step,
+      {
+        allowPreview,
+        previewToken,
+        checkoutToken,
+      },
     );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/preview-token')
+  createPreviewToken(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: AuthRequest,
+  ) {
+    return this.funnelService.createPreviewToken(id, req.user as never);
   }
 
   @UseGuards(AuthGuard('jwt'))

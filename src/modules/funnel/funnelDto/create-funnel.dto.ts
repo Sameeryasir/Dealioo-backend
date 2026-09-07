@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsNotEmpty, IsObject, IsOptional, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsInt,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  Min,
+} from 'class-validator';
 
 export class CreateFunnelDto {
   @Type(() => Number)
@@ -11,4 +18,8 @@ export class CreateFunnelDto {
   @IsOptional()
   @IsObject()
   pages?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
 }

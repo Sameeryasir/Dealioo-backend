@@ -45,6 +45,13 @@ export class Funnel {
   @Column({ name: 'content_revision', type: 'int', default: 0 })
   contentRevision: number;
 
+  @Column({
+    name: 'published_content_revision',
+    type: 'int',
+    nullable: true,
+  })
+  publishedContentRevision: number | null;
+
   @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'updated_by' })
   updatedBy: User | null;
