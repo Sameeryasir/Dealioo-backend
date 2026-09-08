@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { RedemptionService } from '../redemption/redemption.service';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { FunnelEventController } from './funnel-event.controller';
@@ -14,6 +15,7 @@ describe('FunnelEventController', () => {
         { provide: FunnelEventService, useValue: {} },
         { provide: FunnelAnalyticsService, useValue: {} },
         { provide: RedemptionService, useValue: {} },
+        { provide: BusinessAccessService, useValue: {} },
       ],
     }).compile();
 

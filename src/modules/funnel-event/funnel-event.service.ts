@@ -32,6 +32,10 @@ import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
+import {
+  FunnelAnalyticsEvent,
+  FunnelAnalyticsEventType,
+} from '../../db/entities/funnel-analytics-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import {
@@ -57,6 +61,7 @@ import { CustomerService } from '../customer/customer.service';
 import { PendingFunnelPaymentService } from '../payment/pending-funnel-payment.service';
 import { CouponService } from '../redemption/coupon.service';
 import {
+  Coupon,
   CouponPaymentStatus,
   CouponStatus,
 } from '../../db/entities/coupon.entity';
@@ -91,6 +96,10 @@ import {
 import {
   ScannerPurchaseMeans,
 } from './funnelEventDto/scanner-purchase-deals.dto';
+import {
+  applyPerformanceCampaignEarningsFilters,
+  resolvePerformancePreviousWindow,
+} from './business-performance.util';
 
 // --- Scanner purchase response ---
 // purchaseMeans echoes what the caller sent (IN_PERSON | REDEEMED | SCANNED).
@@ -100,6 +109,7 @@ type ScannerPurchasedDeal = {
   couponId: number | null;
   purchaseMeans: ScannerPurchaseMeans;
 };
+
 @Injectable()
 export class FunnelEventService {
   private readonly logger = new Logger(FunnelEventService.name);
@@ -1610,6 +1620,591 @@ export class FunnelEventService {
     }
 
     return null;
+  }
+
+  async getBusinessTopEarningCampaigns(params: {
+    businessId: number;
+    from?: Date | null;
+    to?: Date | null;
+    limit?: number;
+  }): Promise<{
+    businessId: number;
+    from: string | null;
+    to: string | null;
+    totalEarningsCents: number;
+    totalOrderCount: number;
+    totalUniqueCustomerCount: number;
+    totalRepeatedCustomerCount: number;
+    previousPeriod: {
+      totalEarningsCents: number;
+      totalOrderCount: number;
+      totalUniqueCustomerCount: number;
+    } | null;
+    dailyTotals: Array<{
+      date: string;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+    }>;
+    dailyByCampaign: Array<{
+      date: string;
+      campaignId: number;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+    }>;
+    campaigns: Array<{
+      campaignId: number;
+      campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
+      imageUrl: string | null;
+      price: number | null;
+      earningsCents: number;
+      orderCount: number;
+      paidPaymentCount: number;
+      uniqueCustomerCount: number;
+      guestCount: number;
+      repeatedCustomerCount: number;
+      viewCount: number;
+      signupCount: number;
+      newCustomerCount: number;
+      returningCustomerCount: number;
+    }>;
+    conversionCampaigns: Array<{
+      campaignId: number;
+      campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
+      imageUrl: string | null;
+      viewCount: number;
+      signupCount: number;
+      orderCount: number;
+    }>;
+  }> {
+    const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
+
+    const applyFilters = (
+      qb: ReturnType<Repository<FunnelPayment>['createQueryBuilder']>,
+      from?: Date | null,
+      to?: Date | null,
+    ) =>
+      applyPerformanceCampaignEarningsFilters(qb, {
+        businessId: params.businessId,
+        from,
+        to,
+      });
+
+    const pairRows = await applyFilters(
+      this.funnelPaymentRepository.createQueryBuilder('p'),
+      params.from,
+      params.to,
+    )
+      .select('p.campaign_id', 'campaignId')
+      .addSelect('c.campaign_name', 'campaignName')
+      .addSelect('c.campaign_type', 'campaignType')
+      .addSelect('c.image_url', 'imageUrl')
+      .addSelect('c.price', 'price')
+      .addSelect('p.customer_id', 'customerId')
+      .addSelect('COUNT(*)', 'paymentCount')
+      .addSelect('COALESCE(SUM(p.amount), 0)', 'earningsCents')
+      .groupBy('p.campaign_id')
+      .addGroupBy('c.campaign_name')
+      .addGroupBy('c.campaign_type')
+      .addGroupBy('c.image_url')
+      .addGroupBy('c.price')
+      .addGroupBy('p.customer_id')
+      .getRawMany<{
+        campaignId: string | number;
+        campaignName: string | null;
+        campaignType: string | null;
+        imageUrl: string | null;
+        price: string | number | null;
+        customerId: string | number | null;
+        paymentCount: string | number;
+        earningsCents: string | number;
+      }>();
+
+    type CampaignAgg = {
+      campaignId: number;
+      campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
+      imageUrl: string | null;
+      price: number | null;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+      repeatedCustomerCount: number;
+      customerIds: Set<number>;
+    };
+
+    const byCampaign = new Map<number, CampaignAgg>();
+    const businessCustomerPayments = new Map<number, number>();
+    let totalEarningsCents = 0;
+
+    for (const row of pairRows) {
+      const campaignId = Number(row.campaignId);
+      if (!Number.isFinite(campaignId) || campaignId <= 0) continue;
+
+      const paymentCount = Math.max(
+        0,
+        Math.round(Number(row.paymentCount) || 0),
+      );
+      const earningsCents = Math.max(
+        0,
+        Math.round(Number(row.earningsCents) || 0),
+      );
+      totalEarningsCents += earningsCents;
+
+      const customerIdRaw =
+        row.customerId != null && row.customerId !== ''
+          ? Number(row.customerId)
+          : null;
+      const hasCustomer =
+        customerIdRaw != null &&
+        Number.isFinite(customerIdRaw) &&
+        customerIdRaw > 0;
+
+      if (hasCustomer) {
+        businessCustomerPayments.set(
+          customerIdRaw,
+          (businessCustomerPayments.get(customerIdRaw) ?? 0) + paymentCount,
+        );
+      }
+
+      let agg = byCampaign.get(campaignId);
+      if (!agg) {
+        const campaignTypeRaw = String(row.campaignType ?? '')
+          .trim()
+          .toLowerCase();
+        const campaignType =
+          campaignTypeRaw === CampaignType.POSTPAID
+            ? CampaignType.POSTPAID
+            : campaignTypeRaw === CampaignType.PREPAID
+              ? CampaignType.PREPAID
+              : null;
+        const priceRaw =
+          row.price != null && row.price !== '' ? Number(row.price) : null;
+
+        agg = {
+          campaignId,
+          campaignName: row.campaignName?.trim() || 'Campaign',
+          campaignType,
+          imageUrl: row.imageUrl?.trim() || null,
+          price:
+            priceRaw != null && Number.isFinite(priceRaw) && priceRaw >= 0
+              ? Math.round(priceRaw * 100) / 100
+              : null,
+          earningsCents: 0,
+          orderCount: 0,
+          uniqueCustomerCount: 0,
+          repeatedCustomerCount: 0,
+          customerIds: new Set<number>(),
+        };
+        byCampaign.set(campaignId, agg);
+      }
+
+      agg.earningsCents += earningsCents;
+      agg.orderCount += paymentCount;
+      if (hasCustomer) {
+        agg.uniqueCustomerCount += 1;
+        agg.customerIds.add(customerIdRaw);
+        if (paymentCount >= 2) {
+          agg.repeatedCustomerCount += 1;
+        }
+      }
+    }
+
+    let totalUniqueCustomerCount = 0;
+    let totalRepeatedCustomerCount = 0;
+    let totalOrderCount = 0;
+    for (const paymentCount of businessCustomerPayments.values()) {
+      totalUniqueCustomerCount += 1;
+      if (paymentCount >= 2) {
+        totalRepeatedCustomerCount += 1;
+      }
+    }
+    for (const agg of byCampaign.values()) {
+      totalOrderCount += agg.orderCount;
+    }
+
+    let previousPeriod: {
+      totalEarningsCents: number;
+      totalOrderCount: number;
+      totalUniqueCustomerCount: number;
+    } | null = null;
+
+    if (params.from && params.to) {
+      const previousWindow = resolvePerformancePreviousWindow(
+        params.from,
+        params.to,
+      );
+      if (previousWindow) {
+        const previousRow = await applyFilters(
+          this.funnelPaymentRepository.createQueryBuilder('p'),
+          previousWindow.previousFrom,
+          previousWindow.previousTo,
+        )
+          .select('COALESCE(SUM(p.amount), 0)', 'totalEarningsCents')
+          .addSelect('COUNT(*)', 'totalOrderCount')
+          .addSelect(
+            'COUNT(DISTINCT p.customer_id)',
+            'totalUniqueCustomerCount',
+          )
+          .getRawOne<{
+            totalEarningsCents: string | number;
+            totalOrderCount: string | number;
+            totalUniqueCustomerCount: string | number;
+          }>();
+
+        previousPeriod = {
+          totalEarningsCents: Math.max(
+            0,
+            Math.round(Number(previousRow?.totalEarningsCents) || 0),
+          ),
+          totalOrderCount: Math.max(
+            0,
+            Math.round(Number(previousRow?.totalOrderCount) || 0),
+          ),
+          totalUniqueCustomerCount: Math.max(
+            0,
+            Math.round(Number(previousRow?.totalUniqueCustomerCount) || 0),
+          ),
+        };
+      }
+    }
+
+    const rankedCampaigns = [...byCampaign.values()].sort((a, b) => {
+      if (b.earningsCents !== a.earningsCents) {
+        return b.earningsCents - a.earningsCents;
+      }
+      return a.campaignName.localeCompare(b.campaignName);
+    });
+
+    const limitedCampaigns = rankedCampaigns.slice(0, limit);
+
+    const viewCountByCampaign = new Map<number, number>();
+    const signupCountByCampaign = new Map<number, number>();
+    const priorCustomerIds = new Set<number>();
+
+    const allCustomerIds = [
+      ...new Set(limitedCampaigns.flatMap((agg) => [...agg.customerIds])),
+    ];
+
+    if (params.from && params.to) {
+      const viewRows = await this.dataSource
+        .getRepository(FunnelAnalyticsEvent)
+        .createQueryBuilder('ae')
+        .innerJoin(Funnel, 'f', 'f.id = ae.funnel_id')
+        .innerJoin(
+          Campaign,
+          'c',
+          'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
+          { businessId: params.businessId },
+        )
+        .where('ae.event_type = :pageView', {
+          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+        })
+        .andWhere('ae.deleted_at IS NULL')
+        .andWhere('ae.created_at >= :from', { from: params.from })
+        .andWhere('ae.created_at <= :to', { to: params.to })
+        .select('f.campaign_id', 'campaignId')
+        .addSelect('COUNT(*)', 'viewCount')
+        .groupBy('f.campaign_id')
+        .getRawMany<{ campaignId: string | number; viewCount: string | number }>();
+
+      for (const row of viewRows) {
+        const campaignId = Number(row.campaignId);
+        if (!Number.isFinite(campaignId) || campaignId <= 0) continue;
+        viewCountByCampaign.set(
+          campaignId,
+          Math.max(0, Math.round(Number(row.viewCount) || 0)),
+        );
+      }
+
+      const signupRows = await this.funnelEventRepository
+        .createQueryBuilder('e')
+        .innerJoin(Funnel, 'f', 'f.id = e.funnel_id')
+        .innerJoin(
+          Campaign,
+          'c',
+          'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
+          { businessId: params.businessId },
+        )
+        .where('e.event_type = :signup', { signup: FunnelEventType.SIGNUP })
+        .andWhere('e.deleted_at IS NULL')
+        .andWhere('e.created_at >= :from', { from: params.from })
+        .andWhere('e.created_at <= :to', { to: params.to })
+        .select('f.campaign_id', 'campaignId')
+        .addSelect('COUNT(*)', 'signupCount')
+        .groupBy('f.campaign_id')
+        .getRawMany<{
+          campaignId: string | number;
+          signupCount: string | number;
+        }>();
+
+      for (const row of signupRows) {
+        const campaignId = Number(row.campaignId);
+        if (!Number.isFinite(campaignId) || campaignId <= 0) continue;
+        signupCountByCampaign.set(
+          campaignId,
+          Math.max(0, Math.round(Number(row.signupCount) || 0)),
+        );
+      }
+
+      if (allCustomerIds.length > 0) {
+        const priorRows = await applyFilters(
+          this.funnelPaymentRepository.createQueryBuilder('p'),
+          null,
+          new Date(params.from.getTime() - 1),
+        )
+          .andWhere('p.customer_id IN (:...customerIds)', {
+            customerIds: allCustomerIds,
+          })
+          .select('p.customer_id', 'customerId')
+          .distinct(true)
+          .getRawMany<{ customerId: string | number }>();
+
+        for (const row of priorRows) {
+          const customerId = Number(row.customerId);
+          if (Number.isFinite(customerId) && customerId > 0) {
+            priorCustomerIds.add(customerId);
+          }
+        }
+      }
+    }
+
+    const campaigns = limitedCampaigns.map((agg) => {
+      let newCustomerCount = 0;
+      let returningCustomerCount = 0;
+      for (const customerId of agg.customerIds) {
+        if (priorCustomerIds.has(customerId)) {
+          returningCustomerCount += 1;
+        } else {
+          newCustomerCount += 1;
+        }
+      }
+
+      return {
+        campaignId: agg.campaignId,
+        campaignName: agg.campaignName,
+        campaignType: agg.campaignType,
+        imageUrl: agg.imageUrl,
+        price: agg.price,
+        earningsCents: agg.earningsCents,
+        orderCount: agg.orderCount,
+        paidPaymentCount: agg.orderCount,
+        uniqueCustomerCount: agg.uniqueCustomerCount,
+        guestCount: agg.uniqueCustomerCount,
+        repeatedCustomerCount: agg.repeatedCustomerCount,
+        viewCount: viewCountByCampaign.get(agg.campaignId) ?? 0,
+        signupCount: signupCountByCampaign.get(agg.campaignId) ?? 0,
+        newCustomerCount,
+        returningCustomerCount,
+      };
+    });
+
+    let conversionCampaigns = campaigns.slice(0, 3).map((row) => ({
+      campaignId: row.campaignId,
+      campaignName: row.campaignName,
+      campaignType: row.campaignType,
+      imageUrl: row.imageUrl,
+      viewCount: row.viewCount,
+      signupCount: row.signupCount,
+      orderCount: row.orderCount,
+    }));
+
+    if (
+      conversionCampaigns.length === 0 &&
+      params.from &&
+      params.to &&
+      viewCountByCampaign.size > 0
+    ) {
+      const topViewIds = [...viewCountByCampaign.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+        .slice(0, 3)
+        .map(([campaignId]) => campaignId);
+
+      if (topViewIds.length > 0) {
+        const trafficCampaigns = await this.campaignRepository.find({
+          where: {
+            businessId: params.businessId,
+            id: In(topViewIds),
+          },
+        });
+        const byId = new Map(trafficCampaigns.map((c) => [c.id, c]));
+        conversionCampaigns = topViewIds
+          .map((campaignId) => {
+            const campaign = byId.get(campaignId);
+            if (!campaign) return null;
+            const campaignTypeRaw = String(campaign.campaignType ?? '')
+              .trim()
+              .toLowerCase();
+            const campaignType =
+              campaignTypeRaw === CampaignType.POSTPAID
+                ? CampaignType.POSTPAID
+                : campaignTypeRaw === CampaignType.PREPAID
+                  ? CampaignType.PREPAID
+                  : null;
+            return {
+              campaignId,
+              campaignName: campaign.campaignName?.trim() || 'Campaign',
+              campaignType,
+              imageUrl: campaign.imageUrl?.trim() || null,
+              viewCount: viewCountByCampaign.get(campaignId) ?? 0,
+              signupCount: signupCountByCampaign.get(campaignId) ?? 0,
+              orderCount: 0,
+            };
+          })
+          .filter((row): row is NonNullable<typeof row> => row != null);
+      }
+    }
+
+    const topCampaignIds = new Set(
+      campaigns.slice(0, 5).map((c) => c.campaignId),
+    );
+    const dailyTotalsMap = new Map<
+      string,
+      { earningsCents: number; orderCount: number; uniqueCustomerCount: number }
+    >();
+    const dailyByCampaignMap = new Map<
+      string,
+      { earningsCents: number; orderCount: number; uniqueCustomerCount: number }
+    >();
+
+    if (params.from && params.to) {
+      const dailyRows = await applyFilters(
+        this.funnelPaymentRepository.createQueryBuilder('p'),
+        params.from,
+        params.to,
+      )
+        .select(
+          `to_char(
+            date_trunc('day', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
+            'YYYY-MM-DD'
+          )`,
+          'day',
+        )
+        .addSelect('p.campaign_id', 'campaignId')
+        .addSelect('COALESCE(SUM(p.amount), 0)', 'earningsCents')
+        .addSelect('COUNT(*)', 'orderCount')
+        .addSelect('COUNT(DISTINCT p.customer_id)', 'uniqueCustomerCount')
+        .groupBy('day')
+        .addGroupBy('p.campaign_id')
+        .getRawMany<{
+          day: string;
+          campaignId: string | number;
+          earningsCents: string | number;
+          orderCount: string | number;
+          uniqueCustomerCount: string | number;
+        }>();
+
+      for (const row of dailyRows) {
+        const day = String(row.day ?? '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        const campaignId = Number(row.campaignId);
+        const earningsCents = Math.max(
+          0,
+          Math.round(Number(row.earningsCents) || 0),
+        );
+        const orderCount = Math.max(0, Math.round(Number(row.orderCount) || 0));
+        const uniqueCustomerCount = Math.max(
+          0,
+          Math.round(Number(row.uniqueCustomerCount) || 0),
+        );
+
+        const total = dailyTotalsMap.get(day) ?? {
+          earningsCents: 0,
+          orderCount: 0,
+          uniqueCustomerCount: 0,
+        };
+        total.earningsCents += earningsCents;
+        total.orderCount += orderCount;
+        total.uniqueCustomerCount += uniqueCustomerCount;
+        dailyTotalsMap.set(day, total);
+
+        if (
+          Number.isFinite(campaignId) &&
+          campaignId > 0 &&
+          topCampaignIds.has(campaignId)
+        ) {
+          dailyByCampaignMap.set(`${day}:${campaignId}`, {
+            earningsCents,
+            orderCount,
+            uniqueCustomerCount,
+          });
+        }
+      }
+    }
+
+    const dayKeys = new Set<string>([
+      ...dailyTotalsMap.keys(),
+      ...[...dailyByCampaignMap.keys()].map((key) => key.split(':')[0]!),
+    ]);
+    if (params.from && params.to) {
+      const cursor = new Date(
+        Date.UTC(
+          params.from.getUTCFullYear(),
+          params.from.getUTCMonth(),
+          params.from.getUTCDate(),
+        ),
+      );
+      const end = new Date(
+        Date.UTC(
+          params.to.getUTCFullYear(),
+          params.to.getUTCMonth(),
+          params.to.getUTCDate(),
+        ),
+      );
+      while (cursor.getTime() <= end.getTime()) {
+        dayKeys.add(cursor.toISOString().slice(0, 10));
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+    }
+
+    const sortedDays = [...dayKeys].sort();
+    const dailyTotals = sortedDays.map((date) => {
+      const row = dailyTotalsMap.get(date);
+      return {
+        date,
+        earningsCents: row?.earningsCents ?? 0,
+        orderCount: row?.orderCount ?? 0,
+        uniqueCustomerCount: row?.uniqueCustomerCount ?? 0,
+      };
+    });
+
+    const dailyByCampaign: Array<{
+      date: string;
+      campaignId: number;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+    }> = [];
+    for (const date of sortedDays) {
+      for (const campaignId of topCampaignIds) {
+        const row = dailyByCampaignMap.get(`${date}:${campaignId}`);
+        dailyByCampaign.push({
+          date,
+          campaignId,
+          earningsCents: row?.earningsCents ?? 0,
+          orderCount: row?.orderCount ?? 0,
+          uniqueCustomerCount: row?.uniqueCustomerCount ?? 0,
+        });
+      }
+    }
+
+    return {
+      businessId: params.businessId,
+      from: params.from?.toISOString() ?? null,
+      to: params.to?.toISOString() ?? null,
+      totalEarningsCents,
+      totalOrderCount,
+      totalUniqueCustomerCount,
+      totalRepeatedCustomerCount,
+      previousPeriod,
+      dailyTotals,
+      dailyByCampaign,
+      campaigns,
+      conversionCampaigns,
+    };
   }
 
   async getBusinessFunnelEvents(

@@ -99,6 +99,7 @@ export class CampaignService {
       businessId,
       campaignName,
       campaignType,
+      campaignCategory,
       websiteUrl,
       imageUrl: dtoImageUrl,
       offer,
@@ -140,6 +141,7 @@ export class CampaignService {
       createdByUserId: user.id,
       campaignName,
       campaignType,
+      campaignCategory,
       websiteUrl,
       imageUrl,
       offer: offer.trim(),
@@ -306,6 +308,9 @@ export class CampaignService {
 
     if (updateCampaignDto.campaignName !== undefined) {
       campaign.campaignName = updateCampaignDto.campaignName;
+    }
+    if (updateCampaignDto.campaignCategory !== undefined) {
+      campaign.campaignCategory = updateCampaignDto.campaignCategory;
     }
     if (updateCampaignDto.websiteUrl !== undefined) {
       campaign.websiteUrl = updateCampaignDto.websiteUrl;
