@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Query,
   Req,
   UseGuards,
@@ -12,6 +14,7 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { MemberService } from './member.service';
 import { GetMembersQueryDto } from './memberDto/get-members-query.dto';
+import { UpdateBusinessMemberDto } from './memberDto/update-business-member.dto';
 
 type AuthRequest = Request & {
   user: {
@@ -41,6 +44,16 @@ export class MemberController {
     @Req() req: AuthRequest,
   ) {
     return this.memberService.getMembers(query.businessId, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch(':id')
+  async updateMember(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateBusinessMemberDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.memberService.updateMember(id, dto, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))

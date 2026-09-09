@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -13,6 +14,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { InvitationService } from './invitation.service';
 import { CreateBusinessInvitationDto } from './invitationDto/create-business-invitation.dto';
+import { UpdateBusinessInvitationDto } from './invitationDto/update-business-invitation.dto';
 import { ValidateInvitationQueryDto } from './invitationDto/validate-invitation-query.dto';
 import { AcceptInvitationDto } from './invitationDto/accept-invitation.dto';
 
@@ -34,6 +36,50 @@ export class InvitationController {
     @Req() req: { user: AuthRequestUser },
   ) {
     return this.invitationService.createInvitation(businessId, dto, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('businesses/:businessId/invitations/:invitationId')
+  async updateInvitation(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('invitationId', ParseIntPipe) invitationId: number,
+    @Body() dto: UpdateBusinessInvitationDto,
+    @Req() req: { user: AuthRequestUser },
+  ) {
+    return this.invitationService.updatePendingInvitation(
+      businessId,
+      invitationId,
+      dto,
+      req.user,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('businesses/:businessId/invitations/:invitationId/resend')
+  async resendInvitation(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('invitationId', ParseIntPipe) invitationId: number,
+    @Req() req: { user: AuthRequestUser },
+  ) {
+    return this.invitationService.resendInvitation(
+      businessId,
+      invitationId,
+      req.user,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('businesses/:businessId/invitations/:invitationId/link')
+  async regenerateInvitationLink(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('invitationId', ParseIntPipe) invitationId: number,
+    @Req() req: { user: AuthRequestUser },
+  ) {
+    return this.invitationService.regenerateInvitationLink(
+      businessId,
+      invitationId,
+      req.user,
+    );
   }
 
   @Throttle({ default: { limit: 30, ttl: 60_000 } })

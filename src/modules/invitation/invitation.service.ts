@@ -75,7 +75,7 @@ export class InvitationService {
     businessId: number,
     dto: CreateBusinessInvitationDto,
     user: AuthUser,
-  ): Promise<{ message: string; invitationId: number }> {
+  ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
     await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
@@ -138,7 +138,7 @@ export class InvitationService {
 
     if (pendingInvite && pendingInvite.expiresAt.getTime() > Date.now()) {
       throw new ConflictException(
-        'An active invitation has already been sent to this email.',
+        'An active invitation has already been sent to this email. Resend or copy the invite link from Members instead.',
       );
     }
 
@@ -169,18 +169,182 @@ export class InvitationService {
 
     const acceptUrl = `${getFrontendBaseUrl()}/accept-invitation?token=${rawToken}`;
 
-    await this.sendInviteEmail({
-      to: email,
-      businessName: business.name,
-      inviterName: business.owner.name?.trim() || user.email,
-      role,
-      permissions,
-      acceptUrl,
-    });
+    try {
+      await this.sendInviteEmail({
+        to: email,
+        businessName: business.name,
+        inviterName: business.owner.name?.trim() || user.email,
+        role,
+        permissions,
+        acceptUrl,
+      });
+    } catch (error) {
+      invitation.status = BusinessInvitationStatus.CANCELLED;
+      await this.invitationRepository.save(invitation);
+      throw error;
+    }
 
     return {
       message: 'Invitation sent successfully.',
       invitationId: invitation.id,
+      inviteUrl: acceptUrl,
+    };
+  }
+
+  async updatePendingInvitation(
+    businessId: number,
+    invitationId: number,
+    dto: {
+      role?: string;
+      permissions?: string[];
+    },
+    user: AuthUser,
+  ): Promise<{ message: string; invitationId: number }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['members'],
+      'You do not have permission to manage invitations.',
+    );
+
+    const invitation = await this.requirePendingInvitation(
+      businessId,
+      invitationId,
+    );
+
+    const nextRole = dto.role
+      ? normalizeInvitationRole(dto.role)
+      : normalizeInvitationRole(invitation.role);
+    if (!nextRole) {
+      throw new BadRequestException('Role must be Manager or Staff.');
+    }
+
+    const nextPermissions = normalizeMemberPermissions(
+      dto.permissions ?? invitation.permissions,
+      nextRole,
+    );
+
+    invitation.role = nextRole;
+    invitation.permissions = nextPermissions;
+    await this.invitationRepository.save(invitation);
+
+    return {
+      message: 'Invitation updated successfully.',
+      invitationId: invitation.id,
+    };
+  }
+
+  async resendInvitation(
+    businessId: number,
+    invitationId: number,
+    user: AuthUser,
+  ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['members'],
+      'You do not have permission to manage invitations.',
+    );
+
+    const invitation = await this.requirePendingInvitation(
+      businessId,
+      invitationId,
+    );
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+      relations: ['owner'],
+    });
+    if (!business) {
+      throw new NotFoundException('Business not found.');
+    }
+
+    const { rawToken, acceptUrl } = await this.rotateInvitationToken(invitation);
+
+    await this.sendInviteEmail({
+      to: invitation.email,
+      businessName: business.name,
+      inviterName: business.owner.name?.trim() || user.email,
+      role: invitation.role,
+      permissions: invitation.permissions ?? [],
+      acceptUrl,
+    });
+
+    return {
+      message: 'Invitation resent successfully.',
+      invitationId: invitation.id,
+      inviteUrl: acceptUrl,
+    };
+  }
+
+  async regenerateInvitationLink(
+    businessId: number,
+    invitationId: number,
+    user: AuthUser,
+  ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['members'],
+      'You do not have permission to manage invitations.',
+    );
+
+    const invitation = await this.requirePendingInvitation(
+      businessId,
+      invitationId,
+    );
+    const { acceptUrl } = await this.rotateInvitationToken(invitation);
+
+    return {
+      message: 'Invite link ready to copy.',
+      invitationId: invitation.id,
+      inviteUrl: acceptUrl,
+    };
+  }
+
+  private async requirePendingInvitation(
+    businessId: number,
+    invitationId: number,
+  ): Promise<BusinessInvitation> {
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        id: invitationId,
+        business: { id: businessId },
+      },
+      relations: ['business'],
+    });
+
+    if (!invitation) {
+      throw new NotFoundException('Invitation not found.');
+    }
+
+    if (invitation.status !== BusinessInvitationStatus.PENDING) {
+      throw new BadRequestException('This invitation is no longer pending.');
+    }
+
+    if (invitation.expiresAt.getTime() <= Date.now()) {
+      invitation.status = BusinessInvitationStatus.EXPIRED;
+      await this.invitationRepository.save(invitation);
+      throw new BadRequestException('This invitation has expired.');
+    }
+
+    return invitation;
+  }
+
+  private async rotateInvitationToken(
+    invitation: BusinessInvitation,
+  ): Promise<{ rawToken: string; acceptUrl: string }> {
+    const rawToken = randomBytes(32).toString('hex');
+    invitation.tokenHash = this.hashToken(rawToken);
+    invitation.expiresAt = new Date(
+      Date.now() + BUSINESS_INVITATION_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
+    );
+    invitation.status = BusinessInvitationStatus.PENDING;
+    invitation.acceptedAt = null;
+    await this.invitationRepository.save(invitation);
+
+    return {
+      rawToken,
+      acceptUrl: `${getFrontendBaseUrl()}/accept-invitation?token=${rawToken}`,
     };
   }
 
@@ -466,7 +630,7 @@ export class InvitationService {
       );
       if (error instanceof BrevoSendFailedError) {
         throw new BadRequestException(
-          'Invitation was created but the email could not be sent. Try again later.',
+          'The invitation email could not be sent. Try again or copy the invite link.',
         );
       }
       throw error;

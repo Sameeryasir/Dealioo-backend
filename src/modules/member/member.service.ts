@@ -1,6 +1,8 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,10 +14,15 @@ import {
   BusinessInvitationStatus,
 } from '../../db/entities/business-invitation.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
+import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { isAdminOrSuperAdmin, isSuperAdmin } from '../../utils/user-roles';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { normalizeInvitationRole } from '../invitation/invitationDto/create-business-invitation.dto';
 import { FULL_ACCESS_PERMISSION } from './member.constants';
+import { normalizeMemberPermissions } from './member-permissions.util';
+import type { UpdateBusinessMemberDto } from './memberDto/update-business-member.dto';
 
 type AuthUser = {
   id: number;
@@ -169,7 +176,10 @@ export class MemberService {
     });
 
     if (member) {
-      this.assertBusinessOwner(member.business, user);
+      await this.assertCanManageMembers(member.business, user);
+      if (member.business.owner?.id === member.user.id) {
+        throw new ForbiddenException('The business owner cannot be removed.');
+      }
       await this.purgeMemberAccess(
         member.business.id,
         member.user.email,
@@ -187,12 +197,95 @@ export class MemberService {
       throw new NotFoundException('Member not found.');
     }
 
-    this.assertBusinessOwner(businessInvitation.business, user);
+    await this.assertCanManageMembers(businessInvitation.business, user);
     if (businessInvitation.status === BusinessInvitationStatus.PENDING) {
       businessInvitation.status = BusinessInvitationStatus.CANCELLED;
       await this.businessInvitationRepository.save(businessInvitation);
     }
     return { message: 'Member access removed successfully.' };
+  }
+
+  async updateMember(
+    memberId: number,
+    dto: UpdateBusinessMemberDto,
+    user: AuthUser,
+  ): Promise<{
+    message: string;
+    member: MemberListItem;
+  }> {
+    const member = await this.businessMemberRepository.findOne({
+      where: { id: memberId },
+      relations: ['business', 'business.owner', 'user', 'user.role', 'permissionRows'],
+    });
+
+    if (!member) {
+      throw new NotFoundException('Member not found.');
+    }
+
+    await this.assertCanManageMembers(member.business, user);
+
+    if (member.business.owner?.id === member.user.id) {
+      throw new ForbiddenException('The business owner access cannot be edited.');
+    }
+
+    const role = normalizeInvitationRole(dto.role);
+    if (!role) {
+      throw new BadRequestException('Role must be Manager or Staff.');
+    }
+
+    const permissions = normalizeMemberPermissions(dto.permissions, role);
+
+    const platformRole = await this.dataSource.getRepository(Role).findOne({
+      where: { name: role },
+    });
+    if (!platformRole) {
+      throw new InternalServerErrorException(
+        `Role '${role}' does not exist. Seed Manager and Staff roles first.`,
+      );
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      const memberRepo = manager.getRepository(BusinessMember);
+      const permissionRepo = manager.getRepository(BusinessMemberPermission);
+      const userRepo = manager.getRepository(User);
+
+      member.role = role;
+      member.memberRole = platformRole;
+      member.permissions = permissions;
+      await memberRepo.save(member);
+
+      await permissionRepo.delete({ businessMember: { id: member.id } });
+      if (permissions.length > 0) {
+        await permissionRepo.save(
+          permissions.map((permission) =>
+            permissionRepo.create({
+              businessMember: member,
+              permission,
+            }),
+          ),
+        );
+      }
+
+      await userRepo
+        .createQueryBuilder()
+        .update(User)
+        .set({ role: { id: platformRole.id } })
+        .where('id = :id', { id: member.user.id })
+        .execute();
+    });
+
+    return {
+      message: 'Member access updated successfully.',
+      member: {
+        id: member.id,
+        userId: member.user.id,
+        name: member.user.name?.trim() || member.user.email,
+        email: member.user.email,
+        role,
+        status: 'active',
+        permissions,
+      },
+    };
   }
 
   private async purgeMemberAccess(
@@ -271,16 +364,16 @@ export class MemberService {
     return business;
   }
 
-  private assertBusinessOwner(business: Business, user: AuthUser): void {
-    if (isSuperAdmin(user)) {
-      return;
-    }
-
-    if (business.owner?.id !== user.id) {
-      throw new ForbiddenException(
-        'Only the business owner can perform this action.',
-      );
-    }
+  private async assertCanManageMembers(
+    business: Business,
+    user: AuthUser,
+  ): Promise<void> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      business.id,
+      ['members'],
+      'You do not have permission to manage members for this business.',
+    );
   }
 
   private async assertCanViewMembers(

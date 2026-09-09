@@ -183,6 +183,7 @@ export class AuthService {
   // Related: product-meta-pixel trackProductCompleteRegistration; Google isNewCustomer hash.
   async registerWithInvitation(dto: RegisterWithInvitationDto): Promise<{
     message: string;
+    businessId: number;
     token: string;
     refreshToken: string;
     user: AuthUserPayload;
@@ -399,6 +400,7 @@ export class AuthService {
     // Business rule: invite register only succeeds for first-time credential setup → new for Meta.
     return {
       message: 'Account created successfully.',
+      businessId: joined.joined.businessId,
       ...session,
       isNewCustomer: true,
     };
