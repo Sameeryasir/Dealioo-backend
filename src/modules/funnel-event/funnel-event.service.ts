@@ -93,11 +93,8 @@ import {
   type BusinessVisitSnapshot,
 } from './business-order-payment.util';
 import {
-  matchesBusinessEventStatusFilter,
-  matchesBusinessFunnelEventDateFilter,
+  getBusinessFunnelEventDateFrom,
   normalizeBusinessFunnelEventSearch,
-  resolveBusinessEventDisplayStatus,
-  sortBusinessFunnelEventsByPaymentDate,
 } from './business-funnel-events-filters.util';
 import {
   GetBusinessFunnelEventsQueryDto,
@@ -2369,97 +2366,61 @@ export class FunnelEventService {
     const dateFilter: BusinessFunnelEventDateFilter = filters.date ?? 'all';
     const search = normalizeBusinessFunnelEventSearch(filters.search);
 
-    const campaignCount = await this.campaignRepository.count({
-      where: { businessId },
+    const [campaignCount, funnelCount, allEventsTotal] = await Promise.all([
+      this.campaignRepository.count({
+        where: { businessId },
+      }),
+      this.funnelRepository
+        .createQueryBuilder('funnel')
+        .innerJoin('funnel.campaign', 'campaign')
+        .where('campaign.business_id = :businessId', { businessId })
+        .getCount(),
+      this.orderRepository
+        .createQueryBuilder('ord')
+        .where('ord.business_id = :businessId', { businessId })
+        .andWhere('ord.deleted_at IS NULL')
+        .getCount(),
+    ]);
+
+    const filteredQb = this.buildBusinessOrdersListQuery({
+      businessId,
+      statusFilter,
+      dateFilter,
+      search,
     });
 
-    const funnelCount = await this.funnelRepository
-      .createQueryBuilder('funnel')
-      .innerJoin('funnel.campaign', 'campaign')
-      .where('campaign.business_id = :businessId', { businessId })
-      .getCount();
+    const total = await filteredQb.clone().getCount();
 
-    await this.backfillPendingOrdersForOpenCheckouts(businessId);
+    const orders = await filteredQb
+      .clone()
+      .orderBy(this.businessOrdersListSortSql(), 'DESC')
+      .addOrderBy('ord.id', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit)
+      .getMany();
 
-    // Unfiltered order count (same source as this table), not funnel_event rows.
-    const allEventsTotal = await this.orderRepository
-      .createQueryBuilder('ord')
-      .where('ord.business_id = :businessId', { businessId })
-      .andWhere('ord.deleted_at IS NULL')
-      .getCount();
-
-    const orders = await this.loadBusinessOrders(businessId);
     const orderIds = orders.map((order) => order.id);
     const paymentsByOrderId = await this.loadPaymentsGroupedByOrderId(
       businessId,
       orderIds,
     );
-
     const allPaymentsForVisits = [...paymentsByOrderId.values()].flat();
-
     const paymentIdsForVisits = [
       ...new Set(allPaymentsForVisits.map((payment) => payment.id)),
     ];
-
     const visitByPaymentId = await this.loadVisitsByFunnelPaymentId(
       businessId,
       paymentIdsForVisits,
     );
     const visitByOrderId = await this.loadVisitsByOrderId(businessId, orderIds);
 
-    const combinedRows = orders
-      .map((order) =>
-        this.mapOrderToBusinessRow(
-          order,
-          paymentsByOrderId.get(order.id) ?? [],
-          visitByPaymentId,
-          visitByOrderId.get(order.id) ?? null,
-        ),
-      )
-      .filter((row) => {
-      if (
-        !matchesBusinessFunnelEventDateFilter(
-          {
-            createdAt: row.createdAt,
-            paidAt: row.paidAt,
-            businessVisitedAt: row.businessVisitedAt,
-          },
-          dateFilter,
-        )
-      ) {
-        return false;
-      }
-      if (!search) {
-        return true;
-      }
-      const haystack = [
-        row.customer?.name,
-        row.customer?.email,
-        row.customer?.phone,
-        row.customerEmail,
-        row.campaignName,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(search.toLowerCase());
-    });
-
-    const statusFilteredRows =
-      statusFilter === 'all'
-        ? combinedRows
-        : combinedRows.filter((row) =>
-            matchesBusinessEventStatusFilter(
-              resolveBusinessEventDisplayStatus(row),
-              statusFilter,
-            ),
-          );
-
-    const sortedRows = sortBusinessFunnelEventsByPaymentDate(statusFilteredRows);
-    const total = sortedRows.length;
-    const data = sortedRows.slice(
-      pagination.skip,
-      pagination.skip + pagination.limit,
+    const data = orders.map((order) =>
+      this.mapOrderToBusinessRow(
+        order,
+        paymentsByOrderId.get(order.id) ?? [],
+        visitByPaymentId,
+        visitByOrderId.get(order.id) ?? null,
+      ),
     );
 
     return {
@@ -2473,15 +2434,115 @@ export class FunnelEventService {
     };
   }
 
-  private async loadBusinessOrders(businessId: number): Promise<Order[]> {
-    return this.orderRepository
-      .createQueryBuilder('ord')
-      .where('ord.business_id = :businessId', { businessId })
-      .andWhere('ord.deleted_at IS NULL')
-      .getMany();
+  private businessOrdersListSortSql(): string {
+    return `COALESCE(
+      ord.paid_at,
+      (
+        SELECT MAX(v.visit_date)
+        FROM customer_visits v
+        WHERE v.order_id = ord.id
+          AND v.deleted_at IS NULL
+      ),
+      ord.created_at
+    )`;
   }
 
-  private async backfillPendingOrdersForOpenCheckouts(
+  private businessOrdersPaidExistsSql(): string {
+    return `(
+      ord.status = :paidOrderStatus
+      OR EXISTS (
+        SELECT 1
+        FROM funnel_payment p
+        WHERE p.order_id = ord.id
+          AND p.business_id = :businessId
+          AND p.deleted_at IS NULL
+          AND p.status = :paidPaymentStatus
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM customer_visits v
+        WHERE v.order_id = ord.id
+          AND v.business_id = :businessId
+          AND v.deleted_at IS NULL
+          AND (
+            COALESCE(v.order_subtotal, 0) > 0
+            OR (
+              v.extra_items IS NOT NULL
+              AND jsonb_typeof(v.extra_items) = 'array'
+              AND jsonb_array_length(v.extra_items) > 0
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM visit_addon_items vai
+              WHERE vai.customer_visit_id = v.id
+            )
+          )
+      )
+    )`;
+  }
+
+  private buildBusinessOrdersListQuery(params: {
+    businessId: number;
+    statusFilter: BusinessFunnelEventStatusFilter;
+    dateFilter: BusinessFunnelEventDateFilter;
+    search?: string;
+  }): ReturnType<Repository<Order>['createQueryBuilder']> {
+    const qb = this.orderRepository
+      .createQueryBuilder('ord')
+      .where('ord.business_id = :businessId', { businessId: params.businessId })
+      .andWhere('ord.deleted_at IS NULL');
+
+    if (params.statusFilter === 'paid') {
+      qb.andWhere(this.businessOrdersPaidExistsSql(), {
+        paidOrderStatus: OrderStatus.PAID,
+        paidPaymentStatus: FunnelPaymentStatus.PAID,
+        businessId: params.businessId,
+      });
+    } else if (params.statusFilter === 'not_paid') {
+      qb.andWhere(`NOT ${this.businessOrdersPaidExistsSql()}`, {
+        paidOrderStatus: OrderStatus.PAID,
+        paidPaymentStatus: FunnelPaymentStatus.PAID,
+        businessId: params.businessId,
+      });
+    }
+
+    const dateFrom = getBusinessFunnelEventDateFrom(params.dateFilter);
+    if (dateFrom) {
+      qb.andWhere(`${this.businessOrdersListSortSql()} >= :dateFrom`, {
+        dateFrom,
+      });
+    }
+
+    if (params.search) {
+      const searchPattern = `%${params.search.toLowerCase()}%`;
+      qb.andWhere(
+        `EXISTS (
+          SELECT 1
+          FROM funnel_payment p
+          LEFT JOIN customers c ON c.id = p.customer_id
+          LEFT JOIN campaigns camp ON camp.id = p.campaign_id
+          WHERE p.order_id = ord.id
+            AND p.business_id = :businessId
+            AND p.deleted_at IS NULL
+            AND (
+              LOWER(COALESCE(c.name, '')) LIKE :searchPattern
+              OR LOWER(COALESCE(c.email, '')) LIKE :searchPattern
+              OR LOWER(COALESCE(c.phone, '')) LIKE :searchPattern
+              OR LOWER(COALESCE(p.customer_email, '')) LIKE :searchPattern
+              OR LOWER(COALESCE(camp.campaign_name, '')) LIKE :searchPattern
+            )
+        )`,
+        {
+          businessId: params.businessId,
+          searchPattern,
+        },
+      );
+    }
+
+    return qb;
+  }
+
+  async backfillPendingOrdersForOpenCheckouts(
     businessId: number,
   ): Promise<void> {
     const openPayments = await this.funnelPaymentRepository.find({

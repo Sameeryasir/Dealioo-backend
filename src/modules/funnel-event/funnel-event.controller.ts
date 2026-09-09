@@ -123,10 +123,17 @@ export class FunnelEventController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/events')
-  getBusinessFunnelEvents(
+  async getBusinessFunnelEvents(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query() query: GetBusinessFunnelEventsQueryDto,
+    @Req() req: AuthRequest,
   ) {
+    await this.businessAccessService.assertAnyPermission(
+      req.user,
+      businessId,
+      ['orders'],
+      'You do not have permission to view orders for this business.',
+    );
     return this.funnelEventService.getBusinessFunnelEvents(
       businessId,
       query.page ?? 1,
