@@ -10,6 +10,10 @@ import {
   normalizePagination,
 } from '../../common/pagination';
 import {
+  DASHBOARD_CACHE_TTL_MS,
+  dashboardTtlCache,
+} from '../../common/ttl-cache';
+import {
   ActivityEvent,
   ActivityEventType,
 } from '../../db/entities/activity-event.entity';
@@ -1039,6 +1043,27 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const monthCount = clampOverviewMonths(rawMonthCount);
+    const cacheKey = `activity-monthly:${businessId}:${monthCount}`;
+
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_CACHE_TTL_MS,
+      () => this.computeBusinessSummaryMonthly(businessId, monthCount),
+    );
+  }
+
+  private async computeBusinessSummaryMonthly(
+    businessId: number,
+    monthCount: number,
+  ): Promise<{
+    businessId: number;
+    months: number;
+    activeCampaigns: number;
+    totalOrders: number;
+    totalMembers: number;
+    todayRevenueCents: number;
+    data: ActivityMonthlyPoint[];
+  }> {
     const buckets = buildRecentMonthBuckets(monthCount);
     const snapshot = await this.getBusinessActivitySnapshot(businessId);
 

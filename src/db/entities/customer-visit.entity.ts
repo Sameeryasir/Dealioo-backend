@@ -16,6 +16,7 @@ import type { Business } from './business.entity';
 import type { CustomerVisitCampaign } from './customer-visit-campaign.entity';
 import type { Order } from './order.entity';
 import type { User } from './user.entity';
+import type { VisitAddonItem } from './visit-addon-item.entity';
 export enum CustomerVisitSource {
   QR_REDEMPTION = 'QR_REDEMPTION',
   STAFF_LOOKUP = 'STAFF_LOOKUP',
@@ -48,6 +49,12 @@ export class CustomerVisit {
     cascade: true,
   })
   visitCampaigns: CustomerVisitCampaign[];
+
+  @OneToMany(
+    () => require('./visit-addon-item.entity').VisitAddonItem,
+    (row) => row.customerVisit,
+  )
+  addonItems: VisitAddonItem[];
 
   @Column({ name: 'business_id' })
   businessId: number;

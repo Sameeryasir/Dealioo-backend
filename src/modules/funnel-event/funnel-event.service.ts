@@ -22,12 +22,23 @@ import {
   dollarsToCents,
 } from '../../common/money.util';
 import {
+  DASHBOARD_CACHE_TTL_MS,
+  dashboardTtlCache,
+} from '../../common/ttl-cache';
+import {
   ExtraItemsMismatchError,
   extraItemsFingerprint,
   extraItemsForApi,
   resolveCounterExtras,
   visitAddOnAmountDollars,
 } from '../../utils/normalize-extra-items';
+import {
+  replaceVisitAddonItems,
+  resolveVisitStoredExtraItems,
+} from '../../utils/visit-addon-items.util';
+import {
+  VisitAddonItemSource,
+} from '../../db/entities/visit-addon-item.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -934,7 +945,7 @@ export class FunnelEventService {
             where: { couponId: primaryCoupon.couponId },
           });
           if (!existingVisit) {
-            await this.customerVisitRepository.save({
+            const savedVisit = await this.customerVisitRepository.save({
               customerId,
               campaignId: primaryCoupon.campaignId,
               businessId,
@@ -953,6 +964,20 @@ export class FunnelEventService {
                 campaignId,
               })),
             });
+            await replaceVisitAddonItems(this.dataSource.manager, {
+              customerVisitId: savedVisit.id,
+              businessId,
+              customerId,
+              campaignId: primaryCoupon.campaignId,
+              orderId,
+              staffUserId,
+              source: VisitAddonItemSource.SCANNER_PURCHASE,
+              items:
+                visitOrderSubtotalDollars != null &&
+                visitOrderSubtotalDollars > 0
+                  ? normalizedExtraItems
+                  : [],
+            });
           } else if (
             visitOrderSubtotalDollars != null &&
             visitOrderSubtotalDollars > 0
@@ -964,10 +989,20 @@ export class FunnelEventService {
               existingVisit.orderId = orderId;
             }
             await this.customerVisitRepository.save(existingVisit);
+            await replaceVisitAddonItems(this.dataSource.manager, {
+              customerVisitId: existingVisit.id,
+              businessId,
+              customerId,
+              campaignId: existingVisit.campaignId,
+              orderId: existingVisit.orderId,
+              staffUserId,
+              source: VisitAddonItemSource.SCANNER_PURCHASE,
+              items: normalizedExtraItems,
+            });
           }
         } else {
           const primaryCampaignId = visitCampaignIds[0]!;
-          await this.customerVisitRepository.save({
+          const savedVisit = await this.customerVisitRepository.save({
             customerId,
             campaignId: primaryCampaignId,
             businessId,
@@ -985,6 +1020,20 @@ export class FunnelEventService {
             visitCampaigns: visitCampaignIds.map((campaignId) => ({
               campaignId,
             })),
+          });
+          await replaceVisitAddonItems(this.dataSource.manager, {
+            customerVisitId: savedVisit.id,
+            businessId,
+            customerId,
+            campaignId: primaryCampaignId,
+            orderId,
+            staffUserId,
+            source: VisitAddonItemSource.SCANNER_PURCHASE,
+            items:
+              visitOrderSubtotalDollars != null &&
+              visitOrderSubtotalDollars > 0
+                ? normalizedExtraItems
+                : [],
           });
         }
       }
@@ -1681,6 +1730,68 @@ export class FunnelEventService {
     }>;
   }> {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
+    const cacheKey = [
+      'perf-top-campaigns',
+      params.businessId,
+      params.from?.toISOString() ?? '',
+      params.to?.toISOString() ?? '',
+      limit,
+    ].join(':');
+
+    const cached = dashboardTtlCache.get<{
+      businessId: number;
+      from: string | null;
+      to: string | null;
+      totalEarningsCents: number;
+      totalOrderCount: number;
+      totalUniqueCustomerCount: number;
+      totalRepeatedCustomerCount: number;
+      previousPeriod: {
+        totalEarningsCents: number;
+        totalOrderCount: number;
+        totalUniqueCustomerCount: number;
+      } | null;
+      dailyTotals: Array<{
+        date: string;
+        earningsCents: number;
+        orderCount: number;
+        uniqueCustomerCount: number;
+      }>;
+      dailyByCampaign: Array<{
+        date: string;
+        campaignId: number;
+        earningsCents: number;
+        orderCount: number;
+        uniqueCustomerCount: number;
+      }>;
+      campaigns: Array<{
+        campaignId: number;
+        campaignName: string;
+        campaignType: 'prepaid' | 'postpaid' | null;
+        imageUrl: string | null;
+        price: number | null;
+        earningsCents: number;
+        orderCount: number;
+        paidPaymentCount: number;
+        uniqueCustomerCount: number;
+        guestCount: number;
+        repeatedCustomerCount: number;
+        viewCount: number;
+        signupCount: number;
+        newCustomerCount: number;
+        returningCustomerCount: number;
+      }>;
+      conversionCampaigns: Array<{
+        campaignId: number;
+        campaignName: string;
+        campaignType: 'prepaid' | 'postpaid' | null;
+        imageUrl: string | null;
+        viewCount: number;
+        signupCount: number;
+        orderCount: number;
+      }>;
+    }>(cacheKey);
+    if (cached) return cached;
 
     const applyFilters = (
       qb: ReturnType<Repository<FunnelPayment>['createQueryBuilder']>,
@@ -2191,7 +2302,7 @@ export class FunnelEventService {
       }
     }
 
-    return {
+    const result = {
       businessId: params.businessId,
       from: params.from?.toISOString() ?? null,
       to: params.to?.toISOString() ?? null,
@@ -2205,6 +2316,8 @@ export class FunnelEventService {
       campaigns,
       conversionCampaigns,
     };
+    dashboardTtlCache.set(cacheKey, result, DASHBOARD_CACHE_TTL_MS);
+    return result;
   }
 
   async getBusinessFunnelEvents(
@@ -2906,6 +3019,7 @@ export class FunnelEventService {
         businessId,
         orderId: In(orderIds),
       },
+      relations: { addonItems: true },
       order: { visitedAt: 'DESC' },
     });
 
@@ -2918,7 +3032,7 @@ export class FunnelEventService {
         orderSubtotal:
           visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
-        extraItems: extraItemsForApi(visit.extraItems),
+        extraItems: extraItemsForApi(resolveVisitStoredExtraItems(visit)),
       });
     }
 
@@ -2937,10 +3051,12 @@ export class FunnelEventService {
     const visits = await this.customerVisitRepository
       .createQueryBuilder('visit')
       .innerJoinAndSelect('visit.coupon', 'coupon')
+      .leftJoinAndSelect('visit.addonItems', 'addonItems')
       .where('visit.businessId = :businessId', { businessId })
       .andWhere('coupon.funnelPaymentId IN (:...paymentIds)', { paymentIds })
       .andWhere('visit.deletedAt IS NULL')
       .orderBy('visit.visitedAt', 'DESC')
+      .addOrderBy('addonItems.sortOrder', 'ASC')
       .getMany();
 
     for (const visit of visits) {
@@ -2953,7 +3069,7 @@ export class FunnelEventService {
         orderSubtotal:
           visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
         visitedAt: visit.visitedAt,
-        extraItems: extraItemsForApi(visit.extraItems),
+        extraItems: extraItemsForApi(resolveVisitStoredExtraItems(visit)),
       });
     }
 
@@ -2977,7 +3093,7 @@ export class FunnelEventService {
         businessId,
         customerId: In(customerIds),
       },
-      relations: { visitCampaigns: true },
+      relations: { visitCampaigns: true, addonItems: true },
       order: { visitedAt: 'DESC' },
     });
 
@@ -2999,7 +3115,7 @@ export class FunnelEventService {
           orderSubtotal:
             visit.orderSubtotal != null ? Number(visit.orderSubtotal) : null,
           visitedAt: visit.visitedAt,
-          extraItems: extraItemsForApi(visit.extraItems),
+          extraItems: extraItemsForApi(resolveVisitStoredExtraItems(visit)),
         });
       }
     }

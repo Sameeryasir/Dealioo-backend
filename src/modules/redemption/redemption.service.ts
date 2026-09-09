@@ -62,6 +62,8 @@ import {
   type ResolvedCounterExtras,
   type StoredExtraItem,
 } from '../../utils/normalize-extra-items';
+import { replaceVisitAddonItems } from '../../utils/visit-addon-items.util';
+import { VisitAddonItemSource } from '../../db/entities/visit-addon-item.entity';
 import { CouponService } from './coupon.service';
 import {
   isOnlineFunnelPayment,
@@ -1402,6 +1404,18 @@ export class RedemptionService {
       if (changed) {
         await manager.save(existingVisit);
       }
+      if (extraItems != null) {
+        await replaceVisitAddonItems(manager, {
+          customerVisitId: existingVisit.id,
+          businessId: params.businessId,
+          customerId: params.coupon.customerId,
+          campaignId: params.coupon.campaignId,
+          orderId: existingVisit.orderId,
+          staffUserId: params.audit.scannedBy,
+          source: VisitAddonItemSource.QR_REDEEM,
+          items: extraItems,
+        });
+      }
       return {
         recorded: false,
         customerId: params.coupon.customerId,
@@ -1423,7 +1437,22 @@ export class RedemptionService {
       extraItems,
       visitCampaigns: [{ campaignId: params.coupon.campaignId }],
     });
-    await manager.save(visit);
+    const savedVisit = await manager.save(visit);
+    if (extraItems != null && extraItems.length > 0) {
+      await replaceVisitAddonItems(manager, {
+        customerVisitId: savedVisit.id,
+        businessId: params.businessId,
+        customerId: params.coupon.customerId,
+        campaignId: params.coupon.campaignId,
+        orderId: params.orderId ?? null,
+        staffUserId: params.audit.scannedBy,
+        source:
+          params.audit.visitSource === CustomerVisitSource.STAFF_LOOKUP
+            ? VisitAddonItemSource.SCANNER_PURCHASE
+            : VisitAddonItemSource.QR_REDEEM,
+        items: extraItems,
+      });
+    }
 
     const visitSource =
       params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION;

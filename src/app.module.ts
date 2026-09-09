@@ -19,6 +19,7 @@ import { GoogleAdsModule } from './modules/google-ads/google-ads.module';
 import { GoogleWalletModule } from './modules/google-wallet/google-wallet.module';
 import { PaymentModule } from './modules/payment/payment.module';
 import { FunnelEventModule } from './modules/funnel-event/funnel-event.module';
+import { AddonSuggestionModule } from './modules/addon-suggestion/addon-suggestion.module';
 import { AutomationModule } from './modules/automation/automation.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { RedemptionModule } from './modules/redemption/redemption.module';
@@ -93,6 +94,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     GoogleWalletModule,
     PaymentModule,
     FunnelEventModule,
+    AddonSuggestionModule,
     AutomationModule,
     RedemptionModule,
     ActivityModule,

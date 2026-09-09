@@ -56,12 +56,32 @@ export function resolvePerformancePreviousWindow(
 
 export const PERFORMANCE_VISIT_ADDON_CENTS_SQL = `(
   CASE
+    WHEN EXISTS (
+      SELECT 1
+      FROM visit_addon_items vai
+      WHERE vai.customer_visit_id = v.id
+    )
+    THEN (
+      SELECT COALESCE(SUM(vai.line_total_cents), 0)
+      FROM visit_addon_items vai
+      WHERE vai.customer_visit_id = v.id
+    )
     WHEN v.extra_items IS NOT NULL
       AND jsonb_typeof(v.extra_items) = 'array'
       AND jsonb_array_length(v.extra_items) > 0
     THEN (
       SELECT COALESCE(SUM(
-        ROUND(COALESCE((elem->>'unitPrice')::numeric, 0) * 100)
+        ROUND(COALESCE(
+          NULLIF(elem->>'unitPriceCents', '')::numeric,
+          CASE
+            WHEN NULLIF(elem->>'unitPrice', '') IS NOT NULL
+              THEN (elem->>'unitPrice')::numeric * 100
+            WHEN NULLIF(elem->>'price', '') IS NOT NULL
+              THEN (elem->>'price')::numeric * 100
+            ELSE 0
+          END,
+          0
+        ))
         * GREATEST(1, ROUND(COALESCE((elem->>'qty')::numeric, 1)))
       ), 0)
       FROM jsonb_array_elements(v.extra_items) AS elem

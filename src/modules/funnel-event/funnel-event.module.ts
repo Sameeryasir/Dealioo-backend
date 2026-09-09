@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { CustomerVisitCampaign } from '../../db/entities/customer-visit-campaign.entity';
+import { VisitAddonItem } from '../../db/entities/visit-addon-item.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
@@ -36,6 +37,7 @@ import { FunnelEventService } from './funnel-event.service';
       Customer,
       CustomerVisit,
       CustomerVisitCampaign,
+      VisitAddonItem,
       CheckoutAccessToken,
       Business,
       ScannerPurchaseRequest,
