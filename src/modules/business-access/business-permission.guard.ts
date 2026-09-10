@@ -5,9 +5,12 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { BusinessMemberPermission } from '../member/member.constants';
 import { BusinessAccessService } from './business-access.service';
-import { BUSINESS_PERMISSION_KEY } from './business-permission.decorator';
+import {
+  BUSINESS_PERMISSION_KEY,
+  type RequireBusinessPermissionInput,
+} from './business-permission.decorator';
+import { resolveBusinessPermissionKeys } from './business-permission-aliases';
 
 @Injectable()
 export class BusinessPermissionGuard implements CanActivate {
@@ -17,12 +20,11 @@ export class BusinessPermissionGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const permission = this.reflector.getAllAndOverride<BusinessMemberPermission>(
-      BUSINESS_PERMISSION_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const required = this.reflector.getAllAndOverride<
+      RequireBusinessPermissionInput | undefined
+    >(BUSINESS_PERMISSION_KEY, [context.getHandler(), context.getClass()]);
 
-    if (!permission) {
+    if (!required) {
       return true;
     }
 
@@ -31,6 +33,7 @@ export class BusinessPermissionGuard implements CanActivate {
       params?: Record<string, string>;
       body?: Record<string, unknown>;
       query?: Record<string, unknown>;
+      businessAccess?: unknown;
     }>();
 
     const user = request.user;
@@ -43,11 +46,16 @@ export class BusinessPermissionGuard implements CanActivate {
       throw new BadRequestException('Business id is required.');
     }
 
-    await this.businessAccessService.assertPermission(
+    const permissionKeys = (
+      Array.isArray(required) ? required : [required]
+    ).flatMap((permission) => resolveBusinessPermissionKeys(permission));
+
+    const access = await this.businessAccessService.assertAnyPermission(
       user,
       businessId,
-      permission,
+      permissionKeys,
     );
+    request.businessAccess = access;
     return true;
   }
 

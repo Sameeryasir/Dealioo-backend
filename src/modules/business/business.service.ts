@@ -22,8 +22,15 @@ import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-d
 import { Campaign } from '../../db/entities/campaign.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
+import { Role } from '../../db/entities/role.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isSuperAdmin } from '../../utils/user-roles';
+import {
+  ALL_BUSINESS_MEMBER_PERMISSIONS,
+} from '../member/member.constants';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
 import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-phone-number.dto';
@@ -82,6 +89,12 @@ export class BusinessService {
     private readonly businessCustomerRepository: Repository<BusinessCustomer>,
     @InjectRepository(AdminNotification)
     private readonly adminNotificationRepository: Repository<AdminNotification>,
+    @InjectRepository(BusinessMember)
+    private readonly businessMemberRepository: Repository<BusinessMember>,
+    @InjectRepository(BusinessMemberPermission)
+    private readonly businessMemberPermissionRepository: Repository<BusinessMemberPermission>,
+    @InjectRepository(Role)
+    private readonly roleRepository: Repository<Role>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
@@ -255,6 +268,8 @@ export class BusinessService {
     });
 
     await this.businessRepository.save(business);
+
+    await this.ensureOwnerMembership(business, owner);
 
     await this.businessHistoryService.logBusinessCreated({
       businessId: business.id,
@@ -671,6 +686,62 @@ export class BusinessService {
       selectedPhoneNumber: null,
       allAssigned: numbers.length > 0 && unassigned.length === 0,
     };
+  }
+
+  private async ensureOwnerMembership(
+    business: Business,
+    owner: User,
+  ): Promise<void> {
+    const existing = await this.businessMemberRepository.findOne({
+      where: {
+        business: { id: business.id },
+        user: { id: owner.id },
+      },
+    });
+
+    const ownerRole = await this.roleRepository.findOne({
+      where: { name: 'Owner' },
+    });
+
+    let member = existing;
+    if (!member) {
+      member = await this.businessMemberRepository.save(
+        this.businessMemberRepository.create({
+          business,
+          user: owner,
+          role: 'Owner',
+          memberRole: ownerRole,
+          status: BUSINESS_MEMBER_STATUS.ACTIVE,
+          invitedBy: null,
+          joinedAt: new Date(),
+          permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
+        }),
+      );
+    } else {
+      member.role = 'Owner';
+      member.memberRole = ownerRole;
+      member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
+      member.joinedAt = member.joinedAt ?? new Date();
+      member.permissions = [...ALL_BUSINESS_MEMBER_PERMISSIONS];
+      member = await this.businessMemberRepository.save(member);
+    }
+
+    await this.businessMemberPermissionRepository.delete({
+      businessMember: { id: member.id },
+    });
+    await this.businessMemberPermissionRepository.save(
+      ALL_BUSINESS_MEMBER_PERMISSIONS.map((permission) =>
+        this.businessMemberPermissionRepository.create({
+          businessMember: member!,
+          permission,
+        }),
+      ),
+    );
+
+    await this.businessAccessService.invalidateMembershipCache(
+      business.id,
+      owner.id,
+    );
   }
 
   private async filterUnassignedTwilioNumbers(

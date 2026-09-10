@@ -5,9 +5,12 @@ import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Automation } from '../../db/entities/automation.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessCustomer } from '../../db/entities/business-customer.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
+import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
@@ -30,6 +33,9 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
       Automation,
       BusinessCustomer,
       AdminNotification,
+      BusinessMember,
+      BusinessMemberPermission,
+      Role,
     ]),
     AuthModule,
     AdminNotificationsModule,

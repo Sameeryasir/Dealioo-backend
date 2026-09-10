@@ -51,6 +51,7 @@ import {
 import {
   ADMIN_ROLE,
   MANAGER_ROLE,
+  MEMBER_ROLE,
   SCANNER_ROLE,
   STAFF_ROLE,
   SUPER_ADMIN_ROLE,
@@ -529,14 +530,10 @@ export class OnboardingService {
   ): Promise<OnboardingStatusResponse> {
     const normalizedRole = roleName.trim();
 
-    if (normalizedRole === SCANNER_ROLE || normalizedRole === SUPER_ADMIN_ROLE) {
-      return this.buildTerminalStatus({
-        businessId: null,
-        redirectPath: '/dashboard',
-      });
-    }
-
     if (
+      normalizedRole === SCANNER_ROLE ||
+      normalizedRole === SUPER_ADMIN_ROLE ||
+      normalizedRole === MEMBER_ROLE ||
       normalizedRole === MANAGER_ROLE ||
       normalizedRole === STAFF_ROLE
     ) {

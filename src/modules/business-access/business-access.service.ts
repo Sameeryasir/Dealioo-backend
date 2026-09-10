@@ -12,7 +12,9 @@ import {
   ALL_BUSINESS_MEMBER_PERMISSIONS,
   type BusinessMemberPermission as BusinessMemberPermissionKey,
 } from '../member/member.constants';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { isSuperAdmin } from '../../utils/user-roles';
+import { BusinessMembershipCacheService } from './business-membership-cache.service';
 
 export type BusinessAccessUser = {
   id: number;
@@ -36,6 +38,7 @@ export class BusinessAccessService {
     private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(BusinessMemberPermission)
     private readonly permissionRepository: Repository<BusinessMemberPermission>,
+    private readonly membershipCache: BusinessMembershipCacheService,
   ) {}
 
   async getAccessContext(
@@ -51,6 +54,19 @@ export class BusinessAccessService {
       };
     }
 
+    const cached = await this.membershipCache.get(businessId, user.id);
+    if (cached) {
+      if (cached.status !== BUSINESS_MEMBER_STATUS.ACTIVE) {
+        return null;
+      }
+      return {
+        access: cached.access,
+        role: cached.role,
+        permissions: cached.permissions,
+        businessId,
+      };
+    }
+
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
       relations: ['owner'],
@@ -59,27 +75,49 @@ export class BusinessAccessService {
       return null;
     }
 
-    if (business.owner?.id === user.id) {
-      return {
+    const member = await this.getAcceptedMembership(user.id, businessId);
+
+    if (member?.role === 'Owner' || business.owner?.id === user.id) {
+      const context: BusinessAccessContext = {
         access: 'owner',
         role: 'Owner',
         permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
         businessId,
       };
+      await this.membershipCache.set(businessId, user.id, {
+        access: 'owner',
+        role: 'Owner',
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
+        permissions: context.permissions,
+      });
+      return context;
     }
 
-    const member = await this.getAcceptedMembership(user.id, businessId);
     if (!member) {
       return null;
     }
 
     const permissions = await this.resolveMemberPermissions(member);
-    return {
+    const context: BusinessAccessContext = {
       access: 'member',
       role: member.role,
       permissions,
       businessId,
     };
+    await this.membershipCache.set(businessId, user.id, {
+      access: 'member',
+      role: member.role,
+      status: member.status,
+      permissions,
+    });
+    return context;
+  }
+
+  async invalidateMembershipCache(
+    businessId: number,
+    userId: number,
+  ): Promise<void> {
+    await this.membershipCache.invalidate(businessId, userId);
   }
 
   async assertPermission(
@@ -131,6 +169,11 @@ export class BusinessAccessService {
       return;
     }
 
+    const context = await this.getAccessContext(user, businessId);
+    if (context?.access === 'owner' || context?.role === 'Owner') {
+      return;
+    }
+
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
       relations: ['owner'],
@@ -156,16 +199,8 @@ export class BusinessAccessService {
       });
     }
 
-    const owned = await this.businessRepository.findOne({
-      where: { id: businessId, owner: { id: user.id } },
-      relations: ['owner'],
-    });
-    if (owned) {
-      return owned;
-    }
-
-    const member = await this.getAcceptedMembership(user.id, businessId);
-    if (!member) {
+    const context = await this.getAccessContext(user, businessId);
+    if (!context) {
       return null;
     }
 
@@ -195,9 +230,12 @@ export class BusinessAccessService {
               FROM business_members bm
               WHERE bm.business_id = business.id
                 AND bm.user_id = :accessUserId
-                AND bm.user_id IS NOT NULL
+                AND bm.status = :activeMemberStatus
             )`,
-            { accessUserId: user.id },
+            {
+              accessUserId: user.id,
+              activeMemberStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+            },
           );
       }),
     );
@@ -210,22 +248,17 @@ export class BusinessAccessService {
     });
 
     const memberships = await this.businessMemberRepository.find({
-      where: { user: { id: userId } },
-      relations: ['business', 'user'],
+      where: {
+        user: { id: userId },
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
+      },
+      relations: ['business'],
     });
-
-    const acceptedMemberBusinessIds: number[] = [];
-    for (const membership of memberships) {
-      const accepted = await this.isMembershipAccepted(membership);
-      if (accepted) {
-        acceptedMemberBusinessIds.push(membership.business.id);
-      }
-    }
 
     return [
       ...new Set([
         ...owned.map((business) => business.id),
-        ...acceptedMemberBusinessIds,
+        ...memberships.map((membership) => membership.business.id),
       ]),
     ];
   }
@@ -238,25 +271,21 @@ export class BusinessAccessService {
       where: {
         business: { id: businessId },
         user: { id: userId },
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
       },
       relations: ['user', 'business', 'permissionRows'],
     });
 
-    if (!member) {
-      return null;
-    }
-
-    const accepted = await this.isMembershipAccepted(member);
-    return accepted ? member : null;
-  }
-
-  private async isMembershipAccepted(member: BusinessMember): Promise<boolean> {
-    return Boolean(member);
+    return member ?? null;
   }
 
   private async resolveMemberPermissions(
     member: BusinessMember,
   ): Promise<BusinessMemberPermissionKey[]> {
+    if (member.role === 'Owner') {
+      return [...ALL_BUSINESS_MEMBER_PERMISSIONS];
+    }
+
     if (member.permissionRows?.length) {
       return member.permissionRows.map(
         (row) => row.permission as BusinessMemberPermissionKey,

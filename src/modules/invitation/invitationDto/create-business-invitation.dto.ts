@@ -8,8 +8,8 @@ import {
 } from 'class-validator';
 import {
   BUSINESS_MEMBER_PERMISSIONS,
-  BUSINESS_MEMBER_ROLES,
-  type BusinessMemberRole,
+  INVITABLE_BUSINESS_MEMBER_ROLES,
+  type InvitableBusinessMemberRole,
 } from '../../member/member.constants';
 
 export class CreateBusinessInvitationDto {
@@ -30,14 +30,14 @@ export class CreateBusinessInvitationDto {
 
 export function normalizeInvitationRole(
   role: string,
-): BusinessMemberRole | null {
+): InvitableBusinessMemberRole | null {
   const trimmed = role.trim();
   const normalized =
     trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
   if (
-    (BUSINESS_MEMBER_ROLES as readonly string[]).includes(normalized)
+    (INVITABLE_BUSINESS_MEMBER_ROLES as readonly string[]).includes(normalized)
   ) {
-    return normalized as BusinessMemberRole;
+    return normalized as InvitableBusinessMemberRole;
   }
   return null;
 }

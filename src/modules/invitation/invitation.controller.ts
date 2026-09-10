@@ -12,6 +12,10 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
+import {
+  BusinessPermissionGuard,
+  RequireBusinessPermission,
+} from '../business-access';
 import { InvitationService } from './invitation.service';
 import { CreateBusinessInvitationDto } from './invitationDto/create-business-invitation.dto';
 import { UpdateBusinessInvitationDto } from './invitationDto/update-business-invitation.dto';
@@ -28,7 +32,9 @@ type AuthRequestUser = {
 export class InvitationController {
   constructor(private readonly invitationService: InvitationService) {}
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('members')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('businesses/:businessId/invitations')
   async createInvitation(
     @Param('businessId', ParseIntPipe) businessId: number,
@@ -38,7 +44,8 @@ export class InvitationController {
     return this.invitationService.createInvitation(businessId, dto, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('members')
   @Patch('businesses/:businessId/invitations/:invitationId')
   async updateInvitation(
     @Param('businessId', ParseIntPipe) businessId: number,
@@ -54,7 +61,9 @@ export class InvitationController {
     );
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('members')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('businesses/:businessId/invitations/:invitationId/resend')
   async resendInvitation(
     @Param('businessId', ParseIntPipe) businessId: number,
@@ -68,7 +77,9 @@ export class InvitationController {
     );
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('members')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('businesses/:businessId/invitations/:invitationId/link')
   async regenerateInvitationLink(
     @Param('businessId', ParseIntPipe) businessId: number,

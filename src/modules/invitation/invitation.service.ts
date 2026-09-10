@@ -26,6 +26,7 @@ import { BrevoSendFailedError } from '../mail/brevo-mail.errors';
 import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { MemberInviteEmail } from '../../templates/member-invite-email';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import {
   normalizeMemberPermissions,
   sanitizeStoredMemberPermissions,
@@ -438,16 +439,15 @@ export class InvitationService {
 
       const fullUser = await userRepo.findOne({
         where: { id: user.id },
-        relations: ['role'],
       });
       if (!fullUser) {
         throw new NotFoundException('User not found.');
       }
 
-      const platformRole = await roleRepo.findOne({
+      const memberRole = await roleRepo.findOne({
         where: { name: locked.role },
       });
-      if (!platformRole) {
+      if (!memberRole) {
         throw new InternalServerErrorException(
           `Role '${locked.role}' does not exist.`,
         );
@@ -461,13 +461,10 @@ export class InvitationService {
         memberRoleKey,
       );
 
-      await userRepo
-        .createQueryBuilder()
-        .update(User)
-        .set({ role: { id: platformRole.id } })
-        .where('id = :id', { id: fullUser.id })
-        .execute();
-      fullUser.role = platformRole;
+      const inviteWithInviter = await invitationRepo.findOne({
+        where: { id: locked.id },
+        relations: ['invitedBy'],
+      });
 
       let member = await memberRepo.findOne({
         where: {
@@ -482,14 +479,21 @@ export class InvitationService {
             business,
             user: fullUser,
             role: locked.role,
-            memberRole: platformRole,
+            memberRole,
             permissions: permissionKeys,
+            status: BUSINESS_MEMBER_STATUS.ACTIVE,
+            invitedBy: inviteWithInviter?.invitedBy ?? null,
+            joinedAt: new Date(),
           }),
         );
       } else {
         member.role = locked.role;
-        member.memberRole = platformRole;
+        member.memberRole = memberRole;
         member.permissions = permissionKeys;
+        member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
+        member.invitedBy =
+          member.invitedBy ?? inviteWithInviter?.invitedBy ?? null;
+        member.joinedAt = member.joinedAt ?? new Date();
         member = await memberRepo.save(member);
       }
 
@@ -526,6 +530,11 @@ export class InvitationService {
 
       return payload;
     });
+
+    await this.businessAccessService.invalidateMembershipCache(
+      joined.businessId,
+      user.id,
+    );
 
     void this.pusherService.notifyMemberJoined(joined);
 

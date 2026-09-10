@@ -25,6 +25,7 @@ import { User } from '../../db/entities/user.entity';
 import { isAdminOrSuperAdmin, isSuperAdmin } from '../../utils/user-roles';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { normalizeInvitationRole } from '../invitation/invitationDto/create-business-invitation.dto';
+import { BUSINESS_MEMBER_STATUS } from './business-member-status';
 import { FULL_ACCESS_PERMISSION } from './member.constants';
 import { normalizeMemberPermissions } from './member-permissions.util';
 import type { UpdateBusinessMemberDto } from './memberDto/update-business-member.dto';
@@ -111,7 +112,10 @@ export class MemberService {
     await this.assertCanViewMembers(business, user);
 
     const activeMembers = await this.businessMemberRepository.find({
-      where: { business: { id: businessId } },
+      where: {
+        business: { id: businessId },
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
+      },
       relations: ['user', 'user.role', 'permissionRows'],
       order: { createdAt: 'ASC' },
     });
@@ -133,17 +137,25 @@ export class MemberService {
       activeMembers.map((member) => this.normalizeEmail(member.user.email)),
     );
 
-    // --- Build unified roster (owner + active + pending), then paginate in API ---
+    const hasOwnerMembership = activeMembers.some(
+      (member) =>
+        member.user.id === business.owner.id && member.role === 'Owner',
+    );
+
     const allMembers: MemberListItem[] = [
-      {
-        id: null,
-        userId: business.owner.id,
-        name: business.owner.name?.trim() || business.owner.email,
-        email: business.owner.email,
-        role: 'Owner',
-        status: 'owner',
-        permissions: [FULL_ACCESS_PERMISSION],
-      },
+      ...(hasOwnerMembership
+        ? []
+        : [
+            {
+              id: null,
+              userId: business.owner.id,
+              name: business.owner.name?.trim() || business.owner.email,
+              email: business.owner.email,
+              role: 'Owner',
+              status: 'owner' as const,
+              permissions: [FULL_ACCESS_PERMISSION],
+            },
+          ]),
       ...activeMembers.map((member) => {
         const permissionList =
           member.permissionRows?.length > 0
@@ -156,10 +168,14 @@ export class MemberService {
           name: member.user.name?.trim() || member.user.email,
           email: member.user.email,
           role: member.role,
-          status: 'active' as const,
-          permissions: isAdminOrSuperAdmin(member.user)
-            ? [FULL_ACCESS_PERMISSION]
-            : permissionList,
+          status:
+            member.role === 'Owner'
+              ? ('owner' as const)
+              : ('active' as const),
+          permissions:
+            member.role === 'Owner' || isAdminOrSuperAdmin(member.user)
+              ? [FULL_ACCESS_PERMISSION]
+              : permissionList,
         };
       }),
       ...activePending
@@ -221,13 +237,22 @@ export class MemberService {
 
     if (member) {
       await this.assertCanManageMembers(member.business, user);
-      if (member.business.owner?.id === member.user.id) {
+      if (
+        member.business.owner?.id === member.user.id ||
+        member.role === 'Owner'
+      ) {
         throw new ForbiddenException('The business owner cannot be removed.');
       }
+      const businessId = member.business.id;
+      const userId = member.user.id;
       await this.purgeMemberAccess(
-        member.business.id,
+        businessId,
         member.user.email,
-        member.user.id,
+        userId,
+      );
+      await this.businessAccessService.invalidateMembershipCache(
+        businessId,
+        userId,
       );
       return { message: 'Member access removed successfully.' };
     }
@@ -268,7 +293,7 @@ export class MemberService {
 
     await this.assertCanManageMembers(member.business, user);
 
-    if (member.business.owner?.id === member.user.id) {
+    if (member.business.owner?.id === member.user.id || member.role === 'Owner') {
       throw new ForbiddenException('The business owner access cannot be edited.');
     }
 
@@ -279,10 +304,10 @@ export class MemberService {
 
     const permissions = normalizeMemberPermissions(dto.permissions, role);
 
-    const platformRole = await this.dataSource.getRepository(Role).findOne({
+    const memberRole = await this.dataSource.getRepository(Role).findOne({
       where: { name: role },
     });
-    if (!platformRole) {
+    if (!memberRole) {
       throw new InternalServerErrorException(
         `Role '${role}' does not exist. Seed Manager and Staff roles first.`,
       );
@@ -291,11 +316,11 @@ export class MemberService {
     await this.dataSource.transaction(async (manager) => {
       const memberRepo = manager.getRepository(BusinessMember);
       const permissionRepo = manager.getRepository(BusinessMemberPermission);
-      const userRepo = manager.getRepository(User);
 
       member.role = role;
-      member.memberRole = platformRole;
+      member.memberRole = memberRole;
       member.permissions = permissions;
+      member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
       await memberRepo.save(member);
 
       await permissionRepo.delete({ businessMember: { id: member.id } });
@@ -309,14 +334,12 @@ export class MemberService {
           ),
         );
       }
-
-      await userRepo
-        .createQueryBuilder()
-        .update(User)
-        .set({ role: { id: platformRole.id } })
-        .where('id = :id', { id: member.user.id })
-        .execute();
     });
+
+    await this.businessAccessService.invalidateMembershipCache(
+      member.business.id,
+      member.user.id,
+    );
 
     return {
       message: 'Member access updated successfully.',

@@ -1,6 +1,16 @@
-export const BUSINESS_MEMBER_ROLES = ['Manager', 'Staff'] as const;
+export const BUSINESS_MEMBER_ROLES = [
+  'Owner',
+  'Manager',
+  'Staff',
+  'Scanner',
+] as const;
 
 export type BusinessMemberRole = (typeof BUSINESS_MEMBER_ROLES)[number];
+
+export const INVITABLE_BUSINESS_MEMBER_ROLES = ['Manager', 'Staff'] as const;
+
+export type InvitableBusinessMemberRole =
+  (typeof INVITABLE_BUSINESS_MEMBER_ROLES)[number];
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
   'campaigns_create',
@@ -56,6 +66,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
   BusinessMemberRole,
   BusinessMemberPermission[]
 > = {
+  Owner: [...BUSINESS_MEMBER_PERMISSIONS],
   Manager: [
     'campaigns_create',
     'campaigns_edit',
@@ -68,8 +79,10 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
     'activity',
     'chats',
     'scanning',
+    'members',
   ],
   Staff: ['orders', 'activity', 'chats', 'scanning'],
+  Scanner: ['scanning', 'orders'],
 };
 
 export const ALL_BUSINESS_MEMBER_PERMISSIONS: BusinessMemberPermission[] = [

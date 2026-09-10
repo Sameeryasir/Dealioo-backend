@@ -13,36 +13,61 @@ import type {
   BusinessMemberPermission as BusinessMemberPermissionKey,
   BusinessMemberRole,
 } from '../../modules/member/member.constants';
+import type { BusinessMemberStatus } from '../../modules/member/business-member-status';
 import type { Business } from './business.entity';
 import type { BusinessMemberPermission } from './business-member-permission.entity';
 import type { Role } from './role.entity';
 import type { User } from './user.entity';
+
 @Entity('business_members')
 @Unique('UQ_business_members_business_user', ['business', 'user'])
 export class BusinessMember {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
-  @ManyToOne(() => require('./user.entity').User, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'user_id' })
   user!: User;
 
   @Column({ type: 'varchar', length: 32 })
   role!: BusinessMemberRole;
 
-  @ManyToOne(() => require('./role.entity').Role, { nullable: true, onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./role.entity').Role, {
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'role_id' })
   memberRole!: Role | null;
+
+  @Column({ type: 'varchar', length: 32, default: 'active' })
+  status!: BusinessMemberStatus;
+
+  @ManyToOne(() => require('./user.entity').User, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'invited_by' })
+  invitedBy!: User | null;
+
+  @Column({ name: 'joined_at', type: 'timestamptz', nullable: true })
+  joinedAt!: Date | null;
 
   @Column({ type: 'jsonb', default: () => "'[]'" })
   permissions!: BusinessMemberPermissionKey[];
 
   @OneToMany(
-    () => require('./business-member-permission.entity').BusinessMemberPermission,
+    () =>
+      require('./business-member-permission.entity').BusinessMemberPermission,
     (permissionRow) => permissionRow.businessMember,
   )
   permissionRows!: BusinessMemberPermission[];

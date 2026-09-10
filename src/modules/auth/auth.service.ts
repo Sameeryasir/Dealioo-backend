@@ -32,7 +32,9 @@ import { Otp } from '../../db/entities/otp.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { InvitationService } from '../invitation/invitation.service';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { normalizeInvitationRole } from '../invitation/invitationDto/create-business-invitation.dto';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { sanitizeStoredMemberPermissions } from '../member/member-permissions.util';
 import { PusherService } from '../pusher/pusher.service';
 import type { MemberJoinedPusherPayload } from '../pusher/pusher.types';
@@ -51,8 +53,7 @@ import type {
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import {
   ADMIN_ROLE,
-  MANAGER_ROLE,
-  STAFF_ROLE,
+  MEMBER_ROLE,
 } from '../../utils/user-roles';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
@@ -93,13 +94,12 @@ export class AuthService {
     private readonly refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(UserSubscription)
     private readonly userSubscriptionRepository: Repository<UserSubscription>,
-    @InjectRepository(BusinessMember)
-    private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(OnboardingEvent)
     private readonly onboardingEventRepository: Repository<OnboardingEvent>,
     @InjectRepository(AdminNotification)
     private readonly adminNotificationRepository: Repository<AdminNotification>,
     private readonly invitationService: InvitationService,
+    private readonly businessAccessService: BusinessAccessService,
     private readonly pusherService: PusherService,
     private readonly dataSource: DataSource,
     private readonly jwtService: JwtService,
@@ -224,8 +224,9 @@ export class AuthService {
 
       const invitation = await invitationRepo
         .createQueryBuilder('invite')
+        .leftJoinAndSelect('invite.invitedBy', 'invitedBy')
         .where('invite.tokenHash = :tokenHash', { tokenHash })
-        .setLock('pessimistic_write')
+        .setLock('pessimistic_write', undefined, ['invite'])
         .getOne();
 
       if (!invitation) {
@@ -258,12 +259,21 @@ export class AuthService {
         throw new NotFoundException('Business not found for this invitation.');
       }
 
-      const platformRole = await roleRepo.findOne({
+      const memberRole = await roleRepo.findOne({
         where: { name: invitation.role },
       });
-      if (!platformRole) {
+      if (!memberRole) {
         throw new InternalServerErrorException(
           `Role '${invitation.role}' does not exist. Seed Manager and Staff roles first.`,
+        );
+      }
+
+      const accountRole = await roleRepo.findOne({
+        where: { name: MEMBER_ROLE },
+      });
+      if (!accountRole) {
+        throw new InternalServerErrorException(
+          `Role '${MEMBER_ROLE}' does not exist. Run migrations to seed Member.`,
         );
       }
 
@@ -278,8 +288,9 @@ export class AuthService {
       let user = await userRepo
         .createQueryBuilder('user')
         .addSelect('user.passwordHash')
+        .leftJoinAndSelect('user.role', 'role')
         .where('LOWER(user.email) = :email', { email })
-        .setLock('pessimistic_write')
+        .setLock('pessimistic_write', undefined, ['user'])
         .getOne();
 
       if (user?.passwordHash) {
@@ -293,14 +304,15 @@ export class AuthService {
         user.phone = phone;
         user.passwordHash = passwordHash;
         user.emailVerified = true;
+        const currentPlatformRole = user.role?.name?.trim() ?? '';
+        const keepPlatformRole =
+          currentPlatformRole === ADMIN_ROLE ||
+          currentPlatformRole === SUPER_ADMIN_ROLE ||
+          currentPlatformRole === MEMBER_ROLE;
+        if (!keepPlatformRole) {
+          user.role = accountRole;
+        }
         user = await userRepo.save(user);
-        await userRepo
-          .createQueryBuilder()
-          .update(User)
-          .set({ role: { id: platformRole.id } })
-          .where('id = :id', { id: user.id })
-          .execute();
-        user.role = platformRole;
       } else {
         user = await userRepo.save(
           userRepo.create({
@@ -308,19 +320,12 @@ export class AuthService {
             name,
             phone,
             passwordHash,
-            role: platformRole,
+            role: accountRole,
             provider: 'LOCAL',
             emailVerified: true,
             isActive: true,
           }),
         );
-        await userRepo
-          .createQueryBuilder()
-          .update(User)
-          .set({ role: { id: platformRole.id } })
-          .where('id = :id', { id: user.id })
-          .execute();
-        user.role = platformRole;
       }
 
       let member = await memberRepo.findOne({
@@ -336,14 +341,20 @@ export class AuthService {
             business,
             user,
             role: invitation.role,
-            memberRole: platformRole,
+            memberRole,
             permissions: permissionKeys,
+            status: BUSINESS_MEMBER_STATUS.ACTIVE,
+            invitedBy: invitation.invitedBy ?? null,
+            joinedAt: new Date(),
           }),
         );
       } else {
         member.role = invitation.role;
-        member.memberRole = platformRole;
+        member.memberRole = memberRole;
         member.permissions = permissionKeys;
+        member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
+        member.invitedBy = member.invitedBy ?? invitation.invitedBy ?? null;
+        member.joinedAt = member.joinedAt ?? new Date();
         member = await memberRepo.save(member);
       }
 
@@ -380,6 +391,11 @@ export class AuthService {
 
       return { userId: user.id, joined: payload };
     });
+
+    await this.businessAccessService.invalidateMembershipCache(
+      joined.joined.businessId,
+      joined.userId,
+    );
 
     const user = await this.userRepository.findOne({
       where: { id: joined.userId },
@@ -515,62 +531,11 @@ export class AuthService {
   }
 
   private async resolveSignupRole(
-    email: string,
+    _email: string,
     existingUser: User | null,
   ): Promise<Role> {
-    const hashedInvite = await this.dataSource
-      .getRepository(BusinessInvitation)
-      .createQueryBuilder('invite')
-      .where('LOWER(invite.email) = :email', { email })
-      .andWhere('invite.status = :status', {
-        status: BusinessInvitationStatus.PENDING,
-      })
-      .andWhere('invite.expiresAt > :now', { now: new Date() })
-      .orderBy('invite.id', 'DESC')
-      .getOne();
-
-    if (
-      hashedInvite?.role === MANAGER_ROLE ||
-      hashedInvite?.role === STAFF_ROLE
-    ) {
-      const inviteRole = await this.roleRepository.findOne({
-        where: { name: hashedInvite.role },
-      });
-      if (inviteRole) {
-        return inviteRole;
-      }
-    }
-
-    if (existingUser?.id) {
-      const membership = await this.businessMemberRepository
-        .createQueryBuilder('member')
-        .leftJoinAndSelect('member.memberRole', 'memberRole')
-        .where('member.user_id = :userId', { userId: existingUser.id })
-        .orderBy('member.id', 'DESC')
-        .getOne();
-
-      if (membership?.memberRole) {
-        return membership.memberRole;
-      }
-
-      if (
-        membership?.role === MANAGER_ROLE ||
-        membership?.role === STAFF_ROLE
-      ) {
-        const memberRole = await this.roleRepository.findOne({
-          where: { name: membership.role },
-        });
-        if (memberRole) {
-          return memberRole;
-        }
-      }
-
-      if (
-        existingUser.role?.name === MANAGER_ROLE ||
-        existingUser.role?.name === STAFF_ROLE
-      ) {
-        return existingUser.role;
-      }
+    if (existingUser?.role) {
+      return existingUser.role;
     }
 
     const adminRole = await this.roleRepository.findOne({
