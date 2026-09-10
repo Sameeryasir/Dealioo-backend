@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
@@ -13,6 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { requireAdminRole } from '../../utils/require-admin-role';
 import { requireScannerRole } from '../../utils/require-scanner-role';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { RedemptionService } from '../redemption/redemption.service';
@@ -149,12 +151,20 @@ export class FunnelEventController {
     @Query() query: GetBusinessTopCampaignsQueryDto,
     @Req() req: AuthRequest,
   ) {
-    await this.businessAccessService.assertAnyPermission(
+    requireAdminRole(
+      req.user,
+      'Only Admin or Super Admin can view performance for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
       req.user,
       businessId,
-      ['activity'],
-      'You do not have permission to view performance for this business.',
     );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
 
     const from = query.from?.trim() ? new Date(query.from) : null;
     const to = query.to?.trim() ? new Date(query.to) : null;
