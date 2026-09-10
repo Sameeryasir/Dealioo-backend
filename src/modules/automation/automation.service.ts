@@ -257,6 +257,7 @@ export class AutomationService {
 
     if (!wasActive && willBeActive) {
       await this.assertCampaignPublishedForActivation(automation);
+      await this.assertIntegrationsConnectedForActivation(automation);
     }
 
     if (wasActive && !willBeActive) {
@@ -479,6 +480,7 @@ export class AutomationService {
     await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     await this.assertPaymentReminderScheduleForAutomation(automation);
     await this.assertCampaignPublishedForActivation(automation);
+    await this.assertIntegrationsConnectedForActivation(automation);
     const wasActive = automation.isActive;
     automation.isActive = true;
     if (!automation.published) {
@@ -742,6 +744,57 @@ export class AutomationService {
         'Publish the campaign before activating this automation.',
       );
     }
+  }
+
+  private async assertIntegrationsConnectedForActivation(
+    automation: Automation,
+  ): Promise<void> {
+    const business = await this.businessRepository.findOne({
+      where: { id: automation.businessId },
+      select: [
+        'id',
+        'stripeAccountId',
+        'twilioPhoneSid',
+        'twilioPhoneNumber',
+      ],
+    });
+    if (!business) {
+      throw new NotFoundException('Business not found');
+    }
+
+    const stripeConnected = Boolean(business.stripeAccountId?.trim());
+    const twilioConnected = Boolean(
+      business.twilioPhoneSid?.trim() && business.twilioPhoneNumber?.trim(),
+    );
+
+    if (stripeConnected && twilioConnected) {
+      return;
+    }
+
+    const missing: string[] = [];
+    const reasons: string[] = [];
+
+    if (!stripeConnected) {
+      missing.push('Stripe');
+      reasons.push(
+        'Stripe is required so prepaid payments can be matched to the correct campaign offer via a Stripe product ID',
+      );
+    }
+    if (!twilioConnected) {
+      missing.push('a Twilio number');
+      reasons.push(
+        'A Twilio number is required so SMS automation steps can message guests',
+      );
+    }
+
+    const missingLabel =
+      missing.length === 2
+        ? `${missing[0]} and ${missing[1]}`
+        : missing[0];
+
+    throw new BadRequestException(
+      `Connect ${missingLabel} in Settings → Integrations before activating this automation. ${reasons.join('. ')}.`,
+    );
   }
 
   async createNode(dto: CreateAutomationNodeDto): Promise<AutomationNode> {

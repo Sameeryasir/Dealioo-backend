@@ -123,6 +123,12 @@ export class CampaignService {
       throw new NotFoundException('Business not found');
     }
 
+    if (!business.stripeAccountId?.trim()) {
+      throw new BadRequestException(
+        'Connect Stripe for this business before creating a campaign. A Stripe product ID is required so each payment can be matched to the correct campaign offer.',
+      );
+    }
+
     if (!file && !dtoImageUrl?.trim()) {
       throw new BadRequestException('Campaign image is required.');
     }
@@ -176,7 +182,6 @@ export class CampaignService {
       }),
     );
 
-    // Don't block create on Stripe / history — return the campaign immediately.
     void this.stripeCatalogService
       .createCatalogForNewCampaign({
         campaign: savedCampaign,
