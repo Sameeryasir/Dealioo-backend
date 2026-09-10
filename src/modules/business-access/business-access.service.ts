@@ -195,6 +195,7 @@ export class BusinessAccessService {
               FROM business_members bm
               WHERE bm.business_id = business.id
                 AND bm.user_id = :accessUserId
+                AND bm.user_id IS NOT NULL
             )`,
             { accessUserId: user.id },
           );

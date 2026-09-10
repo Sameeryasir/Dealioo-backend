@@ -1,4 +1,5 @@
 import { Business } from '../../db/entities/business.entity';
+import { computeBusinessSetupProgressFromEntity } from './business-setup-progress';
 
 export type PublicBusinessListItem = {
   id: number;
@@ -22,39 +23,72 @@ export type PublicBusinessListItem = {
   updatedAt: Date;
   stripeConnected: boolean;
   metaConnected: boolean;
+  googleAdsConnected: boolean;
   twilioConnected: boolean;
   twilioPhoneNumber: string | null;
+  setupProgressPercent: number;
+  isOwner: boolean;
 };
 
 export function sanitizeBusinessListItem(
   business: Business,
+  options?: { viewerUserId?: number | null; isSuperAdmin?: boolean },
 ): PublicBusinessListItem {
-  // --- Integration flags (IDs alone are not “connected”) ---
-  // Stripe: OAuth callback is the only writer of stripeAccountId. No charges_enabled
-  // column exists yet, so a stored id means Connect finished — never infer this on FE.
   const stripeConnected = Boolean(business.stripeAccountId?.trim());
   const metaStatus = (business.metaConnectionStatus ?? '').trim().toUpperCase();
   const metaReadyStatus =
     metaStatus === 'AD_ACCOUNT_SELECTED' ||
     metaStatus === 'ACTIVE' ||
     metaStatus === 'SYNCING';
-  // Meta Ads: user + token + selected ad account + a ready status. User id alone ≠ connected.
   const metaConnected = Boolean(
     business.metaUserId?.trim() &&
       business.metaAccessToken?.trim() &&
       business.metaAdAccountId?.trim() &&
       metaReadyStatus,
   );
+
+  const googleStatus = (business.googleConnectionStatus ?? '')
+    .trim()
+    .toUpperCase();
+  const googleReadyStatus =
+    googleStatus === 'CUSTOMER_SELECTED' ||
+    googleStatus === 'ACTIVE' ||
+    googleStatus === 'SYNCING' ||
+    googleStatus === 'TOKEN_EXCHANGED';
+  const googleAdsConnected = Boolean(
+    business.googleUserId?.trim() &&
+      business.googleRefreshToken?.trim() &&
+      googleReadyStatus &&
+      googleStatus !== 'INITIATED' &&
+      googleStatus !== 'FAILED',
+  );
+
   const twilioPhoneNumber = business.twilioPhoneNumber?.trim() || null;
-  // Twilio: SID and a live number must both be present.
   const twilioConnected = Boolean(
     business.twilioPhoneSid?.trim() && twilioPhoneNumber,
   );
 
+  const rawName = business.name?.trim() || '';
+  const name = rawName || 'Untitled business';
+
+  const ownerId = business.owner?.id ?? null;
+  const viewerUserId = options?.viewerUserId ?? null;
+  const isOwner = Boolean(
+    options?.isSuperAdmin ||
+      (viewerUserId != null && ownerId != null && ownerId === viewerUserId),
+  );
+
+  const flags = {
+    stripeConnected,
+    metaConnected,
+    googleAdsConnected,
+    twilioConnected,
+  };
+
   return {
     id: business.id,
-    name: business.name,
-    slug: business.slug,
+    name,
+    slug: business.slug?.trim() || `business-${business.id}`,
     description: business.description,
     logoUrl: business.logoUrl,
     businessType: business.businessType ?? null,
@@ -66,14 +100,17 @@ export function sanitizeBusinessListItem(
     state: business.state,
     country: business.country,
     postalCode: business.postalCode,
-    branchCount: business.branchCount,
+    branchCount: business.branchCount ?? 0,
     onboardingCompleted: business.onboardingCompleted,
     onboardingCompletedAt: business.onboardingCompletedAt,
     createdAt: business.createdAt,
     updatedAt: business.updatedAt,
-    stripeConnected,
-    metaConnected,
-    twilioConnected,
+    ...flags,
     twilioPhoneNumber,
+    setupProgressPercent: computeBusinessSetupProgressFromEntity(
+      { ...business, name: rawName },
+      flags,
+    ),
+    isOwner,
   };
 }

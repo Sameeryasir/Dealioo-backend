@@ -360,12 +360,17 @@ export class BusinessService {
     page?: number,
     limit?: number,
     search?: string,
-  ): Promise<{ data: PublicBusinessListItem[]; meta: PaginationMeta }> {
+  ): Promise<{
+    data: PublicBusinessListItem[];
+    meta: PaginationMeta & { ownedTotal: number };
+  }> {
     const pagination = normalizePagination(page, limit);
     const trimmedSearch = search?.trim();
     const listAllBusinesses = isSuperAdmin(user);
 
-    const qb = this.businessRepository.createQueryBuilder('business');
+    const qb = this.businessRepository
+      .createQueryBuilder('business')
+      .leftJoinAndSelect('business.owner', 'owner');
 
     if (!listAllBusinesses) {
       this.businessAccessService.applyAccessibleBusinessFilter(qb, user);
@@ -405,15 +410,31 @@ export class BusinessService {
       );
     }
 
-    qb.orderBy('business.id', 'ASC')
+    qb.addSelect('LOWER(business.name)', 'business_name_sort')
+      .orderBy('business_name_sort', 'ASC')
+      .addOrderBy('business.id', 'ASC')
       .skip(pagination.skip)
       .take(pagination.limit);
 
     const [rows, total] = await qb.getManyAndCount();
 
+    const ownedTotal = listAllBusinesses
+      ? total
+      : await this.businessRepository.count({
+          where: { owner: { id: user.id } },
+        });
+
     return {
-      data: rows.map(sanitizeBusinessListItem),
-      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      data: rows.map((row) =>
+        sanitizeBusinessListItem(row, {
+          viewerUserId: user.id,
+          isSuperAdmin: listAllBusinesses,
+        }),
+      ),
+      meta: {
+        ...buildPaginationMeta(total, pagination.page, pagination.limit),
+        ownedTotal,
+      },
     };
   }
 
