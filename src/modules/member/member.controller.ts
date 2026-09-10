@@ -43,7 +43,11 @@ export class MemberController {
     @Query() query: GetMembersQueryDto,
     @Req() req: AuthRequest,
   ) {
-    return this.memberService.getMembers(query.businessId, req.user);
+    return this.memberService.getMembers(query.businessId, req.user, {
+      page: query.page,
+      limit: query.limit,
+      search: query.search,
+    });
   }
 
   @UseGuards(AuthGuard('jwt'))

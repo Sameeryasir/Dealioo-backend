@@ -8,6 +8,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+  type PaginationMeta,
+} from '../../common/pagination';
 import { Business } from '../../db/entities/business.entity';
 import {
   BusinessInvitation,
@@ -42,8 +47,17 @@ export type MemberListItem = {
   expiresAt?: string;
 };
 
+export type MembersListStats = {
+  activeCount: number;
+  pendingCount: number;
+  fullAccessCount: number;
+  roleCount: number;
+};
+
 export type MembersListResponse = {
   members: MemberListItem[];
+  meta: PaginationMeta;
+  stats: MembersListStats;
 };
 
 @Injectable()
@@ -91,6 +105,7 @@ export class MemberService {
   async getMembers(
     businessId: number,
     user: AuthUser,
+    options?: { page?: number; limit?: number; search?: string },
   ): Promise<MembersListResponse> {
     const business = await this.getBusinessOrThrow(businessId);
     await this.assertCanViewMembers(business, user);
@@ -118,7 +133,8 @@ export class MemberService {
       activeMembers.map((member) => this.normalizeEmail(member.user.email)),
     );
 
-    const members: MemberListItem[] = [
+    // --- Build unified roster (owner + active + pending), then paginate in API ---
+    const allMembers: MemberListItem[] = [
       {
         id: null,
         userId: business.owner.id,
@@ -163,7 +179,35 @@ export class MemberService {
         })),
     ];
 
-    return { members };
+    const stats: MembersListStats = {
+      activeCount: allMembers.filter((m) => m.status !== 'pending').length,
+      pendingCount: allMembers.filter((m) => m.status === 'pending').length,
+      fullAccessCount: allMembers.filter((m) => m.status === 'owner').length,
+      roleCount: new Set(
+        allMembers.map((m) => m.role.trim().toLowerCase()).filter(Boolean),
+      ).size,
+    };
+
+    const search = options?.search?.trim().toLowerCase() ?? '';
+    const filtered = search
+      ? allMembers.filter((member) => {
+          const haystack =
+            `${member.name} ${member.email} ${member.role}`.toLowerCase();
+          return haystack.includes(search);
+        })
+      : allMembers;
+
+    const pagination = normalizePagination(options?.page, options?.limit);
+    const members = filtered.slice(
+      pagination.skip,
+      pagination.skip + pagination.limit,
+    );
+
+    return {
+      members,
+      meta: buildPaginationMeta(filtered.length, pagination.page, pagination.limit),
+      stats,
+    };
   }
 
   async removeMember(
