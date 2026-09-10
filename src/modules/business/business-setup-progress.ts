@@ -11,7 +11,6 @@ type SetupScoreInput = Pick<
   | 'state'
   | 'country'
   | 'postalCode'
-  | 'branchCount'
   | 'twilioConnected'
   | 'stripeConnected'
   | 'metaConnected'
@@ -34,12 +33,15 @@ function hasMeaningfulAddress(input: {
 export function computeBusinessSetupProgressPercent(
   item: SetupScoreInput,
 ): number {
+  const name = item.name?.trim() ?? '';
+  const nameDone =
+    name.length > 0 && name.toLowerCase() !== 'untitled business';
+
   const checks = [
-    Boolean(item.name?.trim()),
+    nameDone,
     Boolean(item.logoUrl?.trim()),
     Boolean(item.email?.trim()) && Boolean(item.phoneNumber?.trim()),
     hasMeaningfulAddress(item),
-    (item.branchCount ?? 0) > 0,
     item.twilioConnected === true,
     item.stripeConnected === true,
     item.metaConnected === true,
@@ -68,7 +70,9 @@ export function computeBusinessSetupProgressFromEntity(
     state: business.state,
     country: business.country,
     postalCode: business.postalCode,
-    branchCount: business.branchCount ?? 0,
-    ...flags,
+    twilioConnected: flags.twilioConnected,
+    stripeConnected: flags.stripeConnected,
+    metaConnected: flags.metaConnected,
+    googleAdsConnected: flags.googleAdsConnected,
   });
 }
