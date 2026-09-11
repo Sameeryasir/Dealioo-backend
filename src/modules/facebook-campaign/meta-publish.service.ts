@@ -275,6 +275,9 @@ export class MetaPublishService {
   ): Promise<void> {
     const { userId, businessId, draftId } = job.data;
     const jobId = String(job.id ?? metaPublishJobId(businessId, draftId));
+    const maxAttempts = job.opts.attempts ?? 3;
+    const attempt = job.attemptsMade + 1;
+    const isFinalAttempt = attempt >= maxAttempts;
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
@@ -305,12 +308,15 @@ export class MetaPublishService {
     await this.notifyDraftProgress(draft);
 
     try {
-      await this.runPublishPipeline(userId, business, draft, jobId);
+      await this.runPublishPipeline(userId, business, draft, jobId, {
+        isFinalAttempt,
+      });
     } catch (err) {
-      
-      if (!isTransientMetaPublishError(err)) {
+      if (!isTransientMetaPublishError(err) || isFinalAttempt) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new UnrecoverableError(message);
+        if (!isTransientMetaPublishError(err)) {
+          throw new UnrecoverableError(message);
+        }
       }
       throw err;
     }
@@ -372,7 +378,9 @@ export class MetaPublishService {
     business: Business,
     draft: MetaCampaignDraft,
     jobId: string | null,
+    options?: { isFinalAttempt?: boolean },
   ): Promise<void> {
+    const isFinalAttempt = options?.isFinalAttempt !== false;
     const businessId = business.id;
     const campaign = draft.campaignData as CampaignStepDataDto;
     const adSet = draft.adSetData as AdSetStepDataDto;
@@ -546,6 +554,7 @@ export class MetaPublishService {
         jobId,
         err,
         { metaCampaignId, metaAdsetId, metaCreativeId, metaAdId },
+        { markDraftFailed: isFinalAttempt },
       );
     }
   }
@@ -966,7 +975,9 @@ export class MetaPublishService {
       metaCreativeId: string | null;
       metaAdId: string | null;
     },
+    options?: { markDraftFailed?: boolean },
   ): Promise<never> {
+    const markDraftFailed = options?.markDraftFailed !== false;
     const step: MetaCreationStep =
       err instanceof MetaApiStepError ? err.step : 'campaign';
     const metaErrorCode =
@@ -977,6 +988,31 @@ export class MetaPublishService {
       err instanceof MetaApiStepError ? err.rawResponse : null;
 
     const userMessage = stepFailureUserMessage(step, metaErrorMessage);
+
+    await this.updatePartialState(draftId, trackingId, {
+      metaCampaignId: partial.metaCampaignId,
+      metaAdsetId: partial.metaAdsetId,
+      metaCreativeId: partial.metaCreativeId,
+      metaAdId: partial.metaAdId,
+    });
+
+    if (!markDraftFailed) {
+      await this.draftRepository.update(draftId, {
+        status: 'publishing',
+        publishStatus: 'PUBLISHING',
+        errorMessage: `Temporary issue — retrying. ${userMessage}`,
+      });
+      const draftRetrying = await this.draftRepository.findOne({
+        where: { id: draftId },
+      });
+      if (draftRetrying) {
+        await this.notifyDraftProgress(draftRetrying);
+      }
+      this.logger.warn(
+        `Draft publish transient failure at step=${step} for business ${businessId}; will retry`,
+      );
+      throw err instanceof Error ? err : new BadRequestException(userMessage);
+    }
 
     await this.facebookCampaignRepository.update(trackingId, {
       metaCampaignId: partial.metaCampaignId,

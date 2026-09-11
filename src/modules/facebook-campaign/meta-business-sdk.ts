@@ -265,6 +265,12 @@ export async function sdkUploadAdImageHash(
       (result) => extractAdImageHash(result),
     );
   } catch (firstErr) {
+    if (!isAllowedMediaFetchHost(trimmed)) {
+      throw firstErr instanceof MetaApiStepError
+        ? firstErr
+        : mapSdkError(firstErr, 'media');
+    }
+
     const res = await fetch(trimmed, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) {
       throw firstErr instanceof MetaApiStepError
@@ -280,6 +286,36 @@ export async function sdkUploadAdImageHash(
       () => account.createAdImage([], payload),
       (result) => extractAdImageHash(result),
     );
+  }
+}
+
+function isAllowedMediaFetchHost(imageUrl: string): boolean {
+  try {
+    const host = new URL(imageUrl).hostname.toLowerCase();
+    const allowed = new Set<string>();
+
+    const addHost = (value?: string) => {
+      const raw = value?.trim();
+      if (!raw) return;
+      try {
+        allowed.add(new URL(raw).hostname.toLowerCase());
+      } catch {
+        allowed.add(raw.toLowerCase());
+      }
+    };
+
+    addHost(process.env.DO_SPACES_CDN_URL);
+    addHost(process.env.DO_SPACES_ENDPOINT);
+    addHost(process.env.PUBLIC_BASE_URL);
+    addHost(process.env.FRONTEND_URL?.split(',')[0]);
+
+    if (allowed.has(host)) return true;
+    for (const entry of allowed) {
+      if (host.endsWith(`.${entry}`)) return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 

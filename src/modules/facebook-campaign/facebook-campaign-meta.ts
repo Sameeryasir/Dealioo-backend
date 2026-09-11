@@ -578,12 +578,15 @@ async function graphPostMeta<T>(
   logMetaApiRequest(step, 'POST', normalized, body);
 
   const url = new URL(`${FACEBOOK_GRAPH}${normalized}`);
-  url.searchParams.set('access_token', accessToken);
+  const form = toMetaFormBody(body);
 
   const res = await fetch(url.toString(), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: toMetaFormBody(body).toString(),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: form.toString(),
     signal: AbortSignal.timeout(60_000),
   });
 
@@ -657,13 +660,13 @@ export async function graphGetWithToken<T>(
 ): Promise<T> {
   const normalized = path.startsWith('/') ? path : `/${path}`;
   const url = new URL(`${FACEBOOK_GRAPH}${normalized}`);
-  url.searchParams.set('access_token', accessToken);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
     }
   }
   const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(25_000),
   });
   const raw = await res.text();
@@ -690,6 +693,85 @@ export type MetaAdGeoLocationHit = {
   region?: string;
   region_id?: number;
 };
+
+export type MetaAudienceSearchType =
+  | 'adinterest'
+  | 'adlocale'
+  | 'adTargetingCategory';
+
+const COMMON_LOCALE_KEYS: Record<string, string> = {
+  en: '6',
+  'en_us': '6',
+  'en_gb': '24',
+  es: '23',
+  'es_es': '23',
+  fr: '16',
+  de: '5',
+  it: '10',
+  pt: '9',
+  'pt_br': '16',
+  ar: '28',
+  hi: '46',
+  ur: '90',
+  zh: '20',
+  ja: '11',
+  ko: '12',
+};
+
+export async function resolveMetaAudienceTargetIds(
+  accessToken: string | undefined,
+  values: string[] | undefined,
+  type: MetaAudienceSearchType,
+  targetingClass?: string,
+): Promise<string[]> {
+  if (!values?.length) return [];
+
+  const resolved: string[] = [];
+  for (const raw of values) {
+    const term = String(raw ?? '').trim();
+    if (!term) continue;
+
+    if (/^\d+$/.test(term)) {
+      if (!resolved.includes(term)) resolved.push(term);
+      continue;
+    }
+
+    if (type === 'adlocale') {
+      const mapped = COMMON_LOCALE_KEYS[term.toLowerCase()];
+      if (mapped) {
+        if (!resolved.includes(mapped)) resolved.push(mapped);
+        continue;
+      }
+    }
+
+    if (!accessToken?.trim()) {
+      continue;
+    }
+
+    try {
+      const params: Record<string, string> = {
+        type,
+        q: term,
+        limit: '1',
+      };
+      if (type === 'adTargetingCategory' && targetingClass) {
+        params.class = targetingClass;
+      }
+      const response = await graphGetWithToken<{
+        data?: Array<{ id?: string | number; key?: string | number }>;
+      }>('/search', accessToken, params);
+      const hit = response.data?.[0];
+      const id = String(hit?.id ?? hit?.key ?? '').trim();
+      if (id && !resolved.includes(id)) {
+        resolved.push(id);
+      }
+    } catch {
+      // Skip unresolved free-text terms so publish still succeeds.
+    }
+  }
+
+  return resolved;
+}
 
 /** Resolve a place name to Meta's named geo targeting (city/region/country). */
 export async function searchMetaAdGeoLocations(

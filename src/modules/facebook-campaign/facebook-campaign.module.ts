@@ -30,7 +30,15 @@ import { MetaPublishService } from './meta-publish.service';
       MetaPublishAttempt,
       Business,
     ]),
-    BullModule.registerQueue({ name: META_PUBLISH_QUEUE }),
+    BullModule.registerQueue({
+      name: META_PUBLISH_QUEUE,
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { count: 100 },
+        removeOnFail: { count: 200 },
+      },
+    }),
     FacebookModule,
     SpacesModule,
   ],

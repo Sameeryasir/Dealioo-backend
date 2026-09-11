@@ -13,6 +13,7 @@ import {
   buildCreativePayload,
   genderToMetaGenders,
   pickBestMetaAdGeoMatch,
+  resolveMetaAudienceTargetIds,
   searchMetaAdGeoLocations,
   toMetaUnixTime,
 } from './facebook-campaign-meta';
@@ -535,6 +536,8 @@ export async function buildAdSetPayloadFromDraft(
     targeting.genders = genders;
   }
 
+  await applyDetailedAudienceTargeting(targeting, adSet.audience, accessToken);
+
   // Meta only allows WEBSITE / APP / MESSENGER for many outcome objectives.
   // Older drafts stored FACEBOOK_PAGE for Awareness — coerce on publish.
   const destinationType = resolveMetaAdSetDestinationType(adSet.destinationType);
@@ -581,6 +584,74 @@ export async function buildAdSetPayloadFromDraft(
   }
 
   return body;
+}
+
+async function applyDetailedAudienceTargeting(
+  targeting: Record<string, unknown>,
+  audience: AdSetStepDataDto['audience'],
+  accessToken?: string,
+): Promise<void> {
+  const locales = await resolveMetaAudienceTargetIds(
+    accessToken,
+    audience.languages,
+    'adlocale',
+  );
+  if (locales.length) {
+    targeting.locales = locales.map((id) => Number(id) || id);
+  }
+
+  const interests = await resolveMetaAudienceTargetIds(
+    accessToken,
+    audience.interests,
+    'adinterest',
+  );
+  const behaviors = await resolveMetaAudienceTargetIds(
+    accessToken,
+    audience.behaviors,
+    'adTargetingCategory',
+    'behaviors',
+  );
+  const demographics = await resolveMetaAudienceTargetIds(
+    accessToken,
+    audience.demographics,
+    'adTargetingCategory',
+    'life_events',
+  );
+
+  const flexibleSpec: Record<string, unknown> = {};
+  if (interests.length) {
+    flexibleSpec.interests = interests.map((id) => ({ id }));
+  }
+  if (behaviors.length) {
+    flexibleSpec.behaviors = behaviors.map((id) => ({ id }));
+  }
+  if (demographics.length) {
+    flexibleSpec.life_events = demographics.map((id) => ({ id }));
+  }
+  if (Object.keys(flexibleSpec).length) {
+    targeting.flexible_spec = [flexibleSpec];
+  }
+
+  const customAudiences = normalizeIdList(audience.customAudiences);
+  if (customAudiences.length) {
+    targeting.custom_audiences = customAudiences.map((id) => ({ id }));
+  }
+
+  const excluded = normalizeIdList(audience.excludedCustomAudiences);
+  if (excluded.length) {
+    targeting.excluded_custom_audiences = excluded.map((id) => ({ id }));
+  }
+}
+
+function normalizeIdList(values?: string[]): string[] {
+  if (!values?.length) return [];
+  const out: string[] = [];
+  for (const raw of values) {
+    const id = String(raw ?? '').trim();
+    if (!id) continue;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 export function buildCreativePayloadFromDraft(

@@ -9,7 +9,10 @@ import {
 import { isTransientMetaPublishError } from './meta-publish-errors.util';
 import { MetaPublishService } from './meta-publish.service';
 
-@Processor(META_PUBLISH_QUEUE, { concurrency: 3 })
+@Processor(META_PUBLISH_QUEUE, {
+  concurrency: 3,
+  limiter: { max: 8, duration: 60_000 },
+})
 export class MetaPublishQueueProcessor extends WorkerHost {
   private readonly logger = new Logger(MetaPublishQueueProcessor.name);
 

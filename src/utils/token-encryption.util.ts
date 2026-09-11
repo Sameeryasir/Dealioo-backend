@@ -14,7 +14,9 @@ function getEncryptionKey(): string | undefined {
 export function encryptSecret(plaintext: string): string {
   const key = getEncryptionKey();
   if (!key) {
-    return plaintext;
+    throw new Error(
+      'TOKEN_ENCRYPTION_KEY must be set before storing OAuth or CAPI tokens.',
+    );
   }
 
   const iv = randomBytes(IV_BYTES);
