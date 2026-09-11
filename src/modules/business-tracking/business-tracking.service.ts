@@ -1,12 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Business } from '../../db/entities/business.entity';
 import { BusinessTracking } from '../../db/entities/business-tracking.entity';
 import { User } from '../../db/entities/user.entity';
+import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
 import { BusinessAccessService } from '../business-access/business-access.service';
-import {
-  metaCampaignPermissionKeysFor,
-} from '../member/member.constants';
+import { metaCampaignPermissionKeysFor } from '../member/member.constants';
 import { UpsertBusinessTrackingDto } from './dto/upsert-business-tracking.dto';
 
 export type BusinessTrackingResponse = {
@@ -21,6 +21,8 @@ export type BusinessTrackingResponse = {
   createdAt: Date;
   updatedAt: Date;
   hasAccessToken: boolean;
+  hasCapiReady: boolean;
+  capiCredentialSource: 'tracking_token' | 'meta_oauth' | null;
 };
 
 export type ActivePublicTrackingIds = {
@@ -31,11 +33,21 @@ export type ActivePublicTrackingIds = {
   googleAdsLeadConversionLabel: string | null;
 };
 
+export type BusinessCapiCredentials = {
+  pixelId: string;
+  accessToken: string;
+  source: 'tracking_token' | 'meta_oauth';
+};
+
 @Injectable()
 export class BusinessTrackingService {
+  private readonly logger = new Logger(BusinessTrackingService.name);
+
   constructor(
     @InjectRepository(BusinessTracking)
     private readonly trackingRepository: Repository<BusinessTracking>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly businessAccessService: BusinessAccessService,
   ) {}
 
@@ -59,7 +71,26 @@ export class BusinessTrackingService {
     return business;
   }
 
-  private toResponse(row: BusinessTracking): BusinessTrackingResponse {
+  private resolveMetaOauthToken(business: Business | null): string | null {
+    const stored = business?.metaAccessToken?.trim();
+    if (!stored) return null;
+    try {
+      const decrypted = decryptSecret(stored)?.trim();
+      return decrypted || null;
+    } catch (err) {
+      this.logger.warn(
+        `Could not decrypt Meta OAuth token for CAPI businessId=${business?.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private async toResponse(
+    row: BusinessTracking,
+  ): Promise<BusinessTrackingResponse> {
+    const credentials = await this.getCapiCredentials(row.businessId);
     return {
       id: row.id,
       businessId: row.businessId,
@@ -72,12 +103,59 @@ export class BusinessTrackingService {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       hasAccessToken: Boolean(row.accessToken?.trim()),
+      hasCapiReady: Boolean(credentials),
+      capiCredentialSource: credentials?.source ?? null,
     };
   }
 
   private normalizeOptionalId(value?: string): string | null {
     const trimmed = value?.trim() ?? '';
     return trimmed ? trimmed : null;
+  }
+
+  async getCapiCredentials(
+    businessId: number,
+  ): Promise<BusinessCapiCredentials | null> {
+    if (!Number.isFinite(businessId) || businessId < 1) return null;
+
+    const tracking = await this.trackingRepository.findOne({
+      where: { businessId, isActive: true },
+    });
+    const pixelId = tracking?.pixelId?.trim() || null;
+    if (!pixelId) return null;
+
+    const dedicatedRaw = tracking?.accessToken?.trim();
+    if (dedicatedRaw) {
+      try {
+        const dedicated = decryptSecret(dedicatedRaw)?.trim();
+        if (dedicated) {
+          return {
+            pixelId,
+            accessToken: dedicated,
+            source: 'tracking_token',
+          };
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Could not decrypt tracking CAPI token businessId=${businessId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+      select: ['id', 'metaAccessToken'],
+    });
+    const oauthToken = this.resolveMetaOauthToken(business);
+    if (!oauthToken) return null;
+
+    return {
+      pixelId,
+      accessToken: oauthToken,
+      source: 'meta_oauth',
+    };
   }
 
   async getForBusiness(
@@ -170,7 +248,8 @@ export class BusinessTrackingService {
       row.isActive = dto.isActive;
     }
     if (dto.accessToken !== undefined) {
-      row.accessToken = this.normalizeOptionalId(dto.accessToken);
+      const normalized = this.normalizeOptionalId(dto.accessToken);
+      row.accessToken = normalized ? encryptSecret(normalized) : null;
     }
 
     const saved = await this.trackingRepository.save(row);

@@ -38,7 +38,7 @@ export class MetaFunnelEvent {
   @Column({
     type: 'varchar',
     length: 32,
-    default: MetaFunnelEventStatus.STORED,
+    default: MetaFunnelEventStatus.PENDING,
   })
   status!: MetaFunnelEventStatus;
 
@@ -76,6 +76,21 @@ export class MetaFunnelEvent {
 
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent!: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  payload!: object | null;
+
+  @Column({ name: 'meta_response', type: 'jsonb', nullable: true })
+  metaResponse!: object | null;
+
+  @Column({ name: 'retry_count', type: 'int', default: 0 })
+  retryCount!: number;
+
+  @Column({ name: 'last_error', type: 'text', nullable: true })
+  lastError!: string | null;
+
+  @Column({ name: 'sent_at', type: 'timestamptz', nullable: true })
+  sentAt!: Date | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

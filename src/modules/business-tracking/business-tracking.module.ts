@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Business } from '../../db/entities/business.entity';
 import { BusinessTracking } from '../../db/entities/business-tracking.entity';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessAccessModule } from '../business-access/business-access.module';
@@ -8,7 +9,7 @@ import { BusinessTrackingService } from './business-tracking.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BusinessTracking]),
+    TypeOrmModule.forFeature([BusinessTracking, Business]),
     AuthModule,
     BusinessAccessModule,
   ],
