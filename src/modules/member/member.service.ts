@@ -7,6 +7,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { render } from '@react-email/render';
+import * as React from 'react';
 import { DataSource, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
@@ -19,15 +21,23 @@ import {
   BusinessInvitationStatus,
 } from '../../db/entities/business-invitation.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
-import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
+import { MemberAccessRemovedEmail } from '../../templates/member-access-removed-email';
 import { isAdminOrSuperAdmin, isSuperAdmin } from '../../utils/user-roles';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { normalizeInvitationRole } from '../invitation/invitationDto/create-business-invitation.dto';
+import { MailDeliveryService } from '../mail/mail-delivery.service';
+import { PusherService } from '../pusher/pusher.service';
 import { BUSINESS_MEMBER_STATUS } from './business-member-status';
-import { FULL_ACCESS_PERMISSION } from './member.constants';
-import { normalizeMemberPermissions } from './member-permissions.util';
+import {
+  FULL_ACCESS_PERMISSION,
+  INVITABLE_ROLE_ERROR,
+} from './member.constants';
+import {
+  normalizeMemberPermissions,
+  syncMemberPermissionRows,
+} from './member-permissions.util';
 import type { UpdateBusinessMemberDto } from './memberDto/update-business-member.dto';
 
 type AuthUser = {
@@ -61,6 +71,15 @@ export type MembersListResponse = {
   stats: MembersListStats;
 };
 
+type AccessRemovalNotifyParams = {
+  toEmail: string;
+  businessId: number;
+  businessName: string;
+  removedByName: string;
+  kind: 'member' | 'invite';
+  userId: number | null;
+};
+
 @Injectable()
 export class MemberService {
   private readonly logger = new Logger(MemberService.name);
@@ -72,8 +91,12 @@ export class MemberService {
     private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(BusinessInvitation)
     private readonly businessInvitationRepository: Repository<BusinessInvitation>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly mailDelivery: MailDeliveryService,
+    private readonly pusherService: PusherService,
   ) {}
 
   async getMyAccess(
@@ -111,27 +134,49 @@ export class MemberService {
     const business = await this.getBusinessOrThrow(businessId);
     await this.assertCanViewMembers(business, user);
 
-    const activeMembers = await this.businessMemberRepository.find({
-      where: {
-        business: { id: businessId },
+    const search = options?.search?.trim().toLowerCase() ?? '';
+    const now = new Date();
+
+    const activeMembersQb = this.businessMemberRepository
+      .createQueryBuilder('member')
+      .leftJoinAndSelect('member.user', 'user')
+      .leftJoinAndSelect('user.role', 'userRole')
+      .leftJoinAndSelect('member.permissionRows', 'permissionRows')
+      .where('member.business_id = :businessId', { businessId })
+      .andWhere('member.status = :status', {
         status: BUSINESS_MEMBER_STATUS.ACTIVE,
-      },
-      relations: ['user', 'user.role', 'permissionRows'],
-      order: { createdAt: 'ASC' },
-    });
+      })
+      .orderBy('member.created_at', 'ASC');
 
-    const pendingInvites = await this.businessInvitationRepository.find({
-      where: {
-        business: { id: businessId },
+    if (search) {
+      activeMembersQb.andWhere(
+        `(LOWER(COALESCE(user.name, '')) LIKE :search
+          OR LOWER(user.email) LIKE :search
+          OR LOWER(member.role) LIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+
+    const pendingInvitesQb = this.businessInvitationRepository
+      .createQueryBuilder('invite')
+      .where('invite.business_id = :businessId', { businessId })
+      .andWhere('invite.status = :status', {
         status: BusinessInvitationStatus.PENDING,
-      },
-      order: { createdAt: 'DESC' },
-    });
+      })
+      .andWhere('invite.expires_at > :now', { now })
+      .orderBy('invite.created_at', 'DESC');
 
-    const now = Date.now();
-    const activePending = pendingInvites.filter(
-      (invite) => invite.expiresAt.getTime() > now,
-    );
+    if (search) {
+      pendingInvitesQb.andWhere(
+        `(LOWER(invite.email) LIKE :search OR LOWER(invite.role) LIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+
+    const [activeMembers, pendingInvites] = await Promise.all([
+      activeMembersQb.getMany(),
+      pendingInvitesQb.getMany(),
+    ]);
 
     const memberEmails = new Set(
       activeMembers.map((member) => this.normalizeEmail(member.user.email)),
@@ -142,8 +187,14 @@ export class MemberService {
         member.user.id === business.owner.id && member.role === 'Owner',
     );
 
+    const ownerMatchesSearch =
+      !search ||
+      `${business.owner.name ?? ''} ${business.owner.email} owner`
+        .toLowerCase()
+        .includes(search);
+
     const allMembers: MemberListItem[] = [
-      ...(hasOwnerMembership
+      ...(hasOwnerMembership || !ownerMatchesSearch
         ? []
         : [
             {
@@ -178,7 +229,7 @@ export class MemberService {
               : permissionList,
         };
       }),
-      ...activePending
+      ...pendingInvites
         .filter(
           (invite) => !memberEmails.has(this.normalizeEmail(invite.email)),
         )
@@ -204,24 +255,15 @@ export class MemberService {
       ).size,
     };
 
-    const search = options?.search?.trim().toLowerCase() ?? '';
-    const filtered = search
-      ? allMembers.filter((member) => {
-          const haystack =
-            `${member.name} ${member.email} ${member.role}`.toLowerCase();
-          return haystack.includes(search);
-        })
-      : allMembers;
-
     const pagination = normalizePagination(options?.page, options?.limit);
-    const members = filtered.slice(
+    const members = allMembers.slice(
       pagination.skip,
       pagination.skip + pagination.limit,
     );
 
     return {
       members,
-      meta: buildPaginationMeta(filtered.length, pagination.page, pagination.limit),
+      meta: buildPaginationMeta(allMembers.length, pagination.page, pagination.limit),
       stats,
     };
   }
@@ -230,6 +272,8 @@ export class MemberService {
     memberId: number,
     user: AuthUser,
   ): Promise<{ message: string }> {
+    const removedByName = user.email?.trim() || 'A team manager';
+
     const member = await this.businessMemberRepository.findOne({
       where: { id: memberId },
       relations: ['business', 'business.owner', 'user'],
@@ -244,7 +288,10 @@ export class MemberService {
         throw new ForbiddenException('The business owner cannot be removed.');
       }
       const businessId = member.business.id;
+      const businessName = member.business.name?.trim() || 'the business';
       const userId = member.user.id;
+      const toEmail = member.user.email;
+
       await this.purgeMemberAccess(
         businessId,
         member.user.email,
@@ -254,6 +301,16 @@ export class MemberService {
         businessId,
         userId,
       );
+
+      void this.notifyAccessRemoved({
+        toEmail,
+        businessId,
+        businessName,
+        removedByName,
+        kind: 'member',
+        userId,
+      });
+
       return { message: 'Member access removed successfully.' };
     }
 
@@ -267,10 +324,33 @@ export class MemberService {
     }
 
     await this.assertCanManageMembers(businessInvitation.business, user);
-    if (businessInvitation.status === BusinessInvitationStatus.PENDING) {
+    const wasPending =
+      businessInvitation.status === BusinessInvitationStatus.PENDING;
+    if (wasPending) {
       businessInvitation.status = BusinessInvitationStatus.CANCELLED;
       await this.businessInvitationRepository.save(businessInvitation);
     }
+
+    if (wasPending) {
+      const inviteEmail = businessInvitation.email;
+      const existingUser = await this.userRepository
+        .createQueryBuilder('user')
+        .where('LOWER(user.email) = :email', {
+          email: this.normalizeEmail(inviteEmail),
+        })
+        .getOne();
+
+      void this.notifyAccessRemoved({
+        toEmail: inviteEmail,
+        businessId: businessInvitation.business.id,
+        businessName:
+          businessInvitation.business.name?.trim() || 'the business',
+        removedByName,
+        kind: 'invite',
+        userId: existingUser?.id ?? null,
+      });
+    }
+
     return { message: 'Member access removed successfully.' };
   }
 
@@ -299,7 +379,7 @@ export class MemberService {
 
     const role = normalizeInvitationRole(dto.role);
     if (!role) {
-      throw new BadRequestException('Role must be Manager or Staff.');
+      throw new BadRequestException(INVITABLE_ROLE_ERROR);
     }
 
     const permissions = normalizeMemberPermissions(dto.permissions, role);
@@ -309,13 +389,12 @@ export class MemberService {
     });
     if (!memberRole) {
       throw new InternalServerErrorException(
-        `Role '${role}' does not exist. Seed Manager and Staff roles first.`,
+        `Role '${role}' does not exist. Seed Manager, Staff, and Scanner roles first.`,
       );
     }
 
     await this.dataSource.transaction(async (manager) => {
       const memberRepo = manager.getRepository(BusinessMember);
-      const permissionRepo = manager.getRepository(BusinessMemberPermission);
 
       member.role = role;
       member.memberRole = memberRole;
@@ -323,17 +402,7 @@ export class MemberService {
       member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
       await memberRepo.save(member);
 
-      await permissionRepo.delete({ businessMember: { id: member.id } });
-      if (permissions.length > 0) {
-        await permissionRepo.save(
-          permissions.map((permission) =>
-            permissionRepo.create({
-              businessMember: member,
-              permission,
-            }),
-          ),
-        );
-      }
+      await syncMemberPermissionRows(manager, member.id, permissions);
     });
 
     await this.businessAccessService.invalidateMembershipCache(
@@ -469,5 +538,64 @@ export class MemberService {
 
   private normalizeEmail(email: string): string {
     return email.trim().toLowerCase();
+  }
+
+  private async notifyAccessRemoved(
+    params: AccessRemovalNotifyParams,
+  ): Promise<void> {
+    await Promise.allSettled([
+      this.sendAccessRemovedEmail(params),
+      params.userId != null
+        ? this.pusherService.notifyMemberAccessRemoved({
+            businessId: params.businessId,
+            businessName: params.businessName,
+            userId: params.userId,
+            kind: params.kind,
+            removedAt: new Date().toISOString(),
+          })
+        : Promise.resolve(),
+    ]);
+  }
+
+  private async sendAccessRemovedEmail(
+    params: AccessRemovalNotifyParams,
+  ): Promise<void> {
+    const html = await render(
+      React.createElement(MemberAccessRemovedEmail, {
+        businessName: params.businessName,
+        removedByName: params.removedByName,
+        kind: params.kind,
+      }),
+    );
+
+    const text =
+      params.kind === 'invite'
+        ? [
+            `${params.removedByName} cancelled your invitation to join ${params.businessName} on Dealioo.`,
+            'You will no longer be able to join this business with that invite.',
+          ].join('\n')
+        : [
+            `${params.removedByName} removed your access to ${params.businessName} on Dealioo.`,
+            'You will no longer see this business in your dashboard.',
+          ].join('\n');
+
+    try {
+      await this.mailDelivery.sendHtmlEmail({
+        to: params.toEmail,
+        subject:
+          process.env.MAIL_MEMBER_ACCESS_REMOVED_SUBJECT?.trim() ||
+          (params.kind === 'invite'
+            ? `Your invitation to ${params.businessName} was cancelled`
+            : `Your access to ${params.businessName} was removed`),
+        html,
+        text,
+        tags: ['member', 'access-removed'],
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send access-removed email to ${params.toEmail}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 }

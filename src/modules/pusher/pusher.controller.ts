@@ -14,7 +14,9 @@ import { isSuperAdmin } from '../../utils/user-roles';
 import {
   isAdminNotificationsChannel,
   isAuthorizedBusinessChatChannel,
+  isAuthorizedUserChannel,
   parseBusinessIdFromChatChannel,
+  parseUserIdFromUserChannel,
 } from './pusher.constants';
 import { PusherService } from './pusher.service';
 
@@ -51,6 +53,19 @@ export class PusherController {
       if (!isSuperAdmin(req.user)) {
         throw new ForbiddenException(
           'Only Super Admin can subscribe to admin notifications.',
+        );
+      }
+      return this.pusherService.authorizeChannel(trimmedSocketId, trimmedChannel);
+    }
+
+    const channelUserId = parseUserIdFromUserChannel(trimmedChannel);
+    if (channelUserId != null) {
+      if (
+        channelUserId !== req.user.id ||
+        !isAuthorizedUserChannel(trimmedChannel, req.user.id)
+      ) {
+        throw new ForbiddenException(
+          'You can only subscribe to your own user channel.',
         );
       }
       return this.pusherService.authorizeChannel(trimmedSocketId, trimmedChannel);

@@ -8,6 +8,7 @@ export const PUSHER_EVENT = {
   AI_EDIT_UI_RESULT: 'ai-edit-ui-result',
   ADMIN_NOTIFICATION_CREATED: 'admin-notification-created',
   MEMBER_JOINED: 'member-joined',
+  MEMBER_ACCESS_REMOVED: 'member-access-removed',
 } as const;
 
 export function pusherExecutionChannel(executionId: number): string {
@@ -46,6 +47,28 @@ export function pusherAdminNotificationsChannel(): string {
 
 export function isAdminNotificationsChannel(channelName: string): boolean {
   return channelName === pusherAdminNotificationsChannel();
+}
+
+export function pusherUserChannel(userId: number): string {
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}user-${userId}`;
+}
+
+export function parseUserIdFromUserChannel(
+  channelName: string,
+): number | null {
+  const prefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}user-`;
+  if (!channelName.startsWith(prefix)) {
+    return null;
+  }
+  const userId = Number(channelName.slice(prefix.length));
+  return Number.isFinite(userId) && userId > 0 ? userId : null;
+}
+
+export function isAuthorizedUserChannel(
+  channelName: string,
+  userId: number,
+): boolean {
+  return channelName === pusherUserChannel(userId);
 }
 
 export function pusherConversationMessagesChannel(

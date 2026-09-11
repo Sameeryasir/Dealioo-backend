@@ -20,11 +20,13 @@ import {
   pusherBusinessMembersChannel,
   pusherConversationMessagesChannel,
   pusherExecutionChannel,
+  pusherUserChannel,
 } from './pusher.constants';
 import type {
   CampaignActivityPusherPayload,
   ChatMessagePusherPayload,
   ExecutionTerminalPusherPayload,
+  MemberAccessRemovedPusherPayload,
   MemberJoinedPusherPayload,
 } from './pusher.types';
 
@@ -251,6 +253,40 @@ export class PusherService implements OnModuleInit {
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
         `Pusher member-joined notify failed for business ${payload.businessId}: ${message}`,
+      );
+    }
+  }
+
+  async notifyMemberAccessRemoved(
+    payload: MemberAccessRemovedPusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.userId) || payload.userId < 1) {
+      this.logger.warn(
+        `Pusher member-access-removed skipped — invalid user id (${payload.userId})`,
+      );
+      return;
+    }
+
+    const channel = pusherUserChannel(payload.userId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.MEMBER_ACCESS_REMOVED,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.MEMBER_ACCESS_REMOVED} | business: ${payload.businessId} | kind: ${payload.kind}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher member-access-removed notify failed for user ${payload.userId}: ${message}`,
       );
     }
   }

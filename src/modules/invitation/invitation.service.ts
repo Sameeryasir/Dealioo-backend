@@ -18,7 +18,6 @@ import {
 } from '../../db/entities/business-invitation.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
-import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
@@ -27,9 +26,11 @@ import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { MemberInviteEmail } from '../../templates/member-invite-email';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
+import { INVITABLE_ROLE_ERROR } from '../member/member.constants';
 import {
   normalizeMemberPermissions,
   sanitizeStoredMemberPermissions,
+  syncMemberPermissionRows,
 } from '../member/member-permissions.util';
 import { PusherService } from '../pusher/pusher.service';
 import type { MemberJoinedPusherPayload } from '../pusher/pusher.types';
@@ -94,7 +95,7 @@ export class InvitationService {
 
     const role = normalizeInvitationRole(dto.role);
     if (!role) {
-      throw new BadRequestException('Role must be Manager or Staff.');
+      throw new BadRequestException(INVITABLE_ROLE_ERROR);
     }
 
     const email = this.normalizeEmail(dto.email);
@@ -217,7 +218,7 @@ export class InvitationService {
       ? normalizeInvitationRole(dto.role)
       : normalizeInvitationRole(invitation.role);
     if (!nextRole) {
-      throw new BadRequestException('Role must be Manager or Staff.');
+      throw new BadRequestException(INVITABLE_ROLE_ERROR);
     }
 
     const nextPermissions = normalizeMemberPermissions(
@@ -400,7 +401,6 @@ export class InvitationService {
     const joined = await this.dataSource.transaction(async (manager) => {
       const invitationRepo = manager.getRepository(BusinessInvitation);
       const memberRepo = manager.getRepository(BusinessMember);
-      const permissionRepo = manager.getRepository(BusinessMemberPermission);
       const roleRepo = manager.getRepository(Role);
       const userRepo = manager.getRepository(User);
 
@@ -455,7 +455,7 @@ export class InvitationService {
 
       const memberRoleKey =
         normalizeInvitationRole(locked.role) ??
-        (locked.role as 'Manager' | 'Staff');
+        (locked.role as 'Manager' | 'Staff' | 'Scanner');
       const permissionKeys = sanitizeStoredMemberPermissions(
         locked.permissions,
         memberRoleKey,
@@ -497,17 +497,7 @@ export class InvitationService {
         member = await memberRepo.save(member);
       }
 
-      await permissionRepo.delete({ businessMember: { id: member.id } });
-      if (permissionKeys.length > 0) {
-        await permissionRepo.save(
-          permissionKeys.map((permission) =>
-            permissionRepo.create({
-              businessMember: member!,
-              permission,
-            }),
-          ),
-        );
-      }
+      await syncMemberPermissionRows(manager, member.id, permissionKeys);
 
       locked.status = BusinessInvitationStatus.ACCEPTED;
       locked.acceptedAt = new Date();

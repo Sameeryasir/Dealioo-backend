@@ -57,3 +57,11 @@ export type MemberJoinedPusherPayload = {
     permissions: string[];
   };
 };
+
+export type MemberAccessRemovedPusherPayload = {
+  businessId: number;
+  businessName: string;
+  userId: number;
+  kind: 'member' | 'invite';
+  removedAt: string;
+};

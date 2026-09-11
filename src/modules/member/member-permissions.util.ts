@@ -1,15 +1,18 @@
 import { BadRequestException } from '@nestjs/common';
+import type { EntityManager } from 'typeorm';
+import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import {
   BUSINESS_MEMBER_PERMISSIONS,
   DEFAULT_PERMISSIONS_BY_ROLE,
-  type BusinessMemberPermission,
+  type BusinessMemberPermission as BusinessMemberPermissionKey,
   type BusinessMemberRole,
 } from './member.constants';
 
 export function normalizeMemberPermissions(
   permissions: string[] | undefined,
   role: BusinessMemberRole,
-): BusinessMemberPermission[] {
+): BusinessMemberPermissionKey[] {
   const allowed = new Set<string>(BUSINESS_MEMBER_PERMISSIONS);
 
   const source =
@@ -23,7 +26,7 @@ export function normalizeMemberPermissions(
         .map((permission) => permission.trim())
         .filter((permission) => allowed.has(permission)),
     ),
-  ] as BusinessMemberPermission[];
+  ] as BusinessMemberPermissionKey[];
 
   if (normalized.length === 0) {
     throw new BadRequestException('Select at least one access permission.');
@@ -35,7 +38,7 @@ export function normalizeMemberPermissions(
 export function sanitizeStoredMemberPermissions(
   permissions: string[] | undefined | null,
   role: BusinessMemberRole,
-): BusinessMemberPermission[] {
+): BusinessMemberPermissionKey[] {
   const allowed = new Set<string>(BUSINESS_MEMBER_PERMISSIONS);
   const filtered = [
     ...new Set(
@@ -43,11 +46,31 @@ export function sanitizeStoredMemberPermissions(
         .map((permission) => permission.trim())
         .filter((permission) => allowed.has(permission)),
     ),
-  ] as BusinessMemberPermission[];
+  ] as BusinessMemberPermissionKey[];
 
   if (filtered.length > 0) {
     return filtered;
   }
 
   return [...DEFAULT_PERMISSIONS_BY_ROLE[role]];
+}
+
+export async function syncMemberPermissionRows(
+  manager: EntityManager,
+  memberId: number,
+  permissions: BusinessMemberPermissionKey[],
+): Promise<void> {
+  const permissionRepo = manager.getRepository(BusinessMemberPermission);
+  await permissionRepo.delete({ businessMember: { id: memberId } });
+  if (permissions.length === 0) {
+    return;
+  }
+  await permissionRepo.save(
+    permissions.map((permission) =>
+      permissionRepo.create({
+        businessMember: { id: memberId } as BusinessMember,
+        permission,
+      }),
+    ),
+  );
 }

@@ -28,6 +28,11 @@ export enum BusinessInvitationStatus {
   'email',
   'status',
 ])
+@Index('IDX_business_invitations_business_status_expires', [
+  'business',
+  'status',
+  'expiresAt',
+])
 export class BusinessInvitation {
   @PrimaryGeneratedColumn()
   id!: number;

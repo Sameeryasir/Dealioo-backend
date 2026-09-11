@@ -5,6 +5,7 @@ import { BusinessInvitation } from '../../db/entities/business-invitation.entity
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { Role } from '../../db/entities/role.entity';
+import { User } from '../../db/entities/user.entity';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessAccessModule } from '../business-access/business-access.module';
 import { MemberController } from './member.controller';
@@ -18,6 +19,7 @@ import { MemberService } from './member.service';
       BusinessMember,
       BusinessMemberPermission,
       Role,
+      User,
     ]),
     AuthModule,
     BusinessAccessModule,

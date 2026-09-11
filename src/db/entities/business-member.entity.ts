@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -21,6 +22,8 @@ import type { User } from './user.entity';
 
 @Entity('business_members')
 @Unique('UQ_business_members_business_user', ['business', 'user'])
+@Index('IDX_business_members_business_status', ['business', 'status'])
+@Index('IDX_business_members_user_status', ['user', 'status'])
 export class BusinessMember {
   @PrimaryGeneratedColumn()
   id!: number;

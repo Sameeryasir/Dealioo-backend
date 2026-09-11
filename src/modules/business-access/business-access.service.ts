@@ -242,25 +242,27 @@ export class BusinessAccessService {
   }
 
   async listAccessibleBusinessIds(userId: number): Promise<number[]> {
-    const owned = await this.businessRepository.find({
-      where: { owner: { id: userId } },
-      select: { id: true },
-    });
+    const owned = await this.businessRepository
+      .createQueryBuilder('business')
+      .select('business.id', 'id')
+      .where('business.owner_id = :userId', { userId })
+      .getRawMany<{ id: number | string }>();
 
-    const memberships = await this.businessMemberRepository.find({
-      where: {
-        user: { id: userId },
+    const memberships = await this.businessMemberRepository
+      .createQueryBuilder('member')
+      .select('member.business_id', 'businessId')
+      .where('member.user_id = :userId', { userId })
+      .andWhere('member.status = :status', {
         status: BUSINESS_MEMBER_STATUS.ACTIVE,
-      },
-      relations: ['business'],
-    });
+      })
+      .getRawMany<{ businessId: number | string }>();
 
     return [
       ...new Set([
-        ...owned.map((business) => business.id),
-        ...memberships.map((membership) => membership.business.id),
+        ...owned.map((row) => Number(row.id)),
+        ...memberships.map((row) => Number(row.businessId)),
       ]),
-    ];
+    ].filter((id) => Number.isFinite(id) && id > 0);
   }
 
   private async getAcceptedMembership(

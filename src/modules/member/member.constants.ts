@@ -7,10 +7,17 @@ export const BUSINESS_MEMBER_ROLES = [
 
 export type BusinessMemberRole = (typeof BUSINESS_MEMBER_ROLES)[number];
 
-export const INVITABLE_BUSINESS_MEMBER_ROLES = ['Manager', 'Staff'] as const;
+export const INVITABLE_BUSINESS_MEMBER_ROLES = [
+  'Manager',
+  'Staff',
+  'Scanner',
+] as const;
 
 export type InvitableBusinessMemberRole =
   (typeof INVITABLE_BUSINESS_MEMBER_ROLES)[number];
+
+export const INVITABLE_ROLE_ERROR =
+  'Role must be Manager, Staff, or Scanner.';
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
   'campaigns_create',

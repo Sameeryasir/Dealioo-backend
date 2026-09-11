@@ -264,7 +264,7 @@ export class AuthService {
       });
       if (!memberRole) {
         throw new InternalServerErrorException(
-          `Role '${invitation.role}' does not exist. Seed Manager and Staff roles first.`,
+          `Role '${invitation.role}' does not exist. Seed Manager, Staff, and Scanner roles first.`,
         );
       }
 
@@ -279,7 +279,7 @@ export class AuthService {
 
       const memberRoleKey =
         normalizeInvitationRole(invitation.role) ??
-        (invitation.role as 'Manager' | 'Staff');
+        (invitation.role as 'Manager' | 'Staff' | 'Scanner');
       const permissionKeys = sanitizeStoredMemberPermissions(
         invitation.permissions,
         memberRoleKey,
