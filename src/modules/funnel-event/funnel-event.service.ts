@@ -106,7 +106,9 @@ import {
 } from './funnelEventDto/scanner-purchase-deals.dto';
 import {
   applyPerformanceCampaignEarningsFilters,
+  PERFORMANCE_NET_EARNINGS_CENTS_SQL,
   resolvePerformancePreviousWindow,
+  stabilizePerformanceCacheInstant,
 } from './business-performance.util';
 
 // --- Scanner purchase response ---
@@ -1728,67 +1730,77 @@ export class FunnelEventService {
   }> {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
     const cacheKey = [
-      'perf-top-campaigns',
+      'perf-top-campaigns-v2',
       params.businessId,
-      params.from?.toISOString() ?? '',
-      params.to?.toISOString() ?? '',
+      stabilizePerformanceCacheInstant(params.from),
+      stabilizePerformanceCacheInstant(params.to),
       limit,
     ].join(':');
 
-    const cached = dashboardTtlCache.get<{
-      businessId: number;
-      from: string | null;
-      to: string | null;
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
+      this.computeBusinessTopEarningCampaigns({ ...params, limit }),
+    );
+  }
+
+  private async computeBusinessTopEarningCampaigns(params: {
+    businessId: number;
+    from?: Date | null;
+    to?: Date | null;
+    limit: number;
+  }): Promise<{
+    businessId: number;
+    from: string | null;
+    to: string | null;
+    totalEarningsCents: number;
+    totalOrderCount: number;
+    totalUniqueCustomerCount: number;
+    totalRepeatedCustomerCount: number;
+    previousPeriod: {
       totalEarningsCents: number;
       totalOrderCount: number;
       totalUniqueCustomerCount: number;
-      totalRepeatedCustomerCount: number;
-      previousPeriod: {
-        totalEarningsCents: number;
-        totalOrderCount: number;
-        totalUniqueCustomerCount: number;
-      } | null;
-      dailyTotals: Array<{
-        date: string;
-        earningsCents: number;
-        orderCount: number;
-        uniqueCustomerCount: number;
-      }>;
-      dailyByCampaign: Array<{
-        date: string;
-        campaignId: number;
-        earningsCents: number;
-        orderCount: number;
-        uniqueCustomerCount: number;
-      }>;
-      campaigns: Array<{
-        campaignId: number;
-        campaignName: string;
-        campaignType: 'prepaid' | 'postpaid' | null;
-        imageUrl: string | null;
-        price: number | null;
-        earningsCents: number;
-        orderCount: number;
-        paidPaymentCount: number;
-        uniqueCustomerCount: number;
-        guestCount: number;
-        repeatedCustomerCount: number;
-        viewCount: number;
-        signupCount: number;
-        newCustomerCount: number;
-        returningCustomerCount: number;
-      }>;
-      conversionCampaigns: Array<{
-        campaignId: number;
-        campaignName: string;
-        campaignType: 'prepaid' | 'postpaid' | null;
-        imageUrl: string | null;
-        viewCount: number;
-        signupCount: number;
-        orderCount: number;
-      }>;
-    }>(cacheKey);
-    if (cached) return cached;
+    } | null;
+    dailyTotals: Array<{
+      date: string;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+    }>;
+    dailyByCampaign: Array<{
+      date: string;
+      campaignId: number;
+      earningsCents: number;
+      orderCount: number;
+      uniqueCustomerCount: number;
+    }>;
+    campaigns: Array<{
+      campaignId: number;
+      campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
+      imageUrl: string | null;
+      price: number | null;
+      earningsCents: number;
+      orderCount: number;
+      paidPaymentCount: number;
+      uniqueCustomerCount: number;
+      guestCount: number;
+      repeatedCustomerCount: number;
+      viewCount: number;
+      signupCount: number;
+      newCustomerCount: number;
+      returningCustomerCount: number;
+    }>;
+    conversionCampaigns: Array<{
+      campaignId: number;
+      campaignName: string;
+      campaignType: 'prepaid' | 'postpaid' | null;
+      imageUrl: string | null;
+      viewCount: number;
+      signupCount: number;
+      orderCount: number;
+    }>;
+  }> {
+    const limit = params.limit;
 
     const applyFilters = (
       qb: ReturnType<Repository<FunnelPayment>['createQueryBuilder']>,
@@ -1813,7 +1825,7 @@ export class FunnelEventService {
       .addSelect('c.price', 'price')
       .addSelect('p.customer_id', 'customerId')
       .addSelect('COUNT(*)', 'paymentCount')
-      .addSelect('COALESCE(SUM(p.amount), 0)', 'earningsCents')
+      .addSelect(`COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`, 'earningsCents')
       .groupBy('p.campaign_id')
       .addGroupBy('c.campaign_name')
       .addGroupBy('c.campaign_type')
@@ -1840,6 +1852,7 @@ export class FunnelEventService {
       earningsCents: number;
       orderCount: number;
       uniqueCustomerCount: number;
+      guestOrderCount: number;
       repeatedCustomerCount: number;
       customerIds: Set<number>;
     };
@@ -1904,6 +1917,7 @@ export class FunnelEventService {
           earningsCents: 0,
           orderCount: 0,
           uniqueCustomerCount: 0,
+          guestOrderCount: 0,
           repeatedCustomerCount: 0,
           customerIds: new Set<number>(),
         };
@@ -1918,6 +1932,8 @@ export class FunnelEventService {
         if (paymentCount >= 2) {
           agg.repeatedCustomerCount += 1;
         }
+      } else {
+        agg.guestOrderCount += paymentCount;
       }
     }
 
@@ -1951,7 +1967,7 @@ export class FunnelEventService {
           previousWindow.previousFrom,
           previousWindow.previousTo,
         )
-          .select('COALESCE(SUM(p.amount), 0)', 'totalEarningsCents')
+          .select(`COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`, 'totalEarningsCents')
           .addSelect('COUNT(*)', 'totalOrderCount')
           .addSelect(
             'COUNT(DISTINCT p.customer_id)',
@@ -1998,26 +2014,58 @@ export class FunnelEventService {
     ];
 
     if (params.from && params.to) {
-      const viewRows = await this.dataSource
-        .getRepository(FunnelAnalyticsEvent)
-        .createQueryBuilder('ae')
-        .innerJoin(Funnel, 'f', 'f.id = ae.funnel_id')
-        .innerJoin(
-          Campaign,
-          'c',
-          'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
-          { businessId: params.businessId },
-        )
-        .where('ae.event_type = :pageView', {
-          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
-        })
-        .andWhere('ae.deleted_at IS NULL')
-        .andWhere('ae.created_at >= :from', { from: params.from })
-        .andWhere('ae.created_at <= :to', { to: params.to })
-        .select('f.campaign_id', 'campaignId')
-        .addSelect('COUNT(*)', 'viewCount')
-        .groupBy('f.campaign_id')
-        .getRawMany<{ campaignId: string | number; viewCount: string | number }>();
+      const [viewRows, signupRows] = await Promise.all([
+        this.dataSource
+          .getRepository(FunnelAnalyticsEvent)
+          .createQueryBuilder('ae')
+          .innerJoin(Funnel, 'f', 'f.id = ae.funnel_id')
+          .innerJoin(
+            Campaign,
+            'c',
+            'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
+            { businessId: params.businessId },
+          )
+          .where('ae.event_type = :pageView', {
+            pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+          })
+          .andWhere('ae.deleted_at IS NULL')
+          .andWhere('ae.created_at >= :from', { from: params.from })
+          .andWhere('ae.created_at <= :to', { to: params.to })
+          .select('f.campaign_id', 'campaignId')
+          .addSelect(
+            `COUNT(DISTINCT COALESCE(
+            NULLIF(ae.visitor_id, ''),
+            NULLIF(ae.session_id, ''),
+            CONCAT('e:', ae.id::text)
+          ))`,
+            'viewCount',
+          )
+          .groupBy('f.campaign_id')
+          .getRawMany<{
+            campaignId: string | number;
+            viewCount: string | number;
+          }>(),
+        this.funnelEventRepository
+          .createQueryBuilder('e')
+          .innerJoin(Funnel, 'f', 'f.id = e.funnel_id')
+          .innerJoin(
+            Campaign,
+            'c',
+            'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
+            { businessId: params.businessId },
+          )
+          .where('e.event_type = :signup', { signup: FunnelEventType.SIGNUP })
+          .andWhere('e.deleted_at IS NULL')
+          .andWhere('e.created_at >= :from', { from: params.from })
+          .andWhere('e.created_at <= :to', { to: params.to })
+          .select('f.campaign_id', 'campaignId')
+          .addSelect('COUNT(*)', 'signupCount')
+          .groupBy('f.campaign_id')
+          .getRawMany<{
+            campaignId: string | number;
+            signupCount: string | number;
+          }>(),
+      ]);
 
       for (const row of viewRows) {
         const campaignId = Number(row.campaignId);
@@ -2027,27 +2075,6 @@ export class FunnelEventService {
           Math.max(0, Math.round(Number(row.viewCount) || 0)),
         );
       }
-
-      const signupRows = await this.funnelEventRepository
-        .createQueryBuilder('e')
-        .innerJoin(Funnel, 'f', 'f.id = e.funnel_id')
-        .innerJoin(
-          Campaign,
-          'c',
-          'c.id = f.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
-          { businessId: params.businessId },
-        )
-        .where('e.event_type = :signup', { signup: FunnelEventType.SIGNUP })
-        .andWhere('e.deleted_at IS NULL')
-        .andWhere('e.created_at >= :from', { from: params.from })
-        .andWhere('e.created_at <= :to', { to: params.to })
-        .select('f.campaign_id', 'campaignId')
-        .addSelect('COUNT(*)', 'signupCount')
-        .groupBy('f.campaign_id')
-        .getRawMany<{
-          campaignId: string | number;
-          signupCount: string | number;
-        }>();
 
       for (const row of signupRows) {
         const campaignId = Number(row.campaignId);
@@ -2101,7 +2128,7 @@ export class FunnelEventService {
         orderCount: agg.orderCount,
         paidPaymentCount: agg.orderCount,
         uniqueCustomerCount: agg.uniqueCustomerCount,
-        guestCount: agg.uniqueCustomerCount,
+        guestCount: agg.guestOrderCount,
         repeatedCustomerCount: agg.repeatedCustomerCount,
         viewCount: viewCountByCampaign.get(agg.campaignId) ?? 0,
         signupCount: signupCountByCampaign.get(agg.campaignId) ?? 0,
@@ -2110,15 +2137,32 @@ export class FunnelEventService {
       };
     });
 
-    let conversionCampaigns = campaigns.slice(0, 3).map((row) => ({
-      campaignId: row.campaignId,
-      campaignName: row.campaignName,
-      campaignType: row.campaignType,
-      imageUrl: row.imageUrl,
-      viewCount: row.viewCount,
-      signupCount: row.signupCount,
-      orderCount: row.orderCount,
-    }));
+    let conversionCampaigns = [...rankedCampaigns]
+      .map((agg) => {
+        const viewCount = viewCountByCampaign.get(agg.campaignId) ?? 0;
+        return {
+          campaignId: agg.campaignId,
+          campaignName: agg.campaignName,
+          campaignType: agg.campaignType,
+          imageUrl: agg.imageUrl,
+          viewCount,
+          signupCount: signupCountByCampaign.get(agg.campaignId) ?? 0,
+          orderCount: agg.orderCount,
+          conversionRate: viewCount > 0 ? agg.orderCount / viewCount : -1,
+        };
+      })
+      .filter((row) => row.viewCount > 0)
+      .sort((a, b) => {
+        if (b.conversionRate !== a.conversionRate) {
+          return b.conversionRate - a.conversionRate;
+        }
+        if (b.orderCount !== a.orderCount) {
+          return b.orderCount - a.orderCount;
+        }
+        return a.campaignName.localeCompare(b.campaignName);
+      })
+      .slice(0, 3)
+      .map(({ conversionRate: _rate, ...row }) => row);
 
     if (
       conversionCampaigns.length === 0 &&
@@ -2179,67 +2223,93 @@ export class FunnelEventService {
     >();
 
     if (params.from && params.to) {
-      const dailyRows = await applyFilters(
-        this.funnelPaymentRepository.createQueryBuilder('p'),
-        params.from,
-        params.to,
-      )
-        .select(
-          `to_char(
+      const dayExpr = `to_char(
             date_trunc('day', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
             'YYYY-MM-DD'
-          )`,
-          'day',
-        )
-        .addSelect('p.campaign_id', 'campaignId')
-        .addSelect('COALESCE(SUM(p.amount), 0)', 'earningsCents')
-        .addSelect('COUNT(*)', 'orderCount')
-        .addSelect('COUNT(DISTINCT p.customer_id)', 'uniqueCustomerCount')
-        .groupBy('day')
-        .addGroupBy('p.campaign_id')
-        .getRawMany<{
-          day: string;
-          campaignId: string | number;
-          earningsCents: string | number;
-          orderCount: string | number;
-          uniqueCustomerCount: string | number;
-        }>();
+          )`;
 
-      for (const row of dailyRows) {
+      const [dailyCampaignRows, dailyTotalRows] = await Promise.all([
+        applyFilters(
+          this.funnelPaymentRepository.createQueryBuilder('p'),
+          params.from,
+          params.to,
+        )
+          .select(dayExpr, 'day')
+          .addSelect('p.campaign_id', 'campaignId')
+          .addSelect(
+            `COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`,
+            'earningsCents',
+          )
+          .addSelect('COUNT(*)', 'orderCount')
+          .addSelect('COUNT(DISTINCT p.customer_id)', 'uniqueCustomerCount')
+          .groupBy('day')
+          .addGroupBy('p.campaign_id')
+          .getRawMany<{
+            day: string;
+            campaignId: string | number;
+            earningsCents: string | number;
+            orderCount: string | number;
+            uniqueCustomerCount: string | number;
+          }>(),
+        applyFilters(
+          this.funnelPaymentRepository.createQueryBuilder('p'),
+          params.from,
+          params.to,
+        )
+          .select(dayExpr, 'day')
+          .addSelect(
+            `COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`,
+            'earningsCents',
+          )
+          .addSelect('COUNT(*)', 'orderCount')
+          .addSelect('COUNT(DISTINCT p.customer_id)', 'uniqueCustomerCount')
+          .groupBy('day')
+          .getRawMany<{
+            day: string;
+            earningsCents: string | number;
+            orderCount: string | number;
+            uniqueCustomerCount: string | number;
+          }>(),
+      ]);
+
+      for (const row of dailyTotalRows) {
+        const day = String(row.day ?? '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        dailyTotalsMap.set(day, {
+          earningsCents: Math.max(
+            0,
+            Math.round(Number(row.earningsCents) || 0),
+          ),
+          orderCount: Math.max(0, Math.round(Number(row.orderCount) || 0)),
+          uniqueCustomerCount: Math.max(
+            0,
+            Math.round(Number(row.uniqueCustomerCount) || 0),
+          ),
+        });
+      }
+
+      for (const row of dailyCampaignRows) {
         const day = String(row.day ?? '').slice(0, 10);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
         const campaignId = Number(row.campaignId);
-        const earningsCents = Math.max(
-          0,
-          Math.round(Number(row.earningsCents) || 0),
-        );
-        const orderCount = Math.max(0, Math.round(Number(row.orderCount) || 0));
-        const uniqueCustomerCount = Math.max(
-          0,
-          Math.round(Number(row.uniqueCustomerCount) || 0),
-        );
-
-        const total = dailyTotalsMap.get(day) ?? {
-          earningsCents: 0,
-          orderCount: 0,
-          uniqueCustomerCount: 0,
-        };
-        total.earningsCents += earningsCents;
-        total.orderCount += orderCount;
-        total.uniqueCustomerCount += uniqueCustomerCount;
-        dailyTotalsMap.set(day, total);
-
         if (
-          Number.isFinite(campaignId) &&
-          campaignId > 0 &&
-          topCampaignIds.has(campaignId)
+          !Number.isFinite(campaignId) ||
+          campaignId <= 0 ||
+          !topCampaignIds.has(campaignId)
         ) {
-          dailyByCampaignMap.set(`${day}:${campaignId}`, {
-            earningsCents,
-            orderCount,
-            uniqueCustomerCount,
-          });
+          continue;
         }
+        dailyByCampaignMap.set(`${day}:${campaignId}`, {
+          earningsCents: Math.max(
+            0,
+            Math.round(Number(row.earningsCents) || 0),
+          ),
+          orderCount: Math.max(0, Math.round(Number(row.orderCount) || 0)),
+          uniqueCustomerCount: Math.max(
+            0,
+            Math.round(Number(row.uniqueCustomerCount) || 0),
+          ),
+        });
       }
     }
 
@@ -2299,7 +2369,7 @@ export class FunnelEventService {
       }
     }
 
-    const result = {
+    return {
       businessId: params.businessId,
       from: params.from?.toISOString() ?? null,
       to: params.to?.toISOString() ?? null,
@@ -2313,8 +2383,6 @@ export class FunnelEventService {
       campaigns,
       conversionCampaigns,
     };
-    dashboardTtlCache.set(cacheKey, result, DASHBOARD_CACHE_TTL_MS);
-    return result;
   }
 
   async getBusinessFunnelEvents(

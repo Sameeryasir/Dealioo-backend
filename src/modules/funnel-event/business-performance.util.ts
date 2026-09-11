@@ -93,6 +93,18 @@ export const PERFORMANCE_VISIT_ADDON_CENTS_SQL = `(
   END
 )`;
 
+export const PERFORMANCE_NET_EARNINGS_CENTS_SQL =
+  'GREATEST(0, COALESCE(p.amount, 0) - COALESCE(p.refunded_amount, 0))';
+
+export function stabilizePerformanceCacheInstant(
+  date: Date | null | undefined,
+): string {
+  if (!date) return '';
+  const floored = new Date(date.getTime());
+  floored.setUTCSeconds(0, 0);
+  return floored.toISOString();
+}
+
 export function applyPerformanceCampaignEarningsFilters(
   qb: ReturnType<Repository<FunnelPayment>['createQueryBuilder']>,
   params: {
@@ -108,7 +120,12 @@ export function applyPerformanceCampaignEarningsFilters(
     { businessId: params.businessId },
   )
     .where('p.business_id = :businessId', { businessId: params.businessId })
-    .andWhere('p.status = :paid', { paid: FunnelPaymentStatus.PAID })
+    .andWhere('p.status IN (:...paidStatuses)', {
+      paidStatuses: [
+        FunnelPaymentStatus.PAID,
+        FunnelPaymentStatus.PARTIALLY_REFUNDED,
+      ],
+    })
     .andWhere('p.campaign_id IS NOT NULL')
     .andWhere(
       `NOT EXISTS (

@@ -11,6 +11,8 @@ import { VisitAddonItem } from '../../db/entities/visit-addon-item.entity';
 const MIN_CLEAR_TOP_VISITS = 3;
 const MIN_LIFT_FOR_STRONG = 1.25;
 const SCORE_TIE_EPSILON = 0.05;
+const EXCLUSIVE_ADDON_LIFT = 3;
+const MAX_LIFT = 10;
 
 export type CampaignAddonTopStatus = 'clear' | 'tied' | 'emerging';
 
@@ -25,6 +27,7 @@ export type CampaignAddonCounts = {
   campaignName: string;
   imageUrl: string | null;
   totalAddonPurchases: number;
+  totalAddonVisits: number;
   topStatus: CampaignAddonTopStatus;
   topAddonName: string | null;
   addons: CampaignAddonCountItem[];
@@ -76,6 +79,7 @@ type AggregatedCampaign = {
   campaignId: number;
   campaignName: string;
   imageUrl: string | null;
+    distinctVisitCount: number;
   rows: AggregatedRow[];
 };
 
@@ -111,7 +115,7 @@ export class AddonSuggestionService {
     campaigns: CampaignAddonCounts[];
   }> {
     const cacheKey = [
-      'addon-counts',
+      'addon-counts-v2',
       params.businessId,
       params.from?.toISOString() ?? '',
       params.to?.toISOString() ?? '',
@@ -120,30 +124,43 @@ export class AddonSuggestionService {
     ].join(':');
 
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, async () => {
-      const aggregated = await this.loadAggregatedCampaigns(params);
+      const [aggregated, globalStats] = await Promise.all([
+        this.loadAggregatedCampaigns(params),
+        this.loadGlobalAddonStats({
+          businessId: params.businessId,
+          from: params.from,
+          to: params.to,
+        }),
+      ]);
       const limitPerCampaign = Math.min(
         100,
         Math.max(1, Math.round(params.limit ?? 20)),
       );
 
       const campaigns: CampaignAddonCounts[] = aggregated.map((campaign) => {
-        const sortedRows = this.sortRowsByVolume(campaign.rows);
-        const addons = sortedRows.slice(0, limitPerCampaign).map((row) => ({
+        const totalAddonPurchases = campaign.rows.reduce(
+          (sum, row) => sum + row.times,
+          0,
+        );
+        const scoredRows = this.sortRowsByScore(
+          campaign.rows.map((row) =>
+            this.scoreRow(row, totalAddonPurchases, campaign, globalStats),
+          ),
+        );
+        const sortedByVolume = this.sortRowsByVolume(campaign.rows);
+        const addons = sortedByVolume.slice(0, limitPerCampaign).map((row) => ({
           name: row.addonName,
           times: row.times,
           visitCount: row.visitCount,
         }));
-        const totalAddonPurchases = sortedRows.reduce(
-          (sum, row) => sum + row.times,
-          0,
-        );
-        const topMeta = this.resolveTopMeta(sortedRows);
+        const topMeta = this.resolveTopMetaFromScored(scoredRows);
 
         return {
           campaignId: campaign.campaignId,
           campaignName: campaign.campaignName,
           imageUrl: campaign.imageUrl,
           totalAddonPurchases,
+          totalAddonVisits: campaign.distinctVisitCount,
           topStatus: topMeta.topStatus,
           topAddonName: topMeta.topAddonName,
           addons,
@@ -174,20 +191,112 @@ export class AddonSuggestionService {
     campaigns: CampaignAddonSuggestions[];
     pagination: AddonSuggestionPagination;
   }> {
+    const pageSize = Math.min(
+      50,
+      Math.max(1, Math.round(params.pageSize ?? params.limit ?? 10)),
+    );
+    const page = Math.max(1, Math.round(params.page ?? 1));
+
     const cacheKey = [
-      'addon-suggestions',
+      'addon-suggestions-v2',
       params.businessId,
       params.from?.toISOString() ?? '',
       params.to?.toISOString() ?? '',
       params.campaignId ?? '',
-      params.limit ?? '',
-      params.page ?? 1,
-      params.pageSize ?? 10,
     ].join(':');
 
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeSuggestionsByCampaign(params),
+    const full = await dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_CACHE_TTL_MS,
+      () => this.computeSuggestionsByCampaign(params),
     );
+
+    return this.paginateSuggestions(full, page, pageSize, params.campaignId);
+  }
+
+  private paginateSuggestions(
+    full: {
+      businessId: number;
+      from: string | null;
+      to: string | null;
+      campaigns: CampaignAddonSuggestions[];
+    },
+    page: number,
+    pageSize: number,
+    campaignId?: number | null,
+  ): {
+    businessId: number;
+    from: string | null;
+    to: string | null;
+    campaigns: CampaignAddonSuggestions[];
+    pagination: AddonSuggestionPagination;
+  } {
+    if (campaignId != null && campaignId > 0) {
+      const campaign = full.campaigns[0] ?? null;
+      if (!campaign) {
+        return {
+          ...full,
+          campaigns: [],
+          pagination: {
+            page: 1,
+            pageSize,
+            totalItems: 0,
+            totalPages: 0,
+          },
+        };
+      }
+
+      const totalItems = campaign.totalSuggestions;
+      const totalPages =
+        totalItems === 0 ? 0 : Math.max(1, Math.ceil(totalItems / pageSize));
+      const safePage =
+        totalPages === 0 ? 1 : Math.min(page, Math.max(1, totalPages));
+      const start = (safePage - 1) * pageSize;
+
+      return {
+        businessId: full.businessId,
+        from: full.from,
+        to: full.to,
+        campaigns: [
+          {
+            ...campaign,
+            suggestions: campaign.suggestions.slice(start, start + pageSize),
+          },
+        ],
+        pagination: {
+          page: safePage,
+          pageSize,
+          totalItems,
+          totalPages,
+        },
+      };
+    }
+
+    const totalItems = full.campaigns.length;
+    const totalPages =
+      totalItems === 0 ? 0 : Math.max(1, Math.ceil(totalItems / pageSize));
+    const safePage =
+      totalPages === 0 ? 1 : Math.min(page, Math.max(1, totalPages));
+    const start = (safePage - 1) * pageSize;
+    const pageCampaigns = full.campaigns
+      .slice(start, start + pageSize)
+      .map((campaign) => ({
+        ...campaign,
+        suggestions: campaign.suggestions.slice(0, pageSize),
+      }));
+
+    return {
+      businessId: full.businessId,
+      from: full.from,
+      to: full.to,
+      campaigns: pageCampaigns,
+      pagination: {
+        page: safePage,
+        pageSize,
+        totalItems,
+        totalPages,
+      },
+    };
   }
 
   private async computeSuggestionsByCampaign(params: {
@@ -195,15 +304,11 @@ export class AddonSuggestionService {
     from?: Date | null;
     to?: Date | null;
     campaignId?: number | null;
-    limit?: number;
-    page?: number;
-    pageSize?: number;
   }): Promise<{
     businessId: number;
     from: string | null;
     to: string | null;
     campaigns: CampaignAddonSuggestions[];
-    pagination: AddonSuggestionPagination;
   }> {
     const [aggregated, globalStats] = await Promise.all([
       this.loadAggregatedCampaigns(params),
@@ -214,19 +319,14 @@ export class AddonSuggestionService {
       }),
     ]);
 
-    const pageSize = Math.min(
-      50,
-      Math.max(1, Math.round(params.pageSize ?? params.limit ?? 10)),
-    );
-    const page = Math.max(1, Math.round(params.page ?? 1));
-
     const campaignsFull: CampaignAddonSuggestions[] = aggregated.map(
       (campaign) => {
         const totalAddonPurchases = campaign.rows.reduce(
           (sum, row) => sum + row.times,
           0,
         );
-        const totalAddonVisits = campaign.rows.reduce(
+        const totalAddonVisits = campaign.distinctVisitCount;
+        const visitShareDenominator = campaign.rows.reduce(
           (sum, row) => sum + row.visitCount,
           0,
         );
@@ -236,8 +336,9 @@ export class AddonSuggestionService {
             this.scoreRow(
               row,
               totalAddonPurchases,
-              totalAddonVisits,
+              campaign,
               globalStats,
+              visitShareDenominator,
             ),
           ),
         );
@@ -306,71 +407,11 @@ export class AddonSuggestionService {
       },
     );
 
-    const sortedCampaigns = this.sortCampaignsByBest(campaignsFull);
-
-    if (params.campaignId != null && params.campaignId > 0) {
-      const campaign = sortedCampaigns[0] ?? null;
-      if (!campaign) {
-        return {
-          businessId: params.businessId,
-          from: params.from ? params.from.toISOString() : null,
-          to: params.to ? params.to.toISOString() : null,
-          campaigns: [],
-          pagination: {
-            page: 1,
-            pageSize,
-            totalItems: 0,
-            totalPages: 0,
-          },
-        };
-      }
-
-      const totalItems = campaign.totalSuggestions;
-      const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-      const safePage = Math.min(page, totalPages);
-      const start = (safePage - 1) * pageSize;
-
-      return {
-        businessId: params.businessId,
-        from: params.from ? params.from.toISOString() : null,
-        to: params.to ? params.to.toISOString() : null,
-        campaigns: [
-          {
-            ...campaign,
-            suggestions: campaign.suggestions.slice(start, start + pageSize),
-          },
-        ],
-        pagination: {
-          page: safePage,
-          pageSize,
-          totalItems,
-          totalPages: totalItems === 0 ? 0 : totalPages,
-        },
-      };
-    }
-
-    const totalItems = sortedCampaigns.length;
-    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-    const safePage = Math.min(page, totalPages);
-    const start = (safePage - 1) * pageSize;
-    const pageCampaigns = sortedCampaigns
-      .slice(start, start + pageSize)
-      .map((campaign) => ({
-        ...campaign,
-        suggestions: campaign.suggestions.slice(0, pageSize),
-      }));
-
     return {
       businessId: params.businessId,
       from: params.from ? params.from.toISOString() : null,
       to: params.to ? params.to.toISOString() : null,
-      campaigns: pageCampaigns,
-      pagination: {
-        page: safePage,
-        pageSize,
-        totalItems,
-        totalPages: totalItems === 0 ? 0 : totalPages,
-      },
+      campaigns: this.sortCampaignsByBest(campaignsFull),
     };
   }
 
@@ -423,16 +464,19 @@ export class AddonSuggestionService {
       qb.andWhere('vai.created_at <= :to', { to: params.to });
     }
 
-    const rawRows = await qb.getRawMany<{
-      campaignId: string | number;
-      campaignName: string;
-      imageUrl: string | null;
-      addonName: string;
-      addonKey: string;
-      times: string | number;
-      visitCount: string | number;
-      revenueCents: string | number;
-    }>();
+    const [rawRows, distinctVisitByCampaign] = await Promise.all([
+      qb.getRawMany<{
+        campaignId: string | number;
+        campaignName: string;
+        imageUrl: string | null;
+        addonName: string;
+        addonKey: string;
+        times: string | number;
+        visitCount: string | number;
+        revenueCents: string | number;
+      }>(),
+      this.loadDistinctVisitCountsByCampaign(params),
+    ]);
 
     const byCampaign = new Map<number, AggregatedCampaign>();
 
@@ -455,7 +499,7 @@ export class AddonSuggestionService {
       const addonKey =
         String(row.addonKey ?? '').trim().toLowerCase() ||
         addonName.toLowerCase();
-      const visitCount = Math.max(1, Math.round(Number(row.visitCount) || 1));
+      const visitCount = Math.max(0, Math.round(Number(row.visitCount) || 0));
       const revenueCents = Math.max(
         0,
         Math.round(Number(row.revenueCents) || 0),
@@ -470,6 +514,7 @@ export class AddonSuggestionService {
             String(row.campaignName ?? '').trim() ||
             `Campaign #${campaignId}`,
           imageUrl: imageUrlRaw || null,
+          distinctVisitCount: distinctVisitByCampaign.get(campaignId) ?? 0,
           rows: [],
         };
         byCampaign.set(campaignId, campaign);
@@ -489,6 +534,57 @@ export class AddonSuggestionService {
     }
 
     return Array.from(byCampaign.values());
+  }
+
+    private async loadDistinctVisitCountsByCampaign(params: {
+    businessId: number;
+    from?: Date | null;
+    to?: Date | null;
+    campaignId?: number | null;
+  }): Promise<Map<number, number>> {
+    const qb = this.visitAddonItemRepository
+      .createQueryBuilder('vai')
+      .innerJoin(
+        Campaign,
+        'c',
+        'c.id = vai.campaign_id AND c.business_id = :businessId AND c.deleted_at IS NULL',
+        { businessId: params.businessId },
+      )
+      .where('vai.business_id = :businessId', {
+        businessId: params.businessId,
+      })
+      .andWhere('vai.campaign_id IS NOT NULL')
+      .andWhere("TRIM(vai.name) <> ''")
+      .select('vai.campaign_id', 'campaignId')
+      .addSelect('COUNT(DISTINCT vai.customer_visit_id)', 'visitCount')
+      .groupBy('vai.campaign_id');
+
+    if (params.campaignId != null && params.campaignId > 0) {
+      qb.andWhere('vai.campaign_id = :campaignId', {
+        campaignId: params.campaignId,
+      });
+    }
+    if (params.from) {
+      qb.andWhere('vai.created_at >= :from', { from: params.from });
+    }
+    if (params.to) {
+      qb.andWhere('vai.created_at <= :to', { to: params.to });
+    }
+
+    const rawRows = await qb.getRawMany<{
+      campaignId: string | number;
+      visitCount: string | number;
+    }>();
+
+    const map = new Map<number, number>();
+    for (const row of rawRows) {
+      const campaignId = Number(row.campaignId);
+      const visitCount = Math.max(0, Math.round(Number(row.visitCount) || 0));
+      if (Number.isFinite(campaignId) && campaignId > 0) {
+        map.set(campaignId, visitCount);
+      }
+    }
+    return map;
   }
 
   private async loadGlobalAddonStats(params: {
@@ -541,32 +637,51 @@ export class AddonSuggestionService {
     return { totalTimes, byKey };
   }
 
-  private scoreRow(
+    private scoreRow(
     row: AggregatedRow,
     totalAddonPurchases: number,
-    totalAddonVisits: number,
+    campaign: Pick<AggregatedCampaign, 'rows'>,
     globalStats: GlobalAddonStats,
+    visitShareDenominator?: number,
   ): ScoredRow {
     const sharePercent =
       totalAddonPurchases > 0
         ? Math.round((row.times / totalAddonPurchases) * 1000) / 10
         : 0;
+
+    const visitDenom =
+      visitShareDenominator ??
+      campaign.rows.reduce((sum, item) => sum + item.visitCount, 0);
     const visitSharePercent =
-      totalAddonVisits > 0
-        ? Math.round((row.visitCount / totalAddonVisits) * 1000) / 10
+      visitDenom > 0
+        ? Math.round((row.visitCount / visitDenom) * 1000) / 10
         : 0;
 
     const campaignShare =
       totalAddonPurchases > 0 ? row.times / totalAddonPurchases : 0;
-    const globalTimes = globalStats.byKey.get(row.addonKey) ?? 0;
-    const globalShare =
-      globalStats.totalTimes > 0 ? globalTimes / globalStats.totalTimes : 0;
+
+    const globalTimesIncl = globalStats.byKey.get(row.addonKey) ?? 0;
+    const globalTimesExcl = Math.max(0, globalTimesIncl - row.times);
+    const totalTimesExcl = Math.max(
+      0,
+      globalStats.totalTimes - totalAddonPurchases,
+    );
 
     let lift = 1;
-    if (globalShare > 0) {
-      lift = Math.round((campaignShare / globalShare) * 100) / 100;
-    } else if (campaignShare > 0) {
+    if (campaignShare <= 0) {
       lift = 1;
+    } else if (totalTimesExcl <= 0 || globalTimesExcl <= 0) {
+      lift = EXCLUSIVE_ADDON_LIFT;
+    } else {
+      const globalShareExcl = globalTimesExcl / totalTimesExcl;
+      if (globalShareExcl > 0) {
+        lift = Math.min(
+          MAX_LIFT,
+          Math.round((campaignShare / globalShareExcl) * 100) / 100,
+        );
+      } else {
+        lift = EXCLUSIVE_ADDON_LIFT;
+      }
     }
 
     const visitWeight = Math.log1p(row.visitCount);
@@ -574,7 +689,8 @@ export class AddonSuggestionService {
     const revenueWeight = Math.log1p(row.revenueCents / 100);
     const score =
       Math.round(
-        (lift * (0.65 * visitWeight + 0.25 * volumeWeight + 0.1 * revenueWeight) +
+        (lift *
+          (0.65 * visitWeight + 0.25 * volumeWeight + 0.1 * revenueWeight) +
           Number.EPSILON) *
           1000,
       ) / 1000;
@@ -625,7 +741,11 @@ export class AddonSuggestionService {
       totalAddonPurchases: number;
       topStatus: CampaignAddonTopStatus;
       addons?: Array<{ times: number; visitCount?: number }>;
-      suggestions?: Array<{ timesPurchased: number; visitCount?: number; score?: number }>;
+      suggestions?: Array<{
+        timesPurchased: number;
+        visitCount?: number;
+        score?: number;
+      }>;
     },
   >(campaigns: T[]): T[] {
     const statusRank = (status: CampaignAddonTopStatus) =>
@@ -659,34 +779,6 @@ export class AddonSuggestionService {
         sensitivity: 'base',
       });
     });
-  }
-
-  private resolveTopMeta(
-    sortedRows: AggregatedRow[],
-  ): { topStatus: CampaignAddonTopStatus; topAddonName: string | null } {
-    if (sortedRows.length === 0) {
-      return { topStatus: 'emerging', topAddonName: null };
-    }
-
-    const topVisits = sortedRows[0].visitCount;
-    const tiedForFirst = sortedRows.filter(
-      (row) => row.visitCount === topVisits && row.times === sortedRows[0].times,
-    );
-    if (tiedForFirst.length > 1) {
-      return { topStatus: 'tied', topAddonName: null };
-    }
-
-    if (topVisits < MIN_CLEAR_TOP_VISITS) {
-      return {
-        topStatus: 'emerging',
-        topAddonName: sortedRows[0].addonName,
-      };
-    }
-
-    return {
-      topStatus: 'clear',
-      topAddonName: sortedRows[0].addonName,
-    };
   }
 
   private resolveTopMetaFromScored(

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -168,12 +169,24 @@ export class FunnelEventController {
 
     const from = query.from?.trim() ? new Date(query.from) : null;
     const to = query.to?.trim() ? new Date(query.to) : null;
+    if (query.from?.trim() && (from == null || Number.isNaN(from.getTime()))) {
+      throw new BadRequestException(
+        'Invalid "from" date. Use a valid ISO date/time.',
+      );
+    }
+    if (query.to?.trim() && (to == null || Number.isNaN(to.getTime()))) {
+      throw new BadRequestException(
+        'Invalid "to" date. Use a valid ISO date/time.',
+      );
+    }
+    if (from && to && from.getTime() > to.getTime()) {
+      throw new BadRequestException('"from" must be before or equal to "to".');
+    }
 
     return this.funnelEventService.getBusinessTopEarningCampaigns({
       businessId,
-      from:
-        from != null && !Number.isNaN(from.getTime()) ? from : null,
-      to: to != null && !Number.isNaN(to.getTime()) ? to : null,
+      from,
+      to,
       limit: query.limit ?? 10,
     });
   }

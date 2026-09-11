@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Param,
@@ -11,11 +12,27 @@ import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { GetCampaignAddonCountsQueryDto } from './addonSuggestionDto/get-campaign-addon-counts-query.dto';
+import { GetCampaignAddonSuggestionsQueryDto } from './addonSuggestionDto/get-campaign-addon-suggestions-query.dto';
 import { AddonSuggestionService } from './addon-suggestion.service';
 
 type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
 };
+
+function parseOptionalQueryDate(
+  value: string | undefined,
+  fieldName: 'from' | 'to',
+): Date | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException(
+      `Invalid "${fieldName}" date. Use a valid ISO date/time.`,
+    );
+  }
+  return parsed;
+}
 
 @Controller('addon-suggestion')
 export class AddonSuggestionController {
@@ -38,14 +55,16 @@ export class AddonSuggestionController {
       'You do not have permission to view add-on suggestions for this business.',
     );
 
-    const from = query.from?.trim() ? new Date(query.from) : null;
-    const to = query.to?.trim() ? new Date(query.to) : null;
+    const from = parseOptionalQueryDate(query.from, 'from');
+    const to = parseOptionalQueryDate(query.to, 'to');
+    if (from && to && from.getTime() > to.getTime()) {
+      throw new BadRequestException('"from" must be before or equal to "to".');
+    }
 
     return this.addonSuggestionService.getAddonCountsByCampaign({
       businessId,
-      from:
-        from != null && !Number.isNaN(from.getTime()) ? from : null,
-      to: to != null && !Number.isNaN(to.getTime()) ? to : null,
+      from,
+      to,
       campaignId: query.campaignId ?? null,
       limit: query.limit ?? 20,
     });
@@ -55,7 +74,7 @@ export class AddonSuggestionController {
   @Get('business/:businessId/suggestions')
   async getSuggestionsByCampaign(
     @Param('businessId', ParseIntPipe) businessId: number,
-    @Query() query: GetCampaignAddonCountsQueryDto,
+    @Query() query: GetCampaignAddonSuggestionsQueryDto,
     @Req() req: AuthRequest,
   ) {
     await this.businessAccessService.assertAnyPermission(
@@ -65,18 +84,19 @@ export class AddonSuggestionController {
       'You do not have permission to view add-on suggestions for this business.',
     );
 
-    const from = query.from?.trim() ? new Date(query.from) : null;
-    const to = query.to?.trim() ? new Date(query.to) : null;
+    const from = parseOptionalQueryDate(query.from, 'from');
+    const to = parseOptionalQueryDate(query.to, 'to');
+    if (from && to && from.getTime() > to.getTime()) {
+      throw new BadRequestException('"from" must be before or equal to "to".');
+    }
 
     return this.addonSuggestionService.getSuggestionsByCampaign({
       businessId,
-      from:
-        from != null && !Number.isNaN(from.getTime()) ? from : null,
-      to: to != null && !Number.isNaN(to.getTime()) ? to : null,
+      from,
+      to,
       campaignId: query.campaignId ?? null,
-      limit: query.limit ?? query.pageSize ?? 10,
       page: query.page ?? 1,
-      pageSize: query.pageSize ?? query.limit ?? 10,
+      pageSize: query.pageSize ?? 10,
     });
   }
 }
