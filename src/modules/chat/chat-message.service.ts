@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
 import {
@@ -170,18 +170,29 @@ export class ChatMessageService {
       return;
     }
 
-    const existing = await this.messageRepository.findOne({
-      where: { idempotencyKey },
-      select: ['id'],
-    });
-    if (existing) {
-      await this.chatMessageNotificationService.replayMessage(existing.id);
-      return;
-    }
-
     try {
+      const existing = await this.messageRepository.findOne({
+        where: { idempotencyKey },
+        select: ['id'],
+      });
+      if (existing) {
+        void this.chatMessageNotificationService.replayMessage(existing.id);
+        return;
+      }
+
       await this.persistOutboundMessage(params);
     } catch (error) {
+      if (this.isIdempotencyConflict(error)) {
+        const existing = await this.messageRepository.findOne({
+          where: { idempotencyKey },
+          select: ['id'],
+        });
+        if (existing) {
+          void this.chatMessageNotificationService.replayMessage(existing.id);
+          return;
+        }
+      }
+
       const message =
         error instanceof Error ? error.message : 'Could not save chat message';
       this.logger.warn(
@@ -232,6 +243,7 @@ export class ChatMessageService {
           businessId,
           customerId,
         },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!conversation) {
@@ -247,6 +259,7 @@ export class ChatMessageService {
         } catch {
           conversation = await manager.findOne(Conversation, {
             where: { businessId, customerId },
+            lock: { mode: 'pessimistic_write' },
           });
         }
       }
@@ -263,36 +276,61 @@ export class ChatMessageService {
         );
       }
 
-      const savedMessage = await manager.save(
-        manager.create(ConversationMessage, {
-          conversationId: conversation.id,
-          automationId: params.automationId ?? null,
-          executionId: params.executionId ?? null,
-          nodeId: params.nodeId ?? null,
-          channel: params.channel,
-          direction:
-            params.direction ?? ConversationMessageDirection.OUTBOUND,
-          sentByBusinessId: businessId,
-          sentByCustomerId: null,
-          sentToBusinessId: null,
-          sentToCustomerId: customerId,
-          body,
-          metadata: params.metadata ?? null,
-          sentAt,
-          idempotencyKey,
-        }),
-      );
-      savedMessageId = savedMessage.id;
+      let createdNewMessage = false;
+      try {
+        const savedMessage = await manager.save(
+          manager.create(ConversationMessage, {
+            conversationId: conversation.id,
+            automationId: params.automationId ?? null,
+            executionId: params.executionId ?? null,
+            nodeId: params.nodeId ?? null,
+            channel: params.channel,
+            direction:
+              params.direction ?? ConversationMessageDirection.OUTBOUND,
+            sentByBusinessId: businessId,
+            sentByCustomerId: null,
+            sentToBusinessId: null,
+            sentToCustomerId: customerId,
+            body,
+            metadata: params.metadata ?? null,
+            sentAt,
+            idempotencyKey,
+          }),
+        );
+        savedMessageId = savedMessage.id;
+        createdNewMessage = true;
+      } catch (error) {
+        if (!this.isIdempotencyConflict(error)) {
+          throw error;
+        }
+        const existing = await manager.findOne(ConversationMessage, {
+          where: { idempotencyKey },
+          select: ['id'],
+        });
+        if (!existing) {
+          throw error;
+        }
+        savedMessageId = existing.id;
+        createdNewMessage = false;
+      }
+
       conversationId = conversation.id;
 
-      await manager.update(Conversation, conversation.id, {
-        messageCount: conversation.messageCount + 1,
-        lastMessagePreview: truncateActivityMessagePreview(body, 80),
-        lastMessageChannel: params.channel,
-        lastMessageAt: sentAt,
-        lastAutomationId:
-          params.automationId ?? conversation.lastAutomationId,
-      });
+      if (createdNewMessage) {
+        await manager
+          .createQueryBuilder()
+          .update(Conversation)
+          .set({
+            messageCount: () => '"message_count" + 1',
+            lastMessagePreview: truncateActivityMessagePreview(body, 80),
+            lastMessageChannel: params.channel,
+            lastMessageAt: sentAt,
+            lastAutomationId:
+              params.automationId ?? conversation.lastAutomationId,
+          })
+          .where('id = :id', { id: conversation.id })
+          .execute();
+      }
 
       const updatedConversation = await manager.findOne(Conversation, {
         where: { id: conversation.id },
@@ -314,7 +352,7 @@ export class ChatMessageService {
     });
 
     if (savedMessageId && conversationId && conversationSnapshot) {
-      await this.chatMessageNotificationService.notifyMessageSent(
+      void this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
         businessId,
         conversationId,
@@ -324,5 +362,20 @@ export class ChatMessageService {
     }
 
     return savedMessageId;
+  }
+
+  private isIdempotencyConflict(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+
+    const driverError = error.driverError as {
+      code?: string;
+      constraint?: string;
+    };
+    return (
+      driverError.code === '23505' &&
+      driverError.constraint === 'UQ_conversation_message_idempotency_key'
+    );
   }
 }

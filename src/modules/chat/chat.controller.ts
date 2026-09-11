@@ -50,6 +50,21 @@ export class ChatController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/unread')
+  async getBusinessChatsUnread(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    return this.chatService.getBusinessChatsUnread(businessId, req.user.id);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/active-flows')
   async getActiveFlowCustomers(
     @Param('businessId', ParseIntPipe) businessId: number,
@@ -88,6 +103,7 @@ export class ChatController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('search') search: string | undefined,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -100,6 +116,7 @@ export class ChatController {
       businessId,
       page,
       limit,
+      search,
     );
   }
 
@@ -129,6 +146,7 @@ export class ChatController {
   async syncBusinessMessages(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('afterMessageId', ParseIntPipe) afterMessageId: number,
+    @Query('limit', new DefaultValuePipe(100), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -140,6 +158,7 @@ export class ChatController {
     return this.chatService.syncBusinessChatMessages(
       businessId,
       afterMessageId,
+      limit,
     );
   }
 
@@ -171,6 +190,8 @@ export class ChatController {
   async getConversationMessages(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Query('beforeMessageId') beforeMessageIdRaw: string | undefined,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -179,9 +200,17 @@ export class ChatController {
       req.user.role.name,
     );
 
+    const beforeMessageId = Number(beforeMessageIdRaw);
     return this.chatService.getConversationMessagesByConversationId(
       businessId,
       conversationId,
+      {
+        beforeMessageId:
+          Number.isFinite(beforeMessageId) && beforeMessageId > 0
+            ? beforeMessageId
+            : undefined,
+        limit,
+      },
     );
   }
 
@@ -229,6 +258,8 @@ export class ChatController {
   async getCustomerConversationMessages(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('customerId', ParseIntPipe) customerId: number,
+    @Query('beforeMessageId') beforeMessageIdRaw: string | undefined,
+    @Query('limit', new DefaultValuePipe(25), ParseIntPipe) limit: number,
     @Req() req: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -237,9 +268,17 @@ export class ChatController {
       req.user.role.name,
     );
 
+    const beforeMessageId = Number(beforeMessageIdRaw);
     return this.chatService.getCustomerConversationMessages(
       businessId,
       customerId,
+      {
+        beforeMessageId:
+          Number.isFinite(beforeMessageId) && beforeMessageId > 0
+            ? beforeMessageId
+            : undefined,
+        limit,
+      },
     );
   }
 

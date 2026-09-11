@@ -118,4 +118,10 @@ export class SyncChatMessagesThreadDto {
 
 export class SyncChatMessagesDto {
   data: SyncChatMessagesThreadDto[];
+  hasMore?: boolean;
+}
+
+export class BusinessChatsUnreadDto {
+  hasUnread: boolean;
+  chatsLastViewedAt: Date | null;
 }

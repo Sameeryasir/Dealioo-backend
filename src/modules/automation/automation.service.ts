@@ -2645,7 +2645,7 @@ export class AutomationService {
           customerId: recipient.customerId,
           message: `Payment reminder text sent to ${recipient.email} (bulk)`,
         });
-        await this.chatMessageService.recordOutboundMessage({
+        void this.chatMessageService.recordOutboundMessage({
           businessId: batch.businessId,
           customerId: recipient.customerId,
           automationId: batch.automationId,
@@ -2841,22 +2841,23 @@ export class AutomationService {
             purpose: batch.purpose,
           },
         });
-        await this.chatMessageService.recordOutboundMessage({
+        const bodyPreview =
+          await this.automationEmailService.resolveRecipientChatMessageBody(
+            batch.prepared!,
+            recipient,
+            batch.purpose,
+            recipient.customerId != null
+              ? recipientTemplateOverrides.get(recipient.customerId)
+              : undefined,
+          );
+        void this.chatMessageService.recordOutboundMessage({
           businessId: batch.businessId,
           customerId: recipient.customerId,
           automationId: batch.automationId,
           executionId: batch.executionId,
           nodeId: batch.emailNodeId,
           channel: ConversationMessageChannel.EMAIL,
-          bodyPreview:
-            await this.automationEmailService.resolveRecipientChatMessageBody(
-              batch.prepared!,
-              recipient,
-              batch.purpose,
-              recipient.customerId != null
-                ? recipientTemplateOverrides.get(recipient.customerId)
-                : undefined,
-            ),
+          bodyPreview,
           idempotencyKey: `chat_message:execution:${batch.executionId}:node:${batch.emailNodeId}:customer:${recipient.customerId}:phase:${batchPhase}`,
           metadata: {
             batchPhase,

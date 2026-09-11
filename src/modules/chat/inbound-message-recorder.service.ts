@@ -283,6 +283,7 @@ export class InboundMessageRecorderService {
           businessId: params.businessId,
           customerId: params.customerId,
         },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!conversation) {
@@ -301,6 +302,7 @@ export class InboundMessageRecorderService {
               businessId: params.businessId,
               customerId: params.customerId,
             },
+            lock: { mode: 'pessimistic_write' },
           });
         }
       }
@@ -311,33 +313,58 @@ export class InboundMessageRecorderService {
         );
       }
 
-      const savedMessage = await manager.save(
-        manager.create(ConversationMessage, {
-          conversationId: conversation.id,
-          automationId: null,
-          executionId: null,
-          nodeId: null,
-          channel: params.channel,
-          direction: ConversationMessageDirection.INBOUND,
-          sentByBusinessId: null,
-          sentByCustomerId: params.customerId,
-          sentToBusinessId: params.businessId,
-          sentToCustomerId: null,
-          body: params.body,
-          metadata: params.metadata ?? null,
-          sentAt,
-          idempotencyKey,
-        }),
-      );
-      savedMessageId = savedMessage.id;
+      let createdNewMessage = false;
+      try {
+        const savedMessage = await manager.save(
+          manager.create(ConversationMessage, {
+            conversationId: conversation.id,
+            automationId: null,
+            executionId: null,
+            nodeId: null,
+            channel: params.channel,
+            direction: ConversationMessageDirection.INBOUND,
+            sentByBusinessId: null,
+            sentByCustomerId: params.customerId,
+            sentToBusinessId: params.businessId,
+            sentToCustomerId: null,
+            body: params.body,
+            metadata: params.metadata ?? null,
+            sentAt,
+            idempotencyKey,
+          }),
+        );
+        savedMessageId = savedMessage.id;
+        createdNewMessage = true;
+      } catch (error) {
+        if (!this.isIdempotencyConflict(error)) {
+          throw error;
+        }
+        const existing = await manager.findOne(ConversationMessage, {
+          where: { idempotencyKey },
+          select: ['id'],
+        });
+        if (!existing) {
+          throw error;
+        }
+        savedMessageId = existing.id;
+        createdNewMessage = false;
+      }
+
       conversationId = conversation.id;
 
-      await manager.update(Conversation, conversation.id, {
-        messageCount: conversation.messageCount + 1,
-        lastMessagePreview: truncateActivityMessagePreview(params.body, 80),
-        lastMessageChannel: params.channel,
-        lastMessageAt: sentAt,
-      });
+      if (createdNewMessage) {
+        await manager
+          .createQueryBuilder()
+          .update(Conversation)
+          .set({
+            messageCount: () => '"message_count" + 1',
+            lastMessagePreview: truncateActivityMessagePreview(params.body, 80),
+            lastMessageChannel: params.channel,
+            lastMessageAt: sentAt,
+          })
+          .where('id = :id', { id: conversation.id })
+          .execute();
+      }
 
       const updatedConversation = await manager.findOne(Conversation, {
         where: { id: conversation.id },
@@ -359,7 +386,7 @@ export class InboundMessageRecorderService {
     });
 
     if (savedMessageId && conversationId && conversationSnapshot) {
-      await this.chatMessageNotificationService.notifyMessageSent(
+      void this.chatMessageNotificationService.notifyMessageSent(
         savedMessageId,
         params.businessId,
         conversationId,

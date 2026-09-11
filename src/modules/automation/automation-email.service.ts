@@ -165,12 +165,33 @@ export class AutomationEmailService {
       purpose,
     );
 
-    const stripped = text.replace(/\r\n/g, '\n').trim();
-    if (!stripped) {
+    const ctaLabel =
+      mergedPrepared.templateProps.ctaLabel?.trim() || 'View my pass';
+    const ctaUrl = mergedPrepared.templateProps.ctaUrl?.trim() || '';
+    const walletUrl =
+      mergedPrepared.templateProps.googleWalletSaveUrl?.trim() || '';
+
+    const extras: string[] = [];
+    if (ctaUrl && !text.includes(ctaUrl)) {
+      extras.push(`${ctaLabel}: ${ctaUrl}`);
+    }
+    if (
+      walletUrl &&
+      walletUrl !== ctaUrl &&
+      !text.includes(walletUrl)
+    ) {
+      extras.push(`Add to Google Wallet: ${walletUrl}`);
+    }
+
+    const withCtas = [text.replace(/\r\n/g, '\n').trim(), ...extras]
+      .filter(Boolean)
+      .join('\n\n');
+
+    if (!withCtas) {
       return this.resolvePreparedEmailPreview(mergedPrepared);
     }
 
-    return sanitizeChatMessageBody(stripped);
+    return sanitizeChatMessageBody(withCtas);
   }
 
   buildTemplatePropsForRecipient(

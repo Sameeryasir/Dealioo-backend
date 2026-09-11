@@ -1661,14 +1661,8 @@ export class AutomationEngineService {
     const funnelName =
       campaignName || (funnelId != null ? `Funnel #${funnelId}` : null);
 
-    await this.chatMessageService.recordOutboundMessage({
-      businessId: execution.automation.businessId,
-      customerId: execution.customerId,
-      automationId: execution.automationId,
-      executionId: execution.id,
-      nodeId,
-      channel: ConversationMessageChannel.EMAIL,
-      bodyPreview: await this.automationEmailService.resolveRecipientChatMessageBody(
+    const bodyPreview =
+      await this.automationEmailService.resolveRecipientChatMessageBody(
         prepared,
         {
           customerId: execution.customerId,
@@ -1676,7 +1670,16 @@ export class AutomationEngineService {
           name: execution.customer?.name ?? '',
         },
         purpose,
-      ),
+      );
+
+    void this.chatMessageService.recordOutboundMessage({
+      businessId: execution.automation.businessId,
+      customerId: execution.customerId,
+      automationId: execution.automationId,
+      executionId: execution.id,
+      nodeId,
+      channel: ConversationMessageChannel.EMAIL,
+      bodyPreview,
       idempotencyKey,
       metadata: {
         automationId: execution.automationId,
@@ -1771,10 +1774,16 @@ export class AutomationEngineService {
         this.logger.warn(
           `CTA "${ctaLabel}" link build failed for execution ${execution.id}; using pass URL fallback`,
         );
+        const googleWalletSaveUrl =
+          await this.tryCreateGoogleWalletSaveUrlForExecution(
+            execution,
+            fallbackPassUrl,
+          );
         return {
           ...next,
           ctaLabel,
           ctaUrl: fallbackPassUrl,
+          ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
         };
       }
 
@@ -1860,7 +1869,12 @@ export class AutomationEngineService {
       if (!passUrl) {
         return null;
       }
-      return { ctaUrl: passUrl };
+      const googleWalletSaveUrl =
+        await this.tryCreateGoogleWalletSaveUrlForExecution(execution, passUrl);
+      return {
+        ctaUrl: passUrl,
+        ...(googleWalletSaveUrl ? { googleWalletSaveUrl } : {}),
+      };
     }
 
     return null;

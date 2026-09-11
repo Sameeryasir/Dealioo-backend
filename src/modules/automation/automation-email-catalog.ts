@@ -1,5 +1,6 @@
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import {
+  AUTOMATION_EMAIL_TEMPLATE_IDS,
   resolveAutomationEmailTemplateFromPurpose,
   resolveAutomationEmailTemplateId,
 } from '../../templates/automation/registry';
@@ -39,16 +40,25 @@ export function resolveEmailTemplateKey(
   purpose: AutomationPurpose,
   rawTemplate: string,
 ): string {
-  if (
-    purpose === AutomationPurpose.FUNNEL_SIGNUP ||
-    purpose === AutomationPurpose.FUNNEL_PAYMENT
-  ) {
-    return resolveAutomationEmailTemplateFromPurpose(purpose);
-  }
   if (rawTemplate) {
-    return resolveAutomationEmailTemplateId(rawTemplate);
+    const resolved = resolveAutomationEmailTemplateId(rawTemplate);
+    const looksGeneric =
+      resolved === AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC &&
+      !normalizeRawTemplate(rawTemplate).includes('generic');
+    if (!looksGeneric) {
+      return resolved;
+    }
   }
+
   return resolveAutomationEmailTemplateFromPurpose(purpose);
+}
+
+function normalizeRawTemplate(rawTemplate: string): string {
+  return rawTemplate
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '');
 }
 
 export function getPurposeEmailDefaults(

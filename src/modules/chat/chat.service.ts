@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThan, Repository } from 'typeorm';
+import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
 } from '../../common/pagination';
-import { CHAT_CONVERSATION_SYNC_PAGE_SIZE, CHAT_MESSAGE_SYNC_PAGE_SIZE } from './chat-sync.constants';
+import {
+  CHAT_BUSINESS_MESSAGE_SYNC_PAGE_SIZE,
+  CHAT_CONVERSATION_SYNC_PAGE_SIZE,
+  CHAT_MESSAGE_SYNC_PAGE_SIZE,
+} from './chat-sync.constants';
 import {
   ActivityEvent,
   ActivityEventType,
@@ -36,6 +40,7 @@ import {
   PaginatedChatCustomersDto,
   SyncChatCustomersDto,
   SyncChatMessagesDto,
+  BusinessChatsUnreadDto,
 } from './chat.dto';
 
 @Injectable()
@@ -74,6 +79,43 @@ export class ChatService {
     );
 
     return viewedAt;
+  }
+
+  async getBusinessChatsUnread(
+    businessId: number,
+    userId: number,
+  ): Promise<BusinessChatsUnreadDto> {
+    const readState = await this.chatReadStateRepository.findOne({
+      where: { businessId, userId },
+    });
+    const viewedAt = readState?.chatsLastViewedAt ?? null;
+
+    const latestInbound = await this.messageRepository
+      .createQueryBuilder('message')
+      .innerJoin('message.conversation', 'conversation')
+      .where('conversation.businessId = :businessId', { businessId })
+      .andWhere('conversation.isPrivate = true')
+      .andWhere('conversation.messageCount > 0')
+      .andWhere('message.direction = :direction', {
+        direction: StoredMessageDirection.INBOUND,
+      })
+      .orderBy('message.sentAt', 'DESC')
+      .addOrderBy('message.id', 'DESC')
+      .select(['message.id', 'message.sentAt'])
+      .getOne();
+
+    if (!latestInbound?.sentAt) {
+      return { hasUnread: false, chatsLastViewedAt: viewedAt };
+    }
+
+    if (!viewedAt) {
+      return { hasUnread: true, chatsLastViewedAt: null };
+    }
+
+    return {
+      hasUnread: latestInbound.sentAt.getTime() > viewedAt.getTime(),
+      chatsLastViewedAt: viewedAt,
+    };
   }
 
   async getActiveFlowCustomers(
@@ -160,29 +202,37 @@ export class ChatService {
     businessId: number,
     page?: number,
     limit?: number,
+    search?: string,
   ): Promise<PaginatedChatCustomersDto> {
     const pagination = normalizePagination(page, limit);
+    const query = (search ?? '').trim().toLowerCase();
 
-    const [conversations, total] = await this.conversationRepository.findAndCount(
-      {
-        where: {
-          businessId,
-          isPrivate: true,
-          messageCount: MoreThan(0),
-        },
-        relations: ['customer', 'lastAutomation'],
-        order: { lastMessageAt: 'DESC' },
-        skip: pagination.skip,
-        take: pagination.limit,
-      },
-    );
+    const qb = this.conversationRepository
+      .createQueryBuilder('conversation')
+      .leftJoinAndSelect('conversation.customer', 'customer')
+      .leftJoinAndSelect('conversation.lastAutomation', 'lastAutomation')
+      .where('conversation.businessId = :businessId', { businessId })
+      .andWhere('conversation.isPrivate = true')
+      .andWhere('conversation.messageCount > 0')
+      .orderBy('conversation.lastMessageAt', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit);
 
-    const data = conversations.map((conversation) =>
-      this.toChatCustomerSummary(conversation),
-    );
+    if (query) {
+      qb.andWhere(
+        `(LOWER(COALESCE(customer.name, '')) LIKE :search
+          OR LOWER(COALESCE(customer.email, '')) LIKE :search
+          OR LOWER(COALESCE(conversation.lastMessagePreview, '')) LIKE :search)`,
+        { search: `%${query}%` },
+      );
+    }
+
+    const [conversations, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: conversations.map((conversation) =>
+        this.toChatCustomerSummary(conversation),
+      ),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
@@ -253,6 +303,7 @@ export class ChatService {
   async getCustomerConversationMessages(
     businessId: number,
     customerId: number,
+    options?: { beforeMessageId?: number; limit?: number },
   ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { businessId, customerId, isPrivate: true },
@@ -264,8 +315,24 @@ export class ChatService {
       );
     }
 
-    const messages = await this.messageRepository.find({
-      where: { conversationId: conversation.id },
+    const pageSize = Math.max(
+      1,
+      Math.min(
+        options?.limit ?? CHAT_MESSAGE_SYNC_PAGE_SIZE,
+        CHAT_MESSAGE_SYNC_PAGE_SIZE,
+      ),
+    );
+    const beforeMessageId = options?.beforeMessageId;
+
+    const rows = await this.messageRepository.find({
+      where: {
+        conversationId: conversation.id,
+        ...(beforeMessageId != null &&
+        Number.isFinite(beforeMessageId) &&
+        beforeMessageId > 0
+          ? { id: LessThan(beforeMessageId) }
+          : {}),
+      },
       relations: [
         'automation',
         'automation.campaign',
@@ -275,15 +342,20 @@ export class ChatService {
         'sentToBusiness',
         'sentToCustomer',
       ],
-      order: { sentAt: 'ASC' },
+      order: { id: 'DESC' },
+      take: pageSize + 1,
     });
+
+    const hasMore = rows.length > pageSize;
+    const page = (hasMore ? rows.slice(0, pageSize) : rows).reverse();
 
     return {
       conversationId: conversation.id,
       customerId,
-      messages: messages.map((message) =>
+      messages: page.map((message) =>
         this.toConversationMessageFromStoredMessage(message),
       ),
+      hasMore,
     };
   }
 
@@ -349,6 +421,7 @@ export class ChatService {
   async getConversationMessagesByConversationId(
     businessId: number,
     conversationId: number,
+    options?: { beforeMessageId?: number; limit?: number },
   ): Promise<CustomerConversationMessagesDto> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId, businessId, isPrivate: true },
@@ -363,6 +436,7 @@ export class ChatService {
     return this.getCustomerConversationMessages(
       businessId,
       conversation.customerId,
+      options,
     );
   }
 
@@ -406,8 +480,13 @@ export class ChatService {
   async syncBusinessChatMessages(
     businessId: number,
     afterMessageId: number,
+    limit: number = CHAT_BUSINESS_MESSAGE_SYNC_PAGE_SIZE,
   ): Promise<SyncChatMessagesDto> {
     const cursorId = Math.max(0, afterMessageId);
+    const pageSize = Math.max(
+      1,
+      Math.min(limit, CHAT_BUSINESS_MESSAGE_SYNC_PAGE_SIZE),
+    );
 
     const messages = await this.messageRepository
       .createQueryBuilder('message')
@@ -423,8 +502,11 @@ export class ChatService {
       .andWhere('conversation.isPrivate = true')
       .andWhere('message.id > :cursorId', { cursorId })
       .orderBy('message.id', 'ASC')
-      .take(1000)
+      .take(pageSize + 1)
       .getMany();
+
+    const hasMore = messages.length > pageSize;
+    const page = hasMore ? messages.slice(0, pageSize) : messages;
 
     const byConversation = new Map<
       number,
@@ -435,7 +517,7 @@ export class ChatService {
       }
     >();
 
-    for (const message of messages) {
+    for (const message of page) {
       const conversationId = message.conversationId;
       const customerId = message.conversation?.customerId;
       if (!customerId) {
@@ -459,6 +541,7 @@ export class ChatService {
 
     return {
       data: [...byConversation.values()],
+      hasMore,
     };
   }
 

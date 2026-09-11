@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -13,6 +14,7 @@ import type { Customer } from './customer.entity';
 import type { Business } from './business.entity';
 @Entity('conversation')
 @Unique('UQ_conversation_business_customer', ['businessId', 'customerId'])
+@Index('IDX_conversation_business_last_message', ['businessId', 'lastMessageAt'])
 export class Conversation {
   @PrimaryGeneratedColumn()
   id!: number;
