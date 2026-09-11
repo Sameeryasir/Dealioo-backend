@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
+import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import { StripeService } from './stripe.service';
@@ -32,7 +33,7 @@ export class StripeController {
     @Query('error_description') errorDescription: string,
     @Res() res: Response,
   ) {
-    const frontend = 'http://localhost:3002';
+    const frontend = getFrontendBaseUrl().replace(/\/$/, '');
     const businessQuery = state?.trim()
       ? `businessId=${encodeURIComponent(state.trim())}`
       : '';
