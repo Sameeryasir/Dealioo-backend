@@ -23,6 +23,7 @@ export type BusinessTrackingResponse = {
   hasAccessToken: boolean;
   hasCapiReady: boolean;
   capiCredentialSource: 'tracking_token' | 'meta_oauth' | null;
+  hasGoogleUploadReady: boolean;
 };
 
 export type ActivePublicTrackingIds = {
@@ -91,6 +92,9 @@ export class BusinessTrackingService {
     row: BusinessTracking,
   ): Promise<BusinessTrackingResponse> {
     const credentials = await this.getCapiCredentials(row.businessId);
+    const hasGoogleUploadReady = await this.hasGoogleConversionUploadReady(
+      row,
+    );
     return {
       id: row.id,
       businessId: row.businessId,
@@ -105,7 +109,30 @@ export class BusinessTrackingService {
       hasAccessToken: Boolean(row.accessToken?.trim()),
       hasCapiReady: Boolean(credentials),
       capiCredentialSource: credentials?.source ?? null,
+      hasGoogleUploadReady,
     };
+  }
+
+  private async hasGoogleConversionUploadReady(
+    row: BusinessTracking,
+  ): Promise<boolean> {
+    if (!row.isActive) return false;
+    if (!row.googleTagManagerId?.trim()) return false;
+    const hasLabel = Boolean(
+      row.googleAdsSignupConversionLabel?.trim() ||
+        row.googleAdsPurchaseConversionLabel?.trim() ||
+        row.googleAdsLeadConversionLabel?.trim(),
+    );
+    if (!hasLabel) return false;
+
+    const business = await this.businessRepository.findOne({
+      where: { id: row.businessId },
+      select: ['id', 'googleRefreshToken', 'googleCustomerId'],
+    });
+    return Boolean(
+      business?.googleRefreshToken?.trim() &&
+        business?.googleCustomerId?.trim(),
+    );
   }
 
   private normalizeOptionalId(value?: string): string | null {

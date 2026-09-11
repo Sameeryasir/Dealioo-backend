@@ -49,7 +49,7 @@ export class GoogleFunnelEvent {
   @Column({
     type: 'varchar',
     length: 32,
-    default: GoogleFunnelEventStatus.STORED,
+    default: GoogleFunnelEventStatus.PENDING,
   })
   status!: GoogleFunnelEventStatus;
 
@@ -84,6 +84,29 @@ export class GoogleFunnelEvent {
 
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent!: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  payload!: object | null;
+
+  @Column({ name: 'google_response', type: 'jsonb', nullable: true })
+  googleResponse!: object | null;
+
+  @Column({ name: 'retry_count', type: 'int', default: 0 })
+  retryCount!: number;
+
+  @Column({ name: 'last_error', type: 'text', nullable: true })
+  lastError!: string | null;
+
+  @Column({ name: 'sent_at', type: 'timestamptz', nullable: true })
+  sentAt!: Date | null;
+
+  @Column({
+    name: 'conversion_action',
+    type: 'varchar',
+    length: 191,
+    nullable: true,
+  })
+  conversionAction!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

@@ -1,5 +1,10 @@
 export enum GoogleFunnelEventStatus {
   STORED = 'stored',
+  PENDING = 'pending',
+  QUEUED = 'queued',
+  SENT = 'sent',
+  FAILED = 'failed',
+  DEAD_LETTER = 'dead_letter',
 }
 
 export enum GoogleFunnelEventName {
