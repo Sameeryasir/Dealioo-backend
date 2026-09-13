@@ -1,12 +1,19 @@
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsNotEmpty,
   IsPhoneNumber,
   IsString,
-  MinLength,
 } from 'class-validator';
+import {
+  IsStrongEnoughPassword,
+  normalizeAuthEmail,
+} from '../auth-password.util';
 
 export class RegisterUserDto {
+  @Transform(({ value }) =>
+    typeof value === 'string' ? normalizeAuthEmail(value) : value,
+  )
   @IsString()
   @IsNotEmpty()
   @IsEmail()
@@ -14,7 +21,7 @@ export class RegisterUserDto {
 
   @IsString()
   @IsNotEmpty()
-  @MinLength(8)
+  @IsStrongEnoughPassword()
   password: string;
 
   @IsString()

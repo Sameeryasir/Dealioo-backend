@@ -5,6 +5,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsStrongEnoughPassword } from '../auth-password.util';
 
 export class RegisterWithInvitationDto {
   @IsString()
@@ -20,8 +21,8 @@ export class RegisterWithInvitationDto {
 
   @IsString()
   @IsNotEmpty()
-  @MinLength(8)
   @MaxLength(128)
+  @IsStrongEnoughPassword()
   password!: string;
 
   @IsOptional()

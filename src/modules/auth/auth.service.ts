@@ -555,30 +555,15 @@ export class AuthService {
     refreshToken: string;
     user: AuthUserPayload;
   }> {
-    const { email, password } = loginUserDto;
+    const email = loginUserDto.email.trim().toLowerCase();
+    const { password } = loginUserDto;
 
-    const user = await this.userRepository.findOne({
-      where: { email },
-      relations: ['role'],
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        avatar: true,
-        firstName: true,
-        lastName: true,
-        provider: true,
-        emailVerified: true,
-        phoneVerified: true,
-        passwordHash: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        lastLoginAt: true,
-        role: { id: true, name: true },
-      },
-    });
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .leftJoinAndSelect('user.role', 'role')
+      .where('LOWER(user.email) = :email', { email })
+      .getOne();
 
     if (!user) {
       throw new UnauthorizedException('Invalid email or password.');
@@ -600,7 +585,23 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password.');
     }
 
+    if (!user.emailVerified) {
+      try {
+        await this.sendOtpForUser(user);
+      } catch {
+      }
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'EMAIL_NOT_VERIFIED',
+        message:
+          'Please verify your email before signing in. We sent a new code to your inbox.',
+      });
+    }
+
     user.lastLoginAt = new Date();
+    if (user.email !== email) {
+      user.email = email;
+    }
     await this.userRepository.save(user);
 
     return {
@@ -713,10 +714,11 @@ export class AuthService {
     });
 
     if (!user) {
-      user = await this.userRepository.findOne({
-        where: { email },
-        relations: ['role'],
-      });
+      user = await this.userRepository
+        .createQueryBuilder('user')
+        .leftJoinAndSelect('user.role', 'role')
+        .where('LOWER(user.email) = :email', { email })
+        .getOne();
     }
 
     if (user) {
@@ -726,7 +728,7 @@ export class AuthService {
 
       if (mode === 'signup') {
         throw new ConflictException(
-          'An account with this email already exists. Please log in with Google instead.',
+          'An account with this email already exists. Please log in instead (email/password or Google).',
         );
       }
 
@@ -781,7 +783,7 @@ export class AuthService {
 
     if (mode === 'login') {
       throw new NotFoundException(
-        'No account found with this Google email. Please sign up with Google first.',
+        'No account found with this Google email. Please sign up with Google first — or create an email account on Sign up.',
       );
     }
 
@@ -906,9 +908,11 @@ export class AuthService {
   }
 
   async resendOtp(email: string): Promise<{ message: string }> {
-    const user = await this.userRepository.findOne({
-      where: { email },
-    });
+    const normalized = email.trim().toLowerCase();
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', { email: normalized })
+      .getOne();
 
     if (!user) {
       throw new NotFoundException('User not found.');
@@ -1153,10 +1157,12 @@ export class AuthService {
   }
 
   private async validateOtpOnly(email: string, otp: number): Promise<User> {
-    const user = await this.userRepository.findOne({
-      where: { email },
-      relations: ['role'],
-    });
+    const normalized = email.trim().toLowerCase();
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.role', 'role')
+      .where('LOWER(user.email) = :email', { email: normalized })
+      .getOne();
     if (!user) {
       throw new NotFoundException('User not found.');
     }
