@@ -24,7 +24,6 @@ import {
 import { Business } from '../../db/entities/business.entity';
 import {
   Campaign,
-  CampaignPublicationStatus,
   CampaignType,
 } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
@@ -1903,12 +1902,14 @@ export class RedemptionService {
     deals: GuestAvailableBusinessDealResult[];
     publishedCount: number;
   }> {
+    // CRM "Live" is funnel.published. Campaign status is kept in sync on write;
+    // list by the funnel flag so already-live deals appear without a republish.
     const funnels = await this.funnelRepository.find({
       where: {
+        published: true,
         campaign: {
           businessId,
           deletedAt: IsNull(),
-          status: CampaignPublicationStatus.PUBLISHED,
         },
       },
       relations: ['campaign'],

@@ -71,6 +71,26 @@ export class FunnelService {
     );
   }
 
+  /**
+   * Keep campaign.status in sync with funnel.published.
+   * Business deals / scanner attach use campaign publication; the CRM editor
+   * only toggles the funnel flag — without this, "Live" funnels stay missing
+   * from Business deals. (MCP context 7: single source of truth via dual write.)
+   */
+  private async syncCampaignStatusFromFunnelPublished(
+    campaign: Campaign,
+    published: boolean,
+  ): Promise<void> {
+    const nextStatus = published
+      ? CampaignPublicationStatus.PUBLISHED
+      : CampaignPublicationStatus.UNPUBLISHED;
+    if (campaign.status === nextStatus) {
+      return;
+    }
+    campaign.status = nextStatus;
+    await this.campaignRepository.save(campaign);
+  }
+
   async createOrUpdateFunnel(
     dto: CreateFunnelDto,
     user: User,
@@ -122,6 +142,13 @@ export class FunnelService {
       });
 
       const saved = await this.funnelRepository.save(funnel);
+      // New funnel: align campaign status with the publish flag from the editor.
+      if (dto.published !== undefined) {
+        await this.syncCampaignStatusFromFunnelPublished(
+          campaign,
+          dto.published === true,
+        );
+      }
       const defaultPages = isPostpaid
         ? {
             landing: {},
@@ -157,6 +184,10 @@ export class FunnelService {
     funnel.updatedBy = { id: user.id } as User;
     if (dto.published !== undefined) {
       funnel.published = dto.published;
+      await this.syncCampaignStatusFromFunnelPublished(
+        campaign,
+        dto.published === true,
+      );
     }
 
     const saved = await this.funnelRepository.save(funnel);
@@ -518,6 +549,11 @@ export class FunnelService {
 
     if (dto.published !== undefined) {
       funnel.published = dto.published;
+      // Same dual-write as createOrUpdateFunnel so PATCH publish stays consistent.
+      await this.syncCampaignStatusFromFunnelPublished(
+        funnel.campaign,
+        dto.published === true,
+      );
     }
     funnel.updatedBy = { id: user.id } as User;
     funnel.businessId = funnel.campaign.businessId;
