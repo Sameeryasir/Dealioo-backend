@@ -1,10 +1,10 @@
 import {
+  BudgetBand,
+  BusinessCount,
   HelpStyle,
-  PaidMarketing,
   PlanFitAnswersInput,
   PlanFitPlanSlug,
   Priority,
-  BusinessCount,
 } from './plan-fit.types';
 
 export type PlanContentInput = {
@@ -24,6 +24,7 @@ const FALLBACK_FEATURES: Record<PlanFitPlanSlug, string[]> = {
     'Analytics',
   ],
   [PlanFitPlanSlug.GROWTH_AI]: [
+    'One primary location',
     'Everything in Starter',
     'AI Deal Generator',
     'AI Image Generation',
@@ -35,6 +36,7 @@ const FALLBACK_FEATURES: Record<PlanFitPlanSlug, string[]> = {
     'Unlimited campaigns',
   ],
   [PlanFitPlanSlug.GROWTH_EXPERT]: [
+    'One primary location',
     'Everything in Growth AI',
     'Dedicated marketing expert',
     'Monthly strategy session',
@@ -71,19 +73,9 @@ export function needsFromAnswers(answers: PlanFitAnswersInput): string[] {
   const needs: string[] = [];
 
   if (answers.businesses === BusinessCount.ONE) {
-    needs.push('one location', 'diy campaign');
-  } else if (answers.businesses === BusinessCount.FEW) {
-    needs.push('unlimited campaigns', 'ai campaign');
+    needs.push('one location', 'one primary location', 'diy campaign');
   } else {
     needs.push('unlimited locations', 'multi-location', 'franchise');
-  }
-
-  if (answers.paidMarketing === PaidMarketing.YES) {
-    needs.push('ai campaign', 'ai copy', 'unlimited campaigns');
-  } else if (answers.paidMarketing === PaidMarketing.SOMEWHAT) {
-    needs.push('ai campaign', 'ai deal');
-  } else {
-    needs.push('diy campaign', 'qr redemption', 'landing pages');
   }
 
   if (answers.helpStyle === HelpStyle.DIY) {
@@ -111,6 +103,16 @@ export function needsFromAnswers(answers: PlanFitAnswersInput): string[] {
     );
   }
 
+  if (answers.budget === BudgetBand.LEAN) {
+    needs.push('one location', 'diy campaign', 'landing pages');
+  } else if (answers.budget === BudgetBand.GROWTH) {
+    needs.push('ai campaign', 'automation', 'unlimited campaigns');
+  } else if (answers.budget === BudgetBand.EXPERT) {
+    needs.push('dedicated marketing expert', 'strategy', 'priority support');
+  } else {
+    needs.push('unlimited locations', 'white label', 'api access', 'sla');
+  }
+
   if (answers.priority === Priority.SIMPLE) {
     needs.push('qr redemption', 'landing pages', 'diy campaign', 'stripe');
   } else if (answers.priority === Priority.AUTOMATION) {
@@ -136,10 +138,7 @@ export function needsFromAnswers(answers: PlanFitAnswersInput): string[] {
   return [...new Set(needs)];
 }
 
-export function contentBonus(
-  features: string[],
-  needs: string[],
-): number {
+export function contentBonus(features: string[], needs: string[]): number {
   if (features.length === 0 || needs.length === 0) {
     return 0;
   }

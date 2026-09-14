@@ -4,16 +4,18 @@ export enum BusinessCount {
   MANY = 'many',
 }
 
-export enum PaidMarketing {
-  YES = 'yes',
-  SOMEWHAT = 'somewhat',
-  NO = 'no',
-}
-
 export enum HelpStyle {
   DIY = 'diy',
   AI = 'ai',
   EXPERT = 'expert',
+}
+
+/** Comfortable monthly spend — maps to real plan price bands. */
+export enum BudgetBand {
+  LEAN = 'lean',
+  GROWTH = 'growth',
+  EXPERT = 'expert',
+  CUSTOM = 'custom',
 }
 
 export enum Priority {
@@ -36,7 +38,7 @@ export enum PlanFitConfidence {
   HIGH = 'HIGH',
 }
 
-export const PLAN_FIT_VERSION = '2026-v2';
+export const PLAN_FIT_VERSION = '2026-v3';
 
 export const PLAN_ORDER: readonly PlanFitPlanSlug[] = [
   PlanFitPlanSlug.STARTER,
@@ -47,8 +49,8 @@ export const PLAN_ORDER: readonly PlanFitPlanSlug[] = [
 
 export type PlanFitAnswersInput = {
   businesses: BusinessCount;
-  paidMarketing: PaidMarketing;
   helpStyle: HelpStyle;
+  budget: BudgetBand;
   priority: Priority;
 };
 

@@ -109,6 +109,10 @@ type FacebookCampaignsResponse = {
       }>;
     };
   }>;
+  paging?: {
+    cursors?: { before?: string; after?: string };
+    next?: string;
+  };
   error?: { message?: string };
 };
 
@@ -839,17 +843,12 @@ export class FacebookService {
   ): Promise<FacebookAdCampaignStatsDto> {
     const accountMeta = await this.fetchAdAccountMeta(adAccountId, accessToken);
 
-    const campaignsResponse =
-      await this.graphGetWithToken<FacebookCampaignsResponse>(
-        `/${adAccountId}/campaigns`,
-        accessToken,
-        {
-          fields: META_CAMPAIGN_FIELDS,
-          limit: '50',
-        },
-      );
+    const campaignRows = await this.fetchAllAdAccountCampaignRows(
+      adAccountId,
+      accessToken,
+    );
 
-    const rows = (campaignsResponse.data ?? []).filter((row) => {
+    const rows = campaignRows.filter((row) => {
       if (!row.id?.trim() || !row.name?.trim()) return false;
       const effective = row.effective_status?.toUpperCase() ?? '';
       const status = row.status?.toUpperCase() ?? '';
@@ -987,6 +986,44 @@ export class FacebookService {
     );
 
     return result;
+  }
+
+  private async fetchAllAdAccountCampaignRows(
+    adAccountId: string,
+    accessToken: string,
+  ): Promise<NonNullable<FacebookCampaignsResponse['data']>> {
+    const rows: NonNullable<FacebookCampaignsResponse['data']> = [];
+    let after: string | undefined;
+    const maxPages = 20;
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const params: Record<string, string> = {
+        fields: META_CAMPAIGN_FIELDS,
+        limit: '50',
+      };
+      if (after) {
+        params.after = after;
+      }
+
+      const response =
+        await this.graphGetWithToken<FacebookCampaignsResponse>(
+          `/${adAccountId}/campaigns`,
+          accessToken,
+          params,
+        );
+
+      const batch = response.data ?? [];
+      rows.push(...batch);
+
+      const nextAfter = response.paging?.cursors?.after?.trim();
+      const hasNext = Boolean(response.paging?.next && nextAfter);
+      if (!hasNext || batch.length === 0) {
+        break;
+      }
+      after = nextAfter;
+    }
+
+    return rows;
   }
 
   private async upsertCampaignStatsSnapshot(

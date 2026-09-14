@@ -2,11 +2,8 @@ import { Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
-  IsObject,
   IsOptional,
-  IsString,
   Max,
-  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -17,12 +14,12 @@ export class PartialPlanFitAnswersDto {
   businesses?: 'one' | 'few' | 'many';
 
   @IsOptional()
-  @IsIn(['yes', 'somewhat', 'no'])
-  paidMarketing?: 'yes' | 'somewhat' | 'no';
-
-  @IsOptional()
   @IsIn(['diy', 'ai', 'expert'])
   helpStyle?: 'diy' | 'ai' | 'expert';
+
+  @IsOptional()
+  @IsIn(['lean', 'growth', 'expert', 'custom'])
+  budget?: 'lean' | 'growth' | 'expert' | 'custom';
 
   @IsOptional()
   @IsIn(['simple', 'automation', 'guidance', 'scale'])

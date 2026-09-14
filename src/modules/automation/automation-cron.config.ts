@@ -10,7 +10,7 @@ export type ParsedCronTriggerConfig = {
 
 export const DEFAULT_CRON_INTERVAL_MS = 15 * 60_000;
 
-type IntervalUnit = 'ms' | 'seconds' | 'minutes' | 'hours';
+type IntervalUnit = 'ms' | 'seconds' | 'minutes' | 'hours' | 'days';
 
 export function parseCronTriggerConfig(
   config: Record<string, unknown>,
@@ -195,6 +195,9 @@ function readUnit(raw: unknown): IntervalUnit | undefined {
   ) {
     return 'hours';
   }
+  if (unit === 'd' || unit === 'day' || unit === 'days') {
+    return 'days';
+  }
   return undefined;
 }
 
@@ -213,7 +216,7 @@ function parseIntervalValue(
   if (typeof raw === 'string') {
     const trimmed = raw.trim().toLowerCase();
     const match = trimmed.match(
-      /^(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?$/,
+      /^(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$/,
     );
     if (match) {
       const amount = Number(match[1]);
@@ -248,6 +251,8 @@ function toIntervalMs(amount: number, unit: IntervalUnit): number {
       return Math.floor(amount * 1000);
     case 'hours':
       return Math.floor(amount * 60 * 60_000);
+    case 'days':
+      return Math.floor(amount * 24 * 60 * 60_000);
     case 'minutes':
     default:
       return Math.floor(amount * 60_000);

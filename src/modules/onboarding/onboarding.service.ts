@@ -42,9 +42,9 @@ import { BUSINESSES_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
 import { SpacesService } from '../spaces/spaces.service';
 import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation.service';
 import {
+  BudgetBand,
   BusinessCount,
   HelpStyle,
-  PaidMarketing,
   PlanFitAnswersInput,
   Priority,
 } from './plan-fit/plan-fit.types';
@@ -894,8 +894,8 @@ export class OnboardingService {
   ): boolean {
     return (
       a.businesses === b.businesses &&
-      a.paidMarketing === b.paidMarketing &&
       a.helpStyle === b.helpStyle &&
+      a.budget === b.budget &&
       a.priority === b.priority
     );
   }
@@ -941,13 +941,11 @@ export class OnboardingService {
     if (Object.values(BusinessCount).includes(raw.businesses as BusinessCount)) {
       out.businesses = raw.businesses as BusinessCount;
     }
-    if (
-      Object.values(PaidMarketing).includes(raw.paidMarketing as PaidMarketing)
-    ) {
-      out.paidMarketing = raw.paidMarketing as PaidMarketing;
-    }
     if (Object.values(HelpStyle).includes(raw.helpStyle as HelpStyle)) {
       out.helpStyle = raw.helpStyle as HelpStyle;
+    }
+    if (Object.values(BudgetBand).includes(raw.budget as BudgetBand)) {
+      out.budget = raw.budget as BudgetBand;
     }
     if (Object.values(Priority).includes(raw.priority as Priority)) {
       out.priority = raw.priority as Priority;
@@ -963,14 +961,14 @@ export class OnboardingService {
     }
 
     const businesses = raw.businesses;
-    const paidMarketing = raw.paidMarketing;
     const helpStyle = raw.helpStyle;
+    const budget = raw.budget;
     const priority = raw.priority;
 
     if (
       !Object.values(BusinessCount).includes(businesses as BusinessCount) ||
-      !Object.values(PaidMarketing).includes(paidMarketing as PaidMarketing) ||
       !Object.values(HelpStyle).includes(helpStyle as HelpStyle) ||
+      !Object.values(BudgetBand).includes(budget as BudgetBand) ||
       !Object.values(Priority).includes(priority as Priority)
     ) {
       return null;
@@ -978,8 +976,8 @@ export class OnboardingService {
 
     return {
       businesses: businesses as BusinessCount,
-      paidMarketing: paidMarketing as PaidMarketing,
       helpStyle: helpStyle as HelpStyle,
+      budget: budget as BudgetBand,
       priority: priority as Priority,
     };
   }

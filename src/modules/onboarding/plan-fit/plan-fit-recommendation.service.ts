@@ -7,9 +7,9 @@ import {
   type PlanContentInput,
 } from './plan-fit-content';
 import {
+  BudgetBand,
   BusinessCount,
   HelpStyle,
-  PaidMarketing,
   PLAN_FIT_VERSION,
   PLAN_ORDER,
   PlanFitAnswersInput,
@@ -29,13 +29,13 @@ const EMPTY_SCORES = (): PlanFitScoreBreakdown => ({
 
 const REASONS: Record<PlanFitPlanSlug, string> = {
   [PlanFitPlanSlug.STARTER]:
-    'Best fit for a single business that wants simple DIY campaigns.',
+    'Best fit for one location that wants simple DIY campaigns on a starter budget.',
   [PlanFitPlanSlug.GROWTH_AI]:
-    'Best fit when you want AI tools and automated follow-ups.',
+    'Best fit for one location that wants AI tools and automated follow-ups.',
   [PlanFitPlanSlug.GROWTH_EXPERT]:
-    'Best fit when you want AI plus a dedicated marketing expert.',
+    'Best fit for one location that wants AI plus a dedicated marketing expert.',
   [PlanFitPlanSlug.ENTERPRISE]:
-    'Best fit for multi-business brands that need a custom plan.',
+    'Best fit for multi-location brands that need unlimited locations and a custom setup.',
 };
 
 const PRIORITY_PLAN: Record<Priority, PlanFitPlanSlug> = {
@@ -51,6 +51,13 @@ const HELP_PLAN: Record<HelpStyle, PlanFitPlanSlug> = {
   [HelpStyle.EXPERT]: PlanFitPlanSlug.GROWTH_EXPERT,
 };
 
+const BUDGET_PLAN: Record<BudgetBand, PlanFitPlanSlug> = {
+  [BudgetBand.LEAN]: PlanFitPlanSlug.STARTER,
+  [BudgetBand.GROWTH]: PlanFitPlanSlug.GROWTH_AI,
+  [BudgetBand.EXPERT]: PlanFitPlanSlug.GROWTH_EXPERT,
+  [BudgetBand.CUSTOM]: PlanFitPlanSlug.ENTERPRISE,
+};
+
 @Injectable()
 export class PlanFitRecommendationService {
   recommend(
@@ -59,10 +66,11 @@ export class PlanFitRecommendationService {
   ): PlanFitRecommendationResult {
     const scores = this.buildScores(answers, planContents);
     const planSlug = this.pickWinner(scores, answers);
-    const ranked = this.rank(scores);
+    const ranked = this.rank(scores, answers);
     const confidence = this.confidence(
       ranked[0]?.score ?? 0,
       ranked[1]?.score ?? 0,
+      ranked.length,
     );
 
     return {
@@ -79,31 +87,23 @@ export class PlanFitRecommendationService {
     planContents: PlanContentInput[],
   ): PlanFitScoreBreakdown {
     const scores = EMPTY_SCORES();
+    const multiLocation = answers.businesses !== BusinessCount.ONE;
 
+    // --- Locations (product truth: Growth tiers = one primary location) ---
     if (answers.businesses === BusinessCount.ONE) {
-      scores.starter += 3;
-      scores.growthAi += 1;
+      scores.starter += 2;
+      scores.growthAi += 2;
+      scores.growthExpert += 2;
+      scores.enterprise += 0;
     } else if (answers.businesses === BusinessCount.FEW) {
-      scores.growthAi += 2;
-      scores.growthExpert += 2;
-      scores.enterprise += 1;
+      scores.enterprise += 5;
     } else {
-      scores.enterprise += 4;
-      scores.growthExpert += 1;
+      scores.enterprise += 6;
     }
 
-    if (answers.paidMarketing === PaidMarketing.YES) {
-      scores.growthAi += 3;
-      scores.growthExpert += 2;
-    } else if (answers.paidMarketing === PaidMarketing.SOMEWHAT) {
-      scores.growthAi += 2;
-      scores.starter += 1;
-    } else {
-      scores.starter += 3;
-    }
-
+    // --- Support model ---
     if (answers.helpStyle === HelpStyle.DIY) {
-      scores.starter += 3;
+      scores.starter += 4;
       scores.growthAi += 1;
     } else if (answers.helpStyle === HelpStyle.AI) {
       scores.growthAi += 4;
@@ -113,6 +113,21 @@ export class PlanFitRecommendationService {
       scores.enterprise += 1;
     }
 
+    // --- Budget bands match real prices ---
+    if (answers.budget === BudgetBand.LEAN) {
+      scores.starter += 5;
+      scores.growthAi += 1;
+    } else if (answers.budget === BudgetBand.GROWTH) {
+      scores.growthAi += 5;
+      scores.growthExpert += 1;
+    } else if (answers.budget === BudgetBand.EXPERT) {
+      scores.growthExpert += 5;
+      scores.enterprise += 1;
+    } else {
+      scores.enterprise += 5;
+    }
+
+    // --- Priority maps 1:1 to plan focus ---
     if (answers.priority === Priority.SIMPLE) {
       scores.starter += 4;
     } else if (answers.priority === Priority.AUTOMATION) {
@@ -130,8 +145,11 @@ export class PlanFitRecommendationService {
       this.addScore(scores, slug, bonus);
     }
 
-    if (answers.businesses !== BusinessCount.ONE) {
+    // Hard product rules: Starter / Growth* require one primary location.
+    if (multiLocation) {
       scores.starter = 0;
+      scores.growthAi = 0;
+      scores.growthExpert = 0;
     }
 
     return scores;
@@ -171,7 +189,7 @@ export class PlanFitRecommendationService {
       this.isEligible(plan, answers),
     );
     if (eligible.length === 0) {
-      return PlanFitPlanSlug.GROWTH_AI;
+      return PlanFitPlanSlug.ENTERPRISE;
     }
 
     return eligible.reduce((best, next) =>
@@ -183,9 +201,11 @@ export class PlanFitRecommendationService {
     plan: PlanFitPlanSlug,
     answers: PlanFitAnswersInput,
   ): boolean {
-    if (plan === PlanFitPlanSlug.STARTER) {
-      return answers.businesses === BusinessCount.ONE;
+    const multiLocation = answers.businesses !== BusinessCount.ONE;
+    if (multiLocation) {
+      return plan === PlanFitPlanSlug.ENTERPRISE;
     }
+    // Single location: all plans eligible (Enterprise still possible via budget/priority).
     return true;
   }
 
@@ -199,6 +219,11 @@ export class PlanFitRecommendationService {
     const scoreB = this.scoreOf(scores, b);
     if (scoreA !== scoreB) {
       return scoreA > scoreB;
+    }
+
+    const byBudget = BUDGET_PLAN[answers.budget];
+    if ((a === byBudget) !== (b === byBudget)) {
+      return a === byBudget;
     }
 
     const byPriority = PRIORITY_PLAN[answers.priority];
@@ -216,16 +241,19 @@ export class PlanFitRecommendationService {
 
   private rank(
     scores: PlanFitScoreBreakdown,
+    answers: PlanFitAnswersInput,
   ): Array<{ slug: PlanFitPlanSlug; score: number }> {
-    return PLAN_ORDER.map((slug) => ({
-      slug,
-      score: this.scoreOf(scores, slug),
-    })).sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      return PLAN_ORDER.indexOf(a.slug) - PLAN_ORDER.indexOf(b.slug);
-    });
+    return PLAN_ORDER.filter((slug) => this.isEligible(slug, answers))
+      .map((slug) => ({
+        slug,
+        score: this.scoreOf(scores, slug),
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        return PLAN_ORDER.indexOf(a.slug) - PLAN_ORDER.indexOf(b.slug);
+      });
   }
 
   private scoreOf(
@@ -249,7 +277,11 @@ export class PlanFitRecommendationService {
   private confidence(
     topScore: number,
     secondScore: number,
+    eligibleCount: number,
   ): PlanFitConfidence {
+    if (eligibleCount <= 1) {
+      return PlanFitConfidence.HIGH;
+    }
     const gap = Math.max(0, topScore - secondScore);
     if (gap >= 4) {
       return PlanFitConfidence.HIGH;
