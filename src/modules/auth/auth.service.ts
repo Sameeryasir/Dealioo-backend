@@ -286,11 +286,11 @@ export class AuthService {
       );
 
       let user = await userRepo
-        .createQueryBuilder('user')
-        .addSelect('user.passwordHash')
-        .leftJoinAndSelect('user.role', 'role')
-        .where('LOWER(user.email) = :email', { email })
-        .setLock('pessimistic_write', undefined, ['user'])
+        .createQueryBuilder('u')
+        .addSelect('u.passwordHash')
+        .leftJoinAndSelect('u.role', 'role')
+        .where('LOWER(u.email) = :email', { email })
+        .setLock('pessimistic_write', undefined, ['u'])
         .getOne();
 
       if (user?.passwordHash) {

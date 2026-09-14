@@ -587,6 +587,38 @@ export class CouponService {
    * Keep coupon payment_status aligned with Stripe funnel payment lifecycle
    * (refunds, disputes) before preview/redeem decisions.
    */
+  async syncPaymentStatusesForCoupons(coupons: Coupon[]): Promise<void> {
+    const updates: Array<{ id: number; paymentStatus: CouponPaymentStatus }> =
+      [];
+
+    for (const coupon of coupons) {
+      if (!coupon.funnelPaymentId) {
+        continue;
+      }
+      const payment = coupon.funnelPayment;
+      if (!payment) {
+        continue;
+      }
+      const mapped = this.mapFunnelPaymentToCouponStatus(payment.status);
+      if (mapped !== coupon.paymentStatus) {
+        coupon.paymentStatus = mapped;
+        updates.push({ id: coupon.id, paymentStatus: mapped });
+      }
+    }
+
+    if (updates.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      updates.map((row) =>
+        this.couponRepository.update(row.id, {
+          paymentStatus: row.paymentStatus,
+        }),
+      ),
+    );
+  }
+
   async syncPaymentStatusFromFunnelPayment(coupon: Coupon): Promise<Coupon> {
     if (!coupon.funnelPaymentId) {
       return coupon;

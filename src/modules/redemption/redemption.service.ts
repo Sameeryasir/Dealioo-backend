@@ -6,7 +6,7 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import {
   CustomerVisit,
   CustomerVisitSource,
@@ -24,6 +24,7 @@ import {
 import { Business } from '../../db/entities/business.entity';
 import {
   Campaign,
+  CampaignPublicationStatus,
   CampaignType,
 } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
@@ -160,6 +161,31 @@ type CustomerVisitRecordResult = {
   campaignId: number | null;
 };
 
+export type GuestActiveDealResult = {
+  couponId: number;
+  funnelId: number | null;
+  campaignId: number | null;
+  campaignName: string;
+  offerName: string;
+  paymentLabel: 'PREPAID' | 'UNPAID';
+  paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
+  paymentStatus: CouponPaymentStatus;
+  campaignType: 'prepaid' | 'postpaid' | null;
+  campaignPrice: number | null;
+  imageUrl: string | null;
+  expiresAt: string | null;
+  canSelect: boolean;
+  qrToken: string;
+};
+
+export type GuestAvailableBusinessDealResult = {
+  id: number;
+  campaignName: string;
+  price: number | null;
+  imageUrl: string | null;
+  campaignType: 'prepaid' | 'postpaid' | null;
+};
+
 export type GuestProfileResult = {
   customerId: number;
   customerName: string;
@@ -173,22 +199,9 @@ export type GuestProfileResult = {
     campaignName: string;
     redeemedAt: string;
   }>;
-  activeDeals: Array<{
-    couponId: number;
-    funnelId: number | null;
-    campaignId: number | null;
-    campaignName: string;
-    offerName: string;
-    paymentLabel: 'PREPAID' | 'UNPAID';
-    paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
-    paymentStatus: CouponPaymentStatus;
-    campaignType: 'prepaid' | 'postpaid' | null;
-    campaignPrice: number | null;
-    imageUrl: string | null;
-    expiresAt: string | null;
-    canSelect: boolean;
-    qrToken: string;
-  }>;
+  activeDeals: GuestActiveDealResult[];
+  availableBusinessDeals: GuestAvailableBusinessDealResult[];
+  publishedBusinessDealCount: number;
 };
 
 @Injectable()
@@ -211,6 +224,8 @@ export class RedemptionService {
     private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Funnel)
+    private readonly funnelRepository: Repository<Funnel>,
     @Inject(
       forwardRef(
         () =>
@@ -311,7 +326,10 @@ export class RedemptionService {
       customerId,
       businessId,
     );
-    const activeDeals = await this.getGuestActiveDeals(customerId, businessId);
+    const { activeDeals, occupiedFunnelIds } =
+      await this.getGuestActiveDeals(customerId, businessId);
+    const { deals: availableBusinessDeals, publishedCount } =
+      await this.getAvailableBusinessDeals(businessId, occupiedFunnelIds);
 
     return {
       customerId: customer.id,
@@ -324,6 +342,8 @@ export class RedemptionService {
       previouslyRedeemedCount: profile.previouslyRedeemedCount,
       previousRedemptions: profile.previousRedemptions,
       activeDeals,
+      availableBusinessDeals,
+      publishedBusinessDealCount: publishedCount,
     };
   }
 
@@ -1778,24 +1798,10 @@ export class RedemptionService {
   private async getGuestActiveDeals(
     customerId: number,
     businessId: number,
-  ): Promise<
-    Array<{
-      couponId: number;
-      funnelId: number | null;
-      campaignId: number | null;
-      campaignName: string;
-      offerName: string;
-      paymentLabel: 'PREPAID' | 'UNPAID';
-      paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
-      paymentStatus: CouponPaymentStatus;
-      campaignType: 'prepaid' | 'postpaid' | null;
-      campaignPrice: number | null;
-      imageUrl: string | null;
-      expiresAt: string | null;
-      canSelect: boolean;
-      qrToken: string;
-    }>
-  > {
+  ): Promise<{
+    activeDeals: GuestActiveDealResult[];
+    occupiedFunnelIds: number[];
+  }> {
     await this.ensureUnpaidFunnelDealsForGuest(customerId, businessId);
 
     const coupons = await this.couponRepository.find({
@@ -1804,32 +1810,22 @@ export class RedemptionService {
       order: { issuedAt: 'DESC' },
     });
 
-    const results: Array<{
-      couponId: number;
-      funnelId: number | null;
-      campaignId: number | null;
-      campaignName: string;
-      offerName: string;
-      paymentLabel: 'PREPAID' | 'UNPAID';
-      paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
-      paymentStatus: CouponPaymentStatus;
-      campaignType: 'prepaid' | 'postpaid' | null;
-      campaignPrice: number | null;
-      imageUrl: string | null;
-      expiresAt: string | null;
-      canSelect: boolean;
-      qrToken: string;
-    }> = [];
+    await this.couponService.syncPaymentStatusesForCoupons(coupons);
+
+    const results: GuestActiveDealResult[] = [];
+    const occupiedFunnelIds = new Set<number>();
 
     for (const coupon of coupons) {
       if (this.couponService.isExpired(coupon)) {
         continue;
       }
 
-      await this.couponService.syncPaymentStatusFromFunnelPayment(coupon);
-
       if (!coupon.campaign || coupon.campaign.deletedAt) {
         continue;
+      }
+
+      if (coupon.funnelId != null && coupon.funnelId > 0) {
+        occupiedFunnelIds.add(coupon.funnelId);
       }
 
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
@@ -1894,7 +1890,74 @@ export class RedemptionService {
       });
     }
 
-    return results;
+    return {
+      activeDeals: results,
+      occupiedFunnelIds: [...occupiedFunnelIds],
+    };
+  }
+
+  private async getAvailableBusinessDeals(
+    businessId: number,
+    occupiedFunnelIds: number[],
+  ): Promise<{
+    deals: GuestAvailableBusinessDealResult[];
+    publishedCount: number;
+  }> {
+    const funnels = await this.funnelRepository.find({
+      where: {
+        campaign: {
+          businessId,
+          deletedAt: IsNull(),
+          status: CampaignPublicationStatus.PUBLISHED,
+        },
+      },
+      relations: ['campaign'],
+      select: {
+        id: true,
+        campaign: {
+          id: true,
+          campaignName: true,
+          price: true,
+          imageUrl: true,
+          campaignType: true,
+        },
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    const occupied = new Set(occupiedFunnelIds);
+    const deals: GuestAvailableBusinessDealResult[] = [];
+
+    for (const funnel of funnels) {
+      if (occupied.has(funnel.id)) {
+        continue;
+      }
+      const campaignName = funnel.campaign?.campaignName?.trim();
+      if (!campaignName) {
+        continue;
+      }
+      const price =
+        funnel.campaign?.price != null ? Number(funnel.campaign.price) : null;
+      const campaignType =
+        funnel.campaign?.campaignType === CampaignType.POSTPAID
+          ? ('postpaid' as const)
+          : funnel.campaign?.campaignType === CampaignType.PREPAID
+            ? ('prepaid' as const)
+            : null;
+
+      deals.push({
+        id: funnel.id,
+        campaignName,
+        price: price != null && Number.isFinite(price) ? price : null,
+        imageUrl: funnel.campaign?.imageUrl?.trim() || null,
+        campaignType,
+      });
+    }
+
+    return {
+      deals,
+      publishedCount: funnels.length,
+    };
   }
 
   private async ensureUnpaidFunnelDealsForGuest(
