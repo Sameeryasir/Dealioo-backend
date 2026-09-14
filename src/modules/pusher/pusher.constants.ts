@@ -4,6 +4,7 @@ export const PUSHER_EVENT = {
   CHAT_CONVERSATION_UPDATED: 'chat-conversation-updated',
   CHAT_MESSAGE_SENT: 'chat-message-sent',
   ACTIVITY_CAMPAIGN_UPDATED: 'activity-campaign-updated',
+  SIDEBAR_SECTION_UPDATED: 'sidebar-section-updated',
   META_PUBLISH_PROGRESS: 'meta-publish-progress',
   AI_EDIT_UI_RESULT: 'ai-edit-ui-result',
   ADMIN_NOTIFICATION_CREATED: 'admin-notification-created',
@@ -27,6 +28,10 @@ export function pusherBusinessConversationsChannel(businessId: number): string {
 
 export function pusherBusinessActivityChannel(businessId: number): string {
   return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-activity-${businessId}`;
+}
+
+export function pusherBusinessSidebarChannel(businessId: number): string {
+  return `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-sidebar-${businessId}`;
 }
 
 export function pusherBusinessMetaPublishChannel(businessId: number): string {
@@ -93,6 +98,12 @@ export function parseBusinessIdFromChatChannel(
     return Number.isFinite(businessId) && businessId > 0 ? businessId : null;
   }
 
+  const sidebarPrefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-sidebar-`;
+  if (channelName.startsWith(sidebarPrefix)) {
+    const businessId = Number(channelName.slice(sidebarPrefix.length));
+    return Number.isFinite(businessId) && businessId > 0 ? businessId : null;
+  }
+
   const metaPublishPrefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}business-meta-publish-`;
   if (channelName.startsWith(metaPublishPrefix)) {
     const businessId = Number(channelName.slice(metaPublishPrefix.length));
@@ -140,6 +151,10 @@ export function isAuthorizedBusinessChatChannel(
   }
 
   if (channelName === pusherBusinessActivityChannel(businessId)) {
+    return true;
+  }
+
+  if (channelName === pusherBusinessSidebarChannel(businessId)) {
     return true;
   }
 

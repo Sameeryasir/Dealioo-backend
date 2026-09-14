@@ -65,4 +65,9 @@ export class LogPrepaidForOfferDto {
   @IsOptional()
   @IsBoolean()
   counterExtrasOnly?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  staffUserId?: number | null;
 }

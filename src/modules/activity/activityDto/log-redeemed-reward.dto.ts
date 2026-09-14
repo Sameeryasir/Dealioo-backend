@@ -36,5 +36,10 @@ export class LogRedeemedRewardDto {
   paidAtCounter?: boolean;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  staffUserId?: number | null;
+
+  @IsOptional()
   manager?: EntityManager;
 }

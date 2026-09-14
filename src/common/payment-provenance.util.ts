@@ -15,6 +15,14 @@ export function isOnlineFunnelPayment(
   if (!payment) {
     return false;
   }
+
+  if (payment.paymentSource === FunnelPaymentSource.SCANNER) {
+    return false;
+  }
+  if (payment.collectionChannel === FunnelCollectionChannel.IN_STORE) {
+    return false;
+  }
+
   if (payment.paymentSource === FunnelPaymentSource.STRIPE) {
     return true;
   }
@@ -39,9 +47,6 @@ export function isScannerFunnelPayment(
   if (payment.collectionChannel === FunnelCollectionChannel.IN_STORE) {
     return true;
   }
-  if (isOnlineFunnelPayment(payment)) {
-    return false;
-  }
   return false;
 }
 
@@ -52,13 +57,11 @@ export function resolveGuestDealPaymentBadge(params: {
   if (!params.couponPaid) {
     return 'PENDING';
   }
-  if (isOnlineFunnelPayment(params.payment)) {
-    return 'PAID_ONLINE';
-  }
   if (isScannerFunnelPayment(params.payment)) {
     return 'PAID_AT_COUNTER';
   }
-  return isOnlineFunnelPayment(params.payment)
-    ? 'PAID_ONLINE'
-    : 'PAID_AT_COUNTER';
+  if (isOnlineFunnelPayment(params.payment)) {
+    return 'PAID_ONLINE';
+  }
+  return 'PAID_AT_COUNTER';
 }

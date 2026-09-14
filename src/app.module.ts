@@ -31,6 +31,7 @@ import { FunnelMetaTrackingModule } from './modules/funnel-meta-tracking/funnel-
 import { GoogleFunnelTrackingModule } from './modules/google-funnel-tracking/google-funnel-tracking.module';
 import { ProductMetaTrackingModule } from './modules/product-meta-tracking/product-meta-tracking.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { SidebarUnreadModule } from './modules/sidebar-unread/sidebar-unread.module';
 import { MailModule } from './modules/mail/mail.module';
 import { PusherModule } from './modules/pusher/pusher.module';
 import { MemberModule } from './modules/member/member.module';
@@ -105,6 +106,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     GoogleFunnelTrackingModule,
     ProductMetaTrackingModule,
     ChatModule,
+    SidebarUnreadModule,
     MemberModule,
     InvitationModule,
     OnboardingModule,

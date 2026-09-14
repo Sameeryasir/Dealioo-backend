@@ -44,6 +44,13 @@ export type CampaignActivityPusherPayload = {
   occurredAt: string;
 };
 
+export type SidebarSectionUpdatedPusherPayload = {
+  businessId: number;
+  section: 'orders' | 'activity' | 'history';
+  occurredAt: string;
+  actorUserId: number | null;
+};
+
 export type MemberJoinedPusherPayload = {
   businessId: number;
   invitationId: number;

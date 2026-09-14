@@ -18,6 +18,7 @@ import {
   pusherBusinessActivityChannel,
   pusherBusinessConversationsChannel,
   pusherBusinessMembersChannel,
+  pusherBusinessSidebarChannel,
   pusherConversationMessagesChannel,
   pusherExecutionChannel,
   pusherUserChannel,
@@ -28,6 +29,7 @@ import type {
   ExecutionTerminalPusherPayload,
   MemberAccessRemovedPusherPayload,
   MemberJoinedPusherPayload,
+  SidebarSectionUpdatedPusherPayload,
 } from './pusher.types';
 
 @Injectable()
@@ -214,6 +216,34 @@ export class PusherService implements OnModuleInit {
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
         `Pusher activity notify failed for business ${payload.businessId}: ${message}`,
+      );
+    }
+  }
+
+  async notifySidebarSectionUpdated(
+    payload: SidebarSectionUpdatedPusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.businessId) || payload.businessId < 1) {
+      return;
+    }
+
+    const channel = pusherBusinessSidebarChannel(payload.businessId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.SIDEBAR_SECTION_UPDATED,
+        payload,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher sidebar notify failed for business ${payload.businessId}: ${message}`,
       );
     }
   }

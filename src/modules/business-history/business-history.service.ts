@@ -6,10 +6,14 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { Business } from '../../db/entities/business.entity';
 import {
   BusinessHistory,
   BusinessHistoryEventType,
 } from '../../db/entities/business-history.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
+import { SidebarSectionNotifyService } from '../sidebar-unread/sidebar-section-notify.service';
 import type { HistoryCategory } from './dto/get-business-history-query.dto';
 
 export type BusinessHistoryListItem = {
@@ -122,6 +126,11 @@ export class BusinessHistoryService {
   constructor(
     @InjectRepository(BusinessHistory)
     private readonly historyRepository: Repository<BusinessHistory>,
+    @InjectRepository(BusinessMember)
+    private readonly businessMemberRepository: Repository<BusinessMember>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
+    private readonly sidebarNotify: SidebarSectionNotifyService,
   ) {}
 
   async getBusinessHistory(
@@ -137,7 +146,6 @@ export class BusinessHistoryService {
     const qb = this.historyRepository
       .createQueryBuilder('history')
       .leftJoinAndSelect('history.actorUser', 'actorUser')
-      .leftJoinAndSelect('actorUser.role', 'actorRole')
       .where('history.businessId = :businessId', { businessId });
 
     const categoryTypes = categoryEventTypes(filters.category);
@@ -190,9 +198,15 @@ export class BusinessHistoryService {
       .take(pagination.limit)
       .getManyAndCount();
 
-    const [counts, actors] = await Promise.all([
+    const [counts, actors, roleByUserId] = await Promise.all([
       this.categoryCounts(businessId),
       this.distinctActors(businessId),
+      this.resolveBusinessActorRoles(
+        businessId,
+        rows
+          .map((row) => row.actorUserId)
+          .filter((id): id is number => id != null && id > 0),
+      ),
     ]);
 
     return {
@@ -202,13 +216,65 @@ export class BusinessHistoryService {
         description: row.description,
         actorUserId: row.actorUserId,
         actorName: row.actorUser?.name?.trim() || null,
-        actorRole: row.actorUser?.role?.name?.trim() || null,
+        actorRole:
+          row.actorUserId != null
+            ? (roleByUserId.get(row.actorUserId) ?? null)
+            : null,
         occurredAt: row.occurredAt.toISOString(),
       })),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
       counts,
       actors,
     };
+  }
+
+  private async resolveBusinessActorRoles(
+    businessId: number,
+    actorUserIds: number[],
+  ): Promise<Map<number, string>> {
+    const roleByUserId = new Map<number, string>();
+    const uniqueIds = [...new Set(actorUserIds)];
+    if (uniqueIds.length === 0) {
+      return roleByUserId;
+    }
+
+    const [members, business] = await Promise.all([
+      this.businessMemberRepository
+        .createQueryBuilder('member')
+        .innerJoin('member.user', 'user')
+        .where('member.business_id = :businessId', { businessId })
+        .andWhere('user.id IN (:...uniqueIds)', { uniqueIds })
+        .andWhere('member.status = :status', {
+          status: BUSINESS_MEMBER_STATUS.ACTIVE,
+        })
+        .select(['member.id', 'member.role', 'user.id'])
+        .getMany(),
+      this.businessRepository
+        .createQueryBuilder('business')
+        .leftJoin('business.owner', 'owner')
+        .where('business.id = :businessId', { businessId })
+        .select(['business.id', 'owner.id'])
+        .getOne(),
+    ]);
+
+    for (const member of members) {
+      const userId = member.user?.id;
+      const role = member.role?.trim();
+      if (userId != null && role) {
+        roleByUserId.set(userId, role);
+      }
+    }
+
+    const ownerId = business?.owner?.id;
+    if (
+      ownerId != null &&
+      uniqueIds.includes(ownerId) &&
+      !roleByUserId.has(ownerId)
+    ) {
+      roleByUserId.set(ownerId, 'Owner');
+    }
+
+    return roleByUserId;
   }
 
   private async categoryCounts(
@@ -494,6 +560,14 @@ export class BusinessHistoryService {
         idempotencyKey: params.idempotencyKey,
       }),
     );
+
+    if (params.businessId != null && params.businessId > 0) {
+      this.sidebarNotify.notifyHistory({
+        businessId: params.businessId,
+        actorUserId: params.actorUserId ?? null,
+        occurredAt: params.occurredAt ?? new Date(),
+      });
+    }
   }
 }
 

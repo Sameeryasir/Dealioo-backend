@@ -66,12 +66,6 @@ export class CouponService {
     return coupon;
   }
 
-  /**
-   * Changed: link orphan pending signup coupons to the open unpaid payment.
-   * Why: postpaid signup creates coupon + pending payment separately; Guest deals
-   * only shows unpaid passes when funnel_payment_id is set.
-   * Related: redemption.service getGuestActiveDeals, funnel-event signup track.
-   */
   async ensurePendingCouponForUnpaidFunnel(
     funnelId: number,
     customerId: number,
@@ -143,8 +137,6 @@ export class CouponService {
       return null;
     }
 
-    // --- Heal existing postpaid/unpaid signup pass ---
-    // Signup often left funnel_payment_id null; attach open checkout so Guest deals can show it.
     const pending = await this.findActivePendingByCustomerAndFunnel(
       customerId,
       funnelId,
@@ -350,6 +342,43 @@ export class CouponService {
     }
 
     await this.syncPaymentStatusFromFunnelPayment(coupon);
+    return coupon;
+  }
+
+  async consumeUnpaidPassAtCounter(params: {
+    couponId: number;
+    funnelPaymentId: number;
+    staffUserId: number;
+    redeemedAt?: Date;
+  }): Promise<Coupon | null> {
+    const coupon = await this.couponRepository.findOne({
+      where: { id: params.couponId },
+    });
+    if (!coupon) {
+      return null;
+    }
+    if (
+      coupon.status === CouponStatus.REDEEMED ||
+      coupon.status === CouponStatus.REVOKED ||
+      coupon.status === CouponStatus.EXPIRED
+    ) {
+      return coupon;
+    }
+
+    const redeemedAt = params.redeemedAt ?? new Date();
+    await this.couponRepository.update(coupon.id, {
+      funnelPaymentId: params.funnelPaymentId,
+      paymentStatus: CouponPaymentStatus.PAID,
+      status: CouponStatus.REDEEMED,
+      redeemedAt,
+      redeemedByUserId: params.staffUserId,
+    });
+
+    coupon.funnelPaymentId = params.funnelPaymentId;
+    coupon.paymentStatus = CouponPaymentStatus.PAID;
+    coupon.status = CouponStatus.REDEEMED;
+    coupon.redeemedAt = redeemedAt;
+    coupon.redeemedByUserId = params.staffUserId;
     return coupon;
   }
 

@@ -236,9 +236,6 @@ export class FunnelEventService {
             Number.isFinite(priceDollars) && priceDollars >= 0
               ? dollarsToCents(priceDollars)
               : 0;
-          // --- Pending order for unpaid / postpaid signup ---
-          // Link the signup coupon so Guest deals can show this pass (not only Business deals).
-          // Platform/medium must match campaign type (postpaid ≠ Stripe).
           const pendingPayment =
             await this.pendingFunnelPaymentService.ensurePendingPayment({
               funnelId: dto.funnelId,
@@ -691,6 +688,8 @@ export class FunnelEventService {
             paymentMethod: FunnelPaymentMethod.OTHER,
             paymentCollectedBy: staffUserId,
             paymentCollectedAt: collectedAt,
+            stripePaymentIntentId: null,
+            stripeCheckoutSessionId: null,
           });
 
           let orderId = pending.orderId;
@@ -852,20 +851,13 @@ export class FunnelEventService {
     const deals = purchaseBatch?.deals ?? [];
     const orderId = purchaseBatch?.orderId ?? null;
     const purchased: ScannerPurchasedDeal[] = [];
-    const issuedCoupons: Array<{
-      couponId: number;
-      campaignId: number;
-      funnelId: number;
-      paymentId: number;
-      funnelPaymentId: number | null;
-    }> = [];
     const visitCampaignIds = [
       ...new Set(deals.map((deal) => deal.funnel.campaign.id)),
     ];
 
     try {
       for (const deal of deals) {
-        const { funnel, paymentId, amountCents } = deal;
+        const { funnel, paymentId } = deal;
         const funnelId = funnel.id;
 
         const existingPass = await this.couponService.findByCustomerAndFunnel(
@@ -878,52 +870,18 @@ export class FunnelEventService {
           existingPass.paymentStatus === CouponPaymentStatus.PENDING &&
           !this.couponService.isExpired(existingPass);
 
-        // Coupons only for unpaid online / signup passes. Fresh counter Business deals: pay only.
-        const shouldIssueOrUpgradeCoupon =
-          deal.fromUnpaidOnlineCheckout || hasUnpaidOnlinePass;
-
-        if (shouldIssueOrUpgradeCoupon) {
-          await this.track(
-            {
-              eventType: FunnelEventType.SIGNUP,
-              funnelId,
-              customerId,
-              visitorId: `scanner-${staffUserId}`,
-            },
-            { skipPendingOrder: true },
-          );
-
-          await this.track({
-            eventType: FunnelEventType.PAYMENT,
-            funnelId,
-            customerId,
+        if (hasUnpaidOnlinePass && existingPass) {
+          const consumed = await this.couponService.consumeUnpaidPassAtCounter({
+            couponId: existingPass.id,
             funnelPaymentId: paymentId,
-            amount: amountCents,
-            currency: 'usd',
-            paymentStatus: FunnelPaymentStatus.PAID,
-            customerEmail: customer.email.trim(),
-          });
-
-          const coupon = await this.couponService.findByCustomerAndFunnel(
-            customerId,
-            funnelId,
-          );
-          if (!coupon) {
-            throw new BadRequestException('Could not issue pass for this deal.');
-          }
-
-          issuedCoupons.push({
-            couponId: coupon.id,
-            campaignId: funnel.campaign.id,
-            funnelId,
-            paymentId,
-            funnelPaymentId: coupon.funnelPaymentId ?? paymentId,
+            staffUserId,
+            redeemedAt: collectedAt,
           });
 
           purchased.push({
             funnelId,
             campaignName: funnel.campaign.campaignName,
-            couponId: coupon.id,
+            couponId: consumed?.id ?? existingPass.id,
             purchaseMeans,
           });
           continue;
@@ -938,103 +896,40 @@ export class FunnelEventService {
       }
 
       if (visitCampaignIds.length > 0) {
-        const primaryCoupon = issuedCoupons[0] ?? null;
-        if (primaryCoupon) {
-          const existingVisit = await this.customerVisitRepository.findOne({
-            where: { couponId: primaryCoupon.couponId },
-          });
-          if (!existingVisit) {
-            const savedVisit = await this.customerVisitRepository.save({
-              customerId,
-              campaignId: primaryCoupon.campaignId,
-              businessId,
-              couponId: primaryCoupon.couponId,
-              orderId,
-              staffUserId,
-              visitedAt: collectedAt,
-              source: CustomerVisitSource.STAFF_LOOKUP,
-              orderSubtotal: visitOrderSubtotalDollars,
-              extraItems:
-                visitOrderSubtotalDollars != null &&
-                visitOrderSubtotalDollars > 0
-                  ? normalizedExtraItems
-                  : null,
-              visitCampaigns: visitCampaignIds.map((campaignId) => ({
-                campaignId,
-              })),
-            });
-            await replaceVisitAddonItems(this.dataSource.manager, {
-              customerVisitId: savedVisit.id,
-              businessId,
-              customerId,
-              campaignId: primaryCoupon.campaignId,
-              orderId,
-              staffUserId,
-              source: VisitAddonItemSource.SCANNER_PURCHASE,
-              items:
-                visitOrderSubtotalDollars != null &&
-                visitOrderSubtotalDollars > 0
-                  ? normalizedExtraItems
-                  : [],
-            });
-          } else if (
+        const primaryCampaignId = visitCampaignIds[0]!;
+        const savedVisit = await this.customerVisitRepository.save({
+          customerId,
+          campaignId: primaryCampaignId,
+          businessId,
+          couponId: null,
+          orderId,
+          staffUserId,
+          visitedAt: collectedAt,
+          source: CustomerVisitSource.STAFF_LOOKUP,
+          orderSubtotal: visitOrderSubtotalDollars,
+          extraItems:
             visitOrderSubtotalDollars != null &&
             visitOrderSubtotalDollars > 0
-          ) {
-            existingVisit.orderSubtotal = visitOrderSubtotalDollars;
-            existingVisit.extraItems =
-              normalizedExtraItems.length > 0 ? normalizedExtraItems : null;
-            if (existingVisit.orderId == null && orderId != null) {
-              existingVisit.orderId = orderId;
-            }
-            await this.customerVisitRepository.save(existingVisit);
-            await replaceVisitAddonItems(this.dataSource.manager, {
-              customerVisitId: existingVisit.id,
-              businessId,
-              customerId,
-              campaignId: existingVisit.campaignId,
-              orderId: existingVisit.orderId,
-              staffUserId,
-              source: VisitAddonItemSource.SCANNER_PURCHASE,
-              items: normalizedExtraItems,
-            });
-          }
-        } else {
-          const primaryCampaignId = visitCampaignIds[0]!;
-          const savedVisit = await this.customerVisitRepository.save({
-            customerId,
-            campaignId: primaryCampaignId,
-            businessId,
-            couponId: null,
-            orderId,
-            staffUserId,
-            visitedAt: collectedAt,
-            source: CustomerVisitSource.STAFF_LOOKUP,
-            orderSubtotal: visitOrderSubtotalDollars,
-            extraItems:
-              visitOrderSubtotalDollars != null &&
-              visitOrderSubtotalDollars > 0
-                ? normalizedExtraItems
-                : null,
-            visitCampaigns: visitCampaignIds.map((campaignId) => ({
-              campaignId,
-            })),
-          });
-          await replaceVisitAddonItems(this.dataSource.manager, {
-            customerVisitId: savedVisit.id,
-            businessId,
-            customerId,
-            campaignId: primaryCampaignId,
-            orderId,
-            staffUserId,
-            source: VisitAddonItemSource.SCANNER_PURCHASE,
-            items:
-              visitOrderSubtotalDollars != null &&
-              visitOrderSubtotalDollars > 0
-                ? normalizedExtraItems
-                : [],
-          });
-        }
+              ? normalizedExtraItems
+              : null,
+          visitCampaigns: visitCampaignIds.map((campaignId) => ({
+            campaignId,
+          })),
+        });
+        await replaceVisitAddonItems(this.dataSource.manager, {
+          customerVisitId: savedVisit.id,
+          businessId,
+          customerId,
+          campaignId: primaryCampaignId,
+          orderId,
+          staffUserId,
+          source: VisitAddonItemSource.SCANNER_PURCHASE,
+          items:
+            visitOrderSubtotalDollars != null &&
+            visitOrderSubtotalDollars > 0
+              ? normalizedExtraItems
+              : [],
+        });
       }
 
       if (idempotencyKey) {

@@ -7,6 +7,7 @@ import { Business } from '../../db/entities/business.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { AuthModule } from '../auth/auth.module';
 import { CustomerActivityModule } from '../customer-activity/customer-activity.module';
+import { SidebarUnreadModule } from '../sidebar-unread/sidebar-unread.module';
 // --- SWC circular import fix ---
 // Lazy-resolve RedemptionModule so Activity ↔ Redemption does not TDZ under SWC.
 import { ActivityController } from './activity.controller';
@@ -23,6 +24,7 @@ import { ActivityService } from './activity.service';
     ]),
     AuthModule,
     CustomerActivityModule,
+    SidebarUnreadModule,
     forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
   ],
   controllers: [ActivityController],

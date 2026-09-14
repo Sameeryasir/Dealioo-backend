@@ -180,7 +180,9 @@ export type GuestProfileResult = {
     campaignName: string;
     offerName: string;
     paymentLabel: 'PREPAID' | 'UNPAID';
+    paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
     paymentStatus: CouponPaymentStatus;
+    campaignType: 'prepaid' | 'postpaid' | null;
     campaignPrice: number | null;
     imageUrl: string | null;
     expiresAt: string | null;
@@ -922,6 +924,7 @@ export class RedemptionService {
                 extraItemsCents > 0 ? resolvedExtras.labels : [],
               extraItems:
                 extraItemsCents > 0 ? resolvedExtras.items : [],
+              staffUserId: audit.scannedBy ?? null,
               manager,
             });
             await this.customerActivityService.recordInStorePurchase({
@@ -960,6 +963,7 @@ export class RedemptionService {
             ? CouponPaymentStatus.PAID
             : coupon.paymentStatus,
           paidAtCounter: walkInPayment,
+          staffUserId: audit.scannedBy ?? null,
           manager,
         });
 
@@ -1055,6 +1059,7 @@ export class RedemptionService {
           counterExtrasOnly: true,
           extraItemNames: resolvedExtras.labels,
           extraItems: resolvedExtras.items,
+          staffUserId: audit.scannedBy ?? null,
           manager,
         });
         await this.customerActivityService.recordInStorePurchase({
@@ -1303,6 +1308,8 @@ export class RedemptionService {
       paymentCollectedBy: staffUserId,
       paymentCollectedAt: paidAt,
       customerId: coupon.customerId ?? payment.customerId ?? null,
+      stripePaymentIntentId: null,
+      stripeCheckoutSessionId: null,
     });
     payment.status = FunnelPaymentStatus.PAID;
     payment.amount = offerAmountCents;
@@ -1311,6 +1318,8 @@ export class RedemptionService {
     payment.paymentCollectedBy = staffUserId;
     payment.paymentSource = FunnelPaymentSource.SCANNER;
     payment.collectionChannel = FunnelCollectionChannel.IN_STORE;
+    payment.stripePaymentIntentId = null;
+    payment.stripeCheckoutSessionId = null;
 
     if (coupon.funnelPaymentId !== payment.id) {
       await manager.update(Coupon, coupon.id, {
@@ -1470,6 +1479,7 @@ export class RedemptionService {
         occurredAt: params.activityOccurredAt ?? visitedAt,
         visitSource,
         offerName,
+        staffUserId: params.audit.scannedBy ?? null,
         manager,
       });
     } catch (error) {
@@ -1778,6 +1788,7 @@ export class RedemptionService {
       paymentLabel: 'PREPAID' | 'UNPAID';
       paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
       paymentStatus: CouponPaymentStatus;
+      campaignType: 'prepaid' | 'postpaid' | null;
       campaignPrice: number | null;
       imageUrl: string | null;
       expiresAt: string | null;
@@ -1802,6 +1813,7 @@ export class RedemptionService {
       paymentLabel: 'PREPAID' | 'UNPAID';
       paymentBadge: 'PAID_ONLINE' | 'PAID_AT_COUNTER' | 'PENDING';
       paymentStatus: CouponPaymentStatus;
+      campaignType: 'prepaid' | 'postpaid' | null;
       campaignPrice: number | null;
       imageUrl: string | null;
       expiresAt: string | null;
@@ -1853,6 +1865,12 @@ export class RedemptionService {
         'Reward';
       const campaignPrice =
         coupon.campaign?.price != null ? Number(coupon.campaign.price) : null;
+      const campaignType =
+        coupon.campaign?.campaignType === CampaignType.POSTPAID
+          ? ('postpaid' as const)
+          : coupon.campaign?.campaignType === CampaignType.PREPAID
+            ? ('prepaid' as const)
+            : null;
 
       results.push({
         couponId: coupon.id,
@@ -1863,6 +1881,7 @@ export class RedemptionService {
         paymentLabel: isPrepaid ? 'PREPAID' : 'UNPAID',
         paymentBadge,
         paymentStatus: coupon.paymentStatus,
+        campaignType,
         campaignPrice:
           campaignPrice != null && Number.isFinite(campaignPrice)
             ? campaignPrice

@@ -41,5 +41,10 @@ export class LogVisitedDto {
   offerName?: string | null;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  staffUserId?: number | null;
+
+  @IsOptional()
   manager?: EntityManager;
 }

@@ -58,7 +58,8 @@ import {
   clampOverviewMonths,
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
-import { PusherService } from '../pusher/pusher.service';
+import { SidebarSectionNotifyService } from '../sidebar-unread/sidebar-section-notify.service';
+import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
 
 export type ActivityEventListItem = {
   id: number;
@@ -125,7 +126,7 @@ export class ActivityService {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
-    private readonly pusherService: PusherService,
+    private readonly sidebarNotify: SidebarSectionNotifyService,
   ) {}
 
   /**
@@ -228,6 +229,8 @@ export class ActivityService {
       return;
     }
 
+    const occurredAt = params.occurredAt ?? new Date();
+
     try {
       await manager.save(
         ActivityEvent,
@@ -237,10 +240,20 @@ export class ActivityService {
           eventType: params.eventType,
           description: params.description,
           metadata: params.metadata ?? null,
-          occurredAt: params.occurredAt ?? new Date(),
+          occurredAt,
           idempotencyKey: params.idempotencyKey,
         }),
       );
+
+      runAfterTransactionCommit(manager, () => {
+        setTimeout(() => {
+          this.sidebarNotify.notifyActivity({
+            businessId: params.businessId,
+            metadata: params.metadata ?? null,
+            occurredAt,
+          });
+        }, 50);
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (
@@ -332,6 +345,9 @@ export class ActivityService {
         campaignType: params.coupon.campaign?.campaignType ?? null,
         paymentStatus,
         ...(paidAtCounter ? { paidAtCounter: true } : {}),
+        ...(params.staffUserId != null && params.staffUserId > 0
+          ? { staffUserId: params.staffUserId }
+          : {}),
       },
     };
 
@@ -362,6 +378,9 @@ export class ActivityService {
         couponId: params.couponId,
         visitSource,
         ...(offerName ? { offerName } : {}),
+        ...(params.staffUserId != null && params.staffUserId > 0
+          ? { staffUserId: params.staffUserId }
+          : {}),
       },
     };
 
@@ -526,6 +545,11 @@ export class ActivityService {
             : 'online_payment',
         paymentSource: payment.paymentSource ?? null,
         collectionChannel: payment.collectionChannel ?? null,
+        ...(params.staffUserId != null && params.staffUserId > 0
+          ? { staffUserId: params.staffUserId }
+          : payment.paymentCollectedBy != null && payment.paymentCollectedBy > 0
+            ? { staffUserId: payment.paymentCollectedBy }
+            : {}),
       },
     };
 

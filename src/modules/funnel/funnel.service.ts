@@ -6,8 +6,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
-import { Repository } from 'typeorm';
-import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
+import { IsNull, Repository } from 'typeorm';
+import {
+  Campaign,
+  CampaignPublicationStatus,
+  CampaignType,
+} from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelVersion } from '../../db/entities/funnel-version.entity';
@@ -367,7 +371,11 @@ export class FunnelService {
 
     const funnels = await this.funnelRepository.find({
       where: {
-        campaign: { businessId },
+        campaign: {
+          businessId,
+          deletedAt: IsNull(),
+          status: CampaignPublicationStatus.PUBLISHED,
+        },
       },
       relations: ['campaign'],
       select: {
