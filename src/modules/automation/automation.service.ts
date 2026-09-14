@@ -40,6 +40,11 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
+import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  automationPermissionKeysFor,
+  type AutomationAccessAction,
+} from '../member/member.constants';
 import { buildGuestPassUrl } from '../../utils/guest-pass-url';
 import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
@@ -158,16 +163,36 @@ export class AutomationService {
     private readonly googleWalletService: GoogleWalletService,
     private readonly sendAttemptService: AutomationSendAttemptService,
     private readonly graphValidator: AutomationGraphValidatorService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
+
+  private async assertAutomationPermission(
+    user: User,
+    businessId: number,
+    action: AutomationAccessAction,
+    message: string,
+  ): Promise<void> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      automationPermissionKeysFor(action),
+      message,
+    );
+  }
 
   async createAutomation(
     dto: CreateAutomationDto,
     user: User,
   ): Promise<Automation> {
-    requireAdminRole(user, 'You do not have permission to create automations.');
-
     const { businessId, campaignId, funnelId } =
       await this.resolveScopeFromCampaign(dto.campaignId, dto.businessId);
+
+    await this.assertAutomationPermission(
+      user,
+      businessId,
+      'create',
+      'You do not have permission to create automations.',
+    );
 
     this.assertCreatablePurpose(dto.purpose);
     this.validatePurposeAndTrigger(dto.purpose, dto.trigger);
@@ -205,9 +230,13 @@ export class AutomationService {
     dto: UpdateAutomationDto,
     user: User,
   ): Promise<Automation | AutomationStatusResponseDto> {
-    requireAdminRole(user, 'You do not have permission to update automations.');
-
     const automation = await this.findAutomationById(id);
+    await this.assertAutomationPermission(
+      user,
+      automation.businessId,
+      'edit',
+      'You do not have permission to update automations.',
+    );
 
     const wasActive = automation.isActive;
 
@@ -397,8 +426,13 @@ export class AutomationService {
   }
 
   async deleteAutomation(id: number, user: User): Promise<void> {
-    requireAdminRole(user, 'You do not have permission to delete automations.');
     const automation = await this.findAutomationById(id);
+    await this.assertAutomationPermission(
+      user,
+      automation.businessId,
+      'delete',
+      'You do not have permission to delete automations.',
+    );
     const executionIds =
       await this.executionService.findExecutionIdsByAutomationId(id);
     await this.queueService.purgeAutomationJobs(id, executionIds);
@@ -464,8 +498,13 @@ export class AutomationService {
   }
 
   async publishAutomation(id: number, user: User): Promise<Automation> {
-    requireAdminRole(user, 'You do not have permission to publish automations.');
     const automation = await this.findAutomationById(id);
+    await this.assertAutomationPermission(
+      user,
+      automation.businessId,
+      'edit',
+      'You do not have permission to publish automations.',
+    );
     await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     automation.published = true;
     const saved = await this.automationRepository.save(automation);
@@ -475,8 +514,13 @@ export class AutomationService {
   }
 
   async activateAutomation(id: number, user: User): Promise<Automation> {
-    requireAdminRole(user, 'You do not have permission to activate automations.');
     const automation = await this.findAutomationById(id);
+    await this.assertAutomationPermission(
+      user,
+      automation.businessId,
+      'edit',
+      'You do not have permission to activate automations.',
+    );
     await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     await this.assertPaymentReminderScheduleForAutomation(automation);
     await this.assertCampaignPublishedForActivation(automation);
@@ -527,11 +571,13 @@ export class AutomationService {
   }
 
   async deactivateAutomation(id: number, user: User): Promise<Automation> {
-    requireAdminRole(
+    const automation = await this.findAutomationById(id);
+    await this.assertAutomationPermission(
       user,
+      automation.businessId,
+      'edit',
       'You do not have permission to deactivate automations.',
     );
-    const automation = await this.findAutomationById(id);
     const wasActive = automation.isActive;
     automation.isActive = false;
     automation.published = false;
@@ -1132,12 +1178,14 @@ export class AutomationService {
     dto: BootstrapAutomationGraphDto,
     user: User,
   ): Promise<Automation> {
-    requireAdminRole(
+    const automation = await this.findAutomationById(automationId);
+    await this.assertAutomationPermission(
       user,
+      automation.businessId,
+      'edit',
       'You do not have permission to update automations.',
     );
 
-    await this.findAutomationById(automationId);
     await this.assertAutomationEditable(automationId);
 
     const existingNodeCount = await this.nodeRepository.count({

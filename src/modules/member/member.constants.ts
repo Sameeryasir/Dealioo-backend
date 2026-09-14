@@ -48,6 +48,17 @@ export type GoogleCampaignActionPermission =
 
 export type GoogleCampaignAccessAction = 'view' | 'create' | 'delete';
 
+export const AUTOMATION_ACTION_PERMISSIONS = [
+  'automations_create',
+  'automations_edit',
+  'automations_delete',
+] as const;
+
+export type AutomationActionPermission =
+  (typeof AUTOMATION_ACTION_PERMISSIONS)[number];
+
+export type AutomationAccessAction = 'create' | 'edit' | 'delete';
+
 export const BUSINESS_MEMBER_PERMISSIONS = [
   'campaigns',
   'campaigns_view',
@@ -58,6 +69,8 @@ export const BUSINESS_MEMBER_PERMISSIONS = [
   ...META_CAMPAIGN_ACTION_PERMISSIONS,
   'google_campaigns_view',
   ...GOOGLE_CAMPAIGN_ACTION_PERMISSIONS,
+  ...AUTOMATION_ACTION_PERMISSIONS,
+  'funnels_edit',
   'orders',
   'activity',
   'chats',
@@ -82,6 +95,10 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
     'meta_campaigns_delete',
     'google_campaigns_create',
     'google_campaigns_delete',
+    'automations_create',
+    'automations_edit',
+    'automations_delete',
+    'funnels_edit',
     'orders',
     'activity',
     'chats',
@@ -180,4 +197,28 @@ export function googleCampaignPermissionKeysFor(
     return ['google_campaigns_create', 'campaigns'];
   }
   return ['google_campaigns_delete', 'campaigns'];
+}
+
+export function hasAnyAutomationPermission(
+  permissions: readonly string[],
+): boolean {
+  return AUTOMATION_ACTION_PERMISSIONS.some((key) =>
+    permissions.includes(key),
+  );
+}
+
+export function automationPermissionKeysFor(
+  action: AutomationAccessAction,
+): BusinessMemberPermission[] {
+  if (action === 'create') {
+    return ['automations_create'];
+  }
+  if (action === 'edit') {
+    return ['automations_edit'];
+  }
+  return ['automations_delete'];
+}
+
+export function funnelEditPermissionKeys(): BusinessMemberPermission[] {
+  return ['funnels_edit'];
 }

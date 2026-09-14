@@ -19,6 +19,7 @@ export type SidebarSectionUnreadDto = {
   hasUnread: boolean;
   unreadCount: number;
   lastViewedAt: string | null;
+  latestAt: string | null;
 };
 
 export type BusinessSidebarUnreadDto = {
@@ -31,6 +32,7 @@ const EMPTY_SECTION: SidebarSectionUnreadDto = {
   hasUnread: false,
   unreadCount: 0,
   lastViewedAt: null,
+  latestAt: null,
 };
 
 @Injectable()
@@ -68,16 +70,21 @@ export class SidebarUnreadService {
       user,
       businessId,
     );
-    if (!context) {
-      throw new ForbiddenException(
-        'Business not found or you do not have access to this business.',
-      );
+    if (context) {
+      return;
     }
-    if (!isAdminOrSuperAdmin(user)) {
-      throw new ForbiddenException(
-        'You do not have permission to view business history.',
+    if (isAdminOrSuperAdmin(user)) {
+      const business = await this.businessAccessService.findAccessibleBusiness(
+        user,
+        businessId,
       );
+      if (business) {
+        return;
+      }
     }
+    throw new ForbiddenException(
+      'Business not found or you do not have access to this business.',
+    );
   }
 
   async assertBusinessAccess(
@@ -174,6 +181,7 @@ export class SidebarUnreadService {
         hasUnread: false,
         unreadCount: 0,
         lastViewedAt: baseline.toISOString(),
+        latestAt: null,
       };
     }
 
@@ -189,6 +197,8 @@ export class SidebarUnreadService {
       hasUnread: unreadCount > 0,
       unreadCount,
       lastViewedAt: viewedAt.toISOString(),
+      latestAt:
+        unreadCount > 0 && latest ? latest.toISOString() : null,
     };
   }
 

@@ -27,6 +27,7 @@ import { MemberInviteEmail } from '../../templates/member-invite-email';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { INVITABLE_ROLE_ERROR } from '../member/member.constants';
+import { isAdminOrSuperAdmin, isSuperAdmin } from '../../utils/user-roles';
 import {
   normalizeMemberPermissions,
   sanitizeStoredMemberPermissions,
@@ -78,11 +79,10 @@ export class InvitationService {
     dto: CreateBusinessInvitationDto,
     user: AuthUser,
   ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
-    await this.businessAccessService.assertAnyPermission(
-      user,
+    await this.assertCanManageInvitations(
       businessId,
-      ['members'],
-      'You do not have permission to invite members.',
+      user,
+      'Only Admin and Super Admin can invite members.',
     );
 
     const business = await this.businessRepository.findOne({
@@ -130,23 +130,63 @@ export class InvitationService {
       );
     }
 
-    const pendingInvite = await this.invitationRepository.findOne({
-      where: {
-        business: { id: businessId },
-        email,
-        status: BusinessInvitationStatus.PENDING,
-      },
-    });
+    const reusableInvites = await this.invitationRepository
+      .createQueryBuilder('invite')
+      .where('invite.business_id = :businessId', { businessId })
+      .andWhere('LOWER(invite.email) = :email', { email })
+      .andWhere('invite.status IN (:...statuses)', {
+        statuses: [
+          BusinessInvitationStatus.PENDING,
+          BusinessInvitationStatus.EXPIRED,
+          BusinessInvitationStatus.CANCELLED,
+        ],
+      })
+      .orderBy('invite.created_at', 'DESC')
+      .getMany();
 
-    if (pendingInvite && pendingInvite.expiresAt.getTime() > Date.now()) {
-      throw new ConflictException(
-        'An active invitation has already been sent to this email. Resend or copy the invite link from Members instead.',
-      );
+    let invitation = reusableInvites[0] ?? null;
+
+    if (reusableInvites.length > 1) {
+      for (const duplicate of reusableInvites.slice(1)) {
+        if (duplicate.status === BusinessInvitationStatus.PENDING) {
+          duplicate.status = BusinessInvitationStatus.CANCELLED;
+          await this.invitationRepository.save(duplicate);
+        }
+      }
     }
 
-    if (pendingInvite) {
-      pendingInvite.status = BusinessInvitationStatus.EXPIRED;
-      await this.invitationRepository.save(pendingInvite);
+    const inviterName = business.owner.name?.trim() || user.email;
+
+    if (invitation) {
+      invitation.email = email;
+      invitation.role = role;
+      invitation.permissions = permissions;
+      invitation.invitedBy = { id: user.id } as User;
+      invitation.acceptedAt = null;
+      await this.invitationRepository.save(invitation);
+
+      const { acceptUrl } = await this.rotateInvitationToken(invitation);
+
+      try {
+        await this.sendInviteEmail({
+          to: email,
+          businessName: business.name,
+          inviterName,
+          role,
+          permissions,
+          acceptUrl,
+        });
+      } catch (error) {
+        invitation.status = BusinessInvitationStatus.CANCELLED;
+        await this.invitationRepository.save(invitation);
+        throw error;
+      }
+
+      return {
+        message: 'Invitation sent successfully.',
+        invitationId: invitation.id,
+        inviteUrl: acceptUrl,
+      };
     }
 
     const rawToken = randomBytes(32).toString('hex');
@@ -155,7 +195,7 @@ export class InvitationService {
       Date.now() + BUSINESS_INVITATION_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
     );
 
-    const invitation = await this.invitationRepository.save(
+    invitation = await this.invitationRepository.save(
       this.invitationRepository.create({
         business,
         email,
@@ -175,7 +215,7 @@ export class InvitationService {
       await this.sendInviteEmail({
         to: email,
         businessName: business.name,
-        inviterName: business.owner.name?.trim() || user.email,
+        inviterName,
         role,
         permissions,
         acceptUrl,
@@ -202,11 +242,10 @@ export class InvitationService {
     },
     user: AuthUser,
   ): Promise<{ message: string; invitationId: number }> {
-    await this.businessAccessService.assertAnyPermission(
-      user,
+    await this.assertCanManageInvitations(
       businessId,
-      ['members'],
-      'You do not have permission to manage invitations.',
+      user,
+      'Only Admin and Super Admin can manage invitations.',
     );
 
     const invitation = await this.requirePendingInvitation(
@@ -241,11 +280,10 @@ export class InvitationService {
     invitationId: number,
     user: AuthUser,
   ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
-    await this.businessAccessService.assertAnyPermission(
-      user,
+    await this.assertCanManageInvitations(
       businessId,
-      ['members'],
-      'You do not have permission to manage invitations.',
+      user,
+      'Only Admin and Super Admin can manage invitations.',
     );
 
     const invitation = await this.requirePendingInvitation(
@@ -283,11 +321,10 @@ export class InvitationService {
     invitationId: number,
     user: AuthUser,
   ): Promise<{ message: string; invitationId: number; inviteUrl: string }> {
-    await this.businessAccessService.assertAnyPermission(
-      user,
+    await this.assertCanManageInvitations(
       businessId,
-      ['members'],
-      'You do not have permission to manage invitations.',
+      user,
+      'Only Admin and Super Admin can manage invitations.',
     );
 
     const invitation = await this.requirePendingInvitation(
@@ -301,6 +338,95 @@ export class InvitationService {
       invitationId: invitation.id,
       inviteUrl: acceptUrl,
     };
+  }
+
+  async cancelPendingInvitation(
+    businessId: number,
+    invitationId: number,
+    user: AuthUser,
+  ): Promise<{ message: string }> {
+    await this.assertCanManageInvitations(
+      businessId,
+      user,
+      'Only Admin and Super Admin can manage invitations.',
+    );
+
+    const invitation = await this.invitationRepository.findOne({
+      where: {
+        id: invitationId,
+        business: { id: businessId },
+      },
+      relations: ['business'],
+    });
+
+    if (!invitation) {
+      throw new NotFoundException('Invitation not found.');
+    }
+
+    if (invitation.status !== BusinessInvitationStatus.PENDING) {
+      throw new BadRequestException('This invitation is no longer pending.');
+    }
+
+    invitation.status = BusinessInvitationStatus.CANCELLED;
+    await this.invitationRepository.save(invitation);
+
+    const inviteEmail = invitation.email;
+    const existingUser = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = :email', {
+        email: this.normalizeEmail(inviteEmail),
+      })
+      .getOne();
+
+    if (existingUser?.id != null && existingUser.id > 0) {
+      void this.pusherService.notifyMemberAccessRemoved({
+        businessId,
+        businessName: invitation.business?.name?.trim() || 'the business',
+        userId: existingUser.id,
+        kind: 'invite',
+        removedAt: new Date().toISOString(),
+      });
+    }
+
+    return { message: 'Member access removed successfully.' };
+  }
+
+  private async assertCanManageInvitations(
+    businessId: number,
+    user: AuthUser,
+    forbiddenMessage: string,
+  ): Promise<void> {
+    if (!isAdminOrSuperAdmin(user)) {
+      throw new ForbiddenException(forbiddenMessage);
+    }
+    if (isSuperAdmin(user)) {
+      return;
+    }
+
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+      relations: ['owner'],
+    });
+    if (!business) {
+      throw new ForbiddenException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+    if (Number(business.owner?.id) === Number(user.id)) {
+      return;
+    }
+
+    const context = await this.businessAccessService.getAccessContext(
+      user,
+      businessId,
+    );
+    if (context) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      'Business not found or you do not have access to this business.',
+    );
   }
 
   private async requirePendingInvitation(

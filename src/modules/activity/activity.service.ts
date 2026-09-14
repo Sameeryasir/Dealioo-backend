@@ -58,8 +58,24 @@ import {
   clampOverviewMonths,
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
-import { SidebarSectionNotifyService } from '../sidebar-unread/sidebar-section-notify.service';
+import { SidebarSectionNotifyService, extractActorUserIdFromMetadata } from '../sidebar-unread/sidebar-section-notify.service';
 import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
+
+function withActivityActorMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): { metadata: Record<string, unknown> | null; actorUserId: number | null } {
+  const base =
+    metadata && typeof metadata === 'object' ? { ...metadata } : {};
+  const actorUserId = extractActorUserIdFromMetadata(base);
+  if (actorUserId != null) {
+    // Canonical key so unread/Pusher can always exclude the acting staff member.
+    base.actorUserId = actorUserId;
+  }
+  return {
+    metadata: Object.keys(base).length > 0 ? base : null,
+    actorUserId,
+  };
+}
 
 export type ActivityEventListItem = {
   id: number;
@@ -230,6 +246,9 @@ export class ActivityService {
     }
 
     const occurredAt = params.occurredAt ?? new Date();
+    const { metadata, actorUserId } = withActivityActorMetadata(
+      params.metadata ?? null,
+    );
 
     try {
       await manager.save(
@@ -239,7 +258,7 @@ export class ActivityService {
           customerId: params.customerId,
           eventType: params.eventType,
           description: params.description,
-          metadata: params.metadata ?? null,
+          metadata,
           occurredAt,
           idempotencyKey: params.idempotencyKey,
         }),
@@ -249,7 +268,8 @@ export class ActivityService {
         setTimeout(() => {
           this.sidebarNotify.notifyActivity({
             businessId: params.businessId,
-            metadata: params.metadata ?? null,
+            actorUserId,
+            metadata,
             occurredAt,
           });
         }, 50);
@@ -346,7 +366,10 @@ export class ActivityService {
         paymentStatus,
         ...(paidAtCounter ? { paidAtCounter: true } : {}),
         ...(params.staffUserId != null && params.staffUserId > 0
-          ? { staffUserId: params.staffUserId }
+          ? {
+              staffUserId: params.staffUserId,
+              actorUserId: params.staffUserId,
+            }
           : {}),
       },
     };
@@ -379,7 +402,10 @@ export class ActivityService {
         visitSource,
         ...(offerName ? { offerName } : {}),
         ...(params.staffUserId != null && params.staffUserId > 0
-          ? { staffUserId: params.staffUserId }
+          ? {
+              staffUserId: params.staffUserId,
+              actorUserId: params.staffUserId,
+            }
           : {}),
       },
     };
@@ -546,9 +572,15 @@ export class ActivityService {
         paymentSource: payment.paymentSource ?? null,
         collectionChannel: payment.collectionChannel ?? null,
         ...(params.staffUserId != null && params.staffUserId > 0
-          ? { staffUserId: params.staffUserId }
+          ? {
+              staffUserId: params.staffUserId,
+              actorUserId: params.staffUserId,
+            }
           : payment.paymentCollectedBy != null && payment.paymentCollectedBy > 0
-            ? { staffUserId: payment.paymentCollectedBy }
+            ? {
+                staffUserId: payment.paymentCollectedBy,
+                actorUserId: payment.paymentCollectedBy,
+              }
             : {}),
       },
     };

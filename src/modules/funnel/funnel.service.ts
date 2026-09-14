@@ -25,6 +25,8 @@ import {
 } from '../../db/entities/funnel-page-type';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { isBusinessOwnerScopedUser } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
+import { funnelEditPermissionKeys } from '../member/member.constants';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { BusinessTrackingService } from '../business-tracking/business-tracking.service';
 import { FunnelPagesService } from '../funnel-pages/funnel-pages.service';
@@ -53,17 +55,26 @@ export class FunnelService {
     private readonly businessTrackingService: BusinessTrackingService,
     private readonly funnelPagesService: FunnelPagesService,
     private readonly configService: ConfigService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
+
+  private async assertFunnelEditPermission(
+    user: User,
+    businessId: number,
+    message: string,
+  ): Promise<void> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      funnelEditPermissionKeys(),
+      message,
+    );
+  }
 
   async createOrUpdateFunnel(
     dto: CreateFunnelDto,
     user: User,
   ): Promise<Funnel> {
-    requireAdminRole(
-      user,
-      'You do not have permission to manage funnels.',
-    );
-
     const campaign = await this.campaignRepository.findOne({
       where: { id: dto.campaignId },
     });
@@ -71,6 +82,12 @@ export class FunnelService {
     if (!campaign) {
       throw new NotFoundException('Campaign not found');
     }
+
+    await this.assertFunnelEditPermission(
+      user,
+      campaign.businessId,
+      'You do not have permission to manage funnels.',
+    );
 
     let funnel = await this.funnelRepository.findOne({
       where: {
@@ -318,11 +335,6 @@ export class FunnelService {
     funnelId: number,
     user: User,
   ): Promise<{ previewToken: string; expiresAt: string }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to preview funnels.',
-    );
-
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
       select: { id: true, businessId: true, campaignId: true },
@@ -344,6 +356,12 @@ export class FunnelService {
     if (businessId == null) {
       throw new NotFoundException('Funnel not found');
     }
+
+    await this.assertFunnelEditPermission(
+      user,
+      businessId,
+      'You do not have permission to preview funnels.',
+    );
 
     await this.redemptionService.verifyBusinessAccess(
       businessId,
@@ -474,11 +492,6 @@ export class FunnelService {
     dto: UpdateFunnelDto,
     user: User,
   ): Promise<Funnel> {
-    requireAdminRole(
-      user,
-      'You do not have permission to update a funnel.',
-    );
-
     const funnel = await this.funnelRepository.findOne({
       where: { id },
       relations: ['campaign', 'updatedBy'],
@@ -486,6 +499,12 @@ export class FunnelService {
     if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
+
+    await this.assertFunnelEditPermission(
+      user,
+      funnel.campaign.businessId,
+      'You do not have permission to update a funnel.',
+    );
 
     const currentVersion =
       funnel.contentRevision > 0

@@ -10,6 +10,7 @@ export const PUSHER_EVENT = {
   ADMIN_NOTIFICATION_CREATED: 'admin-notification-created',
   MEMBER_JOINED: 'member-joined',
   MEMBER_ACCESS_REMOVED: 'member-access-removed',
+  MEMBER_ROLE_UPDATED: 'member-role-updated',
 } as const;
 
 export function pusherExecutionChannel(executionId: number): string {

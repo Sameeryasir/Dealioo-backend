@@ -233,6 +233,14 @@ export class MemberService {
         .filter(
           (invite) => !memberEmails.has(this.normalizeEmail(invite.email)),
         )
+        .filter((invite, index, list) => {
+          const normalized = this.normalizeEmail(invite.email);
+          return (
+            list.findIndex(
+              (other) => this.normalizeEmail(other.email) === normalized,
+            ) === index
+          );
+        })
         .map((invite) => ({
           id: invite.id,
           userId: 0,
@@ -314,44 +322,7 @@ export class MemberService {
       return { message: 'Member access removed successfully.' };
     }
 
-    const businessInvitation = await this.businessInvitationRepository.findOne({
-      where: { id: memberId },
-      relations: ['business', 'business.owner'],
-    });
-
-    if (!businessInvitation) {
-      throw new NotFoundException('Member not found.');
-    }
-
-    await this.assertCanManageMembers(businessInvitation.business, user);
-    const wasPending =
-      businessInvitation.status === BusinessInvitationStatus.PENDING;
-    if (wasPending) {
-      businessInvitation.status = BusinessInvitationStatus.CANCELLED;
-      await this.businessInvitationRepository.save(businessInvitation);
-    }
-
-    if (wasPending) {
-      const inviteEmail = businessInvitation.email;
-      const existingUser = await this.userRepository
-        .createQueryBuilder('user')
-        .where('LOWER(user.email) = :email', {
-          email: this.normalizeEmail(inviteEmail),
-        })
-        .getOne();
-
-      void this.notifyAccessRemoved({
-        toEmail: inviteEmail,
-        businessId: businessInvitation.business.id,
-        businessName:
-          businessInvitation.business.name?.trim() || 'the business',
-        removedByName,
-        kind: 'invite',
-        userId: existingUser?.id ?? null,
-      });
-    }
-
-    return { message: 'Member access removed successfully.' };
+    throw new NotFoundException('Member not found.');
   }
 
   async updateMember(
@@ -393,6 +364,16 @@ export class MemberService {
       );
     }
 
+    const previousRole = String(member.role ?? '').trim();
+    const previousPermissions = [...(member.permissions ?? [])].sort();
+    const nextPermissionsSorted = [...permissions].sort();
+    const roleChanged = previousRole !== role;
+    const permissionsChanged =
+      previousPermissions.length !== nextPermissionsSorted.length ||
+      previousPermissions.some(
+        (value, index) => value !== nextPermissionsSorted[index],
+      );
+
     await this.dataSource.transaction(async (manager) => {
       const memberRepo = manager.getRepository(BusinessMember);
 
@@ -409,6 +390,17 @@ export class MemberService {
       member.business.id,
       member.user.id,
     );
+
+    if (roleChanged || permissionsChanged) {
+      void this.pusherService.notifyMemberRoleUpdated({
+        businessId: member.business.id,
+        businessName: member.business.name?.trim() || 'Business',
+        userId: member.user.id,
+        previousRole: previousRole || role,
+        role,
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     return {
       message: 'Member access updated successfully.',
@@ -504,11 +496,30 @@ export class MemberService {
     business: Business,
     user: AuthUser,
   ): Promise<void> {
-    await this.businessAccessService.assertAnyPermission(
+    if (!isAdminOrSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Only Admin and Super Admin can manage members for this business.',
+      );
+    }
+    if (isSuperAdmin(user)) {
+      return;
+    }
+
+    const userId = Number(user.id);
+    if (Number(business.owner?.id) === userId) {
+      return;
+    }
+
+    const context = await this.businessAccessService.getAccessContext(
       user,
-      business.id,
-      ['members'],
-      'You do not have permission to manage members for this business.',
+      Number(business.id),
+    );
+    if (context) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      'Business not found or you do not have access to this business.',
     );
   }
 
@@ -516,24 +527,17 @@ export class MemberService {
     business: Business,
     user: AuthUser,
   ): Promise<void> {
+    const context = await this.businessAccessService.getAccessContext(
+      user,
+      business.id,
+    );
+    if (context) {
+      return;
+    }
     if (isSuperAdmin(user)) {
       return;
     }
-
-    if (business.owner?.id === user.id) {
-      return;
-    }
-
-    const membership = await this.businessMemberRepository.findOne({
-      where: {
-        business: { id: business.id },
-        user: { id: user.id },
-      },
-    });
-
-    if (!membership) {
-      throw new ForbiddenException('You do not have access to this business.');
-    }
+    throw new ForbiddenException('You do not have access to this business.');
   }
 
   private normalizeEmail(email: string): string {

@@ -67,6 +67,8 @@ type LogCampaignParams = {
   campaignId: number;
   campaignName: string;
   actorUserId?: number | null;
+  previousStatus?: string | null;
+  status?: string | null;
 };
 
 type LogBusinessParams = {
@@ -338,10 +340,23 @@ export class BusinessHistoryService {
 
   async logCampaignUpdated(params: LogCampaignParams): Promise<void> {
     const occurredAt = new Date();
+    const label = this.campaignLabel(params);
+    const previous = params.previousStatus?.trim().toLowerCase() ?? '';
+    const next = params.status?.trim().toLowerCase() ?? '';
+    let description = `Updated campaign "${label}"`;
+    if (previous && next && previous !== next) {
+      if (next === 'published') {
+        description = `Published campaign "${label}"`;
+      } else if (next === 'unpublished') {
+        description = `Unpublished campaign "${label}"`;
+      } else {
+        description = `Changed campaign "${label}" status to ${next}`;
+      }
+    }
     await this.insert({
       businessId: params.businessId,
       eventType: BusinessHistoryEventType.CAMPAIGN_UPDATED,
-      description: `Updated campaign "${this.campaignLabel(params)}"`,
+      description,
       actorUserId: params.actorUserId,
       occurredAt,
       idempotencyKey: `campaign_updated:${params.campaignId}:${occurredAt.getTime()}`,

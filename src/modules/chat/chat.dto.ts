@@ -124,4 +124,5 @@ export class SyncChatMessagesDto {
 export class BusinessChatsUnreadDto {
   hasUnread: boolean;
   chatsLastViewedAt: Date | null;
+  latestInboundAt: Date | null;
 }

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -57,6 +58,21 @@ export class InvitationController {
       businessId,
       invitationId,
       dto,
+      req.user,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('members')
+  @Delete('businesses/:businessId/invitations/:invitationId')
+  async cancelInvitation(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('invitationId', ParseIntPipe) invitationId: number,
+    @Req() req: { user: AuthRequestUser },
+  ) {
+    return this.invitationService.cancelPendingInvitation(
+      businessId,
+      invitationId,
       req.user,
     );
   }

@@ -330,6 +330,7 @@ export class CampaignService {
       campaign.price = updateCampaignDto.price;
     }
 
+    const previousStatus = campaign.status;
     const becomingUnpublished =
       updateCampaignDto.status === CampaignPublicationStatus.UNPUBLISHED &&
       campaign.status !== CampaignPublicationStatus.UNPUBLISHED;
@@ -373,6 +374,9 @@ export class CampaignService {
       campaignId: saved.id,
       campaignName: saved.campaignName,
       actorUserId: user.id,
+      previousStatus:
+        updateCampaignDto.status !== undefined ? previousStatus : null,
+      status: updateCampaignDto.status !== undefined ? saved.status : null,
     });
 
     return saved;

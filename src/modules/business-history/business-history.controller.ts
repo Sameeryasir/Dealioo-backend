@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-import { requireAdminRole } from '../../utils/require-admin-role';
+import { isAdminOrSuperAdmin } from '../../utils/user-roles';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from './business-history.service';
 import { GetBusinessHistoryQueryDto } from './dto/get-business-history-query.dto';
@@ -33,19 +33,26 @@ export class BusinessHistoryController {
     @Query() query: GetBusinessHistoryQueryDto,
     @Req() req: AuthRequest,
   ) {
-    requireAdminRole(
-      req.user,
-      'Only Admin and Super Admin can view business history.',
-    );
-
-    const business = await this.businessAccessService.findAccessibleBusiness(
+    const context = await this.businessAccessService.getAccessContext(
       req.user,
       businessId,
     );
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not have access to this business.',
+
+    if (!context) {
+      if (!isAdminOrSuperAdmin(req.user)) {
+        throw new NotFoundException(
+          'Business not found or you do not have access to this business.',
+        );
+      }
+      const business = await this.businessAccessService.findAccessibleBusiness(
+        req.user,
+        businessId,
       );
+      if (!business) {
+        throw new NotFoundException(
+          'Business not found or you do not have access to this business.',
+        );
+      }
     }
 
     return this.businessHistoryService.getBusinessHistory(businessId, {

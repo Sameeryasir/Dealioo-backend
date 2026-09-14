@@ -11,7 +11,6 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import type { SidebarUnreadSection } from '../../db/entities/business-user-sidebar-section-read-state.entity';
-import { isAdminOrSuperAdmin } from '../../utils/user-roles';
 import { isSidebarUnreadSection } from './sidebar-unread.constants';
 import { SidebarUnreadService } from './sidebar-unread.service';
 
@@ -50,8 +49,14 @@ export class SidebarUnreadController {
       allowed.push('activity');
     } catch {
     }
-    if (isAdminOrSuperAdmin(req.user)) {
+    try {
+      await this.sidebarUnreadService.assertCanAccessSection(
+        req.user,
+        businessId,
+        'history',
+      );
       allowed.push('history');
+    } catch {
     }
 
     return this.sidebarUnreadService.getBusinessUnread(

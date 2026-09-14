@@ -986,6 +986,7 @@ export class FunnelEventService {
             paymentId: deal.paymentId,
             customerId,
             occurredAt: collectedAt,
+            staffUserId,
             extraItemsCents: index === 0 ? extraItemsCents : 0,
             extraItemNames:
               index === 0 && extraItemsCents > 0

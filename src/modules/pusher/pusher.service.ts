@@ -29,6 +29,7 @@ import type {
   ExecutionTerminalPusherPayload,
   MemberAccessRemovedPusherPayload,
   MemberJoinedPusherPayload,
+  MemberRoleUpdatedPusherPayload,
   SidebarSectionUpdatedPusherPayload,
 } from './pusher.types';
 
@@ -317,6 +318,40 @@ export class PusherService implements OnModuleInit {
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
         `Pusher member-access-removed notify failed for user ${payload.userId}: ${message}`,
+      );
+    }
+  }
+
+  async notifyMemberRoleUpdated(
+    payload: MemberRoleUpdatedPusherPayload,
+  ): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.userId) || payload.userId < 1) {
+      this.logger.warn(
+        `Pusher member-role-updated skipped — invalid user id (${payload.userId})`,
+      );
+      return;
+    }
+
+    const channel = pusherUserChannel(payload.userId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.MEMBER_ROLE_UPDATED,
+        payload,
+      );
+      this.logger.log(
+        `Pusher send → channel: ${channel} | event: ${PUSHER_EVENT.MEMBER_ROLE_UPDATED} | business: ${payload.businessId} | role: ${payload.previousRole}→${payload.role}`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher member-role-updated notify failed for user ${payload.userId}: ${message}`,
       );
     }
   }

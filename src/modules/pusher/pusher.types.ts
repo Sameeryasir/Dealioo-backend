@@ -72,3 +72,12 @@ export type MemberAccessRemovedPusherPayload = {
   kind: 'member' | 'invite';
   removedAt: string;
 };
+
+export type MemberRoleUpdatedPusherPayload = {
+  businessId: number;
+  businessName: string;
+  userId: number;
+  previousRole: string;
+  role: string;
+  updatedAt: string;
+};

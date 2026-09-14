@@ -105,16 +105,27 @@ export class ChatService {
       .getOne();
 
     if (!latestInbound?.sentAt) {
-      return { hasUnread: false, chatsLastViewedAt: viewedAt };
+      return {
+        hasUnread: false,
+        chatsLastViewedAt: viewedAt,
+        latestInboundAt: null,
+      };
     }
 
     if (!viewedAt) {
-      return { hasUnread: true, chatsLastViewedAt: null };
+      return {
+        hasUnread: true,
+        chatsLastViewedAt: null,
+        latestInboundAt: latestInbound.sentAt,
+      };
     }
 
+    const hasUnread =
+      latestInbound.sentAt.getTime() > viewedAt.getTime();
     return {
-      hasUnread: latestInbound.sentAt.getTime() > viewedAt.getTime(),
+      hasUnread,
       chatsLastViewedAt: viewedAt,
+      latestInboundAt: hasUnread ? latestInbound.sentAt : null,
     };
   }
 
