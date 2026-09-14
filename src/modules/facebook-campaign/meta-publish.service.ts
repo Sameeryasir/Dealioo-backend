@@ -15,6 +15,7 @@ import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entit
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
@@ -92,6 +93,7 @@ export class MetaPublishService {
     private readonly metaPublishQueue: Queue<MetaPublishJobPayload>,
     private readonly dataSource: DataSource,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessHistoryService: BusinessHistoryService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly facebookService: FacebookService,
     private readonly metaAdsService: MetaAdsService,
@@ -545,6 +547,21 @@ export class MetaPublishService {
       this.logger.log(
         `Draft ${draft.id} published for business ${businessId}: ad=${metaAdId} adsManager=${adsManagerCampaignsUrl(adAccountId)}`,
       );
+
+      const campaignName =
+        typeof ctx.campaign?.name === 'string' && ctx.campaign.name.trim()
+          ? ctx.campaign.name.trim()
+          : metaCampaignId!;
+
+      void this.businessHistoryService
+        .logCampaignCreated({
+          businessId,
+          campaignId: metaCampaignId!,
+          campaignName,
+          actorUserId: userId,
+          source: 'meta',
+        })
+        .catch(() => undefined);
     } catch (err) {
       throw await this.handlePublishFailure(
         userId,

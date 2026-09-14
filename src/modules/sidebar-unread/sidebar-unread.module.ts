@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ActivityEvent } from '../../db/entities/activity-event.entity';
 import { BusinessHistory } from '../../db/entities/business-history.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessUserSidebarSectionReadState } from '../../db/entities/business-user-sidebar-section-read-state.entity';
 import { Order } from '../../db/entities/order.entity';
 import { AuthModule } from '../auth/auth.module';
@@ -18,6 +19,7 @@ import { SidebarUnreadService } from './sidebar-unread.service';
       Order,
       ActivityEvent,
       BusinessHistory,
+      BusinessMember,
     ]),
     AuthModule,
   ],

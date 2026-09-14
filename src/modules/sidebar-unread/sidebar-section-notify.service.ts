@@ -7,6 +7,7 @@ export type SidebarSectionNotifyInput = {
   section: SidebarUnreadSection;
   actorUserId?: number | null;
   occurredAt?: Date | string | null;
+  description?: string | null;
 };
 
 @Injectable()
@@ -20,11 +21,17 @@ export class SidebarSectionNotifyService {
     const actorUserId = this.normalizeActorUserId(input.actorUserId);
     const occurredAt = this.toIso(input.occurredAt);
 
+    const description =
+      typeof input.description === 'string' && input.description.trim()
+        ? input.description.trim()
+        : null;
+
     void this.pusherService.notifySidebarSectionUpdated({
       businessId,
       section: input.section,
       actorUserId,
       occurredAt,
+      description,
     });
   }
 
@@ -61,12 +68,14 @@ export class SidebarSectionNotifyService {
     businessId: number;
     actorUserId?: number | null;
     occurredAt?: Date | string | null;
+    description?: string | null;
   }): void {
     this.notify({
       businessId: params.businessId,
       section: 'history',
       actorUserId: params.actorUserId,
       occurredAt: params.occurredAt,
+      description: params.description,
     });
   }
 

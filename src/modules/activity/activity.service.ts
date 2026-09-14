@@ -59,6 +59,7 @@ import {
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
 import { SidebarSectionNotifyService, extractActorUserIdFromMetadata } from '../sidebar-unread/sidebar-section-notify.service';
+import { PusherService } from '../pusher/pusher.service';
 import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
 
 function withActivityActorMetadata(
@@ -143,6 +144,7 @@ export class ActivityService {
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
     private readonly sidebarNotify: SidebarSectionNotifyService,
+    private readonly pusherService: PusherService,
   ) {}
 
   /**
@@ -328,6 +330,27 @@ export class ActivityService {
     };
 
     await this.logInTransaction(manager, payload);
+
+    const customer = await this.customerRepository.findOne({
+      where: { id: params.customerId },
+      select: ['id', 'name', 'email'],
+    });
+    const guestName =
+      customer?.name?.trim() ||
+      customer?.email?.trim() ||
+      'A guest';
+    const guestEmail = customer?.email?.trim() || null;
+
+    void this.pusherService.notifyGuestJoined({
+      businessId: params.businessId,
+      customerId: params.customerId,
+      guestName,
+      guestEmail,
+      funnelId: params.funnelId,
+      campaignId: params.campaignId ?? null,
+      campaignName: campaignName || null,
+      occurredAt: occurredAt.toISOString(),
+    });
   }
 
   async logRedeemedReward(params: LogRedeemedRewardDto): Promise<void> {

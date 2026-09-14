@@ -27,6 +27,7 @@ import type {
   CampaignActivityPusherPayload,
   ChatMessagePusherPayload,
   ExecutionTerminalPusherPayload,
+  GuestJoinedPusherPayload,
   MemberAccessRemovedPusherPayload,
   MemberJoinedPusherPayload,
   MemberRoleUpdatedPusherPayload,
@@ -352,6 +353,32 @@ export class PusherService implements OnModuleInit {
         error instanceof Error ? error.message : 'Pusher trigger failed';
       this.logger.error(
         `Pusher member-role-updated notify failed for user ${payload.userId}: ${message}`,
+      );
+    }
+  }
+
+  async notifyGuestJoined(payload: GuestJoinedPusherPayload): Promise<void> {
+    if (!this.client) {
+      return;
+    }
+
+    if (!Number.isFinite(payload.businessId) || payload.businessId < 1) {
+      return;
+    }
+
+    const channel = pusherBusinessActivityChannel(payload.businessId);
+
+    try {
+      await this.client.trigger(
+        channel,
+        PUSHER_EVENT.GUEST_JOINED,
+        payload,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Pusher trigger failed';
+      this.logger.error(
+        `Pusher guest-joined notify failed for business ${payload.businessId}: ${message}`,
       );
     }
   }

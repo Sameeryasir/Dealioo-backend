@@ -49,6 +49,7 @@ export type SidebarSectionUpdatedPusherPayload = {
   section: 'orders' | 'activity' | 'history';
   occurredAt: string;
   actorUserId: number | null;
+  description?: string | null;
 };
 
 export type MemberJoinedPusherPayload = {
@@ -79,5 +80,18 @@ export type MemberRoleUpdatedPusherPayload = {
   userId: number;
   previousRole: string;
   role: string;
+  grantedPermissions: string[];
+  removedPermissions: string[];
   updatedAt: string;
+};
+
+export type GuestJoinedPusherPayload = {
+  businessId: number;
+  customerId: number;
+  guestName: string;
+  guestEmail: string | null;
+  funnelId: number;
+  campaignId: number | null;
+  campaignName: string | null;
+  occurredAt: string;
 };

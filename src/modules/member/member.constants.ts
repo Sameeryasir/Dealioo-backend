@@ -161,6 +161,11 @@ export function campaignPermissionKeysFor(
       'campaigns',
       'campaigns_view',
       ...CAMPAIGN_ACTION_PERMISSIONS,
+      'meta_ads',
+      'meta_campaigns',
+      'meta_campaigns_view',
+      ...META_CAMPAIGN_ACTION_PERMISSIONS,
+      ...ALL_BUSINESS_MEMBER_PERMISSIONS,
     ];
   }
   return [action, 'campaigns'];
@@ -178,7 +183,7 @@ export function metaCampaignPermissionKeysFor(
     ];
   }
   if (action === 'create') {
-    return ['meta_campaigns_create', 'meta_campaigns'];
+    return [...ALL_BUSINESS_MEMBER_PERMISSIONS];
   }
   return ['meta_campaigns_delete', 'meta_campaigns'];
 }

@@ -12,6 +12,7 @@ import { MetaCampaignError } from '../../db/entities/meta-campaign-error.entity'
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
@@ -85,6 +86,7 @@ export class FacebookCampaignService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessHistoryService: BusinessHistoryService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly facebookService: FacebookService,
     private readonly spacesService: SpacesService,
@@ -339,6 +341,16 @@ export class FacebookCampaignService {
         `Meta campaign published for business ${businessId}: campaign=${metaCampaignId}, ad=${adId}`,
       );
 
+      void this.businessHistoryService
+        .logCampaignCreated({
+          businessId,
+          campaignId: metaCampaignId!,
+          campaignName: dto.name.trim(),
+          actorUserId: user.id,
+          source: 'meta',
+        })
+        .catch(() => undefined);
+
       return {
         id: tracking.id,
         metaCampaignId: metaCampaignId!,
@@ -368,6 +380,7 @@ export class FacebookCampaignService {
     user: User,
     businessId: number,
     metaCampaignId: string,
+    providedCampaignName?: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
 
     const campaignId = metaCampaignId.trim();
@@ -379,6 +392,38 @@ export class FacebookCampaignService {
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
+
+    const localCampaign = await this.facebookCampaignRepository.findOne({
+      where: { businessId, metaCampaignId: campaignId },
+    });
+    const localDraft = await this.metaCampaignDraftRepository.findOne({
+      where: { businessId, metaCampaignId: campaignId },
+    });
+    const draftName =
+      localDraft?.campaignData &&
+      typeof (localDraft.campaignData as { name?: unknown }).name === 'string'
+        ? String((localDraft.campaignData as { name: string }).name).trim()
+        : '';
+
+    let metaApiName = '';
+    try {
+      const metaCampaign = await graphGetWithToken<{ name?: string }>(
+        campaignId,
+        accessToken,
+        { fields: 'name' },
+      );
+      metaApiName =
+        typeof metaCampaign?.name === 'string' ? metaCampaign.name.trim() : '';
+    } catch {
+      metaApiName = '';
+    }
+
+    const campaignName =
+      providedCampaignName?.trim() ||
+      localCampaign?.campaignName?.trim() ||
+      draftName ||
+      metaApiName ||
+      'Untitled Meta campaign';
 
     await deleteMetaObject(campaignId, accessToken);
 
@@ -397,6 +442,16 @@ export class FacebookCampaignService {
     this.logger.log(
       `Meta campaign ${campaignId} deleted for business ${businessId}`,
     );
+
+    void this.businessHistoryService
+      .logCampaignDeleted({
+        businessId,
+        campaignId,
+        campaignName,
+        actorUserId: user.id,
+        source: 'meta',
+      })
+      .catch(() => undefined);
 
     return { deleted: true, metaCampaignId: campaignId };
   }

@@ -6,26 +6,46 @@ import {
   type SidebarUnreadSection,
 } from '../../db/entities/business-user-sidebar-section-read-state.entity';
 import { Order } from '../../db/entities/order.entity';
-import { ActivityEvent } from '../../db/entities/activity-event.entity';
+import { ActivityEvent, ActivityEventType } from '../../db/entities/activity-event.entity';
 import { BusinessHistory } from '../../db/entities/business-history.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
 import {
   BusinessAccessService,
   type BusinessAccessUser,
 } from '../business-access/business-access.service';
 import { isAdminOrSuperAdmin } from '../../utils/user-roles';
-import { SIDEBAR_UNREAD_SECTIONS } from './sidebar-unread.constants';
 
 export type SidebarSectionUnreadDto = {
   hasUnread: boolean;
   unreadCount: number;
   lastViewedAt: string | null;
   latestAt: string | null;
+  latestDescription: string | null;
+};
+
+export type LatestGuestJoinedDto = {
+  customerId: number;
+  guestName: string;
+  guestEmail: string | null;
+  campaignName: string | null;
+  occurredAt: string;
+};
+
+export type LatestAccessUpdatedDto = {
+  businessName: string;
+  previousRole: string;
+  role: string;
+  grantedPermissions: string[];
+  removedPermissions: string[];
+  updatedAt: string;
 };
 
 export type BusinessSidebarUnreadDto = {
   orders: SidebarSectionUnreadDto;
   activity: SidebarSectionUnreadDto;
   history: SidebarSectionUnreadDto;
+  latestGuestJoined: LatestGuestJoinedDto | null;
+  latestAccessUpdated: LatestAccessUpdatedDto | null;
 };
 
 const EMPTY_SECTION: SidebarSectionUnreadDto = {
@@ -33,6 +53,7 @@ const EMPTY_SECTION: SidebarSectionUnreadDto = {
   unreadCount: 0,
   lastViewedAt: null,
   latestAt: null,
+  latestDescription: null,
 };
 
 @Injectable()
@@ -46,6 +67,8 @@ export class SidebarUnreadService {
     private readonly activityRepository: Repository<ActivityEvent>,
     @InjectRepository(BusinessHistory)
     private readonly historyRepository: Repository<BusinessHistory>,
+    @InjectRepository(BusinessMember)
+    private readonly businessMemberRepository: Repository<BusinessMember>,
     private readonly businessAccessService: BusinessAccessService,
   ) {}
 
@@ -141,16 +164,44 @@ export class SidebarUnreadService {
     allowedSections: SidebarUnreadSection[],
   ): Promise<BusinessSidebarUnreadDto> {
     const allowed = new Set(allowedSections);
-    const [orders, activity, history] = await Promise.all(
-      SIDEBAR_UNREAD_SECTIONS.map(async (section) => {
-        if (!allowed.has(section)) {
-          return { ...EMPTY_SECTION };
-        }
-        return this.resolveSectionUnread(businessId, userId, section);
-      }),
-    );
+    const [orders, activity, history, latestGuestJoined, latestAccessUpdated] =
+      await Promise.all([
+        allowed.has('orders')
+          ? this.resolveSectionUnread(businessId, userId, 'orders')
+          : Promise.resolve({ ...EMPTY_SECTION }),
+        allowed.has('activity')
+          ? this.resolveSectionUnread(businessId, userId, 'activity')
+          : Promise.resolve({ ...EMPTY_SECTION }),
+        allowed.has('history')
+          ? this.resolveSectionUnread(businessId, userId, 'history')
+          : Promise.resolve({ ...EMPTY_SECTION }),
+        this.resolveLatestGuestJoined(businessId, userId),
+        this.resolveLatestAccessUpdated(businessId, userId),
+      ]);
 
-    return { orders, activity, history };
+    return {
+      orders,
+      activity,
+      history,
+      latestGuestJoined,
+      latestAccessUpdated,
+    };
+  }
+
+  async markAccessNotifyRead(
+    businessId: number,
+    userId: number,
+  ): Promise<void> {
+    await this.businessMemberRepository
+      .createQueryBuilder()
+      .update(BusinessMember)
+      .set({
+        accessNotifyAt: null,
+        accessNotifyPayload: null,
+      })
+      .where('business_id = :businessId', { businessId })
+      .andWhere('user_id = :userId', { userId })
+      .execute();
   }
 
   private async resolveSectionUnread(
@@ -182,6 +233,7 @@ export class SidebarUnreadService {
         unreadCount: 0,
         lastViewedAt: baseline.toISOString(),
         latestAt: null,
+        latestDescription: null,
       };
     }
 
@@ -193,12 +245,22 @@ export class SidebarUnreadService {
       viewedAt,
     );
 
+    const latestDescription =
+      unreadCount > 0 && section === 'history'
+        ? await this.getLatestUnreadHistoryDescription(
+            businessId,
+            userId,
+            viewedAt,
+          )
+        : null;
+
     return {
       hasUnread: unreadCount > 0,
       unreadCount,
       lastViewedAt: viewedAt.toISOString(),
       latestAt:
         unreadCount > 0 && latest ? latest.toISOString() : null,
+      latestDescription,
     };
   }
 
@@ -342,6 +404,156 @@ export class SidebarUnreadService {
         { userId },
       )
       .getCount();
+  }
+
+  private async resolveLatestGuestJoined(
+    businessId: number,
+    userId: number,
+  ): Promise<LatestGuestJoinedDto | null> {
+    const since = await this.getGuestJoinedSince(businessId, userId);
+    return this.getLatestUnreadGuestJoined(businessId, userId, since);
+  }
+
+  private async getGuestJoinedSince(
+    businessId: number,
+    userId: number,
+  ): Promise<Date> {
+    const readState = await this.readStateRepository.findOne({
+      where: { businessId, userId, section: 'activity' },
+    });
+    if (readState?.lastViewedAt) {
+      return readState.lastViewedAt;
+    }
+    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  }
+
+  private async resolveLatestAccessUpdated(
+    businessId: number,
+    userId: number,
+  ): Promise<LatestAccessUpdatedDto | null> {
+    const member = await this.businessMemberRepository
+      .createQueryBuilder('member')
+      .where('member.business_id = :businessId', { businessId })
+      .andWhere('member.user_id = :userId', { userId })
+      .getOne();
+
+    if (!member?.accessNotifyAt || !member.accessNotifyPayload) {
+      return null;
+    }
+
+    const payload = member.accessNotifyPayload;
+    return {
+      businessName:
+        typeof payload.businessName === 'string' && payload.businessName.trim()
+          ? payload.businessName.trim()
+          : 'Business',
+      previousRole:
+        typeof payload.previousRole === 'string'
+          ? payload.previousRole
+          : '',
+      role: typeof payload.role === 'string' ? payload.role : '',
+      grantedPermissions: Array.isArray(payload.grantedPermissions)
+        ? payload.grantedPermissions.filter(
+            (value): value is string => typeof value === 'string',
+          )
+        : [],
+      removedPermissions: Array.isArray(payload.removedPermissions)
+        ? payload.removedPermissions.filter(
+            (value): value is string => typeof value === 'string',
+          )
+        : [],
+      updatedAt: member.accessNotifyAt.toISOString(),
+    };
+  }
+
+  private async getLatestUnreadHistoryDescription(
+    businessId: number,
+    userId: number,
+    since: Date,
+  ): Promise<string | null> {
+    const row = await this.historyRepository
+      .createQueryBuilder('history')
+      .select('history.description', 'description')
+      .where('history.businessId = :businessId', { businessId })
+      .andWhere('history.occurredAt > :since', { since })
+      .andWhere(
+        '(history.actorUserId IS NULL OR history.actorUserId IS DISTINCT FROM :userId)',
+        { userId },
+      )
+      .orderBy('history.occurredAt', 'DESC')
+      .addOrderBy('history.id', 'DESC')
+      .limit(1)
+      .getRawOne<{ description: string | null }>();
+
+    const description =
+      typeof row?.description === 'string' ? row.description.trim() : '';
+    return description || null;
+  }
+
+  private async getLatestUnreadGuestJoined(
+    businessId: number,
+    userId: number,
+    since: Date,
+  ): Promise<LatestGuestJoinedDto | null> {
+    const row = await this.activityRepository
+      .createQueryBuilder('activity')
+      .leftJoinAndSelect('activity.customer', 'customer')
+      .where('activity.businessId = :businessId', { businessId })
+      .andWhere('activity.occurredAt > :since', { since })
+      .andWhere('activity.eventType = :eventType', {
+        eventType: ActivityEventType.SIGNED_UP,
+      })
+      .andWhere(
+        `(
+          activity.metadata IS NULL
+          OR (
+            COALESCE(
+              NULLIF(activity.metadata->>'actorUserId', ''),
+              NULLIF(activity.metadata->>'staffUserId', ''),
+              NULLIF(activity.metadata->>'paymentCollectedBy', '')
+            ) IS NULL
+            OR COALESCE(
+              NULLIF(activity.metadata->>'actorUserId', ''),
+              NULLIF(activity.metadata->>'staffUserId', ''),
+              NULLIF(activity.metadata->>'paymentCollectedBy', '')
+            )::int IS DISTINCT FROM :userId
+          )
+        )`,
+        { userId },
+      )
+      .orderBy('activity.occurredAt', 'DESC')
+      .addOrderBy('activity.id', 'DESC')
+      .getOne();
+
+    if (!row?.customerId || !row.occurredAt) {
+      return null;
+    }
+
+    const metadata =
+      row.metadata && typeof row.metadata === 'object'
+        ? (row.metadata as Record<string, unknown>)
+        : null;
+    const campaignNameRaw = metadata?.campaignName;
+    const campaignName =
+      typeof campaignNameRaw === 'string' && campaignNameRaw.trim()
+        ? campaignNameRaw.trim()
+        : null;
+    const guestName =
+      row.customer?.name?.trim() ||
+      row.customer?.email?.trim() ||
+      'A guest';
+    const guestEmail = row.customer?.email?.trim() || null;
+
+    return {
+      customerId: row.customerId,
+      guestName,
+      guestEmail,
+      campaignName,
+      occurredAt:
+        row.occurredAt instanceof Date
+          ? row.occurredAt.toISOString()
+          : new Date(row.occurredAt).toISOString(),
+    };
   }
 
   private toDate(value: Date | string | null | undefined): Date | null {

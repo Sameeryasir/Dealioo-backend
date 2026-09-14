@@ -17,6 +17,7 @@ import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-ca
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import {
   googleCampaignPermissionKeysFor,
   type GoogleCampaignAccessAction,
@@ -82,6 +83,7 @@ export class GooglePublishService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessHistoryService: BusinessHistoryService,
     private readonly googleAdsTokenService: GoogleAdsTokenService,
     @InjectQueue(GOOGLE_PUBLISH_QUEUE)
     private readonly googlePublishQueue: Queue<GooglePublishJobPayload>,
@@ -469,6 +471,21 @@ export class GooglePublishService {
     this.logger.log(
       `Google publish done: draft=${draft.id} business=${businessId} job=${jobId} user=${userId} campaign=${campaignId} adGroup=${adGroupId} ad=${adId}`,
     );
+
+    const campaignName =
+      draft.campaignName?.trim() ||
+      draft.draftData?.campaignName?.trim() ||
+      campaignId!;
+
+    void this.businessHistoryService
+      .logCampaignCreated({
+        businessId,
+        campaignId: campaignId!,
+        campaignName,
+        actorUserId: userId,
+        source: 'google',
+      })
+      .catch(() => undefined);
   }
 
   private async createCampaignBudget(ctx: PublishContext): Promise<string> {

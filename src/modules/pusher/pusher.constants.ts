@@ -11,6 +11,7 @@ export const PUSHER_EVENT = {
   MEMBER_JOINED: 'member-joined',
   MEMBER_ACCESS_REMOVED: 'member-access-removed',
   MEMBER_ROLE_UPDATED: 'member-role-updated',
+  GUEST_JOINED: 'guest-joined',
 } as const;
 
 export function pusherExecutionChannel(executionId: number): string {

@@ -381,6 +381,24 @@ export class MemberService {
       member.memberRole = memberRole;
       member.permissions = permissions;
       member.status = BUSINESS_MEMBER_STATUS.ACTIVE;
+
+      if (roleChanged || permissionsChanged) {
+        const previousSet = new Set(previousPermissions);
+        const nextSet = new Set(nextPermissionsSorted);
+        member.accessNotifyAt = new Date();
+        member.accessNotifyPayload = {
+          businessName: member.business.name?.trim() || 'Business',
+          previousRole: previousRole || role,
+          role,
+          grantedPermissions: nextPermissionsSorted.filter(
+            (value) => !previousSet.has(value),
+          ),
+          removedPermissions: previousPermissions.filter(
+            (value) => !nextSet.has(value),
+          ),
+        };
+      }
+
       await memberRepo.save(member);
 
       await syncMemberPermissionRows(manager, member.id, permissions);
@@ -392,13 +410,19 @@ export class MemberService {
     );
 
     if (roleChanged || permissionsChanged) {
+      const payload = member.accessNotifyPayload;
       void this.pusherService.notifyMemberRoleUpdated({
         businessId: member.business.id,
-        businessName: member.business.name?.trim() || 'Business',
+        businessName:
+          payload?.businessName ||
+          member.business.name?.trim() ||
+          'Business',
         userId: member.user.id,
-        previousRole: previousRole || role,
-        role,
-        updatedAt: new Date().toISOString(),
+        previousRole: payload?.previousRole || previousRole || role,
+        role: payload?.role || role,
+        grantedPermissions: payload?.grantedPermissions ?? [],
+        removedPermissions: payload?.removedPermissions ?? [],
+        updatedAt: (member.accessNotifyAt ?? new Date()).toISOString(),
       });
     }
 

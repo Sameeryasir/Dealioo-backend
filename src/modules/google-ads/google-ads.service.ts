@@ -9,9 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { google } from 'googleapis';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
 import { encryptSecret } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
+import { BusinessHistoryService } from '../business-history/business-history.service';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
@@ -206,9 +208,12 @@ export class GoogleAdsService {
   constructor(
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectRepository(GoogleCampaignDraft)
+    private readonly googleCampaignDraftRepository: Repository<GoogleCampaignDraft>,
     private readonly auditService: GoogleAdsIntegrationAuditService,
     private readonly tokenService: GoogleAdsTokenService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
+    private readonly businessHistoryService: BusinessHistoryService,
   ) {}
 
   async connect(user: User, businessId: number): Promise<{ url: string }> {
@@ -1288,6 +1293,15 @@ export class GoogleAdsService {
       campaignId,
     );
 
+    const localDraft = await this.googleCampaignDraftRepository.findOne({
+      where: { businessId, googleCampaignId: campaignId },
+      order: { updatedAt: 'DESC' },
+    });
+    const campaignName =
+      localDraft?.campaignName?.trim() ||
+      localDraft?.draftData?.campaignName?.trim() ||
+      campaignId;
+
     try {
       await this.withSdkTimeout(
         customer.campaigns.remove([resourceName]),
@@ -1305,6 +1319,16 @@ export class GoogleAdsService {
     this.logger.log(
       `Google Ads campaign ${campaignId} deleted for business ${businessId}`,
     );
+
+    void this.businessHistoryService
+      .logCampaignDeleted({
+        businessId,
+        campaignId,
+        campaignName,
+        actorUserId: user.id,
+        source: 'google',
+      })
+      .catch(() => undefined);
 
     return { deleted: true, googleCampaignId: campaignId };
   }

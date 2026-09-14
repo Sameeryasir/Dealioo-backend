@@ -9,6 +9,7 @@ import { MetaPublishAttempt } from '../../db/entities/meta-publish-attempt.entit
 import { Business } from '../../db/entities/business.entity';
 import { SpacesModule } from '../spaces/spaces.module';
 import { FacebookModule } from '../facebook/facebook.module';
+import { BusinessHistoryModule } from '../business-history/business-history.module';
 import { FacebookCampaignController } from './facebook-campaign.controller';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
@@ -41,6 +42,7 @@ import { MetaPublishService } from './meta-publish.service';
     }),
     FacebookModule,
     SpacesModule,
+    BusinessHistoryModule,
   ],
   controllers: [FacebookCampaignController],
   providers: [

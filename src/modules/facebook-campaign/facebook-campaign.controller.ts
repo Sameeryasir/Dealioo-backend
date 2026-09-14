@@ -9,6 +9,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -271,11 +272,13 @@ export class FacebookCampaignController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('metaCampaignId') metaCampaignId: string,
+    @Query('campaignName') campaignName?: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
     return this.facebookCampaignService.deleteMetaCampaignForBusiness(
       req.user,
       businessId,
       metaCampaignId,
+      campaignName,
     );
   }
 

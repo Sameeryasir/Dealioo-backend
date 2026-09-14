@@ -87,6 +87,20 @@ export class SidebarUnreadController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/access-notify/mark-read')
+  async markAccessNotifyRead(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.sidebarUnreadService.assertBusinessAccess(req.user, businessId);
+    await this.sidebarUnreadService.markAccessNotifyRead(
+      businessId,
+      req.user.id,
+    );
+    return { cleared: true };
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Post('business/:businessId/:section/mark-read')
   async markSectionRead(
     @Param('businessId', ParseIntPipe) businessId: number,

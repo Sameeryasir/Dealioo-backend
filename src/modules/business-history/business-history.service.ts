@@ -64,11 +64,12 @@ const CATEGORY_EVENT_TYPES: Record<
 
 type LogCampaignParams = {
   businessId: number;
-  campaignId: number;
+  campaignId: number | string;
   campaignName: string;
   actorUserId?: number | null;
   previousStatus?: string | null;
   status?: string | null;
+  source?: 'dealioo' | 'meta' | 'google';
 };
 
 type LogBusinessParams = {
@@ -329,28 +330,31 @@ export class BusinessHistoryService {
   }
 
   async logCampaignCreated(params: LogCampaignParams): Promise<void> {
+    const source = params.source ?? 'dealioo';
     await this.insert({
       businessId: params.businessId,
       eventType: BusinessHistoryEventType.CAMPAIGN_CREATED,
-      description: `Created campaign "${this.campaignLabel(params)}"`,
+      description: `Created ${this.campaignSourceLabel(source)} "${this.campaignLabel(params)}"`,
       actorUserId: params.actorUserId,
-      idempotencyKey: `campaign_created:${params.campaignId}`,
+      idempotencyKey: `campaign_created:${source}:${params.campaignId}`,
     });
   }
 
   async logCampaignUpdated(params: LogCampaignParams): Promise<void> {
     const occurredAt = new Date();
+    const source = params.source ?? 'dealioo';
     const label = this.campaignLabel(params);
+    const sourceLabel = this.campaignSourceLabel(source);
     const previous = params.previousStatus?.trim().toLowerCase() ?? '';
     const next = params.status?.trim().toLowerCase() ?? '';
-    let description = `Updated campaign "${label}"`;
+    let description = `Updated ${sourceLabel} "${label}"`;
     if (previous && next && previous !== next) {
       if (next === 'published') {
-        description = `Published campaign "${label}"`;
+        description = `Published ${sourceLabel} "${label}"`;
       } else if (next === 'unpublished') {
-        description = `Unpublished campaign "${label}"`;
+        description = `Unpublished ${sourceLabel} "${label}"`;
       } else {
-        description = `Changed campaign "${label}" status to ${next}`;
+        description = `Changed ${sourceLabel} "${label}" status to ${next}`;
       }
     }
     await this.insert({
@@ -359,17 +363,18 @@ export class BusinessHistoryService {
       description,
       actorUserId: params.actorUserId,
       occurredAt,
-      idempotencyKey: `campaign_updated:${params.campaignId}:${occurredAt.getTime()}`,
+      idempotencyKey: `campaign_updated:${source}:${params.campaignId}:${occurredAt.getTime()}`,
     });
   }
 
   async logCampaignDeleted(params: LogCampaignParams): Promise<void> {
+    const source = params.source ?? 'dealioo';
     await this.insert({
       businessId: params.businessId,
       eventType: BusinessHistoryEventType.CAMPAIGN_DELETED,
-      description: `Deleted campaign "${this.campaignLabel(params)}"`,
+      description: `Deleted ${this.campaignSourceLabel(source)} "${this.campaignLabel(params)}"`,
       actorUserId: params.actorUserId,
-      idempotencyKey: `campaign_deleted:${params.campaignId}`,
+      idempotencyKey: `campaign_deleted:${source}:${params.campaignId}`,
     });
   }
 
@@ -534,6 +539,14 @@ export class BusinessHistoryService {
     return params.campaignName.trim() || `Campaign #${params.campaignId}`;
   }
 
+  private campaignSourceLabel(
+    source: NonNullable<LogCampaignParams['source']>,
+  ): string {
+    if (source === 'meta') return 'Meta campaign';
+    if (source === 'google') return 'Google Ads campaign';
+    return 'campaign';
+  }
+
   private businessLabel(
     params: Pick<LogBusinessParams, 'businessId' | 'businessName'>,
   ): string {
@@ -581,6 +594,7 @@ export class BusinessHistoryService {
         businessId: params.businessId,
         actorUserId: params.actorUserId ?? null,
         occurredAt: params.occurredAt ?? new Date(),
+        description: params.description,
       });
     }
   }

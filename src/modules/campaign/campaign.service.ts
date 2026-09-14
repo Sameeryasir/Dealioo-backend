@@ -40,6 +40,8 @@ import { BusinessAccessService } from '../business-access/business-access.servic
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { AutomationService } from '../automation/automation.service';
 import { campaignPermissionKeysFor } from '../member/member.constants';
+import { PusherService } from '../pusher/pusher.service';
+import type { CampaignActivityPusherPayload } from '../pusher/pusher.types';
 import { CreateCampaignDto } from './campaignDto/create-campaign.dto';
 import { UpdateCampaignDto } from './campaignDto/update-campaign.dto';
 
@@ -67,7 +69,31 @@ export class CampaignService {
     private readonly automationService: AutomationService,
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly funnelPagesService: FunnelPagesService,
+    private readonly pusherService: PusherService,
   ) {}
+
+  private emitCampaignActivity(params: {
+    businessId: number;
+    eventType: CampaignActivityPusherPayload['eventType'];
+    campaignId: number;
+    campaignName: string;
+    actorUserId: number | null;
+    description: string;
+  }): void {
+    const campaignName = params.campaignName.trim() || `Campaign #${params.campaignId}`;
+    void this.pusherService
+      .notifyCampaignActivity({
+        businessId: params.businessId,
+        eventType: params.eventType,
+        campaignId: params.campaignId,
+        campaignName,
+        description: params.description.trim() || campaignName,
+        actorUserId: params.actorUserId,
+        actorName: null,
+        occurredAt: new Date().toISOString(),
+      })
+      .catch(() => undefined);
+  }
 
   async uploadCampaignImage(
     file?: Express.Multer.File,
@@ -123,9 +149,12 @@ export class CampaignService {
       throw new NotFoundException('Business not found');
     }
 
-    if (!business.stripeAccountId?.trim()) {
+    if (
+      campaignType !== CampaignType.POSTPAID &&
+      !business.stripeAccountId?.trim()
+    ) {
       throw new BadRequestException(
-        'Connect Stripe for this business before creating a campaign. A Stripe product ID is required so each payment can be matched to the correct campaign offer.',
+        'Connect Stripe for this business before creating a prepaid campaign. A Stripe product ID is required so each payment can be matched to the correct campaign offer.',
       );
     }
 
@@ -182,12 +211,17 @@ export class CampaignService {
       }),
     );
 
-    void this.stripeCatalogService
-      .createCatalogForNewCampaign({
-        campaign: savedCampaign,
-        stripeAccountId: business.stripeAccountId,
-      })
-      .catch(() => undefined);
+    if (
+      campaignType !== CampaignType.POSTPAID &&
+      business.stripeAccountId?.trim()
+    ) {
+      void this.stripeCatalogService
+        .createCatalogForNewCampaign({
+          campaign: savedCampaign,
+          stripeAccountId: business.stripeAccountId,
+        })
+        .catch(() => undefined);
+    }
 
     void this.businessHistoryService
       .logCampaignCreated({
@@ -197,6 +231,15 @@ export class CampaignService {
         actorUserId: user.id,
       })
       .catch(() => undefined);
+
+    this.emitCampaignActivity({
+      businessId: savedCampaign.businessId,
+      eventType: 'campaign_created',
+      campaignId: savedCampaign.id,
+      campaignName: savedCampaign.campaignName,
+      actorUserId: user.id,
+      description: `Created campaign "${savedCampaign.campaignName?.trim() || savedCampaign.id}"`,
+    });
 
     return savedCampaign;
   }
@@ -377,6 +420,32 @@ export class CampaignService {
       previousStatus:
         updateCampaignDto.status !== undefined ? previousStatus : null,
       status: updateCampaignDto.status !== undefined ? saved.status : null,
+    });
+
+    const previous =
+      updateCampaignDto.status !== undefined
+        ? previousStatus?.trim().toLowerCase() ?? ''
+        : '';
+    const next =
+      updateCampaignDto.status !== undefined
+        ? saved.status?.trim().toLowerCase() ?? ''
+        : '';
+    let description = `Updated campaign "${saved.campaignName?.trim() || saved.id}"`;
+    if (previous && next && previous !== next) {
+      if (next === 'published') {
+        description = `Published campaign "${saved.campaignName?.trim() || saved.id}"`;
+      } else if (next === 'unpublished') {
+        description = `Unpublished campaign "${saved.campaignName?.trim() || saved.id}"`;
+      }
+    }
+
+    this.emitCampaignActivity({
+      businessId: saved.businessId,
+      eventType: 'campaign_updated',
+      campaignId: saved.id,
+      campaignName: saved.campaignName,
+      actorUserId: user.id,
+      description,
     });
 
     return saved;
@@ -586,6 +655,15 @@ export class CampaignService {
       campaignId,
       campaignName,
       actorUserId: user.id,
+    });
+
+    this.emitCampaignActivity({
+      businessId,
+      eventType: 'campaign_deleted',
+      campaignId,
+      campaignName,
+      actorUserId: user.id,
+      description: `Deleted campaign "${campaignName?.trim() || campaignId}"`,
     });
 
     return { deleted: true, campaignId };

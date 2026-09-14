@@ -68,6 +68,18 @@ export class BusinessMember {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   permissions!: BusinessMemberPermissionKey[];
 
+  @Column({ name: 'access_notify_at', type: 'timestamptz', nullable: true })
+  accessNotifyAt!: Date | null;
+
+  @Column({ name: 'access_notify_payload', type: 'jsonb', nullable: true })
+  accessNotifyPayload!: {
+    businessName: string;
+    previousRole: string;
+    role: string;
+    grantedPermissions: string[];
+    removedPermissions: string[];
+  } | null;
+
   @OneToMany(
     () =>
       require('./business-member-permission.entity').BusinessMemberPermission,
