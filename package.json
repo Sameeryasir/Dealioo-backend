@@ -26,7 +26,8 @@
     "migration:run:baseline": "MIGRATIONS_DIR=baseline TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:run",
     "migration:show:baseline": "MIGRATIONS_DIR=baseline TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show",
     "migration:revert": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:revert",
-    "migration:show": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show"
+    "migration:show": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show",
+    "set-user-admin": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/set-user-role-admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1083.0",
