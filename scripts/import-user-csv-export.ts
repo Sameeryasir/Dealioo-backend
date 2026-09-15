@@ -4,7 +4,7 @@
  *
  * Usage:
  *   npx ts-node -r tsconfig-paths/register scripts/import-user-csv-export.ts \
- *     ../sameeryasir02-gmail-com-db-export.csv
+ *     ./sameeryasir02-gmail-com-db-export.csv
  *
  * Password applied to sameeryasir02@gmail.com: secret@1234
  *
@@ -25,7 +25,7 @@ config();
 
 const DEFAULT_CSV = resolve(
   __dirname,
-  '../../sameeryasir02-gmail-com-db-export.csv',
+  '../sameeryasir02-gmail-com-db-export.csv',
 );
 const TARGET_EMAIL = 'sameeryasir02@gmail.com';
 const TARGET_PASSWORD = 'secret@1234';
