@@ -64,7 +64,7 @@ export class CreateCampaignDto {
   )
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
+  @MaxLength(50)
   offer!: string;
 
   @Transform(({ value }) =>
@@ -72,7 +72,7 @@ export class CreateCampaignDto {
   )
   @IsString()
   @IsNotEmpty()
-  @MaxLength(2000)
+  @MaxLength(80)
   description!: string;
 
   @IsOptional()

@@ -55,6 +55,7 @@ export class UpdateCampaignDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   offer?: string;
 
   @IsOptional()
@@ -62,7 +63,7 @@ export class UpdateCampaignDto {
     typeof value === 'string' ? value.trim() : value,
   )
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(80)
   description?: string;
 
   @IsOptional()

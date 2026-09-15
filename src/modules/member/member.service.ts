@@ -54,6 +54,7 @@ export type MemberListItem = {
   role: string;
   status: 'owner' | 'active' | 'pending';
   permissions: string[];
+  joinedAt?: string;
   invitedAt?: string;
   expiresAt?: string;
 };
@@ -205,6 +206,9 @@ export class MemberService {
               role: 'Owner',
               status: 'owner' as const,
               permissions: [FULL_ACCESS_PERMISSION],
+              joinedAt: (
+                business.createdAt ?? business.owner.createdAt
+              )?.toISOString(),
             },
           ]),
       ...activeMembers.map((member) => {
@@ -227,6 +231,7 @@ export class MemberService {
             member.role === 'Owner' || isAdminOrSuperAdmin(member.user)
               ? [FULL_ACCESS_PERMISSION]
               : permissionList,
+          joinedAt: member.createdAt?.toISOString(),
         };
       }),
       ...pendingInvites
@@ -249,6 +254,7 @@ export class MemberService {
           role: invite.role,
           status: 'pending' as const,
           permissions: invite.permissions ?? [],
+          joinedAt: invite.createdAt.toISOString(),
           invitedAt: invite.createdAt.toISOString(),
           expiresAt: invite.expiresAt.toISOString(),
         })),

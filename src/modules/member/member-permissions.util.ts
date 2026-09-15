@@ -3,8 +3,10 @@ import type { EntityManager } from 'typeorm';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import {
+  AUTOMATION_ACTION_PERMISSIONS,
   BUSINESS_MEMBER_PERMISSIONS,
   DEFAULT_PERMISSIONS_BY_ROLE,
+  hasAnyCampaignPermission,
   type BusinessMemberPermission as BusinessMemberPermissionKey,
   type BusinessMemberRole,
 } from './member.constants';
@@ -20,13 +22,18 @@ export function normalizeMemberPermissions(
       ? permissions
       : DEFAULT_PERMISSIONS_BY_ROLE[role];
 
-  const normalized = [
+  let normalized = [
     ...new Set(
       source
         .map((permission) => permission.trim())
         .filter((permission) => allowed.has(permission)),
     ),
   ] as BusinessMemberPermissionKey[];
+
+  if (!hasAnyCampaignPermission(normalized)) {
+    const automationKeys = new Set<string>(AUTOMATION_ACTION_PERMISSIONS);
+    normalized = normalized.filter((permission) => !automationKeys.has(permission));
+  }
 
   if (normalized.length === 0) {
     throw new BadRequestException('Select at least one access permission.');
