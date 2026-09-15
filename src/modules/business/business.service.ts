@@ -611,9 +611,6 @@ export class BusinessService {
         `DELETE FROM funnel_payment WHERE business_id = $1`,
         [businessId],
       );
-      await manager.query(`DELETE FROM funnel_order WHERE business_id = $1`, [
-        businessId,
-      ]);
 
       await manager.query(
         `DELETE FROM facebook_campaigns WHERE business_id = $1`,

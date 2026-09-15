@@ -27,6 +27,10 @@ import {
   FunnelEvent,
   FunnelEventType,
 } from '../../db/entities/funnel-event.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { Business } from '../../db/entities/business.entity';
 import {
@@ -569,11 +573,13 @@ export class CampaignService {
       if (funnelId != null) {
         await manager
           .createQueryBuilder()
-          .update('funnel_order')
-          .set({ deleted_at: softDeletedAt })
+          .update(FunnelPayment)
+          .set({ deletedAt: softDeletedAt })
           .where('funnel_id = :funnelId', { funnelId })
           .andWhere('deleted_at IS NULL')
-          .andWhere(`status <> 'paid'`)
+          .andWhere('status <> :paidStatus', {
+            paidStatus: FunnelPaymentStatus.PAID,
+          })
           .execute();
 
         await manager
@@ -597,11 +603,13 @@ export class CampaignService {
       } else {
         await manager
           .createQueryBuilder()
-          .update('funnel_order')
-          .set({ deleted_at: softDeletedAt })
+          .update(FunnelPayment)
+          .set({ deletedAt: softDeletedAt })
           .where('campaign_id = :campaignId', { campaignId })
           .andWhere('deleted_at IS NULL')
-          .andWhere(`status <> 'paid'`)
+          .andWhere('status <> :paidStatus', {
+            paidStatus: FunnelPaymentStatus.PAID,
+          })
           .execute();
       }
 
