@@ -21,9 +21,18 @@ export const INVITABLE_ROLE_ERROR =
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
   'campaigns_create',
+  'campaigns_update',
   'campaigns_edit',
   'campaigns_delete',
 ] as const;
+
+export const CAMPAIGN_WORKSPACE_PERMISSIONS = [
+  'campaigns_guests',
+  'campaigns_orders',
+] as const;
+
+export type CampaignWorkspacePermission =
+  (typeof CAMPAIGN_WORKSPACE_PERMISSIONS)[number];
 
 export type CampaignActionPermission =
   (typeof CAMPAIGN_ACTION_PERMISSIONS)[number];
@@ -63,16 +72,19 @@ export const BUSINESS_MEMBER_PERMISSIONS = [
   'campaigns',
   'campaigns_view',
   ...CAMPAIGN_ACTION_PERMISSIONS,
+  ...CAMPAIGN_WORKSPACE_PERMISSIONS,
   'meta_ads',
   'meta_campaigns',
   'meta_campaigns_view',
   ...META_CAMPAIGN_ACTION_PERMISSIONS,
   'google_campaigns_view',
   ...GOOGLE_CAMPAIGN_ACTION_PERMISSIONS,
+  'automations',
   ...AUTOMATION_ACTION_PERMISSIONS,
   'funnels_edit',
   'orders',
   'activity',
+  'history',
   'chats',
   'scanning',
   'members',
@@ -91,21 +103,24 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
     'campaigns_create',
     'campaigns_edit',
     'campaigns_delete',
+    'campaigns_guests',
+    'campaigns_orders',
     'meta_campaigns_create',
     'meta_campaigns_delete',
     'google_campaigns_create',
     'google_campaigns_delete',
+    'automations',
     'automations_create',
     'automations_edit',
     'automations_delete',
     'funnels_edit',
     'orders',
     'activity',
+    'history',
     'chats',
     'scanning',
-    'members',
   ],
-  Staff: ['orders', 'activity', 'chats', 'scanning'],
+  Staff: ['orders', 'activity', 'history', 'chats', 'scanning'],
   Scanner: ['scanning', 'orders'],
 };
 
@@ -119,6 +134,9 @@ export function hasAnyCampaignPermission(
   permissions: readonly string[],
 ): boolean {
   if (permissions.includes('campaigns') || permissions.includes('campaigns_view')) {
+    return true;
+  }
+  if (CAMPAIGN_WORKSPACE_PERMISSIONS.some((key) => permissions.includes(key))) {
     return true;
   }
   return CAMPAIGN_ACTION_PERMISSIONS.some((key) => permissions.includes(key));
@@ -161,14 +179,21 @@ export function campaignPermissionKeysFor(
       'campaigns',
       'campaigns_view',
       ...CAMPAIGN_ACTION_PERMISSIONS,
-      'meta_ads',
-      'meta_campaigns',
-      'meta_campaigns_view',
-      ...META_CAMPAIGN_ACTION_PERMISSIONS,
-      ...ALL_BUSINESS_MEMBER_PERMISSIONS,
+      ...CAMPAIGN_WORKSPACE_PERMISSIONS,
     ];
   }
+  if (action === 'campaigns_edit' || action === 'campaigns_update') {
+    return ['campaigns_edit', 'campaigns_update', 'campaigns'];
+  }
   return [action, 'campaigns'];
+}
+
+export function campaignGuestsPermissionKeys(): BusinessMemberPermission[] {
+  return ['campaigns_guests', 'campaigns', 'campaigns_view'];
+}
+
+export function campaignOrdersPermissionKeys(): BusinessMemberPermission[] {
+  return ['campaigns_orders', 'campaigns', 'orders'];
 }
 
 export function metaCampaignPermissionKeysFor(
@@ -183,7 +208,7 @@ export function metaCampaignPermissionKeysFor(
     ];
   }
   if (action === 'create') {
-    return [...ALL_BUSINESS_MEMBER_PERMISSIONS];
+    return ['meta_campaigns_create', 'meta_campaigns'];
   }
   return ['meta_campaigns_delete', 'meta_campaigns'];
 }
@@ -207,6 +232,9 @@ export function googleCampaignPermissionKeysFor(
 export function hasAnyAutomationPermission(
   permissions: readonly string[],
 ): boolean {
+  if (permissions.includes('automations')) {
+    return true;
+  }
   return AUTOMATION_ACTION_PERMISSIONS.some((key) =>
     permissions.includes(key),
   );
@@ -216,12 +244,12 @@ export function automationPermissionKeysFor(
   action: AutomationAccessAction,
 ): BusinessMemberPermission[] {
   if (action === 'create') {
-    return ['automations_create'];
+    return ['automations', 'automations_create'];
   }
   if (action === 'edit') {
-    return ['automations_edit'];
+    return ['automations', 'automations_edit'];
   }
-  return ['automations_delete'];
+  return ['automations', 'automations_delete'];
 }
 
 export function funnelEditPermissionKeys(): BusinessMemberPermission[] {

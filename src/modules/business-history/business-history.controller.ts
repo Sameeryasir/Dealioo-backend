@@ -53,6 +53,13 @@ export class BusinessHistoryController {
           'Business not found or you do not have access to this business.',
         );
       }
+    } else if (context.access !== 'owner' && context.access !== 'super_admin') {
+      await this.businessAccessService.assertAnyPermission(
+        req.user,
+        businessId,
+        ['history'],
+        'You do not have permission to view history for this business.',
+      );
     }
 
     return this.businessHistoryService.getBusinessHistory(businessId, {

@@ -881,6 +881,21 @@ export class PaymentService implements OnModuleInit {
   }
 
 
+  async getFunnelBusinessId(funnelId: number): Promise<number> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+    const businessId = funnel.businessId ?? funnel.campaign?.businessId ?? null;
+    if (!businessId) {
+      throw new NotFoundException('Funnel not found');
+    }
+    return businessId;
+  }
+
   async getFunnelOrders(
     funnelId: number,
     page?: number,

@@ -13,6 +13,7 @@ import {
   BusinessAccessService,
   type BusinessAccessUser,
 } from '../business-access/business-access.service';
+import { hasAnyCampaignPermission } from '../member/member.constants';
 import { isAdminOrSuperAdmin } from '../../utils/user-roles';
 
 export type SidebarSectionUnreadDto = {
@@ -89,22 +90,13 @@ export class SidebarUnreadService {
       ]);
       return;
     }
-    const context = await this.businessAccessService.getAccessContext(
-      user,
-      businessId,
-    );
-    if (context) {
+    if (section === 'history') {
+      await this.businessAccessService.assertAnyPermission(user, businessId, [
+        'history',
+      ]);
       return;
     }
-    if (isAdminOrSuperAdmin(user)) {
-      const business = await this.businessAccessService.findAccessibleBusiness(
-        user,
-        businessId,
-      );
-      if (business) {
-        return;
-      }
-    }
+
     throw new ForbiddenException(
       'Business not found or you do not have access to this business.',
     );
@@ -160,23 +152,34 @@ export class SidebarUnreadService {
 
   async getBusinessUnread(
     businessId: number,
-    userId: number,
+    user: BusinessAccessUser,
     allowedSections: SidebarUnreadSection[],
   ): Promise<BusinessSidebarUnreadDto> {
     const allowed = new Set(allowedSections);
+    const context = await this.businessAccessService.getAccessContext(
+      user,
+      businessId,
+    );
+    const canGuestNotify =
+      context?.access === 'owner' ||
+      context?.access === 'super_admin' ||
+      hasAnyCampaignPermission(context?.permissions ?? []);
+
     const [orders, activity, history, latestGuestJoined, latestAccessUpdated] =
       await Promise.all([
         allowed.has('orders')
-          ? this.resolveSectionUnread(businessId, userId, 'orders')
+          ? this.resolveSectionUnread(businessId, user.id, 'orders')
           : Promise.resolve({ ...EMPTY_SECTION }),
         allowed.has('activity')
-          ? this.resolveSectionUnread(businessId, userId, 'activity')
+          ? this.resolveSectionUnread(businessId, user.id, 'activity')
           : Promise.resolve({ ...EMPTY_SECTION }),
         allowed.has('history')
-          ? this.resolveSectionUnread(businessId, userId, 'history')
+          ? this.resolveSectionUnread(businessId, user.id, 'history')
           : Promise.resolve({ ...EMPTY_SECTION }),
-        this.resolveLatestGuestJoined(businessId, userId),
-        this.resolveLatestAccessUpdated(businessId, userId),
+        canGuestNotify
+          ? this.resolveLatestGuestJoined(businessId, user.id)
+          : Promise.resolve(null),
+        this.resolveLatestAccessUpdated(businessId, user.id),
       ]);
 
     return {

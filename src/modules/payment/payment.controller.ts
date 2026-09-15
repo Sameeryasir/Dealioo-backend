@@ -15,6 +15,8 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { BusinessAccessService } from '../business-access/business-access.service';
+import { campaignOrdersPermissionKeys } from '../member/member.constants';
 import { PaymentService } from './payment.service';
 import { CheckoutResumeService } from './checkout-resume.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
@@ -22,6 +24,9 @@ import { CreateCheckoutSessionDto } from './paymentDto/create-checkout-session.d
 import { GetFunnelOrdersQueryDto } from './paymentDto/get-funnel-orders-query.dto';
 
 type RawBodyRequest = Request & { rawBody?: Buffer };
+type AuthRequest = Request & {
+  user: { id: number; email: string; role: { id: number; name: string } };
+};
 
 @SkipThrottle()
 @Controller('payment')
@@ -31,6 +36,7 @@ export class PaymentController {
   constructor(
     private readonly paymentService: PaymentService,
     private readonly checkoutResumeService: CheckoutResumeService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   @Post('session')
@@ -72,10 +78,19 @@ export class PaymentController {
 
   @Get('funnel/:funnelId/orders')
   @UseGuards(AuthGuard('jwt'))
-  getFunnelOrders(
+  async getFunnelOrders(
     @Param('funnelId', ParseIntPipe) funnelId: number,
     @Query() query: GetFunnelOrdersQueryDto,
+    @Req() req: AuthRequest,
   ) {
+    const businessId =
+      await this.paymentService.getFunnelBusinessId(funnelId);
+    await this.businessAccessService.assertAnyPermission(
+      req.user,
+      businessId,
+      campaignOrdersPermissionKeys(),
+      'You do not have permission to view campaign orders.',
+    );
     return this.paymentService.getFunnelOrders(
       funnelId,
       query.page ?? 1,
@@ -85,9 +100,18 @@ export class PaymentController {
 
   @Get('funnel/:funnelId')
   @UseGuards(AuthGuard('jwt'))
-  getPaidFunnelPayments(
+  async getPaidFunnelPayments(
     @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Req() req: AuthRequest,
   ) {
+    const businessId =
+      await this.paymentService.getFunnelBusinessId(funnelId);
+    await this.businessAccessService.assertAnyPermission(
+      req.user,
+      businessId,
+      campaignOrdersPermissionKeys(),
+      'You do not have permission to view campaign orders.',
+    );
     return this.paymentService.getPaidFunnelPayments(funnelId);
   }
 

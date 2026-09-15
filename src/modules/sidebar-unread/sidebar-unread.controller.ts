@@ -61,7 +61,7 @@ export class SidebarUnreadController {
 
     return this.sidebarUnreadService.getBusinessUnread(
       businessId,
-      req.user.id,
+      req.user,
       allowed,
     );
   }

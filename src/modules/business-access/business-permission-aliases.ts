@@ -1,9 +1,9 @@
 import type { BusinessMemberPermission } from '../member/member.constants';
 
 export const BUSINESS_PERMISSION_ALIASES = {
-  'campaign.view': ['campaigns', 'campaigns_view', 'campaigns_create', 'campaigns_edit', 'campaigns_delete'],
+  'campaign.view': ['campaigns', 'campaigns_view', 'campaigns_create', 'campaigns_update', 'campaigns_edit', 'campaigns_delete', 'campaigns_guests', 'campaigns_orders'],
   'campaign.create': ['campaigns_create', 'campaigns'],
-  'campaign.update': ['campaigns_edit', 'campaigns'],
+  'campaign.update': ['campaigns_edit', 'campaigns_update', 'campaigns'],
   'campaign.delete': ['campaigns_delete', 'campaigns'],
   'analytics.view': ['activity'],
   'customer.view': ['orders', 'activity'],

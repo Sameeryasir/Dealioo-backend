@@ -3155,6 +3155,21 @@ export class FunnelEventService {
     return result;
   }
 
+  async getFunnelBusinessId(funnelId: number): Promise<number> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+    const businessId = funnel.businessId ?? funnel.campaign?.businessId ?? null;
+    if (!businessId) {
+      throw new NotFoundException('Funnel not found');
+    }
+    return businessId;
+  }
+
   /** Distinct customers who signed up on this funnel (first signup time = joined). */
   async getFunnelGuests(
     funnelId: number,

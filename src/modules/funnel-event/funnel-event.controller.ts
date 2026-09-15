@@ -18,6 +18,7 @@ import type { Request } from 'express';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { requireScannerRole } from '../../utils/require-scanner-role';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { campaignGuestsPermissionKeys } from '../member/member.constants';
 import { RedemptionService } from '../redemption/redemption.service';
 import { FunnelAnalyticsEvent } from '../../db/entities/funnel-analytics-event.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
@@ -193,10 +194,19 @@ export class FunnelEventController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('funnel/:funnelId/guests')
-  getFunnelGuests(
+  async getFunnelGuests(
     @Param('funnelId', ParseIntPipe) funnelId: number,
     @Query() query: GetFunnelGuestsQueryDto,
+    @Req() req: AuthRequest,
   ) {
+    const businessId =
+      await this.funnelEventService.getFunnelBusinessId(funnelId);
+    await this.businessAccessService.assertAnyPermission(
+      req.user,
+      businessId,
+      campaignGuestsPermissionKeys(),
+      'You do not have permission to view campaign guests.',
+    );
     return this.funnelEventService.getFunnelGuests(
       funnelId,
       query.page ?? 1,

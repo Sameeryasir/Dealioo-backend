@@ -350,7 +350,7 @@ export class CampaignService {
     await this.businessAccessService.assertAnyPermission(
       user,
       campaign.businessId,
-      ['campaigns_edit', 'campaigns'],
+      campaignPermissionKeysFor('campaigns_edit'),
       'You do not have permission to update campaigns for this business.',
     );
 
