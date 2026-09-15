@@ -15,7 +15,7 @@
  * - Temporarily disables FK checks (session_replication_role = replica)
  */
 import { createHash } from 'crypto';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import * as bcrypt from 'bcrypt';
 import { config } from 'dotenv';
@@ -344,6 +344,16 @@ async function setUserPassword(client: Client): Promise<void> {
 async function main(): Promise<void> {
   const csvPath = resolve(process.argv[2] ?? DEFAULT_CSV);
   console.log(`Reading CSV: ${csvPath}`);
+
+  if (!existsSync(csvPath)) {
+    throw new Error(
+      `CSV not found at ${csvPath}. From the backend folder run:\n` +
+        `  npx ts-node -r tsconfig-paths/register scripts/import-user-csv-export.ts\n` +
+        `or:\n` +
+        `  npx ts-node -r tsconfig-paths/register scripts/import-user-csv-export.ts ./sameeryasir02-gmail-com-db-export.csv\n` +
+        `(Do not use ../ — the CSV lives inside the backend directory.)`,
+    );
+  }
 
   const csvRows = readCsv(csvPath);
   console.log(`CSV rows: ${csvRows.length}`);
