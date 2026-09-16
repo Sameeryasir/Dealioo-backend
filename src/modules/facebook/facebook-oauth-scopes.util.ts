@@ -56,7 +56,7 @@ export function assertBusinessCanManageMetaAds(
 ): void {
   if (!businessHasMetaOauthScope(metaOauthScopes, 'ads_management')) {
     throw new ForbiddenException(
-      'Meta ads_management permission is required to create or manage campaigns. Reconnect Meta Ads and grant Manage advertising campaigns.',
+      'Meta ads_management permission is required to create or manage campaigns. Reconnect Meta Ads and grant ads_management.',
     );
   }
 }
