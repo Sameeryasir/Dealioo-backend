@@ -36,6 +36,7 @@ import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
+import { DEFAULT_META_AD_STATS_DATE_PRESET } from './meta-ad-stats-date-preset';
 import {
   FacebookConnectionStatus,
   type FacebookConnectionStatusValue,
@@ -116,7 +117,7 @@ type FacebookCampaignsResponse = {
   error?: { message?: string };
 };
 
-const META_AD_STATS_DATE_PRESET = 'last_30d';
+const META_AD_STATS_DATE_PRESET = DEFAULT_META_AD_STATS_DATE_PRESET;
 const META_CAMPAIGN_FIELDS =
   'id,name,status,effective_status,daily_budget';
 const META_CAMPAIGN_INSIGHT_FIELDS =
