@@ -36,7 +36,11 @@ export function buildMetaOAuthDialogScopes(selected: string[]): string[] {
   const selectable = assertRequestedMetaScopesSelected(selected);
   const scopes = new Set<string>([META_IDENTITY_SCOPE, ...selectable]);
 
-  if (selectable.includes('ads_management')) {
+  if (
+    selectable.includes('ads_management') ||
+    selectable.includes('pages_read_engagement') ||
+    selectable.includes('pages_show_list')
+  ) {
     for (const scope of META_ADS_MANAGEMENT_DEPENDENT_PAGE_SCOPES) {
       scopes.add(scope);
     }

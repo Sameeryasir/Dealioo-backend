@@ -22,6 +22,7 @@ import { FacebookAdCampaignStatsDto } from './dto/facebook-ad-campaign-stats.dto
 import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
+import { FacebookPageEngagementPreviewDto } from './dto/facebook-page-engagement-preview.dto';
 import { SetFacebookAdAccountDto } from './dto/set-facebook-ad-account.dto';
 import { FacebookService } from './facebook.service';
 
@@ -175,6 +176,20 @@ export class FacebookController {
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookPageDto[]> {
     return this.facebookService.listPagesForBusiness(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('pages/:businessId/:pageId')
+  async getPageEngagementPreview(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('pageId') pageId: string,
+  ): Promise<FacebookPageEngagementPreviewDto> {
+    return this.facebookService.getPageEngagementPreviewForBusiness(
+      req.user,
+      businessId,
+      pageId,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

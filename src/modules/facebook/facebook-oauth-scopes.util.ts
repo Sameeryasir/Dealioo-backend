@@ -3,6 +3,22 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 
+export type MetaOauthPermissionStatus = 'granted' | 'missing';
+
+export type MetaOauthPermissionMap = {
+  ads_read: MetaOauthPermissionStatus;
+  ads_management: MetaOauthPermissionStatus;
+  pages_show_list: MetaOauthPermissionStatus;
+  pages_read_engagement: MetaOauthPermissionStatus;
+};
+
+export type MetaOauthCapabilityMap = {
+  campaignManagement: boolean;
+  pageSelection: boolean;
+  pageInformation: boolean;
+  advertisingAnalytics: boolean;
+};
+
 export function parseFacebookScopeList(raw: string | undefined): string[] {
   if (!raw?.trim()) {
     return [];
@@ -50,13 +66,82 @@ export function businessHasMetaOauthScope(
   return parseFacebookScopeList(metaOauthScopes ?? undefined).includes(scope);
 }
 
-/** Create/edit/delete Meta campaigns require ads_management (ads_read alone is not enough). */
+export function buildMetaOauthPermissionMap(
+  metaOauthScopes: string | null | undefined,
+): MetaOauthPermissionMap {
+  const status = (
+    scope: keyof MetaOauthPermissionMap,
+  ): MetaOauthPermissionStatus =>
+    businessHasMetaOauthScope(metaOauthScopes, scope) ? 'granted' : 'missing';
+
+  return {
+    ads_read: status('ads_read'),
+    ads_management: status('ads_management'),
+    pages_show_list: status('pages_show_list'),
+    pages_read_engagement: status('pages_read_engagement'),
+  };
+}
+
+export function buildMetaOauthCapabilityMap(
+  metaOauthScopes: string | null | undefined,
+): MetaOauthCapabilityMap {
+  const permissions = buildMetaOauthPermissionMap(metaOauthScopes);
+  return {
+    campaignManagement: permissions.ads_management === 'granted',
+    pageSelection: permissions.pages_show_list === 'granted',
+    pageInformation: permissions.pages_read_engagement === 'granted',
+    advertisingAnalytics:
+      permissions.ads_read === 'granted' ||
+      permissions.ads_management === 'granted',
+  };
+}
+
+export function assertBusinessHasMetaOauthScope(
+  metaOauthScopes: string | null | undefined,
+  scope: string,
+  message?: string,
+): void {
+  if (!businessHasMetaOauthScope(metaOauthScopes, scope)) {
+    throw new ForbiddenException(
+      message ??
+        `Meta ${scope} permission is required. Reconnect Meta Ads and grant ${scope}.`,
+    );
+  }
+}
+
+export function assertBusinessHasPagesReadEngagement(
+  metaOauthScopes: string | null | undefined,
+): void {
+  if (!businessHasMetaOauthScope(metaOauthScopes, 'pages_read_engagement')) {
+    throw new ForbiddenException({
+      code: 'META_PAGES_READ_ENGAGEMENT_NOT_GRANTED',
+      message:
+        'Meta pages_read_engagement permission is required to load Facebook Page details. Reconnect Meta Ads and grant pages_read_engagement.',
+    });
+  }
+}
+
 export function assertBusinessCanManageMetaAds(
   metaOauthScopes: string | null | undefined,
 ): void {
-  if (!businessHasMetaOauthScope(metaOauthScopes, 'ads_management')) {
-    throw new ForbiddenException(
-      'Meta ads_management permission is required to create or manage campaigns. Reconnect Meta Ads and grant ads_management.',
-    );
+  assertBusinessHasMetaOauthScope(
+    metaOauthScopes,
+    'ads_management',
+    'Meta ads_management permission is required to create or manage campaigns. Reconnect Meta Ads and grant ads_management.',
+  );
+}
+
+export function assertBusinessCanReadMetaAds(
+  metaOauthScopes: string | null | undefined,
+): void {
+  if (
+    businessHasMetaOauthScope(metaOauthScopes, 'ads_read') ||
+    businessHasMetaOauthScope(metaOauthScopes, 'ads_management')
+  ) {
+    return;
   }
+
+  throw new ForbiddenException(
+    'Meta ads_read permission is required to view advertising analytics. Reconnect Meta Ads and grant ads_read.',
+  );
 }

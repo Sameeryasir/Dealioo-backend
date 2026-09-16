@@ -35,6 +35,7 @@ import {
 import { FacebookAdPixelDto } from './dto/facebook-ad-pixel.dto';
 import { FacebookConnectionStatusDto } from './dto/facebook-connection-status.dto';
 import { FacebookPageDto } from './dto/facebook-page.dto';
+import { FacebookPageEngagementPreviewDto } from './dto/facebook-page-engagement-preview.dto';
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
 import { DEFAULT_META_AD_STATS_DATE_PRESET } from './meta-ad-stats-date-preset';
 import {
@@ -48,6 +49,11 @@ import {
   parseFacebookOAuthState,
 } from './facebook-oauth-state';
 import {
+  assertBusinessCanReadMetaAds,
+  assertBusinessHasMetaOauthScope,
+  assertBusinessHasPagesReadEngagement,
+  buildMetaOauthCapabilityMap,
+  buildMetaOauthPermissionMap,
   toFacebookOAuthScopeParam,
 } from './facebook-oauth-scopes.util';
 import {
@@ -126,6 +132,8 @@ const META_SINGLE_CAMPAIGN_INSIGHT_FIELDS =
   'spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type';
 const GRAPH_FETCH_TIMEOUT_MS = 25_000;
 const GRAPH_FETCH_RETRIES = 2;
+const PAGE_PREVIEW_TIMEOUT_MS = 8_000;
+const PAGE_PREVIEW_RETRIES = 1;
 const CAMPAIGN_STATS_DB_TTL_MS = 10 * 60_000;
 const INSIGHTS_FETCH_CONCURRENCY = 4;
 const DEFAULT_CAMPAIGN_PAGE_SIZE = 4;
@@ -485,6 +493,8 @@ export class FacebookService {
       query?: string;
     },
   ): Promise<FacebookAdCampaignStatsDto> {
+    assertBusinessCanReadMetaAds(business.metaOauthScopes);
+
     const includeInsights = options?.includeInsights !== false;
     const bypassCache = options?.bypassCache === true;
     const { accessToken } =
@@ -1392,6 +1402,8 @@ export class FacebookService {
       missingRequiredScopes,
       requestedScopes,
       requiredScopes,
+      permissions: buildMetaOauthPermissionMap(business.metaOauthScopes),
+      capabilities: buildMetaOauthCapabilityMap(business.metaOauthScopes),
     };
   }
 
@@ -1419,6 +1431,11 @@ export class FacebookService {
     businessId: number,
   ): Promise<FacebookPageDto[]> {
     const business = await this.requireMetaBusiness(user, businessId);
+    assertBusinessHasMetaOauthScope(
+      business.metaOauthScopes,
+      'pages_show_list',
+      'Meta pages_show_list permission is required to list Facebook Pages. Reconnect Meta Ads and grant pages_show_list.',
+    );
 
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaToken(business);
@@ -1441,6 +1458,132 @@ export class FacebookService {
         name: row.name?.trim() ?? null,
         pictureUrl: row.picture?.data?.url?.trim() || null,
       }));
+  }
+
+  /**
+   * Dealioo uses pages_read_engagement to retrieve supported information about
+   * the Facebook Page selected during campaign creation. This information is
+   * displayed in the Selected Facebook Page preview so the business owner can
+   * verify that the correct Page will represent their advertisement before publishing.
+   */
+  async getPageEngagementPreviewForBusiness(
+    user: User,
+    businessId: number,
+    pageId: string,
+  ): Promise<FacebookPageEngagementPreviewDto> {
+    const business = await this.requireMetaBusiness(user, businessId);
+    assertBusinessHasPagesReadEngagement(business.metaOauthScopes);
+
+    const { accessToken } =
+      await this.metaTokenService.assertBusinessMetaToken(business);
+
+    const trimmedPageId = pageId.trim();
+    if (!trimmedPageId) {
+      throw new BadRequestException('Facebook Page ID is required.');
+    }
+
+    const accounts = await this.graphGetWithToken<{
+      data?: Array<{
+        id?: string;
+        name?: string;
+        access_token?: string;
+      }>;
+    }>(
+      '/me/accounts',
+      accessToken,
+      {
+        fields: 'id,name,access_token',
+        limit: '50',
+      },
+      {
+        timeoutMs: PAGE_PREVIEW_TIMEOUT_MS,
+        retries: PAGE_PREVIEW_RETRIES,
+      },
+    );
+
+    const matchedPage = (accounts.data ?? []).find(
+      (row) => row.id?.trim() === trimmedPageId,
+    );
+    if (!matchedPage) {
+      throw new BadRequestException(
+        'Selected Facebook Page is not linked to this Meta account.',
+      );
+    }
+
+    const pageToken = matchedPage.access_token?.trim() || accessToken;
+
+    try {
+      const page = await this.graphGetWithToken<{
+        id?: string;
+        name?: string;
+        about?: string;
+        category?: string;
+        description?: string;
+        website?: string;
+        phone?: string;
+        single_line_address?: string;
+        link?: string;
+        picture?: { data?: { url?: string } };
+      }>(
+        `/${trimmedPageId}`,
+        pageToken,
+        {
+          fields:
+            'id,name,about,category,description,website,phone,single_line_address,link,picture.type(large)',
+        },
+        {
+          timeoutMs: PAGE_PREVIEW_TIMEOUT_MS,
+          retries: PAGE_PREVIEW_RETRIES,
+        },
+      );
+
+      return {
+        id: page.id?.trim() || trimmedPageId,
+        name: page.name?.trim() || null,
+        about: page.about?.trim() || null,
+        category: page.category?.trim() || null,
+        description: page.description?.trim() || null,
+        website: this.normalizePageWebsite(page.website),
+        phone: page.phone?.trim() || null,
+        singleLineAddress: page.single_line_address?.trim() || null,
+        link: page.link?.trim() || null,
+        pictureUrl: page.picture?.data?.url?.trim() || null,
+        detailsLoaded: true,
+        errorCode: null,
+        engagementError: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        `Page identity preview failed pageId=${trimmedPageId}: ${message}`,
+      );
+
+      return {
+        id: trimmedPageId,
+        name: null,
+        about: null,
+        category: null,
+        description: null,
+        website: null,
+        phone: null,
+        singleLineAddress: null,
+        link: null,
+        pictureUrl: null,
+        detailsLoaded: false,
+        errorCode: 'META_PAGE_DETAILS_UNAVAILABLE',
+        engagementError: message,
+      };
+    }
+  }
+
+  private normalizePageWebsite(raw: string | null | undefined): string | null {
+    const trimmed = raw?.trim();
+    if (!trimmed) return null;
+    const parts = trimmed
+      .split(/[\s,;|]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join('\n') : null;
   }
 
   async listAdPixelsForBusiness(
@@ -1987,6 +2130,7 @@ export class FacebookService {
     path: string,
     accessToken: string,
     params?: Record<string, string>,
+    options?: { timeoutMs?: number; retries?: number },
   ): Promise<T> {
     const normalized = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${FACEBOOK_GRAPH}${normalized}`);
@@ -1996,7 +2140,7 @@ export class FacebookService {
         url.searchParams.set(key, value);
       }
     }
-    return this.graphGet<T>(url.toString());
+    return this.graphGet<T>(url.toString(), options);
   }
 
   private async fetchFacebookUser(
@@ -2016,13 +2160,18 @@ export class FacebookService {
     return { id: me.id, name: me.name ?? null };
   }
 
-  private async graphGet<T>(url: string): Promise<T> {
+  private async graphGet<T>(
+    url: string,
+    options?: { timeoutMs?: number; retries?: number },
+  ): Promise<T> {
+    const timeoutMs = options?.timeoutMs ?? GRAPH_FETCH_TIMEOUT_MS;
+    const retries = options?.retries ?? GRAPH_FETCH_RETRIES;
     let lastNetworkError: unknown;
 
-    for (let attempt = 0; attempt < GRAPH_FETCH_RETRIES; attempt++) {
+    for (let attempt = 0; attempt < retries; attempt++) {
       try {
         const res = await fetch(url, {
-          signal: AbortSignal.timeout(GRAPH_FETCH_TIMEOUT_MS),
+          signal: AbortSignal.timeout(timeoutMs),
         });
 
         const raw = await res.text();
@@ -2062,9 +2211,9 @@ export class FacebookService {
         }
         lastNetworkError = err;
         this.logger.warn(
-          `Facebook Graph API attempt ${attempt + 1}/${GRAPH_FETCH_RETRIES} failed: ${err instanceof Error ? err.message : String(err)}`,
+          `Facebook Graph API attempt ${attempt + 1}/${retries} failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-        if (attempt < GRAPH_FETCH_RETRIES - 1) {
+        if (attempt < retries - 1) {
           await new Promise((resolve) => setTimeout(resolve, 800));
         }
       }
