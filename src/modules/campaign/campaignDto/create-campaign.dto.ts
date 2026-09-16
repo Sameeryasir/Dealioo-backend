@@ -25,7 +25,7 @@ export class CreateCampaignDto {
 
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
+  @MaxLength(30)
   campaignName!: string;
 
   @IsEnum(CampaignType)

@@ -20,7 +20,7 @@ export class UpdateCampaignDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
-  @MaxLength(255)
+  @MaxLength(30)
   campaignName?: string;
 
   @IsOptional()
