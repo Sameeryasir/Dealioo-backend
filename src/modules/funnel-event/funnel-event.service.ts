@@ -8,7 +8,11 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { And, DataSource, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
-import { Campaign, CampaignType } from '../../db/entities/campaign.entity';
+import {
+  Campaign,
+  CampaignPublicationStatus,
+  CampaignType,
+} from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import {
@@ -501,8 +505,9 @@ export class FunnelEventService {
           message: ScannerErrorMessage.CAMPAIGN_INACTIVE,
         });
       }
-      // Match Business deals: CRM Live (funnel.published) is enough to attach.
-      if (!funnel.published) {
+      const campaignIsPublished =
+        funnel.campaign.status === CampaignPublicationStatus.PUBLISHED;
+      if (!funnel.published && !campaignIsPublished) {
         throw new BadRequestException({
           code: ScannerErrorCode.CAMPAIGN_INACTIVE,
           message: 'Only published deals can be attached at the counter.',
