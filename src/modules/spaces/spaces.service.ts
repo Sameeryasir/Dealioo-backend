@@ -152,7 +152,7 @@ export class SpacesService {
 
     const safeFolder = folder.replace(/^\/+|\/+$/g, '');
     const storedName = sanitizeStoredUploadFileName(file.originalname);
-    const objectKey = `${safeFolder}/${storedName}`;
+    const objectKey = `${safeFolder}/${randomUUID()}-${storedName}`;
 
     try {
       await this.client.send(

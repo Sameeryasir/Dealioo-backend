@@ -2,11 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { MetaCampaignDraft } from '../../db/entities/meta-campaign-draft.entity';
+import { FacebookCampaign } from '../../db/entities/facebook-campaign.entity';
 import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
@@ -15,7 +17,12 @@ import {
   type MetaCampaignAccessAction,
 } from '../member/member.constants';
 import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
+import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
+import {
+  graphGetWithToken,
+  normalizeAdAccountId,
+} from './facebook-campaign-meta';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
 import { AdSetStepDataDto } from './dto/adset-step-data.dto';
 import { AutosaveDraftDto } from './dto/autosave-draft.dto';
@@ -48,12 +55,15 @@ import { MetaCreativeFormat } from './meta-campaign.constants';
 
 @Injectable()
 export class MetaCampaignDraftService {
+  private readonly logger = new Logger(MetaCampaignDraftService.name);
+
   constructor(
     @InjectRepository(MetaCampaignDraft)
     private readonly draftRepository: Repository<MetaCampaignDraft>,
-    @InjectRepository(Business)
-    private readonly businessRepository: Repository<Business>,
+    @InjectRepository(FacebookCampaign)
+    private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly metaTokenService: FacebookMetaTokenService,
   ) {}
 
   async saveCampaignStep(
@@ -205,7 +215,8 @@ export class MetaCampaignDraftService {
       destinationType: dto.destinationType,
       promotedObject:
         dto.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
-        dto.optimizationGoal === MetaOptimizationGoal.VALUE
+        dto.optimizationGoal === MetaOptimizationGoal.VALUE ||
+        dto.optimizationGoal === MetaOptimizationGoal.LANDING_PAGE_VIEWS
           ? dto.promotedObject
           : undefined,
       audience: {
@@ -284,6 +295,12 @@ export class MetaCampaignDraftService {
       thumbnailUrl: dto.thumbnailUrl?.trim(),
       carouselCards: dto.carouselCards?.map((card) => ({
         ...card,
+        imageUrl: card.imageUrl
+          ? (normalizeCampaignImageUrlForMeta(card.imageUrl) ??
+            card.imageUrl.trim())
+          : undefined,
+        videoUrl: undefined,
+        mediaType: 'image' as const,
         destinationUrl: buildDestinationUrlWithParams(
           card.destinationUrl,
           dto.urlParameters,
@@ -396,7 +413,7 @@ export class MetaCampaignDraftService {
     user: User,
     businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
-    await this.loadOwnedBusiness(user, businessId, 'view');
+    const business = await this.loadOwnedBusiness(user, businessId, 'view');
 
     const drafts = await this.draftRepository.find({
       where: {
@@ -406,7 +423,117 @@ export class MetaCampaignDraftService {
       order: { updatedAt: 'DESC' },
     });
 
-    return drafts.map((draft) => this.toResponse(draft));
+    const synced = await this.syncPublishedDraftsWithMeta(business, drafts);
+
+    return synced.map((draft) => this.toResponse(draft));
+  }
+
+  private async syncPublishedDraftsWithMeta(
+    business: Business,
+    drafts: MetaCampaignDraft[],
+  ): Promise<MetaCampaignDraft[]> {
+    const published = drafts.filter((draft) => {
+      const status = (draft.status ?? '').toLowerCase();
+      const publishStatus = (draft.publishStatus ?? '').toUpperCase();
+      return (
+        Boolean(draft.metaCampaignId?.trim()) &&
+        (status === 'published' ||
+          publishStatus === 'PUBLISHED' ||
+          Boolean(draft.metaAdId))
+      );
+    });
+
+    if (published.length === 0) {
+      return drafts;
+    }
+
+    let liveIds: Set<string>;
+    try {
+      liveIds = await this.fetchLiveMetaCampaignIds(business);
+    } catch (err) {
+      this.logger.warn(
+        `Could not sync Meta campaigns for business ${business.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return drafts;
+    }
+
+    const missing = published.filter(
+      (draft) => !liveIds.has(String(draft.metaCampaignId).trim()),
+    );
+    if (missing.length === 0) {
+      return drafts;
+    }
+
+    const missingIds = missing.map((draft) => draft.id);
+    const missingMetaIds = missing
+      .map((draft) => draft.metaCampaignId?.trim())
+      .filter((id): id is string => Boolean(id));
+
+    await this.draftRepository.delete({ id: In(missingIds) });
+    if (missingMetaIds.length > 0) {
+      await this.facebookCampaignRepository.delete({
+        businessId: business.id,
+        metaCampaignId: In(missingMetaIds),
+      });
+    }
+
+    this.logger.log(
+      `Synced Meta campaigns for business ${business.id}: removed ${missing.length} deleted campaign(s).`,
+    );
+
+    const removed = new Set(missingIds);
+    return drafts.filter((draft) => !removed.has(draft.id));
+  }
+
+  private async fetchLiveMetaCampaignIds(
+    business: Business,
+  ): Promise<Set<string>> {
+    const { accessToken, adAccountId: storedAdAccountId } =
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
+    const adAccountId = normalizeAdAccountId(storedAdAccountId ?? '');
+    const live = new Set<string>();
+    let after: string | undefined;
+
+    for (let page = 0; page < 20; page += 1) {
+      const params: Record<string, string> = {
+        fields: 'id,status,effective_status',
+        limit: '100',
+      };
+      if (after) {
+        params.after = after;
+      }
+
+      const response = await graphGetWithToken<{
+        data?: Array<{
+          id?: string;
+          status?: string;
+          effective_status?: string;
+        }>;
+        paging?: { cursors?: { after?: string }; next?: string };
+      }>(`/${adAccountId}/campaigns`, accessToken, params);
+
+      for (const row of response.data ?? []) {
+        const id = row.id?.trim();
+        if (!id) continue;
+        const effective = (row.effective_status ?? '').toUpperCase();
+        const status = (row.status ?? '').toUpperCase();
+        if (effective === 'DELETED' || status === 'DELETED') {
+          continue;
+        }
+        live.add(id);
+      }
+
+      const nextAfter = response.paging?.cursors?.after?.trim();
+      const hasNext = Boolean(response.paging?.next && nextAfter);
+      if (!hasNext || !(response.data?.length ?? 0)) {
+        break;
+      }
+      after = nextAfter;
+    }
+
+    return live;
   }
 
   async deleteDraft(

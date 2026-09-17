@@ -68,6 +68,7 @@ export function isTransientMetaPublishError(err: unknown): boolean {
         message.includes('objective') ||
         message.includes('budget'))) ||
     message.includes('unsupported creative') ||
+    message.includes('video cards are not supported in carousel') ||
     message.includes('carousel video cards are not supported') ||
     message.includes('landing page url is required') ||
     message.includes('complete all builder steps')

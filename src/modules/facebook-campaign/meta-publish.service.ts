@@ -32,15 +32,19 @@ import {
   MetaPublishStatusDto,
 } from './dto/meta-publish-status.dto';
 import {
+  buildDestinationUrlWithParams,
+} from './meta-ad-creative-draft-validation';
+import {
+  assertPublishReady,
+  humanizeMetaPublishDetail,
+} from './meta-publish-preflight';
+import {
   adsManagerCampaignsUrl,
+  graphGetWithToken,
   MetaApiStepError,
   normalizeAdAccountId,
   stepFailureUserMessage,
 } from './facebook-campaign-meta';
-import {
-  assertAdCreativeMedia,
-  buildDestinationUrlWithParams,
-} from './meta-ad-creative-draft-validation';
 import {
   sdkCreateAd,
   sdkCreateAdCreative,
@@ -138,6 +142,12 @@ export class MetaPublishService {
           'Complete all builder steps (Campaign, Ad Set, Ad / Creative) before publishing.',
         );
       }
+
+      assertPublishReady(
+        draft.campaignData as CampaignStepDataDto,
+        draft.adSetData as AdSetStepDataDto,
+        draft.adCreativeData as AdCreativeStepDataDto,
+      );
 
       if (draft.status === 'published' && draft.metaAdId) {
         throw new BadRequestException(
@@ -388,7 +398,7 @@ export class MetaPublishService {
     const adSet = draft.adSetData as AdSetStepDataDto;
     const creative = draft.adCreativeData as AdCreativeStepDataDto;
 
-    assertAdCreativeMedia(creative as never);
+    assertPublishReady(campaign, adSet, creative);
 
     const { accessToken, adAccountId: storedAdAccountId } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
@@ -410,6 +420,36 @@ export class MetaPublishService {
     let metaAdsetId: string | null = draft.metaAdsetId;
     let metaCreativeId: string | null = draft.metaCreativeId;
     let metaAdId: string | null = draft.metaAdId;
+
+    if (metaCampaignId) {
+      const stillExists = await this.metaObjectStillExists(
+        accessToken,
+        metaCampaignId,
+      );
+      if (!stillExists) {
+        this.logger.warn(
+          `Draft ${draft.id}: saved Meta campaign ${metaCampaignId} is missing; clearing partial IDs for a clean republish.`,
+        );
+        metaCampaignId = null;
+        metaAdsetId = null;
+        metaCreativeId = null;
+        metaAdId = null;
+        draft.metaCampaignId = null;
+        draft.metaAdsetId = null;
+        draft.metaCreativeId = null;
+        draft.metaAdId = null;
+        await this.draftRepository.update(draft.id, {
+          metaCampaignId: null,
+          metaAdsetId: null,
+          metaCreativeId: null,
+          metaAdId: null,
+        });
+      }
+    } else if (metaAdsetId) {
+      metaAdsetId = null;
+      metaCreativeId = null;
+      metaAdId = null;
+    }
 
     const tracking = await this.findOrCreateTrackingRow(
       userId,
@@ -647,37 +687,45 @@ export class MetaPublishService {
         return { imageHash };
       }
       case MetaCreativeFormat.SINGLE_VIDEO: {
-        const videoId = await this.uploadVideo(
-          adAccountId,
-          accessToken,
-          creative.videoUrl!,
-        );
-
-        let videoThumbnailHash: string | undefined;
         const thumbnailUrl = creative.thumbnailUrl?.trim();
-        if (thumbnailUrl) {
-          videoThumbnailHash = await this.uploadImage(
-            adAccountId,
-            accessToken,
-            thumbnailUrl,
+        if (!thumbnailUrl) {
+          throw new BadRequestException(
+            'A thumbnail image is required for video ads.',
           );
         }
+
+        const [videoId, videoThumbnailHash] = await Promise.all([
+          this.uploadVideo(adAccountId, accessToken, creative.videoUrl!),
+          this.uploadImage(adAccountId, accessToken, thumbnailUrl),
+        ]);
 
         return { videoId, videoThumbnailHash };
       }
       case MetaCreativeFormat.CAROUSEL: {
-        const carouselHashes: string[] = [];
-        for (const card of creative.carouselCards ?? []) {
-          if (card.imageUrl?.trim()) {
-            carouselHashes.push(
-              await this.uploadImage(adAccountId, accessToken, card.imageUrl),
-            );
-          } else if (card.videoUrl?.trim()) {
+        const cards = creative.carouselCards ?? [];
+        if (cards.length < 2) {
+          throw new BadRequestException('Carousel ads require at least 2 cards.');
+        }
+
+        for (const [index, card] of cards.entries()) {
+          if (!card.imageUrl?.trim()) {
             throw new BadRequestException(
-              'Carousel video cards are not supported yet. Use images for each card.',
+              `Carousel card ${index + 1} needs an image before publishing.`,
+            );
+          }
+          if (card.videoUrl?.trim()) {
+            throw new BadRequestException(
+              `Carousel card ${index + 1}: use an image. Video cards are not supported in carousel ads.`,
             );
           }
         }
+
+        const carouselHashes = await Promise.all(
+          cards.map((card) =>
+            this.uploadImage(adAccountId, accessToken, card.imageUrl!),
+          ),
+        );
+
         return { carouselHashes };
       }
       default:
@@ -1004,7 +1052,10 @@ export class MetaPublishService {
     const rawResponse =
       err instanceof MetaApiStepError ? err.rawResponse : null;
 
-    const userMessage = stepFailureUserMessage(step, metaErrorMessage);
+    const userMessage = stepFailureUserMessage(
+      step,
+      humanizeMetaPublishDetail(metaErrorMessage),
+    );
 
     await this.updatePartialState(draftId, trackingId, {
       metaCampaignId: partial.metaCampaignId,
@@ -1084,6 +1135,20 @@ export class MetaPublishService {
     );
 
     throw err instanceof Error ? err : new BadRequestException(userMessage);
+  }
+
+  private async metaObjectStillExists(
+    accessToken: string,
+    objectId: string,
+  ): Promise<boolean> {
+    try {
+      await graphGetWithToken<{ id?: string }>(objectId, accessToken, {
+        fields: 'id',
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async recoverStalePublishingDraftInTx(

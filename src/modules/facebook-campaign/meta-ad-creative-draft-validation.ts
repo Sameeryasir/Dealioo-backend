@@ -42,22 +42,20 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
         );
       }
       for (const [index, card] of dto.carouselCards.entries()) {
-        const hasImage = Boolean(card.imageUrl?.trim());
-        const hasVideo = Boolean(card.videoUrl?.trim());
-        if (hasImage === hasVideo) {
+        if (!card.imageUrl?.trim()) {
           throw new BadRequestException(
-            `Carousel card ${index + 1} needs an image or video.`,
+            `Carousel card ${index + 1} needs an image.`,
           );
         }
-        if (card.imageUrl?.trim()) {
-          const cardImage =
-            normalizeCampaignImageUrlForMeta(card.imageUrl) ??
-            card.imageUrl.trim();
-          assertDirectMetaImageUrl(cardImage);
-        }
         if (card.videoUrl?.trim()) {
-          assertDirectMetaVideoUrl(String(normalizeMetaHttpsUrl(card.videoUrl)));
+          throw new BadRequestException(
+            `Carousel card ${index + 1}: use an image. Video cards are not supported in carousel ads.`,
+          );
         }
+        const cardImage =
+          normalizeCampaignImageUrlForMeta(card.imageUrl) ??
+          card.imageUrl.trim();
+        assertDirectMetaImageUrl(cardImage);
         const dest = String(normalizeMetaHttpsUrl(card.destinationUrl));
         if (!dest.startsWith('https://')) {
           throw new BadRequestException(
