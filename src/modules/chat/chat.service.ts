@@ -147,6 +147,11 @@ export class ChatService {
             AND CAST(:businessViewedAt AS timestamptz) IS NOT NULL
             AND message.sent_at > CAST(:businessViewedAt AS timestamptz)
           )
+          OR
+          (
+            read.last_read_at IS NULL
+            AND CAST(:businessViewedAt AS timestamptz) IS NULL
+          )
         )`,
         { businessViewedAt: viewedAt },
       )
@@ -728,6 +733,7 @@ export class ChatService {
 
     const withConversationCursor: Array<{ id: number; cursor: Date }> = [];
     const withBusinessCursor: number[] = [];
+    const withNoCursor: number[] = [];
 
     for (const id of conversationIds) {
       const conversationCursor = lastReadByConversationId.get(id);
@@ -735,6 +741,28 @@ export class ChatService {
         withConversationCursor.push({ id, cursor: conversationCursor });
       } else if (businessViewedAt) {
         withBusinessCursor.push(id);
+      } else {
+        // No read cursor yet — every inbound counts as unread.
+        withNoCursor.push(id);
+      }
+    }
+
+    if (withNoCursor.length > 0) {
+      const rows = await this.messageRepository
+        .createQueryBuilder('message')
+        .innerJoin('message.conversation', 'conversation')
+        .select('conversation.id', 'conversationId')
+        .addSelect('COUNT(*)', 'unreadCount')
+        .where('conversation.businessId = :businessId', { businessId })
+        .andWhere('conversation.id IN (:...ids)', { ids: withNoCursor })
+        .andWhere('message.direction = :direction', {
+          direction: StoredMessageDirection.INBOUND,
+        })
+        .groupBy('conversation.id')
+        .getRawMany<{ conversationId: string; unreadCount: string }>();
+
+      for (const row of rows) {
+        result.set(Number(row.conversationId), Number(row.unreadCount) || 0);
       }
     }
 
