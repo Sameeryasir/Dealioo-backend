@@ -26,6 +26,7 @@ import {
   ConversationMessageDirection as StoredMessageDirection,
 } from '../../db/entities/conversation-message.entity';
 import { BusinessUserChatReadState } from '../../db/entities/business-user-chat-read-state.entity';
+import { BusinessUserConversationReadState } from '../../db/entities/business-user-conversation-read-state.entity';
 import {
   ActiveFlowCustomerDto,
   ChatCustomerSummaryDto,
@@ -58,6 +59,8 @@ export class ChatService {
     private readonly messageRepository: Repository<ConversationMessage>,
     @InjectRepository(BusinessUserChatReadState)
     private readonly chatReadStateRepository: Repository<BusinessUserChatReadState>,
+    @InjectRepository(BusinessUserConversationReadState)
+    private readonly conversationReadStateRepository: Repository<BusinessUserConversationReadState>,
   ) {}
 
   async markBusinessChatsRead(
@@ -81,6 +84,36 @@ export class ChatService {
     return viewedAt;
   }
 
+  async markConversationRead(
+    businessId: number,
+    conversationId: number,
+    userId: number,
+  ): Promise<Date> {
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId, businessId, isPrivate: true },
+      select: ['id'],
+    });
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found.');
+    }
+
+    const lastReadAt = new Date();
+    await this.conversationReadStateRepository.upsert(
+      {
+        userId,
+        businessId,
+        conversationId,
+        lastReadAt,
+      },
+      {
+        conflictPaths: ['userId', 'businessId', 'conversationId'],
+        skipUpdateIfNoValuesChanged: false,
+      },
+    );
+
+    return lastReadAt;
+  }
+
   async getBusinessChatsUnread(
     businessId: number,
     userId: number,
@@ -90,42 +123,45 @@ export class ChatService {
     });
     const viewedAt = readState?.chatsLastViewedAt ?? null;
 
-    const latestInbound = await this.messageRepository
+    const latestUnread = await this.messageRepository
       .createQueryBuilder('message')
       .innerJoin('message.conversation', 'conversation')
+      .leftJoin(
+        'business_user_conversation_read_state',
+        'read',
+        'read.conversation_id = conversation.id AND read.user_id = :userId AND read.business_id = :businessId',
+        { userId, businessId },
+      )
       .where('conversation.businessId = :businessId', { businessId })
       .andWhere('conversation.isPrivate = true')
       .andWhere('conversation.messageCount > 0')
       .andWhere('message.direction = :direction', {
         direction: StoredMessageDirection.INBOUND,
       })
+      .andWhere(
+        `(
+          (read.last_read_at IS NOT NULL AND message.sent_at > read.last_read_at)
+          OR
+          (
+            read.last_read_at IS NULL
+            AND CAST(:businessViewedAt AS timestamptz) IS NOT NULL
+            AND message.sent_at > CAST(:businessViewedAt AS timestamptz)
+          )
+        )`,
+        { businessViewedAt: viewedAt },
+      )
       .orderBy('message.sentAt', 'DESC')
       .addOrderBy('message.id', 'DESC')
-      .select(['message.id', 'message.sentAt'])
-      .getOne();
+      .select('message.sent_at', 'sentAt')
+      .limit(1)
+      .getRawOne<{ sentAt: Date }>();
 
-    if (!latestInbound?.sentAt) {
-      return {
-        hasUnread: false,
-        chatsLastViewedAt: viewedAt,
-        latestInboundAt: null,
-      };
-    }
+    const latestInboundAt = latestUnread?.sentAt ?? null;
 
-    if (!viewedAt) {
-      return {
-        hasUnread: true,
-        chatsLastViewedAt: null,
-        latestInboundAt: latestInbound.sentAt,
-      };
-    }
-
-    const hasUnread =
-      latestInbound.sentAt.getTime() > viewedAt.getTime();
     return {
-      hasUnread,
+      hasUnread: latestInboundAt != null,
       chatsLastViewedAt: viewedAt,
-      latestInboundAt: hasUnread ? latestInbound.sentAt : null,
+      latestInboundAt,
     };
   }
 
@@ -211,6 +247,7 @@ export class ChatService {
 
   async getBusinessChatCustomers(
     businessId: number,
+    userId: number,
     page?: number,
     limit?: number,
     search?: string,
@@ -239,10 +276,18 @@ export class ChatService {
     }
 
     const [conversations, total] = await qb.getManyAndCount();
+    const unreadByConversationId = await this.getUnreadCountsByConversationIds(
+      businessId,
+      userId,
+      conversations.map((conversation) => conversation.id),
+    );
 
     return {
       data: conversations.map((conversation) =>
-        this.toChatCustomerSummary(conversation),
+        this.toChatCustomerSummary(
+          conversation,
+          unreadByConversationId.get(conversation.id) ?? 0,
+        ),
       ),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
@@ -250,6 +295,7 @@ export class ChatService {
 
   async syncBusinessChatCustomers(
     businessId: number,
+    userId: number,
     afterConversationId: number,
     limit: number = CHAT_CONVERSATION_SYNC_PAGE_SIZE,
   ): Promise<SyncChatCustomersDto> {
@@ -284,10 +330,18 @@ export class ChatService {
 
     const hasMore = conversations.length > pageSize;
     const page = hasMore ? conversations.slice(0, pageSize) : conversations;
+    const unreadByConversationId = await this.getUnreadCountsByConversationIds(
+      businessId,
+      userId,
+      page.map((conversation) => conversation.id),
+    );
 
     return {
       data: page.map((conversation) =>
-        this.toChatCustomerSummary(conversation),
+        this.toChatCustomerSummary(
+          conversation,
+          unreadByConversationId.get(conversation.id) ?? 0,
+        ),
       ),
       hasMore,
     };
@@ -585,7 +639,7 @@ export class ChatService {
   }
 
   private toGuestConversation(conversation: Conversation): GuestConversationDto {
-    const summary = this.toChatCustomerSummary(conversation);
+    const summary = this.toChatCustomerSummary(conversation, 0);
     return {
       conversationId: conversation.id,
       customerId: summary.customerId,
@@ -600,7 +654,10 @@ export class ChatService {
     };
   }
 
-  private toChatCustomerSummary(conversation: Conversation): ChatCustomerSummaryDto {
+  private toChatCustomerSummary(
+    conversation: Conversation,
+    unreadCount: number = 0,
+  ): ChatCustomerSummaryDto {
     return {
       conversationId: conversation.id,
       customerId: conversation.customerId,
@@ -619,7 +676,117 @@ export class ChatService {
           ? `Automation #${conversation.lastAutomationId}`
           : null),
       createdAt: conversation.createdAt,
+      unreadCount: Math.max(0, Math.floor(unreadCount)),
     };
+  }
+
+  private async getUnreadCountsByConversationIds(
+    businessId: number,
+    userId: number,
+    conversationIds: number[],
+  ): Promise<Map<number, number>> {
+    if (conversationIds.length === 0) {
+      return new Map();
+    }
+
+    const businessRead = await this.chatReadStateRepository.findOne({
+      where: { businessId, userId },
+      select: ['chatsLastViewedAt'],
+    });
+    const businessViewedAt = businessRead?.chatsLastViewedAt ?? null;
+
+    const conversationReads = await this.conversationReadStateRepository.find({
+      where: {
+        businessId,
+        userId,
+        conversationId: In(conversationIds),
+      },
+      select: ['conversationId', 'lastReadAt'],
+    });
+    const lastReadByConversationId = new Map(
+      conversationReads.map((row) => [row.conversationId, row.lastReadAt]),
+    );
+
+    return this.countInboundAfterCursors(
+      businessId,
+      conversationIds,
+      lastReadByConversationId,
+      businessViewedAt,
+    );
+  }
+
+  private async countInboundAfterCursors(
+    businessId: number,
+    conversationIds: number[],
+    lastReadByConversationId: Map<number, Date>,
+    businessViewedAt: Date | null,
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    for (const id of conversationIds) {
+      result.set(id, 0);
+    }
+
+    const withConversationCursor: Array<{ id: number; cursor: Date }> = [];
+    const withBusinessCursor: number[] = [];
+
+    for (const id of conversationIds) {
+      const conversationCursor = lastReadByConversationId.get(id);
+      if (conversationCursor) {
+        withConversationCursor.push({ id, cursor: conversationCursor });
+      } else if (businessViewedAt) {
+        withBusinessCursor.push(id);
+      }
+    }
+
+    if (withBusinessCursor.length > 0 && businessViewedAt) {
+      const rows = await this.messageRepository
+        .createQueryBuilder('message')
+        .innerJoin('message.conversation', 'conversation')
+        .select('conversation.id', 'conversationId')
+        .addSelect('COUNT(*)', 'unreadCount')
+        .where('conversation.businessId = :businessId', { businessId })
+        .andWhere('conversation.id IN (:...ids)', { ids: withBusinessCursor })
+        .andWhere('message.direction = :direction', {
+          direction: StoredMessageDirection.INBOUND,
+        })
+        .andWhere('message.sentAt > :cursor', { cursor: businessViewedAt })
+        .groupBy('conversation.id')
+        .getRawMany<{ conversationId: string; unreadCount: string }>();
+
+      for (const row of rows) {
+        result.set(Number(row.conversationId), Number(row.unreadCount) || 0);
+      }
+    }
+
+    const byCursorIso = new Map<string, number[]>();
+    for (const item of withConversationCursor) {
+      const key = item.cursor.toISOString();
+      const list = byCursorIso.get(key) ?? [];
+      list.push(item.id);
+      byCursorIso.set(key, list);
+    }
+
+    for (const [cursorIso, ids] of byCursorIso) {
+      const rows = await this.messageRepository
+        .createQueryBuilder('message')
+        .innerJoin('message.conversation', 'conversation')
+        .select('conversation.id', 'conversationId')
+        .addSelect('COUNT(*)', 'unreadCount')
+        .where('conversation.businessId = :businessId', { businessId })
+        .andWhere('conversation.id IN (:...ids)', { ids })
+        .andWhere('message.direction = :direction', {
+          direction: StoredMessageDirection.INBOUND,
+        })
+        .andWhere('message.sentAt > :cursor', { cursor: new Date(cursorIso) })
+        .groupBy('conversation.id')
+        .getRawMany<{ conversationId: string; unreadCount: string }>();
+
+      for (const row of rows) {
+        result.set(Number(row.conversationId), Number(row.unreadCount) || 0);
+      }
+    }
+
+    return result;
   }
 
   private toConversationMessage(

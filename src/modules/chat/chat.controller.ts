@@ -65,6 +65,28 @@ export class ChatController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/conversation/:conversationId/mark-read')
+  async markConversationRead(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Req() req: AuthRequest,
+  ) {
+    await this.redemptionService.verifyBusinessAccess(
+      businessId,
+      req.user.id,
+      req.user.role.name,
+    );
+
+    const lastReadAt = await this.chatService.markConversationRead(
+      businessId,
+      conversationId,
+      req.user.id,
+    );
+
+    return { lastReadAt };
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/active-flows')
   async getActiveFlowCustomers(
     @Param('businessId', ParseIntPipe) businessId: number,
@@ -114,6 +136,7 @@ export class ChatController {
 
     return this.chatService.getBusinessChatCustomers(
       businessId,
+      req.user.id,
       page,
       limit,
       search,
@@ -136,6 +159,7 @@ export class ChatController {
 
     return this.chatService.syncBusinessChatCustomers(
       businessId,
+      req.user.id,
       afterConversationId,
       limit,
     );

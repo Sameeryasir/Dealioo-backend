@@ -78,6 +78,7 @@ export class ChatCustomerSummaryDto {
   lastMessageAt: Date;
   lastAutomationName: string | null;
   createdAt: Date;
+  unreadCount: number;
 }
 
 export class PaginatedChatCustomersDto {
