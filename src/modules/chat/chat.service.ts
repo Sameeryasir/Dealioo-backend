@@ -742,7 +742,6 @@ export class ChatService {
       } else if (businessViewedAt) {
         withBusinessCursor.push(id);
       } else {
-        // No read cursor yet — every inbound counts as unread.
         withNoCursor.push(id);
       }
     }
