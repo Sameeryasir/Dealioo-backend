@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import Twilio from 'twilio';
 import { resolveTwilioCountryCode } from './utils/resolve-twilio-country-code';
+import { normalizeTwilioSearchAreaCode } from './utils/normalize-twilio-search-area-code';
 
 export type TwilioAccountCredentials = {
   accountSid: string;
@@ -121,6 +122,10 @@ export class TwilioService implements OnModuleInit {
     areaCode?: string | null;
     areaName?: string | null;
     contains?: string | null;
+    voice?: boolean;
+    sms?: boolean;
+    mms?: boolean;
+    fax?: boolean;
     limit?: number;
   }): Promise<
     Array<{
@@ -129,10 +134,14 @@ export class TwilioService implements OnModuleInit {
       locality: string | null;
       region: string | null;
       isoCountry: string | null;
+      numberType: 'Local' | 'Mobile';
+      addressRequirement: string;
+      monthlyFee: string | null;
       capabilities: {
         sms: boolean;
         mms: boolean;
         voice: boolean;
+        fax: boolean;
       };
     }>
   > {
@@ -148,57 +157,134 @@ export class TwilioService implements OnModuleInit {
     }
 
     const areaCodeRaw = params.areaCode?.trim() || '';
-    const areaCode = areaCodeRaw ? Number.parseInt(areaCodeRaw, 10) : undefined;
-    if (areaCodeRaw && (!Number.isFinite(areaCode) || areaCode! < 100 || areaCode! > 999)) {
-      throw new BadRequestException('Area code must be a 3-digit number (e.g. 415).');
-    }
+    const normalizedAreaCode = normalizeTwilioSearchAreaCode(
+      countryCode,
+      areaCodeRaw,
+    );
+    const areaCode = normalizedAreaCode
+      ? Number.parseInt(normalizedAreaCode, 10)
+      : undefined;
 
     const areaName = params.areaName?.trim() || undefined;
     const contains = params.contains?.trim() || undefined;
+    const capabilityFilters = {
+      ...(params.voice ? { voiceEnabled: true as const } : {}),
+      ...(params.sms ? { smsEnabled: true as const } : {}),
+      ...(params.mms ? { mmsEnabled: true as const } : {}),
+      ...(params.fax ? { faxEnabled: true as const } : {}),
+    };
     const client = Twilio(accountSid, authToken);
 
-    const mapNumber = (n: {
-      phoneNumber?: string;
-      friendlyName?: string | null;
-      locality?: string | null;
-      region?: string | null;
-      isoCountry?: string | null;
-      capabilities?: { sms?: boolean; mms?: boolean; voice?: boolean };
-    }) => ({
-      phoneNumber: n.phoneNumber || '',
-      friendlyName: n.friendlyName?.trim() || null,
-      locality: n.locality?.trim() || null,
-      region: n.region?.trim() || null,
-      isoCountry: n.isoCountry?.trim() || countryCode,
-      capabilities: {
-        sms: Boolean(n.capabilities?.sms),
-        mms: Boolean(n.capabilities?.mms),
-        voice: Boolean(n.capabilities?.voice),
+    const feeByType: { local: string | null; mobile: string | null } = {
+      local: null,
+      mobile: null,
+    };
+    try {
+      const pricing = await client.pricing.v1.phoneNumbers
+        .countries(countryCode)
+        .fetch();
+      for (const row of pricing.phoneNumberPrices ?? []) {
+        const type = String(
+          (row as { number_type?: string; numberType?: string }).number_type ||
+            (row as { numberType?: string }).numberType ||
+            '',
+        ).toLowerCase();
+        const price = String(
+          (row as { current_price?: string; currentPrice?: string })
+            .current_price ||
+            (row as { currentPrice?: string }).currentPrice ||
+            (row as { base_price?: string; basePrice?: string }).base_price ||
+            (row as { basePrice?: string }).basePrice ||
+            '',
+        ).trim();
+        if (!price) continue;
+        const formatted = price.startsWith('$') ? price : `$${price}`;
+        if (type === 'local') feeByType.local = formatted;
+        if (type === 'mobile') feeByType.mobile = formatted;
+      }
+    } catch (pricingError) {
+      const detail =
+        pricingError instanceof Error
+          ? pricingError.message
+          : String(pricingError);
+      this.logger.warn(
+        `Twilio number pricing skipped for ${countryCode} → ${detail}`,
+      );
+    }
+
+    const formatAddressRequirement = (raw: string | null | undefined) => {
+      const value = (raw || 'none').trim().toLowerCase();
+      if (value === 'none' || !value) return 'None';
+      if (value === 'any') return 'Any';
+      if (value === 'local') return 'Local';
+      if (value === 'foreign') return 'Foreign';
+      return value.charAt(0).toUpperCase() + value.slice(1);
+    };
+
+    const mapNumber = (
+      n: {
+        phoneNumber?: string;
+        friendlyName?: string | null;
+        locality?: string | null;
+        region?: string | null;
+        isoCountry?: string | null;
+        addressRequirements?: string | null;
+        capabilities?: {
+          sms?: boolean;
+          SMS?: boolean;
+          mms?: boolean;
+          MMS?: boolean;
+          voice?: boolean;
+          Voice?: boolean;
+          fax?: boolean;
+          Fax?: boolean;
+        };
       },
-    });
+      numberType: 'Local' | 'Mobile',
+    ) => {
+      const caps = n.capabilities || {};
+      return {
+        phoneNumber: n.phoneNumber || '',
+        friendlyName: n.friendlyName?.trim() || null,
+        locality: n.locality?.trim() || null,
+        region: n.region?.trim() || null,
+        isoCountry: n.isoCountry?.trim() || countryCode,
+        numberType,
+        addressRequirement: formatAddressRequirement(n.addressRequirements),
+        monthlyFee:
+          numberType === 'Local' ? feeByType.local : feeByType.mobile,
+        capabilities: {
+          sms: Boolean(caps.sms ?? caps.SMS),
+          mms: Boolean(caps.mms ?? caps.MMS),
+          voice: Boolean(caps.voice ?? caps.Voice),
+          fax: Boolean(caps.fax ?? caps.Fax),
+        },
+      };
+    };
 
     const localFilters = {
       ...(areaCode ? { areaCode } : {}),
       ...(areaName ? { inLocality: areaName } : {}),
       ...(contains ? { contains } : {}),
-      smsEnabled: true as const,
+      ...capabilityFilters,
       limit,
     };
 
     const mobileFilters = {
       ...(contains ? { contains } : {}),
-      smsEnabled: true as const,
+      ...capabilityFilters,
       limit,
     };
 
     try {
-      // Local first (US/CA style). Many countries (e.g. GB) mostly inventory SMS on Mobile.
       let rows: Array<ReturnType<typeof mapNumber>> = [];
       try {
         const locals = await client
           .availablePhoneNumbers(countryCode)
           .local.list(localFilters);
-        rows = locals.map(mapNumber).filter((n) => Boolean(n.phoneNumber));
+        rows = locals
+          .map((n) => mapNumber(n, 'Local'))
+          .filter((n) => Boolean(n.phoneNumber));
       } catch (localError) {
         const detail =
           localError instanceof Error ? localError.message : String(localError);
@@ -216,7 +302,7 @@ export class TwilioService implements OnModuleInit {
               limit: Math.max(1, limit - rows.length),
             });
           const seen = new Set(rows.map((n) => n.phoneNumber));
-          for (const row of mobiles.map(mapNumber)) {
+          for (const row of mobiles.map((n) => mapNumber(n, 'Mobile'))) {
             if (!row.phoneNumber || seen.has(row.phoneNumber)) continue;
             rows.push(row);
             seen.add(row.phoneNumber);

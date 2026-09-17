@@ -898,7 +898,15 @@ export class BusinessService {
       locality: string | null;
       region: string | null;
       isoCountry: string | null;
-      capabilities: { sms: boolean; mms: boolean; voice: boolean };
+      numberType: 'Local' | 'Mobile';
+      addressRequirement: string;
+      monthlyFee: string | null;
+      capabilities: {
+        sms: boolean;
+        mms: boolean;
+        voice: boolean;
+        fax: boolean;
+      };
     }>;
   }> {
     await this.businessAccessService.assertAnyPermission(
@@ -934,6 +942,10 @@ export class BusinessService {
       areaCode: dto.areaCode,
       areaName: dto.areaName,
       contains: dto.contains,
+      voice: dto.voice,
+      sms: dto.sms,
+      mms: dto.mms,
+      fax: dto.fax,
       limit: dto.limit,
     });
 
