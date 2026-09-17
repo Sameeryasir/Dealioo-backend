@@ -28,6 +28,9 @@ import {
 } from '../../utils/disk-file-upload-multer';
 import type { Request } from 'express';
 import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-phone-number.dto';
+import { ConnectTwilioCredentialsDto } from './businessDto/connect-twilio-credentials.dto';
+import { PurchaseTwilioPhoneNumberDto } from './businessDto/purchase-twilio-phone-number.dto';
+import { SearchTwilioAvailableNumbersDto } from './businessDto/search-twilio-available-numbers.dto';
 import { User } from '../../db/entities/user.entity';
 
 @Controller('business')
@@ -73,20 +76,55 @@ export class BusinessController {
   }
 
   @UseGuards(AuthGuard('jwt'))
-  @Get('available-twilio-numbers')
-  async listAvailableTwilioPhoneNumbers(
-    @Req() req: Request & { user: User },
-  ) {
-    return this.businessService.listAvailableTwilioPhoneNumbers(req.user);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
   @Get(':id/twilio/phone-numbers')
   async listTwilioPhoneNumbers(
     @Param('id', ParseIntPipe) id: number,
     @Req() req: Request & { user: User },
   ) {
     return this.businessService.listTwilioPhoneNumbers(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/twilio/connect')
+  async connectTwilioCredentials(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ConnectTwilioCredentialsDto,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.connectTwilioCredentials(id, dto, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Delete(':id/twilio/disconnect')
+  async disconnectTwilioCredentials(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.disconnectTwilioCredentials(id, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get(':id/twilio/available-to-buy')
+  async searchAvailableTwilioPhoneNumbers(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: SearchTwilioAvailableNumbersDto,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.searchAvailableTwilioPhoneNumbers(
+      id,
+      query,
+      req.user,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post(':id/twilio/purchase-number')
+  async purchaseTwilioPhoneNumber(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PurchaseTwilioPhoneNumberDto,
+    @Req() req: Request & { user: User },
+  ) {
+    return this.businessService.purchaseTwilioPhoneNumber(id, dto, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))

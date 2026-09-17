@@ -9,12 +9,15 @@ import { randomUUID } from 'crypto';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
+import { Business } from '../../db/entities/business.entity';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import {
   ConversationMessage,
   ConversationMessageChannel,
   ConversationMessageDirection,
 } from '../../db/entities/conversation-message.entity';
 import { TwilioService } from '../sms/twilio.service';
+import { decryptSecret } from '../../utils/token-encryption.util';
 import type { ConversationMessageDto } from './chat.dto';
 import type { RecordOutboundMessageDto } from './chat-message.dto';
 import {
@@ -38,6 +41,10 @@ export class ChatMessageService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Conversation)
     private readonly conversationRepository: Repository<Conversation>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
+    @InjectRepository(BusinessTwilioIntegration)
+    private readonly businessTwilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
     private readonly chatService: ChatService,
     private readonly chatMessageNotificationService: ChatMessageNotificationService,
     private readonly twilioService: TwilioService,
@@ -68,7 +75,8 @@ export class ChatMessageService {
         );
       }
 
-      await this.twilioService.sendSms(customer.phone, trimmed);
+      const sendOptions = await this.resolveTwilioSendOptions(businessId);
+      await this.twilioService.sendSms(customer.phone, trimmed, sendOptions);
     }
 
     const idempotencyKey = `chat_message:manual:${businessId}:${customerId}:${randomUUID()}`;
@@ -126,8 +134,16 @@ export class ChatMessageService {
       return { sent: false, error: 'Customer phone number is missing.' };
     }
 
-    if (!this.twilioService.isConfigured()) {
-      return { sent: false, error: 'Twilio SMS is not configured on the server.' };
+    const sendOptions = await this.resolveTwilioSendOptions(params.businessId);
+    const canSend =
+      Boolean(sendOptions?.accountSid && sendOptions?.fromPhoneNumber) ||
+      this.twilioService.isConfigured();
+    if (!canSend) {
+      return {
+        sent: false,
+        error:
+          'Twilio SMS is not configured. Connect Twilio credentials and select a number in Integrations.',
+      };
     }
 
     if (await this.hasOutboundMessage(params.idempotencyKey)) {
@@ -135,7 +151,7 @@ export class ChatMessageService {
     }
 
     try {
-      await this.twilioService.sendSms(phone, trimmed);
+      await this.twilioService.sendSms(phone, trimmed, sendOptions);
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : 'Twilio rejected this SMS.';
@@ -362,6 +378,45 @@ export class ChatMessageService {
     }
 
     return savedMessageId;
+  }
+
+  private async resolveTwilioSendOptions(businessId: number): Promise<
+    | {
+        accountSid: string;
+        authToken: string;
+        fromPhoneNumber: string;
+      }
+    | undefined
+  > {
+    const [business, integration] = await Promise.all([
+      this.businessRepository.findOne({ where: { id: businessId } }),
+      this.businessTwilioIntegrationRepository.findOne({
+        where: { businessId },
+      }),
+    ]);
+    if (!business || !integration) {
+      return undefined;
+    }
+
+    const accountSid = integration.twilioAccountSid?.trim() || '';
+    const storedToken = integration.twilioAuthToken?.trim() || '';
+    const fromPhoneNumber = business.twilioPhoneNumber?.trim() || '';
+    if (!accountSid || !storedToken || !fromPhoneNumber) {
+      return undefined;
+    }
+
+    try {
+      const authToken = decryptSecret(storedToken).trim();
+      if (!authToken) return undefined;
+      return { accountSid, authToken, fromPhoneNumber };
+    } catch (error) {
+      this.logger.warn(
+        `Could not decrypt Twilio credentials for business ${businessId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return undefined;
+    }
   }
 
   private isIdempotencyConflict(error: unknown): boolean {

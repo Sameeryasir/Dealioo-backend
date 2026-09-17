@@ -34,6 +34,9 @@ import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
 import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-phone-number.dto';
+import { ConnectTwilioCredentialsDto } from './businessDto/connect-twilio-credentials.dto';
+import { PurchaseTwilioPhoneNumberDto } from './businessDto/purchase-twilio-phone-number.dto';
+import { SearchTwilioAvailableNumbersDto } from './businessDto/search-twilio-available-numbers.dto';
 import {
   BUSINESSES_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
@@ -44,9 +47,12 @@ import { BusinessHistoryService } from '../business-history/business-history.ser
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { PusherService } from '../pusher/pusher.service';
 import {
+  maskTwilioAccountSid,
   normalizePhoneNumber,
   TwilioService,
 } from '../sms/twilio.service';
+import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import {
   isValidBusinessSlug,
   slugifyBusinessName,
@@ -95,6 +101,8 @@ export class BusinessService {
     private readonly businessMemberPermissionRepository: Repository<BusinessMemberPermission>,
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
+    @InjectRepository(BusinessTwilioIntegration)
+    private readonly businessTwilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
     private readonly spacesService: SpacesService,
     private readonly businessAccessService: BusinessAccessService,
     private readonly businessHistoryService: BusinessHistoryService,
@@ -200,11 +208,6 @@ export class BusinessService {
       twilioPhoneNumber,
     } = createBusinessDto;
 
-    const twilioMatch = await this.requireAvailableTwilioNumber(
-      twilioPhoneSid,
-      twilioPhoneNumber,
-    );
-
     const owner = await this.userRepository.findOne({ where: { id: user.id } });
     if (!owner) {
       throw new NotFoundException('Owner not found');
@@ -219,15 +222,6 @@ export class BusinessService {
       order: { id: 'DESC' },
     });
     if (recentDuplicate) {
-      if (
-        !recentDuplicate.twilioPhoneSid?.trim() ||
-        !recentDuplicate.twilioPhoneNumber?.trim()
-      ) {
-        recentDuplicate.twilioPhoneSid = twilioMatch.sid;
-        recentDuplicate.twilioPhoneNumber = twilioMatch.phoneNumber;
-        recentDuplicate.twilioConnectedAt = new Date();
-        await this.businessRepository.save(recentDuplicate);
-      }
       return recentDuplicate;
     }
 
@@ -243,7 +237,13 @@ export class BusinessService {
       slugInput?.trim() || name,
     );
 
-    const connectedAt = new Date();
+    const createdAt = new Date();
+    const optionalTwilioSid = twilioPhoneSid?.trim() || null;
+    const rawTwilioNumber = twilioPhoneNumber?.trim() || '';
+    const optionalTwilioNumber = rawTwilioNumber
+      ? normalizePhoneNumber(rawTwilioNumber) ?? rawTwilioNumber
+      : null;
+
     const business = this.businessRepository.create({
       name,
       slug,
@@ -260,11 +260,12 @@ export class BusinessService {
       postalCode,
       branchCount,
       owner,
-      twilioPhoneSid: twilioMatch.sid,
-      twilioPhoneNumber: twilioMatch.phoneNumber,
-      twilioConnectedAt: connectedAt,
+      twilioPhoneSid: optionalTwilioSid,
+      twilioPhoneNumber: optionalTwilioNumber,
+      twilioConnectedAt:
+        optionalTwilioSid && optionalTwilioNumber ? createdAt : null,
       onboardingCompleted: true,
-      onboardingCompletedAt: connectedAt,
+      onboardingCompletedAt: createdAt,
     });
 
     await this.businessRepository.save(business);
@@ -278,17 +279,6 @@ export class BusinessService {
     });
 
     await this.notifyBusinessCreated(business, user);
-    await this.adminNotificationWriter.notifyIntegrationConnected({
-      provider: 'twilio',
-      businessId: business.id,
-      businessName: business.name,
-      actorUserId: user.id,
-      idempotencyKey: `twilio_connected:${business.id}:${business.twilioPhoneSid ?? 'assigned'}`,
-      metadata: {
-        twilioPhoneSid: business.twilioPhoneSid,
-        twilioPhoneNumber: business.twilioPhoneNumber,
-      },
-    });
 
     await this.draftRepository.delete({ userId: user.id });
 
@@ -660,31 +650,6 @@ export class BusinessService {
     return business;
   }
 
-  async listAvailableTwilioPhoneNumbers(user: User): Promise<{
-    numbers: Array<{
-      sid: string;
-      phoneNumber: string;
-      friendlyName: string | null;
-    }>;
-    selectedPhoneSid: string | null;
-    selectedPhoneNumber: string | null;
-    allAssigned: boolean;
-  }> {
-    requireAdminRole(
-      user,
-      'You do not have permission to list Twilio numbers.',
-    );
-    await this.assertActiveSubscription(user.id);
-    const numbers = await this.twilioService.listIncomingPhoneNumbers();
-    const unassigned = await this.filterUnassignedTwilioNumbers(numbers);
-    return {
-      numbers: unassigned,
-      selectedPhoneSid: null,
-      selectedPhoneNumber: null,
-      allAssigned: numbers.length > 0 && unassigned.length === 0,
-    };
-  }
-
   private async ensureOwnerMembership(
     business: Business,
     owner: User,
@@ -741,98 +706,6 @@ export class BusinessService {
     );
   }
 
-  private async filterUnassignedTwilioNumbers(
-    numbers: Array<{
-      sid: string;
-      phoneNumber: string;
-      friendlyName: string | null;
-    }>,
-  ): Promise<
-    Array<{
-      sid: string;
-      phoneNumber: string;
-      friendlyName: string | null;
-    }>
-  > {
-    if (numbers.length === 0) return [];
-
-    const assigned = await this.businessRepository
-      .createQueryBuilder('business')
-      .select([
-        'business.id',
-        'business.twilioPhoneSid',
-        'business.twilioPhoneNumber',
-      ])
-      .where(
-        new Brackets((qb) => {
-          qb.where('business.twilioPhoneSid IS NOT NULL').orWhere(
-            'business.twilioPhoneNumber IS NOT NULL',
-          );
-        }),
-      )
-      .getMany();
-
-    const assignedSids = new Set(
-      assigned
-        .map((row) => row.twilioPhoneSid?.trim())
-        .filter((sid): sid is string => Boolean(sid)),
-    );
-    const assignedPhones = new Set(
-      assigned
-        .map((row) => {
-          const raw = row.twilioPhoneNumber?.trim() ?? '';
-          if (!raw) return null;
-          return normalizePhoneNumber(raw) ?? raw;
-        })
-        .filter((phone): phone is string => Boolean(phone)),
-    );
-
-    return numbers.filter((number) => {
-      const normalized =
-        normalizePhoneNumber(number.phoneNumber) ?? number.phoneNumber;
-      return (
-        !assignedSids.has(number.sid) && !assignedPhones.has(normalized)
-      );
-    });
-  }
-
-  private async requireAvailableTwilioNumber(
-    phoneSid: string,
-    phoneNumber: string,
-  ): Promise<{ sid: string; phoneNumber: string; friendlyName: string | null }> {
-    const sid = phoneSid?.trim() ?? '';
-    const normalized =
-      normalizePhoneNumber(phoneNumber?.trim() ?? '') ?? phoneNumber?.trim() ?? '';
-    if (!sid || !normalized) {
-      throw new BadRequestException(
-        'A Twilio phone number is required before creating a business.',
-      );
-    }
-
-    const available = await this.twilioService.listIncomingPhoneNumbers();
-    const unassigned = await this.filterUnassignedTwilioNumbers(available);
-    const match = unassigned.find(
-      (n) =>
-        n.sid === sid ||
-        n.phoneNumber === normalized ||
-        n.phoneNumber === phoneNumber.trim(),
-    );
-    if (!match) {
-      const existsOnTwilio = available.some(
-        (n) =>
-          n.sid === sid ||
-          n.phoneNumber === normalized ||
-          n.phoneNumber === phoneNumber.trim(),
-      );
-      throw new BadRequestException(
-        existsOnTwilio
-          ? 'That Twilio number is already assigned to another business.'
-          : 'That phone number was not found on the Twilio account.',
-      );
-    }
-    return match;
-  }
-
   async listTwilioPhoneNumbers(
     businessId: number,
     user: User,
@@ -842,6 +715,51 @@ export class BusinessService {
       phoneNumber: string;
       friendlyName: string | null;
     }>;
+    selectedPhoneSid: string | null;
+    selectedPhoneNumber: string | null;
+    credentialsConnected: boolean;
+    accountSidMasked: string | null;
+  }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['campaigns_edit', 'campaigns'],
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const integration = await this.getOrCreateTwilioIntegration(business.id);
+    const ownCredentials =
+      this.resolveTwilioCredentialsFromIntegration(integration);
+    const numbers = ownCredentials
+      ? await this.twilioService.listIncomingPhoneNumbers(ownCredentials)
+      : [];
+
+    return {
+      numbers,
+      selectedPhoneSid: business.twilioPhoneSid?.trim() || null,
+      selectedPhoneNumber: business.twilioPhoneNumber?.trim() || null,
+      credentialsConnected: Boolean(ownCredentials),
+      accountSidMasked: maskTwilioAccountSid(integration.twilioAccountSid),
+    };
+  }
+
+  async connectTwilioCredentials(
+    businessId: number,
+    dto: ConnectTwilioCredentialsDto,
+    user: User,
+  ): Promise<{
+    credentialsConnected: boolean;
+    accountSidMasked: string | null;
     selectedPhoneSid: string | null;
     selectedPhoneNumber: string | null;
   }> {
@@ -862,12 +780,243 @@ export class BusinessService {
       );
     }
 
-    const numbers = await this.twilioService.listIncomingPhoneNumbers();
+    const accountSid = dto.accountSid.trim();
+    const authToken = dto.authToken.trim();
+
+    await this.twilioService.assertCredentialsWork({ accountSid, authToken });
+
+    const integration = await this.getOrCreateTwilioIntegration(business.id);
+    const previousSid = integration.twilioAccountSid?.trim() || null;
+
+    integration.twilioAccountSid = accountSid;
+    integration.twilioAuthToken = encryptSecret(authToken);
+    integration.twilioConnectedAt = new Date();
+
+    if (previousSid && previousSid !== accountSid) {
+      business.twilioPhoneSid = null;
+      business.twilioPhoneNumber = null;
+      integration.twilioPhoneSid = null;
+      integration.twilioPhoneNumber = null;
+      await this.businessRepository.save(business);
+    } else {
+      integration.twilioPhoneSid = business.twilioPhoneSid;
+      integration.twilioPhoneNumber = business.twilioPhoneNumber;
+    }
+
+    await this.businessTwilioIntegrationRepository.save(integration);
+
+    await this.adminNotificationWriter.notifyIntegrationConnected({
+      provider: 'twilio',
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+      idempotencyKey: `twilio_credentials:${business.id}:${accountSid}`,
+      metadata: {
+        twilioAccountSidMasked: maskTwilioAccountSid(accountSid),
+      },
+    });
 
     return {
-      numbers,
+      credentialsConnected: true,
+      accountSidMasked: maskTwilioAccountSid(accountSid),
       selectedPhoneSid: business.twilioPhoneSid?.trim() || null,
       selectedPhoneNumber: business.twilioPhoneNumber?.trim() || null,
+    };
+  }
+
+  async disconnectTwilioCredentials(
+    businessId: number,
+    user: User,
+  ): Promise<{ disconnected: true; inboundWebhookCleared: boolean }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['campaigns_edit', 'campaigns'],
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const integration = await this.businessTwilioIntegrationRepository.findOne({
+      where: { businessId: business.id },
+    });
+
+    let inboundWebhookCleared = false;
+    const ownCredentials =
+      this.resolveTwilioCredentialsFromIntegration(integration);
+    const phoneSid =
+      integration?.twilioPhoneSid?.trim() ||
+      business.twilioPhoneSid?.trim() ||
+      '';
+    const phoneNumber =
+      integration?.twilioPhoneNumber?.trim() ||
+      business.twilioPhoneNumber?.trim() ||
+      '';
+    if (ownCredentials && phoneSid) {
+      inboundWebhookCleared =
+        await this.twilioService.clearInboundWebhookForNumber({
+          accountSid: ownCredentials.accountSid,
+          authToken: ownCredentials.authToken,
+          phoneSid,
+          phoneNumber: phoneNumber || phoneSid,
+        });
+    }
+
+    business.twilioPhoneSid = null;
+    business.twilioPhoneNumber = null;
+    business.twilioConnectedAt = null;
+    await this.businessRepository.save(business);
+
+    if (integration) {
+      integration.twilioAccountSid = null;
+      integration.twilioAuthToken = null;
+      integration.twilioPhoneSid = null;
+      integration.twilioPhoneNumber = null;
+      integration.twilioConnectedAt = null;
+      await this.businessTwilioIntegrationRepository.save(integration);
+    }
+
+    return { disconnected: true, inboundWebhookCleared };
+  }
+
+  async searchAvailableTwilioPhoneNumbers(
+    businessId: number,
+    dto: SearchTwilioAvailableNumbersDto,
+    user: User,
+  ): Promise<{
+    numbers: Array<{
+      phoneNumber: string;
+      friendlyName: string | null;
+      locality: string | null;
+      region: string | null;
+      isoCountry: string | null;
+      capabilities: { sms: boolean; mms: boolean; voice: boolean };
+    }>;
+  }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['campaigns_edit', 'campaigns'],
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const integration = await this.getOrCreateTwilioIntegration(business.id);
+    const ownCredentials =
+      this.resolveTwilioCredentialsFromIntegration(integration);
+    if (!ownCredentials) {
+      throw new BadRequestException(
+        'Connect your Twilio Account SID and Auth Token before searching numbers.',
+      );
+    }
+
+    const numbers = await this.twilioService.searchAvailablePhoneNumbers({
+      accountSid: ownCredentials.accountSid,
+      authToken: ownCredentials.authToken,
+      countryCode: dto.country?.trim() || dto.countryCode,
+      areaCode: dto.areaCode,
+      areaName: dto.areaName,
+      contains: dto.contains,
+      limit: dto.limit,
+    });
+
+    return { numbers };
+  }
+
+  async purchaseTwilioPhoneNumber(
+    businessId: number,
+    dto: PurchaseTwilioPhoneNumberDto,
+    user: User,
+  ): Promise<{
+    twilioPhoneSid: string;
+    twilioPhoneNumber: string;
+    twilioConnectedAt: Date;
+  }> {
+    await this.businessAccessService.assertAnyPermission(
+      user,
+      businessId,
+      ['campaigns_edit', 'campaigns'],
+      'You do not have permission to manage Twilio for this business.',
+    );
+
+    const business = await this.businessAccessService.findAccessibleBusiness(
+      user,
+      businessId,
+    );
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const integration = await this.getOrCreateTwilioIntegration(business.id);
+    const ownCredentials =
+      this.resolveTwilioCredentialsFromIntegration(integration);
+    if (!ownCredentials) {
+      throw new BadRequestException(
+        'Connect your Twilio Account SID and Auth Token before buying a number.',
+      );
+    }
+
+    this.twilioService.assertInboundSmsConfigured();
+
+    const purchased = await this.twilioService.purchasePhoneNumber({
+      accountSid: ownCredentials.accountSid,
+      authToken: ownCredentials.authToken,
+      phoneNumber: dto.phoneNumber,
+    });
+
+    const connectedAt = new Date();
+    business.twilioPhoneSid = purchased.sid;
+    business.twilioPhoneNumber = purchased.phoneNumber;
+    business.twilioConnectedAt = connectedAt;
+    await this.businessRepository.save(business);
+
+    integration.twilioPhoneSid = purchased.sid;
+    integration.twilioPhoneNumber = purchased.phoneNumber;
+    integration.twilioConnectedAt = connectedAt;
+    await this.businessTwilioIntegrationRepository.save(integration);
+
+    await this.twilioService.syncInboundWebhookForNumber({
+      accountSid: ownCredentials.accountSid,
+      authToken: ownCredentials.authToken,
+      phoneSid: purchased.sid,
+      phoneNumber: purchased.phoneNumber,
+    });
+
+    await this.adminNotificationWriter.notifyIntegrationConnected({
+      provider: 'twilio',
+      businessId: business.id,
+      businessName: business.name,
+      actorUserId: user.id,
+      idempotencyKey: `twilio_purchased:${business.id}:${purchased.sid}`,
+      metadata: {
+        twilioPhoneSid: purchased.sid,
+        twilioPhoneNumber: purchased.phoneNumber,
+      },
+    });
+
+    return {
+      twilioPhoneSid: purchased.sid,
+      twilioPhoneNumber: purchased.phoneNumber,
+      twilioConnectedAt: connectedAt,
     };
   }
 
@@ -904,7 +1053,20 @@ export class BusinessService {
       throw new BadRequestException('A valid Twilio phone number is required.');
     }
 
-    const available = await this.twilioService.listIncomingPhoneNumbers();
+    const integration = await this.getOrCreateTwilioIntegration(business.id);
+    const ownCredentials =
+      this.resolveTwilioCredentialsFromIntegration(integration);
+    if (!ownCredentials) {
+      throw new BadRequestException(
+        'Connect your Twilio Account SID and Auth Token before selecting a number.',
+      );
+    }
+
+    this.twilioService.assertInboundSmsConfigured();
+
+    const available = await this.twilioService.listIncomingPhoneNumbers(
+      ownCredentials,
+    );
     const match = available.find(
       (n) =>
         n.sid === phoneSid ||
@@ -920,7 +1082,7 @@ export class BusinessService {
         actorUserId: user.id,
       });
       throw new BadRequestException(
-        'That phone number was not found on the Twilio account.',
+        'That phone number was not found on your Twilio account.',
       );
     }
 
@@ -929,6 +1091,18 @@ export class BusinessService {
     business.twilioPhoneNumber = match.phoneNumber;
     business.twilioConnectedAt = connectedAt;
     await this.businessRepository.save(business);
+
+    integration.twilioPhoneSid = match.sid;
+    integration.twilioPhoneNumber = match.phoneNumber;
+    integration.twilioConnectedAt = connectedAt;
+    await this.businessTwilioIntegrationRepository.save(integration);
+
+    await this.twilioService.syncInboundWebhookForNumber({
+      accountSid: ownCredentials.accountSid,
+      authToken: ownCredentials.authToken,
+      phoneSid: match.sid,
+      phoneNumber: match.phoneNumber,
+    });
 
     await this.adminNotificationWriter.notifyIntegrationConnected({
       provider: 'twilio',
@@ -947,5 +1121,42 @@ export class BusinessService {
       twilioPhoneNumber: match.phoneNumber,
       twilioConnectedAt: connectedAt,
     };
+  }
+
+  resolveTwilioCredentialsFromIntegration(
+    integration: BusinessTwilioIntegration | null,
+  ): { accountSid: string; authToken: string } | null {
+    if (!integration) return null;
+    const accountSid = integration.twilioAccountSid?.trim() || '';
+    const storedToken = integration.twilioAuthToken?.trim() || '';
+    if (!accountSid || !storedToken) {
+      return null;
+    }
+
+    try {
+      const authToken = decryptSecret(storedToken).trim();
+      if (!authToken) return null;
+      return { accountSid, authToken };
+    } catch (error) {
+      this.logger.warn(
+        `Could not decrypt Twilio auth token for business ${integration.businessId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private async getOrCreateTwilioIntegration(
+    businessId: number,
+  ): Promise<BusinessTwilioIntegration> {
+    let row = await this.businessTwilioIntegrationRepository.findOne({
+      where: { businessId },
+    });
+    if (!row) {
+      row = this.businessTwilioIntegrationRepository.create({ businessId });
+      row = await this.businessTwilioIntegrationRepository.save(row);
+    }
+    return row;
   }
 }

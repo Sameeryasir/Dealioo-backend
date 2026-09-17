@@ -131,11 +131,31 @@ export class StripeService {
   }
 
   getConnectionStatus(business: Business): StripeConnectionStatusDto {
-    const connected = Boolean(business.stripeAccountId?.trim());
+    const stripeAccountId = business.stripeAccountId?.trim() || null;
+    const connected = Boolean(stripeAccountId);
     return {
       connected,
       status: connected ? 'connected' : null,
+      stripeAccountId,
     };
+  }
+
+  async resolveAccountDisplayName(
+    stripeAccountId: string,
+  ): Promise<string | null> {
+    const accountId = stripeAccountId?.trim();
+    if (!accountId) return null;
+    try {
+      const account = await this.stripe.accounts.retrieve(accountId);
+      return (
+        account.business_profile?.name?.trim() ||
+        account.settings?.dashboard?.display_name?.trim() ||
+        account.email?.trim() ||
+        null
+      );
+    } catch {
+      return null;
+    }
   }
 
   async abortOAuthConnect(

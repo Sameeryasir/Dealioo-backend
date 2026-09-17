@@ -85,13 +85,13 @@ export class CreateBusinessDto {
   @Min(0)
   branchCount?: number;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(64)
-  twilioPhoneSid: string;
+  twilioPhoneSid?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(32)
-  twilioPhoneNumber: string;
+  twilioPhoneNumber?: string;
 }

@@ -30,10 +30,25 @@ export class IntegrationsStatusService {
     const facebook = this.facebookService.getConnectionStatus(business);
     const googleAds = this.googleAdsService.getConnectionStatus(business);
 
+    const [stripeAccountName, metaAdAccountName, googleCustomerName] =
+      await Promise.all([
+        stripe.connected && stripe.stripeAccountId
+          ? this.stripeService.resolveAccountDisplayName(stripe.stripeAccountId)
+          : Promise.resolve(null),
+        facebook.connected && facebook.metaAdAccountId
+          ? this.facebookService.resolveSelectedAdAccountName(business)
+          : Promise.resolve(null),
+        googleAds.connected && googleAds.googleCustomerId
+          ? this.googleAdsService.resolveSelectedCustomerName(business)
+          : Promise.resolve(null),
+      ]);
+
     return {
       stripe: {
         connected: stripe.connected,
         status: stripe.status,
+        stripeAccountId: stripe.stripeAccountId?.trim() || null,
+        stripeAccountName,
       },
       facebook: {
         connected: facebook.connected,
@@ -41,12 +56,15 @@ export class IntegrationsStatusService {
         metaOauthScopes: facebook.metaOauthScopes,
         missingRequiredScopes: facebook.missingRequiredScopes,
         metaAdAccountId: facebook.metaAdAccountId?.trim() || null,
+        metaAdAccountName,
       },
       googleAds: {
         connected: googleAds.connected,
         status: googleAds.status,
         googleOauthScopes: googleAds.googleOauthScopes,
         missingRequiredScopes: googleAds.missingRequiredScopes,
+        googleCustomerId: googleAds.googleCustomerId?.trim() || null,
+        googleCustomerName,
       },
     };
   }

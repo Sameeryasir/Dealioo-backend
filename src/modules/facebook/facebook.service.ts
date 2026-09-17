@@ -1407,6 +1407,21 @@ export class FacebookService {
     };
   }
 
+  async resolveSelectedAdAccountName(
+    business: Business,
+  ): Promise<string | null> {
+    const adAccountId = business.metaAdAccountId?.trim();
+    if (!adAccountId) return null;
+    try {
+      const { accessToken } =
+        await this.metaTokenService.assertBusinessMetaToken(business);
+      const meta = await this.fetchAdAccountMeta(adAccountId, accessToken);
+      return meta.name?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   async listAdAccountsForBusiness(
     user: User,
     businessId: number,

@@ -8,6 +8,7 @@ import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { Role } from '../../db/entities/role.entity';
@@ -36,6 +37,7 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
       BusinessMember,
       BusinessMemberPermission,
       Role,
+      BusinessTwilioIntegration,
     ]),
     AuthModule,
     AdminNotificationsModule,

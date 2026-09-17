@@ -1,4 +1,6 @@
 import { Global, Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { ChatModule } from '../chat/chat.module';
 import { SmsController } from './sms.controller';
 import { TwilioInboundService } from './twilio-inbound.service';
@@ -7,7 +9,7 @@ import { TwilioWebhookValidatorService } from './twilio-webhook-validator.servic
 
 @Global()
 @Module({
-  imports: [ChatModule],
+  imports: [ChatModule, TypeOrmModule.forFeature([BusinessTwilioIntegration])],
   controllers: [SmsController],
   providers: [
     TwilioService,

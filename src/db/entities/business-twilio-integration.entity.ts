@@ -26,6 +26,17 @@ export class BusinessTwilioIntegration {
   business!: Business;
 
   @Column({
+    name: 'twilio_account_sid',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  twilioAccountSid!: string | null;
+
+  @Column({ name: 'twilio_auth_token', type: 'text', nullable: true })
+  twilioAuthToken!: string | null;
+
+  @Column({
     name: 'twilio_phone_number',
     type: 'varchar',
     length: 32,

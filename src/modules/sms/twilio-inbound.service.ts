@@ -53,7 +53,7 @@ export class TwilioInboundService {
       hasSignature: Boolean(signature?.trim()),
     });
 
-    const validation = this.webhookValidator.validateSignature(
+    const validation = await this.webhookValidator.validateSignature(
       signature,
       webhookUrls,
       params,
@@ -133,7 +133,7 @@ export class TwilioInboundService {
       webhookUrls,
     });
 
-    const validation = this.webhookValidator.validateSignature(
+    const validation = await this.webhookValidator.validateSignature(
       signature,
       webhookUrls,
       params,

@@ -1,6 +1,8 @@
 export type PublicStripeIntegrationStatus = {
   connected: boolean;
   status: string | null;
+  stripeAccountId: string | null;
+  stripeAccountName: string | null;
 };
 
 export type PublicFacebookIntegrationStatus = {
@@ -9,6 +11,7 @@ export type PublicFacebookIntegrationStatus = {
   metaOauthScopes: string[];
   missingRequiredScopes: string[];
   metaAdAccountId: string | null;
+  metaAdAccountName: string | null;
 };
 
 export type PublicGoogleAdsIntegrationStatus = {
@@ -16,6 +19,8 @@ export type PublicGoogleAdsIntegrationStatus = {
   status: string | null;
   googleOauthScopes: string[];
   missingRequiredScopes: string[];
+  googleCustomerId: string | null;
+  googleCustomerName: string | null;
 };
 
 export type IntegrationsStatusDto = {

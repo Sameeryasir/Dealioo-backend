@@ -6,4 +6,5 @@ export class GoogleAdsConnectionStatusDto {
   googleTokenExpiresAt: Date | null;
   googleOauthScopes: string[];
   missingRequiredScopes: string[];
+  googleCustomerId: string | null;
 }

@@ -502,7 +502,29 @@ export class GoogleAdsService {
       googleTokenExpiresAt: normalized.googleTokenExpiresAt,
       googleOauthScopes: grantedScopes,
       missingRequiredScopes,
+      googleCustomerId: normalized.googleCustomerId?.trim() || null,
     };
+  }
+
+  async resolveSelectedCustomerName(
+    business: Business,
+  ): Promise<string | null> {
+    const customerId = business.googleCustomerId?.trim();
+    if (!customerId) return null;
+    try {
+      const { refreshToken } =
+        await this.tokenService.assertBusinessGoogleToken(business);
+      const loginCustomerId =
+        business.googleLoginCustomerId?.trim() || customerId;
+      const meta = await this.tryFetchCustomerMeta(
+        refreshToken,
+        customerId,
+        loginCustomerId,
+      );
+      return meta.name?.trim() || null;
+    } catch {
+      return null;
+    }
   }
 
   private normalizeConnectionStatus(business: Business): Business {
