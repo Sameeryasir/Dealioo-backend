@@ -206,6 +206,7 @@ export class CustomerService {
     const email = dto.email.trim();
     const name = dto.name.trim();
     const phone = dto.phone?.trim() || null;
+    const phoneDigits = phone ? phone.replace(/\D/g, '') : '';
 
     const existing = await this.customerRepository
       .createQueryBuilder('customer')
@@ -213,16 +214,33 @@ export class CustomerService {
       .orderBy('customer.id', 'DESC')
       .getOne();
 
+    if (existing && dto.rejectDuplicateEmail) {
+      throw new ConflictException(
+        'A guest with this email already exists. Search for them instead.',
+      );
+    }
+
+    if (dto.rejectDuplicatePhone && phoneDigits.length >= 8) {
+      const phoneOwner = await this.customerRepository
+        .createQueryBuilder('customer')
+        .where(
+          `regexp_replace(coalesce(customer.phone, ''), '[^0-9]', '', 'g') = :digits`,
+          { digits: phoneDigits },
+        )
+        .orderBy('customer.id', 'DESC')
+        .getOne();
+
+      if (phoneOwner && (!existing || phoneOwner.id !== existing.id)) {
+        throw new ConflictException(
+          'A guest with this phone number already exists. Search for them instead.',
+        );
+      }
+    }
+
     let customer: Customer;
     let isNewCustomer = false;
 
     if (existing) {
-      if (dto.rejectDuplicateEmail) {
-        throw new ConflictException(
-          'A guest with this email already exists. Search for them instead.',
-        );
-      }
-
       let changed = false;
       if (name && existing.name !== name) {
         existing.name = name;

@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { Business } from '../../db/entities/business.entity';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
 import {
@@ -41,6 +43,10 @@ export class InboundMessageRecorderService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(Conversation)
     private readonly conversationRepository: Repository<Conversation>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
+    @InjectRepository(BusinessTwilioIntegration)
+    private readonly twilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
     private readonly chatMessageNotificationService: ChatMessageNotificationService,
   ) {}
 
@@ -59,6 +65,7 @@ export class InboundMessageRecorderService {
     const messageSid = params.messageSid.trim();
     const body = params.body.trim();
     const normalizedFrom = normalizePhoneNumber(params.fromPhone);
+    const normalizedTo = normalizePhoneNumber(params.toPhone?.trim() || '') || null;
 
     if (!messageSid || !body || !normalizedFrom) {
       this.webhookLogger.warn(logContext, 'inbound.validation_failed', {
@@ -82,20 +89,26 @@ export class InboundMessageRecorderService {
       };
     }
 
-    const customer = await this.findCustomerByPhone(normalizedFrom);
+    // Route by Twilio To number → business, then guest From → that business conversation.
+    const businessId = await this.resolveBusinessIdByTwilioTo(normalizedTo);
+    const customer = await this.findCustomerByPhone(normalizedFrom, businessId);
     if (!customer) {
       this.webhookLogger.warn(logContext, 'inbound.customer_not_found', {
         reason: InboundMessageSkipReason.CUSTOMER_NOT_FOUND,
         normalizedFrom,
+        normalizedTo,
+        businessId,
       });
       return { saved: false, skipReason: InboundMessageSkipReason.CUSTOMER_NOT_FOUND };
     }
 
-    const conversation = await this.resolveConversation(customer.id);
-    if (!conversation) {
+    const conversation = await this.resolveConversation(customer.id, businessId);
+    const targetBusinessId = conversation?.businessId ?? businessId ?? null;
+    if (targetBusinessId == null) {
       this.webhookLogger.warn(logContext, 'inbound.conversation_not_found', {
         reason: InboundMessageSkipReason.CONVERSATION_NOT_FOUND,
         customerId: customer.id,
+        normalizedTo,
       });
       return {
         saved: false,
@@ -106,7 +119,7 @@ export class InboundMessageRecorderService {
 
     try {
       const savedMessageId = await this.persistInboundMessage({
-        businessId: conversation.businessId,
+        businessId: targetBusinessId,
         customerId: customer.id,
         body,
         channel,
@@ -117,7 +130,7 @@ export class InboundMessageRecorderService {
           correlationId: params.correlationId,
           twilioMessageSid: messageSid,
           twilioFrom: normalizedFrom,
-          twilioTo: params.toPhone?.trim() ?? null,
+          twilioTo: normalizedTo,
           deliveryStatus: params.smsStatus ?? null,
         },
       });
@@ -126,20 +139,20 @@ export class InboundMessageRecorderService {
         this.webhookLogger.warn(logContext, 'inbound.persist_failed', {
           reason: InboundMessageSkipReason.PERSIST_FAILED,
           customerId: customer.id,
-          businessId: conversation.businessId,
+          businessId: targetBusinessId,
         });
         return {
           saved: false,
           skipReason: InboundMessageSkipReason.PERSIST_FAILED,
           customerId: customer.id,
-          businessId: conversation.businessId,
+          businessId: targetBusinessId,
         };
       }
 
       this.webhookLogger.log(logContext, 'inbound.stored', {
         messageId: savedMessageId,
         customerId: customer.id,
-        businessId: conversation.businessId,
+        businessId: targetBusinessId,
         idempotencyKey,
       });
 
@@ -147,7 +160,7 @@ export class InboundMessageRecorderService {
         saved: true,
         messageId: savedMessageId,
         customerId: customer.id,
-        businessId: conversation.businessId,
+        businessId: targetBusinessId,
       };
     } catch (error) {
       if (this.isIdempotencyConflict(error)) {
@@ -162,7 +175,7 @@ export class InboundMessageRecorderService {
             duplicate: true,
             messageId: existing.id,
             customerId: customer.id,
-            businessId: conversation.businessId,
+            businessId: targetBusinessId,
           };
         }
       }
@@ -171,14 +184,14 @@ export class InboundMessageRecorderService {
       this.webhookLogger.error(logContext, 'inbound.database_error', {
         reason: InboundMessageSkipReason.DATABASE_ERROR,
         customerId: customer.id,
-        businessId: conversation.businessId,
+        businessId: targetBusinessId,
         error: detail,
       });
       return {
         saved: false,
         skipReason: InboundMessageSkipReason.DATABASE_ERROR,
         customerId: customer.id,
-        businessId: conversation.businessId,
+        businessId: targetBusinessId,
       };
     }
   }
@@ -192,9 +205,52 @@ export class InboundMessageRecorderService {
     });
   }
 
+  private async resolveBusinessIdByTwilioTo(
+    normalizedTo: string | null,
+  ): Promise<number | null> {
+    if (!normalizedTo) {
+      return null;
+    }
+
+    const digits = phoneDigitsOnly(normalizedTo);
+    if (!digits) {
+      return null;
+    }
+
+    const business = await this.businessRepository
+      .createQueryBuilder('business')
+      .where(
+        `regexp_replace(coalesce(business.twilio_phone_number, ''), '[^0-9]', '', 'g') = :digits`,
+        { digits },
+      )
+      .orderBy('business.id', 'ASC')
+      .getOne();
+    if (business) {
+      return business.id;
+    }
+
+    const integration = await this.twilioIntegrationRepository
+      .createQueryBuilder('integration')
+      .where(
+        `regexp_replace(coalesce(integration.twilio_phone_number, ''), '[^0-9]', '', 'g') = :digits`,
+        { digits },
+      )
+      .orderBy('integration.id', 'ASC')
+      .getOne();
+
+    return integration?.businessId ?? null;
+  }
+
   private async resolveConversation(
     customerId: number,
+    businessId: number | null,
   ): Promise<Conversation | null> {
+    if (businessId != null) {
+      return this.conversationRepository.findOne({
+        where: { customerId, businessId, isPrivate: true },
+      });
+    }
+
     let conversation = await this.conversationRepository.findOne({
       where: { customerId, isPrivate: true },
       order: { lastMessageAt: 'DESC' },
@@ -219,16 +275,52 @@ export class InboundMessageRecorderService {
 
   private async findCustomerByPhone(
     normalizedPhone: string,
+    businessId: number | null,
   ): Promise<Customer | null> {
     const digits = phoneDigitsOnly(normalizedPhone);
     if (!digits) {
       return null;
     }
 
+    if (businessId != null) {
+      const linked = await this.customerRepository
+        .createQueryBuilder('customer')
+        .innerJoin('customer.businessCustomers', 'bc')
+        .where('bc.business_id = :businessId', { businessId })
+        .andWhere(
+          `regexp_replace(coalesce(customer.phone, ''), '[^0-9]', '', 'g') = :digits`,
+          { digits },
+        )
+        .getMany();
+
+      if (linked.length === 1) {
+        return linked[0];
+      }
+
+      if (linked.length > 1) {
+        const linkedIds = linked.map((customer) => customer.id);
+        const conversation = await this.conversationRepository
+          .createQueryBuilder('conversation')
+          .where('conversation.business_id = :businessId', { businessId })
+          .andWhere('conversation.customer_id IN (:...linkedIds)', { linkedIds })
+          .andWhere('conversation.is_private = true')
+          .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
+          .getOne();
+
+        if (conversation) {
+          return (
+            linked.find((customer) => customer.id === conversation.customerId) ??
+            linked[0]
+          );
+        }
+        return linked[0];
+      }
+    }
+
     const customers = await this.customerRepository
       .createQueryBuilder('customer')
       .where(
-        "REGEXP_REPLACE(COALESCE(customer.phone, ''), '[^0-9]', '', 'g') = :digits",
+        `regexp_replace(coalesce(customer.phone, ''), '[^0-9]', '', 'g') = :digits`,
         { digits },
       )
       .getMany();
@@ -242,10 +334,18 @@ export class InboundMessageRecorderService {
     }
 
     const customerIds = customers.map((customer) => customer.id);
-    const conversation = await this.conversationRepository
+    const conversationQb = this.conversationRepository
       .createQueryBuilder('conversation')
       .where('conversation.customer_id IN (:...customerIds)', { customerIds })
-      .andWhere('conversation.is_private = true')
+      .andWhere('conversation.is_private = true');
+
+    if (businessId != null) {
+      conversationQb.andWhere('conversation.business_id = :businessId', {
+        businessId,
+      });
+    }
+
+    const conversation = await conversationQb
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .getOne();
 

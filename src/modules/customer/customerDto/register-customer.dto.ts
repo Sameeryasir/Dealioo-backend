@@ -27,6 +27,10 @@ export class RegisterCustomerDto {
   rejectDuplicateEmail?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  rejectDuplicatePhone?: boolean;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)

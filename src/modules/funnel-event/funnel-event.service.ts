@@ -164,7 +164,11 @@ export class FunnelEventService {
   async track(
     dto: TrackFunnelEventDto,
     options?: { skipPendingOrder?: boolean },
-  ): Promise<FunnelEvent> {
+  ): Promise<
+    FunnelEvent & {
+      signupStatus?: 'new' | 'returning_continue' | 'already_paid';
+    }
+  > {
     const funnel = await this.funnelRepository.findOne({
       where: { id: dto.funnelId },
       relations: ['campaign'],
@@ -178,11 +182,41 @@ export class FunnelEventService {
         ? await this.trackSignup(dto)
         : await this.trackPayment(dto);
 
+    let signupStatus: 'new' | 'returning_continue' | 'already_paid' | undefined;
+    let alreadyPaidPrepaid = false;
+
     if (
       dto.eventType === FunnelEventType.SIGNUP &&
       tracked.event.customerId
     ) {
       const businessId = funnel.campaign?.businessId;
+      const isPostpaid =
+        String(funnel.campaign?.campaignType ?? '').toLowerCase() ===
+        CampaignType.POSTPAID;
+
+      if (!isPostpaid) {
+        const paidPayment = await this.funnelPaymentRepository.findOne({
+          where: {
+            funnelId: dto.funnelId,
+            customerId: tracked.event.customerId,
+            status: FunnelPaymentStatus.PAID,
+          },
+          order: { id: 'DESC' },
+        });
+        alreadyPaidPrepaid = paidPayment != null;
+      }
+
+      if (alreadyPaidPrepaid) {
+        signupStatus = 'already_paid';
+      } else if (
+        'isReturningGuest' in tracked &&
+        tracked.isReturningGuest
+      ) {
+        signupStatus = 'returning_continue';
+      } else {
+        signupStatus = 'new';
+      }
+
       if (businessId != null && businessId > 0) {
         await this.customerService.ensureBusinessCustomerLink(
           businessId,
@@ -225,6 +259,7 @@ export class FunnelEventService {
       }
 
       if (
+        !alreadyPaidPrepaid &&
         !options?.skipPendingOrder &&
         businessId != null &&
         businessId > 0 &&
@@ -251,7 +286,10 @@ export class FunnelEventService {
               amountCents,
               currency: 'usd',
             });
-          if (pendingPayment.id > 0) {
+          if (
+            pendingPayment.id > 0 &&
+            pendingPayment.status !== FunnelPaymentStatus.PAID
+          ) {
             await this.couponService.linkSignupCouponToPayment(
               tracked.event.customerId,
               dto.funnelId,
@@ -292,7 +330,10 @@ export class FunnelEventService {
       );
     }
 
-    if (tracked.shouldRunAutomation) {
+    const shouldRunAutomation =
+      tracked.shouldRunAutomation && !alreadyPaidPrepaid;
+
+    if (shouldRunAutomation) {
       if (
         dto.eventType === FunnelEventType.PAYMENT &&
         this.isPaidFunnelEvent(tracked.event)
@@ -340,7 +381,9 @@ export class FunnelEventService {
 
     await this.recordJourneyFromTrackedEvent(funnel, tracked.event);
 
-    return tracked.event;
+    return Object.assign(tracked.event, {
+      ...(signupStatus ? { signupStatus } : {}),
+    });
   }
 
 
@@ -1267,7 +1310,11 @@ export class FunnelEventService {
 
   private async trackSignup(
     dto: TrackFunnelEventDto,
-  ): Promise<{ event: FunnelEvent; shouldRunAutomation: boolean }> {
+  ): Promise<{
+    event: FunnelEvent;
+    shouldRunAutomation: boolean;
+    isReturningGuest: boolean;
+  }> {
     if (!dto.customerId) {
       throw new BadRequestException('customerId is required for signup events');
     }
@@ -1292,7 +1339,8 @@ export class FunnelEventService {
       existing.updatedAt = new Date();
       return {
         event: await this.funnelEventRepository.save(existing),
-        shouldRunAutomation: true,
+        shouldRunAutomation: false,
+        isReturningGuest: true,
       };
     }
 
@@ -1306,6 +1354,7 @@ export class FunnelEventService {
     return {
       event: await this.funnelEventRepository.save(event),
       shouldRunAutomation: true,
+      isReturningGuest: false,
     };
   }
 

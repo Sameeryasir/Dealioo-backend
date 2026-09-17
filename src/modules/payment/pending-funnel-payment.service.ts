@@ -53,8 +53,26 @@ export class PendingFunnelPaymentService {
         lockKey2,
       ]);
 
-      // Paid rows stay as completed purchases. Unpaid rows are reused so a
-      // second funnel signup updates the open checkout instead of stacking copies.
+      const alreadyPaid = await manager.findOne(FunnelPayment, {
+        where: {
+          funnelId: input.funnelId,
+          businessId: input.businessId,
+          customerEmail: email,
+          status: FunnelPaymentStatus.PAID,
+        },
+        order: { createdAt: 'DESC' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (alreadyPaid) {
+        logStripePayment({
+          phase: 'pending_payment_ensure',
+          outcome: 'reuse_paid_payment',
+          paymentId: alreadyPaid.id,
+          checkoutSessionId: alreadyPaid.stripeCheckoutSessionId,
+        });
+        return alreadyPaid;
+      }
+
       const pending = await manager.findOne(FunnelPayment, {
         where: {
           funnelId: input.funnelId,
