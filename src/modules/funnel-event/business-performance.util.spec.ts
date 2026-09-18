@@ -38,6 +38,32 @@ describe('business-performance.util', () => {
       expect(window!.previousTo.getTime()).toBe(from.getTime() - 1);
     });
 
+    it('maps a single selected day to the same day last month', () => {
+      const from = new Date(Date.UTC(2026, 8, 1, 0, 0, 0, 0));
+      const to = new Date(Date.UTC(2026, 8, 1, 23, 59, 59, 999));
+      const window = resolvePerformancePreviousWindow(from, to);
+      expect(window).not.toBeNull();
+      expect(window!.previousFrom.toISOString()).toBe(
+        '2026-08-01T00:00:00.000Z',
+      );
+      expect(window!.previousTo.toISOString()).toBe(
+        '2026-08-01T23:59:59.999Z',
+      );
+    });
+
+    it('maps a finished month to the full previous month', () => {
+      const from = new Date(Date.UTC(2026, 8, 1, 0, 0, 0, 0));
+      const to = new Date(Date.UTC(2026, 8, 30, 23, 59, 59, 999));
+      const window = resolvePerformancePreviousWindow(from, to);
+      expect(window).not.toBeNull();
+      expect(window!.previousFrom.toISOString()).toBe(
+        '2026-08-01T00:00:00.000Z',
+      );
+      expect(window!.previousTo.toISOString()).toBe(
+        '2026-08-31T23:59:59.999Z',
+      );
+    });
+
     it('returns null when to is before from', () => {
       const from = new Date(Date.UTC(2026, 8, 8));
       const to = new Date(Date.UTC(2026, 8, 1));

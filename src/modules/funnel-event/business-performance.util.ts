@@ -35,6 +35,17 @@ export function resolvePerformancePreviousWindow(
     return null;
   }
 
+  const sameUtcCalendarDay =
+    from.getUTCFullYear() === to.getUTCFullYear() &&
+    from.getUTCMonth() === to.getUTCMonth() &&
+    from.getUTCDate() === to.getUTCDate();
+  if (sameUtcCalendarDay) {
+    return {
+      previousFrom: shiftUtcByMonths(from, -1),
+      previousTo: shiftUtcByMonths(to, -1),
+    };
+  }
+
   const isSingleCalendarMonth =
     from.getUTCDate() === 1 &&
     from.getUTCFullYear() === to.getUTCFullYear() &&
@@ -42,7 +53,23 @@ export function resolvePerformancePreviousWindow(
 
   if (isSingleCalendarMonth) {
     const previousFrom = shiftUtcByMonths(from, -1);
-    let previousTo = shiftUtcByMonths(to, -1);
+    const lastDayOfSelectedMonth = new Date(
+      Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const selectedMonthIsComplete = to.getUTCDate() === lastDayOfSelectedMonth;
+    let previousTo = selectedMonthIsComplete
+      ? new Date(
+          Date.UTC(
+            previousFrom.getUTCFullYear(),
+            previousFrom.getUTCMonth() + 1,
+            0,
+            to.getUTCHours(),
+            to.getUTCMinutes(),
+            to.getUTCSeconds(),
+            to.getUTCMilliseconds(),
+          ),
+        )
+      : shiftUtcByMonths(to, -1);
     if (previousTo.getTime() < previousFrom.getTime()) {
       previousTo = new Date(previousFrom.getTime());
     }

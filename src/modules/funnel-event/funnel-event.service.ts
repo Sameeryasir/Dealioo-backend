@@ -1687,7 +1687,7 @@ export class FunnelEventService {
   }> {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
     const cacheKey = [
-      'perf-top-campaigns-v2',
+      'perf-top-campaigns-v3',
       params.businessId,
       stabilizePerformanceCacheInstant(params.from),
       stabilizePerformanceCacheInstant(params.to),
@@ -1866,7 +1866,12 @@ export class FunnelEventService {
           campaignId,
           campaignName: row.campaignName?.trim() || 'Campaign',
           campaignType,
-          imageUrl: row.imageUrl?.trim() || null,
+          imageUrl:
+            String(
+              row.imageUrl ??
+                (row as { imageurl?: string | null }).imageurl ??
+                "",
+            ).trim() || null,
           price:
             priceRaw != null && Number.isFinite(priceRaw) && priceRaw >= 0
               ? Math.round(priceRaw * 100) / 100
@@ -2179,8 +2184,20 @@ export class FunnelEventService {
       { earningsCents: number; orderCount: number; uniqueCustomerCount: number }
     >();
 
+    const sameUtcDay =
+      params.from != null &&
+      params.to != null &&
+      params.from.getUTCFullYear() === params.to.getUTCFullYear() &&
+      params.from.getUTCMonth() === params.to.getUTCMonth() &&
+      params.from.getUTCDate() === params.to.getUTCDate();
+
     if (params.from && params.to) {
-      const dayExpr = `to_char(
+      const dayExpr = sameUtcDay
+        ? `to_char(
+            date_trunc('hour', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
+            'YYYY-MM-DD"T"HH24'
+          )`
+        : `to_char(
             date_trunc('day', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
             'YYYY-MM-DD'
           )`;
@@ -2230,8 +2247,16 @@ export class FunnelEventService {
       ]);
 
       for (const row of dailyTotalRows) {
-        const day = String(row.day ?? '').slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        const day = sameUtcDay
+          ? String(row.day ?? '').trim().slice(0, 13)
+          : String(row.day ?? '').trim().slice(0, 10);
+        if (
+          sameUtcDay
+            ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
+            : !/^\d{4}-\d{2}-\d{2}$/.test(day)
+        ) {
+          continue;
+        }
         dailyTotalsMap.set(day, {
           earningsCents: Math.max(
             0,
@@ -2246,8 +2271,16 @@ export class FunnelEventService {
       }
 
       for (const row of dailyCampaignRows) {
-        const day = String(row.day ?? '').slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        const day = sameUtcDay
+          ? String(row.day ?? '').trim().slice(0, 13)
+          : String(row.day ?? '').trim().slice(0, 10);
+        if (
+          sameUtcDay
+            ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
+            : !/^\d{4}-\d{2}-\d{2}$/.test(day)
+        ) {
+          continue;
+        }
         const campaignId = Number(row.campaignId);
         if (
           !Number.isFinite(campaignId) ||
@@ -2274,7 +2307,7 @@ export class FunnelEventService {
       ...dailyTotalsMap.keys(),
       ...[...dailyByCampaignMap.keys()].map((key) => key.split(':')[0]!),
     ]);
-    if (params.from && params.to) {
+    if (params.from && params.to && !sameUtcDay) {
       const cursor = new Date(
         Date.UTC(
           params.from.getUTCFullYear(),

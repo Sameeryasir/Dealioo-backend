@@ -507,7 +507,11 @@ export class AddonSuggestionService {
 
       let campaign = byCampaign.get(campaignId);
       if (!campaign) {
-        const imageUrlRaw = String(row.imageUrl ?? '').trim();
+        const imageUrlRaw = String(
+          row.imageUrl ??
+            (row as { imageurl?: string | null }).imageurl ??
+            "",
+        ).trim();
         campaign = {
           campaignId,
           campaignName:
