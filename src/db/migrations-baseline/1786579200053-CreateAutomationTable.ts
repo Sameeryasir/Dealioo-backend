@@ -4,6 +4,20 @@ export class CreateAutomationTable1786579200053 implements MigrationInterface {
   name = 'CreateAutomationTable1786579200053';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "automation_trigger_enum" AS ENUM ('signup', 'payment', 'funnel_completed', 'abandoned_checkout', 'first_purchase', 'no_visit', 'cron');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "automation_purpose_enum" AS ENUM ('manual', 'funnel_signup_payment_reminder', 'funnel_signup', 'funnel_payment', 'funnel_abandoned_checkout_reminder');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     const hasTable = await queryRunner.hasTable('automation');
     if (!hasTable) {
       await queryRunner.query(`CREATE TABLE "automation" ("id" SERIAL NOT NULL, "business_id" integer NOT NULL, "name" character varying(255) NOT NULL, "description" text, "trigger" "public"."automation_trigger_enum" NOT NULL, "purpose" "public"."automation_purpose_enum" NOT NULL DEFAULT 'funnel_signup_payment_reminder', "campaign_id" integer, "funnel_id" integer, "created_by" integer NOT NULL, "is_active" boolean NOT NULL DEFAULT false, "published" boolean NOT NULL DEFAULT false, "is_template" boolean NOT NULL DEFAULT false, "version" integer NOT NULL DEFAULT '1', "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_6c0430b160cab96bd145ca5297d" PRIMARY KEY ("id"))`);

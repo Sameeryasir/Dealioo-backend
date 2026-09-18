@@ -6,7 +6,7 @@ export class CreateAutomationConnectionTable1786579200055 implements MigrationIn
   public async up(queryRunner: QueryRunner): Promise<void> {
     const hasTable = await queryRunner.hasTable('automation_connection');
     if (!hasTable) {
-      await queryRunner.query(`CREATE TABLE "automation_connection" ("id" SERIAL NOT NULL, "automation_id" integer NOT NULL, "source_node_id" integer NOT NULL, "target_node_id" integer NOT NULL, CONSTRAINT "PK_554a9db2be1bf0d8cc9fb561844" PRIMARY KEY ("id"))`);
+      await queryRunner.query(`CREATE TABLE "automation_connection" ("id" SERIAL NOT NULL, "automation_id" integer NOT NULL, "source_node_id" integer NOT NULL, "target_node_id" integer NOT NULL, "branch" character varying(64), CONSTRAINT "PK_554a9db2be1bf0d8cc9fb561844" PRIMARY KEY ("id"))`);
     }
     {
       const rows = await queryRunner.query(
@@ -32,6 +32,10 @@ export class CreateAutomationConnectionTable1786579200055 implements MigrationIn
         await queryRunner.query(`ALTER TABLE "automation_connection" ADD CONSTRAINT "FK_c0fa65dca22e76a7574b2d82351" FOREIGN KEY ("target_node_id") REFERENCES "automation_node"("id") ON DELETE CASCADE ON UPDATE NO ACTION`);
       }
     }
+    await queryRunner.query(`
+      ALTER TABLE "automation_connection"
+      ADD COLUMN IF NOT EXISTS "branch" character varying(64)
+    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

@@ -4,6 +4,13 @@ export class CreateFunnelEventTable1786579200021 implements MigrationInterface {
   name = 'CreateFunnelEventTable1786579200021';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "funnel_event_event_type_enum" AS ENUM ('signup', 'payment');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     const hasTable = await queryRunner.hasTable('funnel_event');
     if (!hasTable) {
       await queryRunner.query(`CREATE TABLE "funnel_event" ("id" SERIAL NOT NULL, "funnel_id" integer, "event_type" "public"."funnel_event_event_type_enum" NOT NULL, "customer_id" integer, "visitor_id" character varying(64), "funnel_payment_id" integer, "amount" integer, "currency" character varying(10), "payment_status" character varying(32), "stripe_payment_intent_id" character varying(255), "customer_email" character varying(320), "receipt_url" text, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "deleted_at" TIMESTAMP WITH TIME ZONE, CONSTRAINT "PK_5d2dac1af690f1d52c5cf92f764" PRIMARY KEY ("id"))`);

@@ -603,7 +603,7 @@ export class BusinessService {
       );
 
       await manager.query(
-        `DELETE FROM funnel_order WHERE business_id = $1`,
+        `DELETE FROM orders WHERE business_id = $1`,
         [businessId],
       );
 

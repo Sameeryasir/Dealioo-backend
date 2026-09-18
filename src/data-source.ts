@@ -4,10 +4,10 @@ import { config } from 'dotenv';
 
 config();
 
-const migrationsDir =
-  process.env.MIGRATIONS_DIR === 'baseline'
-    ? 'src/db/migrations-baseline/*.ts'
-    : 'src/db/migrations/*.ts';
+const useBaseline = process.env.MIGRATIONS_DIR !== 'migrations';
+const migrationsDir = useBaseline
+  ? 'src/db/migrations-baseline/*.ts'
+  : 'src/db/migrations/*.ts';
 
 const AppDataSource = new DataSource({
   type: 'postgres',
@@ -19,10 +19,7 @@ const AppDataSource = new DataSource({
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   entities: ['src/db/entities/*.entity.ts'],
   migrations: [migrationsDir],
-  migrationsTableName:
-    process.env.MIGRATIONS_DIR === 'baseline'
-      ? 'migrations_baseline'
-      : 'migrations',
+  migrationsTableName: useBaseline ? 'migrations_baseline' : 'migrations',
 });
 
 export default AppDataSource;

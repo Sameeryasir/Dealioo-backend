@@ -616,10 +616,7 @@ async function main() {
 
   if (!userId) {
     const roleRows = (await AppDataSource.query(
-      `SELECT id FROM roles WHERE id = $1
-       UNION ALL
-       SELECT id FROM roles ORDER BY id LIMIT 1`,
-      [Number(userRow.role_id) || 0],
+      `SELECT id FROM roles WHERE name = 'Admin' LIMIT 1`,
     )) as Array<{ id: number }>;
     const roleId = roleRows[0]?.id;
     if (!roleId) throw new Error('No role exists to attach the new user.');
@@ -642,6 +639,13 @@ async function main() {
     userAction = 'created';
   } else {
     const filled = await fillMissing('users', 'id = $1', [userId], userFields);
+    await AppDataSource.query(
+      `UPDATE users
+       SET role_id = (SELECT id FROM roles WHERE name = 'Admin' LIMIT 1)
+       WHERE id = $1
+         AND role_id = (SELECT id FROM roles WHERE name = 'Owner' LIMIT 1)`,
+      [userId],
+    );
     userAction = filled === 'inserted' ? 'updated' : filled;
   }
 

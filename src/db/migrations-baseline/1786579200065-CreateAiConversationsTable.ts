@@ -4,6 +4,13 @@ export class CreateAiConversationsTable1786579200065 implements MigrationInterfa
   name = 'CreateAiConversationsTable1786579200065';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "ai_conversation_status" AS ENUM ('ACTIVE', 'ARCHIVED');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     const hasTable = await queryRunner.hasTable('ai_conversations');
     if (!hasTable) {
       await queryRunner.query(`CREATE TABLE "ai_conversations" ("id" uuid NOT NULL DEFAULT uuid_generate_v4(), "business_id" integer NOT NULL, "funnel_id" integer NOT NULL, "created_by" integer, "title" character varying(255) NOT NULL DEFAULT 'New chat', "status" "public"."ai_conversation_status" NOT NULL DEFAULT 'ACTIVE', "last_message_at" TIMESTAMP WITH TIME ZONE, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_60db12765b82858ba00c8aa4ae2" PRIMARY KEY ("id"))`);

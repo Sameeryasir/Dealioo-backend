@@ -4,6 +4,20 @@ export class CreateCampaignsTable1786579200013 implements MigrationInterface {
   name = 'CreateCampaignsTable1786579200013';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "campaigns_status_enum" AS ENUM ('published', 'unpublished');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+    await queryRunner.query(`
+      DO $$ BEGIN
+        CREATE TYPE "campaigns_campaign_type_enum" AS ENUM ('prepaid', 'postpaid');
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
     const hasTable = await queryRunner.hasTable('campaigns');
     if (!hasTable) {
       await queryRunner.query(`CREATE TABLE "campaigns" ("id" SERIAL NOT NULL, "business_id" integer NOT NULL, "created_by" integer, "campaign_name" character varying(255) NOT NULL, "campaign_type" "public"."campaigns_campaign_type_enum" NOT NULL DEFAULT 'prepaid', "website_url" character varying(2048) NOT NULL, "image_url" text, "offer" text, "price" numeric(10,2), "status" "public"."campaigns_status_enum" NOT NULL DEFAULT 'unpublished', "stripe_product_id" character varying(255), "stripe_price_id" character varying(255), "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "deleted_at" TIMESTAMP WITH TIME ZONE, CONSTRAINT "PK_831e3fcd4fc45b4e4c3f57a9ee4" PRIMARY KEY ("id"))`);
