@@ -256,15 +256,17 @@ async function ensureCampaign(
       `INSERT INTO campaigns (
          business_id, created_by, campaign_name, website_url, offer, price,
          status, campaign_type, campaign_category, description
-       ) VALUES ($1, $2, $3, $4, $3, $5, 'published', 'prepaid', $6, $3)
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'published', 'prepaid', $7, $8)
        RETURNING id`,
       [
         businessId,
         userId,
         plan.name,
         `https://${slug}.example.com`,
+        plan.name,
         (plan.priceCents / 100).toFixed(2),
         plan.category,
+        plan.name,
       ],
     )) as Array<{ id: number }>;
     campaignId = inserted[0].id;
