@@ -81,18 +81,57 @@ function blank(value: unknown): boolean {
   return value == null || value === '';
 }
 
-function parseJson(value: string): unknown {
-  if (blank(value)) return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
+function postgresJson(value: string): string | null {
+  let current = value.trim();
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (!current) return null;
+    try {
+      const parsed: unknown = JSON.parse(current);
+      if (typeof parsed === 'string') {
+        current = parsed.trim();
+        continue;
+      }
+      return JSON.stringify(parsed);
+    } catch {
+      const doubled = current.replace(/""/g, '"');
+      if (doubled !== current) {
+        current = doubled;
+        continue;
+      }
+      if (
+        current.length >= 2 &&
+        current.startsWith('"') &&
+        current.endsWith('"')
+      ) {
+        current = current.slice(1, -1).trim();
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+function coerceJsonFields(fields: Row, columns: Set<string>): void {
+  for (const key of Object.keys(fields)) {
+    if (!columns.has(key)) continue;
+    const next = postgresJson(fields[key]);
+    if (next == null) delete fields[key];
+    else fields[key] = next;
   }
 }
 
 async function tableColumns(table: string): Promise<Set<string>> {
   const rows = (await AppDataSource.query(
     `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`,
+    [table],
+  )) as Array<{ column_name: string }>;
+  return new Set(rows.map((row) => row.column_name));
+}
+
+async function jsonColumns(table: string): Promise<Set<string>> {
+  const rows = (await AppDataSource.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND data_type IN ('json', 'jsonb')`,
     [table],
   )) as Array<{ column_name: string }>;
   return new Set(rows.map((row) => row.column_name));
@@ -538,6 +577,12 @@ async function main() {
   const subscriptionColumns = await tableColumns('user_subscriptions');
   const onboardingColumns = await tableColumns('onboarding_events');
   const historyColumns = await tableColumns('business_history');
+  const userJson = await jsonColumns('users');
+  const businessJson = await jsonColumns('businesses');
+  const memberJson = await jsonColumns('business_members');
+  const subscriptionJson = await jsonColumns('user_subscriptions');
+  const onboardingJson = await jsonColumns('onboarding_events');
+  const historyJson = await jsonColumns('business_history');
 
   const existingUsers = (await AppDataSource.query(
     `SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1`,
@@ -553,6 +598,7 @@ async function main() {
     'password_hash',
     'two_factor_secret',
   ]);
+  coerceJsonFields(userFields, userJson);
 
   if (!userId) {
     const roleRows = (await AppDataSource.query(
@@ -592,6 +638,7 @@ async function main() {
     const sourceId = business.id;
     const fields = pickColumns(business, businessColumns, ['id', 'owner_id']);
     fields.owner_id = String(userId);
+    coerceJsonFields(fields, businessJson);
     const found = (await AppDataSource.query(
       `SELECT id FROM businesses WHERE owner_id = $1 AND (slug = $2 OR name = $3) LIMIT 1`,
       [userId, business.slug, business.name],
@@ -622,7 +669,6 @@ async function main() {
   for (const member of records.get('business_members') ?? []) {
     const businessId = businessIdMap.get(member.business_id);
     if (!businessId) continue;
-    const permissions = parseJson(member.permissions);
     const fields = pickColumns(member, memberColumns, [
       'id',
       'business_id',
@@ -634,10 +680,11 @@ async function main() {
     fields.business_id = String(businessId);
     fields.user_id = String(userId);
     if (memberColumns.has('permissions')) {
-      fields.permissions = JSON.stringify(
-        Array.isArray(permissions) ? permissions : ALL_BUSINESS_MEMBER_PERMISSIONS,
-      );
+      fields.permissions =
+        postgresJson(member.permissions ?? '') ??
+        JSON.stringify(ALL_BUSINESS_MEMBER_PERMISSIONS);
     }
+    coerceJsonFields(fields, memberJson);
     const existing = (await AppDataSource.query(
       `SELECT id FROM business_members WHERE business_id = $1 AND user_id = $2 LIMIT 1`,
       [businessId, userId],
@@ -673,6 +720,7 @@ async function main() {
       ]);
       fields.user_id = String(userId);
       fields.plan_id = plan[0].id;
+      coerceJsonFields(fields, subscriptionJson);
       const keys = Object.keys(fields);
       await AppDataSource.query(
         `INSERT INTO user_subscriptions (${keys.join(', ')}) VALUES (${keys
@@ -699,10 +747,7 @@ async function main() {
     const fields = pickColumns(event, onboardingColumns, ['id', 'user_id']);
     fields.user_id = String(userId);
     fields.idempotency_key = key;
-    if (fields.metadata) {
-      const parsed = parseJson(fields.metadata);
-      fields.metadata = parsed == null ? fields.metadata : JSON.stringify(parsed);
-    }
+    coerceJsonFields(fields, onboardingJson);
     const keys = Object.keys(fields);
     await AppDataSource.query(
       `INSERT INTO onboarding_events (${keys.join(', ')}) VALUES (${keys
@@ -731,6 +776,7 @@ async function main() {
     if (mappedBusiness && historyColumns.has('business_id')) {
       fields.business_id = String(mappedBusiness);
     }
+    coerceJsonFields(fields, historyJson);
     const keys = Object.keys(fields);
     await AppDataSource.query(
       `INSERT INTO business_history (${keys.join(', ')}) VALUES (${keys
