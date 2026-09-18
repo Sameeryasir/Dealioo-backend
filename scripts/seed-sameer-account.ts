@@ -406,7 +406,18 @@ async function seedBusinessAndCampaignStats(
         plans[planIndex],
       );
       totals.campaigns += 1;
-      if (ready.hasPaid) continue;
+      const signupRows = (await AppDataSource.query(
+        `SELECT 1 FROM funnel_event WHERE funnel_id = $1 LIMIT 1`,
+        [ready.funnelId],
+      )) as unknown[];
+      const viewRows = (await AppDataSource.query(
+        `SELECT 1 FROM funnel_analytics_event WHERE funnel_id = $1 LIMIT 1`,
+        [ready.funnelId],
+      )) as unknown[];
+      const needsPayments = !ready.hasPaid;
+      const needsSignups = signupRows.length === 0;
+      const needsViews = viewRows.length === 0;
+      if (!needsPayments && !needsSignups && !needsViews) continue;
       if (customers.length === 0) {
         customers = await ensureStatCustomers(business.id, days);
         totals.customers += customers.length;
@@ -422,39 +433,43 @@ async function seedBusinessAndCampaignStats(
       const signupsPerDay = 3 - planIndex;
 
       days.forEach((day, dayIndex) => {
-        for (let copy = 0; copy < paymentsPerDay; copy += 1) {
-          const at = stampOnDay(day, 11 + copy);
-          if (!at) continue;
-          const customer = customers[(dayIndex + copy + planIndex) % customers.length];
-          payments.push([
-            ready.funnelId,
-            business.id,
-            ready.campaignId,
-            customer.id,
-            plans[planIndex].priceCents,
-            'usd',
-            'paid',
-            customer.email,
-            `seed-sameer-${business.id}-${ready.campaignId}-${dayIndex}-${copy}`,
-            at,
-            at,
-            at,
-          ]);
+        if (needsPayments) {
+          for (let copy = 0; copy < paymentsPerDay; copy += 1) {
+            const at = stampOnDay(day, 11 + copy);
+            if (!at) continue;
+            const customer = customers[(dayIndex + copy + planIndex) % customers.length];
+            payments.push([
+              ready.funnelId,
+              business.id,
+              ready.campaignId,
+              customer.id,
+              plans[planIndex].priceCents,
+              'usd',
+              'paid',
+              customer.email,
+              `seed-sameer-${business.id}-${ready.campaignId}-${dayIndex}-${copy}`,
+              at,
+              at,
+              at,
+            ]);
+          }
         }
-        for (let copy = 0; copy < signupsPerDay; copy += 1) {
-          const at = stampOnDay(day, 10 + copy);
-          if (!at) continue;
-          const customer = customers[(dayIndex + copy) % customers.length];
-          signups.push([
-            ready.funnelId,
-            ready.campaignId,
-            'signup',
-            customer.id,
-            customer.email,
-            at,
-            at,
-          ]);
+        if (needsSignups) {
+          for (let copy = 0; copy < signupsPerDay; copy += 1) {
+            const at = stampOnDay(day, 10 + copy);
+            if (!at) continue;
+            const customer = customers[(dayIndex + copy) % customers.length];
+            signups.push([
+              ready.funnelId,
+              'signup',
+              customer.id,
+              customer.email,
+              at,
+              at,
+            ]);
+          }
         }
+        if (!needsViews) return;
         for (let copy = 0; copy < viewsPerDay; copy += 1) {
           const at = stampOnDay(day, 8 + copy);
           if (!at) continue;
@@ -504,7 +519,6 @@ async function seedBusinessAndCampaignStats(
         'funnel_event',
         [
           'funnel_id',
-          'campaign_id',
           'event_type',
           'customer_id',
           'customer_email',
