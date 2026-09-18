@@ -112,6 +112,8 @@ export class ActivityController {
   async getBusinessSummaryMonthly(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('months', new DefaultValuePipe(6), ParseIntPipe) months: number,
+    @Query('from') fromRaw: string | undefined,
+    @Query('to') toRaw: string | undefined,
     @Req() req?: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -119,6 +121,16 @@ export class ActivityController {
       req!.user.id,
       req!.user.role.name,
     );
+
+    const from = parseDate(fromRaw);
+    const to = parseDate(toRaw);
+    if (from && to && from.getTime() <= to.getTime()) {
+      return this.activityService.getBusinessSummaryForRange(
+        businessId,
+        from,
+        to,
+      );
+    }
 
     return this.activityService.getBusinessSummaryMonthly(businessId, months);
   }

@@ -24,6 +24,56 @@ export function formatMonthKey(date: Date): string {
   return `${year}-${month}`;
 }
 
+export function buildUtcRangeBucketKeys(
+  from: Date,
+  to: Date,
+): { sameDay: boolean; keys: string[] } {
+  const sameDay =
+    from.getUTCFullYear() === to.getUTCFullYear() &&
+    from.getUTCMonth() === to.getUTCMonth() &&
+    from.getUTCDate() === to.getUTCDate();
+
+  if (sameDay) {
+    const day = from.toISOString().slice(0, 10);
+    const keys: string[] = [];
+    for (let hour = 0; hour < 24; hour += 1) {
+      const start = Date.UTC(
+        from.getUTCFullYear(),
+        from.getUTCMonth(),
+        from.getUTCDate(),
+        hour,
+      );
+      if (start > to.getTime()) break;
+      keys.push(`${day}T${String(hour).padStart(2, '0')}`);
+    }
+    return { sameDay, keys };
+  }
+
+  const keys: string[] = [];
+  const last = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+  for (
+    let time = Date.UTC(
+      from.getUTCFullYear(),
+      from.getUTCMonth(),
+      from.getUTCDate(),
+    );
+    time <= last;
+    time += 24 * 60 * 60 * 1000
+  ) {
+    keys.push(new Date(time).toISOString().slice(0, 10));
+  }
+  return { sameDay, keys };
+}
+
+export function overviewRangeBucketSql(
+  columnSql: string,
+  sameDay: boolean,
+): string {
+  return sameDay
+    ? `TO_CHAR(DATE_TRUNC('hour', ${columnSql} AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
+    : `TO_CHAR(DATE_TRUNC('day', ${columnSql} AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+}
+
 export function buildRecentMonthBuckets(monthCount: number): OverviewMonthBucket[] {
   const now = new Date();
   const buckets: OverviewMonthBucket[] = [];

@@ -88,6 +88,8 @@ import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import {
   buildRecentMonthBuckets,
+  buildUtcRangeBucketKeys,
+  overviewRangeBucketSql,
 } from './overview-monthly.util';
 import { isOnlineFunnelPayment } from '../../common/payment-provenance.util';
 import {
@@ -1233,6 +1235,105 @@ export class FunnelEventService {
     return {
       funnelId,
       months: monthCount,
+      currency: currencyRow?.currency ?? null,
+      data,
+    };
+  }
+
+  async getStatsForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    currency: string | null;
+    data: {
+      month: string;
+      signups: number;
+      payments: number;
+      signupOnly: number;
+      paidAfterSignup: number;
+      revenue: number;
+    }[];
+  }> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: funnelId },
+      select: ['id'],
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
+    const eventBucket = overviewRangeBucketSql('e.created_at', sameDay);
+    const paymentBucket = overviewRangeBucketSql(
+      'COALESCE(p.paid_at, p.created_at)',
+      sameDay,
+    );
+
+    const [eventRows, paymentRows, currencyRow] = await Promise.all([
+      this.funnelEventRepository
+        .createQueryBuilder('e')
+        .select(eventBucket, 'month')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NULL)`,
+          'signupOnly',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NOT NULL)`,
+          'paidAfterSignup',
+        )
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.created_at >= :from', { from })
+        .andWhere('e.created_at <= :to', { to })
+        .groupBy(eventBucket)
+        .getRawMany<{
+          month: string;
+          signupOnly: string;
+          paidAfterSignup: string;
+        }>(),
+      this.funnelPaymentRepository
+        .createQueryBuilder('p')
+        .select(paymentBucket, 'month')
+        .addSelect('COUNT(*)', 'payments')
+        .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
+        .where('p.funnel_id = :funnelId', { funnelId })
+        .andWhere('p.status = :paid', { paid: FunnelPaymentStatus.PAID })
+        .andWhere('COALESCE(p.paid_at, p.created_at) >= :from', { from })
+        .andWhere('COALESCE(p.paid_at, p.created_at) <= :to', { to })
+        .groupBy(paymentBucket)
+        .getRawMany<{
+          month: string;
+          payments: string;
+          revenue: string;
+        }>(),
+      this.funnelPaymentRepository.findOne({
+        where: { funnelId, status: FunnelPaymentStatus.PAID },
+        select: ['currency'],
+      }),
+    ]);
+
+    const eventsByBucket = new Map(eventRows.map((row) => [row.month, row]));
+    const paymentsByBucket = new Map(paymentRows.map((row) => [row.month, row]));
+    const data = keys.map((bucket) => {
+      const eventRow = eventsByBucket.get(bucket);
+      const paymentRow = paymentsByBucket.get(bucket);
+      const signupOnly = Number(eventRow?.signupOnly ?? 0);
+      const paidAfterSignup = Number(eventRow?.paidAfterSignup ?? 0);
+      return {
+        month: bucket,
+        signups: signupOnly + paidAfterSignup,
+        payments: Number(paymentRow?.payments ?? 0),
+        signupOnly,
+        paidAfterSignup,
+        revenue: Number(paymentRow?.revenue ?? 0),
+      };
+    });
+
+    return {
+      funnelId,
+      months: data.length,
       currency: currencyRow?.currency ?? null,
       data,
     };

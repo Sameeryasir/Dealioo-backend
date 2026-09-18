@@ -113,6 +113,7 @@ export type ActivityMonthlyPoint = {
   prepaidRevenueCents: number;
   orders: number;
   members: number;
+  paidRevenueCents?: number;
 };
 
 function startOfTodayUtc(): Date {
@@ -1272,5 +1273,203 @@ export class ActivityService {
       ...snapshot,
       data,
     };
+  }
+
+  async getBusinessSummaryForRange(
+    businessId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    businessId: number;
+    months: number;
+    activeCampaigns: number;
+    totalOrders: number;
+    totalMembers: number;
+    todayRevenueCents: number;
+    data: ActivityMonthlyPoint[];
+  }> {
+    const cacheKey = `activity-range-v4:${businessId}:${from.toISOString()}:${to.toISOString()}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_CACHE_TTL_MS,
+      () => this.computeBusinessSummaryForRange(businessId, from, to),
+    );
+  }
+
+  private async computeBusinessSummaryForRange(
+    businessId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    businessId: number;
+    months: number;
+    activeCampaigns: number;
+    totalOrders: number;
+    totalMembers: number;
+    todayRevenueCents: number;
+    data: ActivityMonthlyPoint[];
+  }> {
+    const snapshot = await this.getBusinessActivitySnapshot(businessId);
+    const sameDay =
+      from.getUTCFullYear() === to.getUTCFullYear() &&
+      from.getUTCMonth() === to.getUTCMonth() &&
+      from.getUTCDate() === to.getUTCDate();
+    const bucketKeys = this.buildActivityRangeBucketKeys(from, to, sameDay);
+    const activityBucket = sameDay
+      ? `TO_CHAR(DATE_TRUNC('hour', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
+      : `TO_CHAR(DATE_TRUNC('day', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+    const paymentBucket = sameDay
+      ? `TO_CHAR(DATE_TRUNC('hour', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
+      : `TO_CHAR(DATE_TRUNC('day', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+    const memberBucket = sameDay
+      ? `TO_CHAR(DATE_TRUNC('hour', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
+      : `TO_CHAR(DATE_TRUNC('day', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+
+    const [activityRows, orderRows, memberRows] = await Promise.all([
+      this.activityRepository
+        .createQueryBuilder('activity')
+        .select(activityBucket, 'month')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :visited)`,
+          'visited',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
+          'redeemedReward',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :prepaid)`,
+          'prepaidForOffer',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE activity.event_type = :message)`,
+          'messageSent',
+        )
+        .addSelect(
+          `COALESCE(SUM(
+          CASE
+            WHEN activity.event_type = :prepaid
+            THEN NULLIF(activity.metadata->>'amountCents', '')::int
+            ELSE 0
+          END
+        ), 0)`,
+          'prepaidRevenueCents',
+        )
+        .where('activity.businessId = :businessId', { businessId })
+        .andWhere('activity.occurredAt >= :from', { from })
+        .andWhere('activity.occurredAt <= :to', { to })
+        .groupBy(activityBucket)
+        .setParameters({
+          visited: ActivityEventType.VISITED,
+          redeemed: ActivityEventType.REDEEMED_REWARD,
+          prepaid: ActivityEventType.PREPAID_FOR_OFFER,
+          message: ActivityEventType.MESSAGE_SENT,
+        })
+        .getRawMany<{
+          month: string;
+          visited: string;
+          redeemedReward: string;
+          prepaidForOffer: string;
+          messageSent: string;
+          prepaidRevenueCents: string;
+        }>(),
+      this.funnelPaymentRepository
+        .createQueryBuilder('payment')
+        .select(paymentBucket, 'month')
+        .addSelect('COUNT(*)', 'orders')
+        .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
+        .where('payment.businessId = :businessId', { businessId })
+        .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+        .andWhere('COALESCE(payment.paidAt, payment.createdAt) >= :from', {
+          from,
+        })
+        .andWhere('COALESCE(payment.paidAt, payment.createdAt) <= :to', { to })
+        .groupBy(paymentBucket)
+        .getRawMany<{
+          month: string;
+          orders: string;
+          paidRevenueCents?: string;
+          paidrevenuecents?: string;
+        }>(),
+      this.businessCustomersBaseQuery(businessId)
+        .select(memberBucket, 'month')
+        .addSelect('COUNT(*)', 'members')
+        .andWhere('customer.createdAt >= :from', { from })
+        .andWhere('customer.createdAt <= :to', { to })
+        .groupBy(memberBucket)
+        .getRawMany<{ month: string; members: string }>(),
+    ]);
+
+    const activityByBucket = monthKeyToMap(activityRows);
+    const ordersByBucket = monthKeyToMap(orderRows);
+    const membersByBucket = monthKeyToMap(memberRows);
+    const data = bucketKeys.map((bucket) => {
+      const activityRow = activityByBucket.get(bucket);
+      const orderRow = ordersByBucket.get(bucket);
+      const memberRow = membersByBucket.get(bucket);
+      const visited = Number(activityRow?.visited ?? 0);
+      const redeemedReward = Number(activityRow?.redeemedReward ?? 0);
+      const prepaidForOffer = Number(activityRow?.prepaidForOffer ?? 0);
+      const messageSent = Number(activityRow?.messageSent ?? 0);
+      const checkIns = visited + redeemedReward;
+      return {
+        month: bucket,
+        totalEvents: checkIns + prepaidForOffer + messageSent,
+        checkIns,
+        visited,
+        redeemedReward,
+        prepaidForOffer,
+        messageSent,
+        prepaidRevenueCents: Number(activityRow?.prepaidRevenueCents ?? 0),
+        orders: Number(orderRow?.orders ?? 0),
+        members: Number(memberRow?.members ?? 0),
+        paidRevenueCents: Number(
+          orderRow?.paidRevenueCents ?? orderRow?.paidrevenuecents ?? 0,
+        ),
+      };
+    });
+
+    return {
+      businessId,
+      months: data.length,
+      activeCampaigns: snapshot.activeCampaigns,
+      totalOrders: data.reduce((sum, row) => sum + (row.orders ?? 0), 0),
+      totalMembers: data.reduce((sum, row) => sum + (row.members ?? 0), 0),
+      todayRevenueCents: snapshot.todayRevenueCents,
+      data,
+    };
+  }
+
+  private buildActivityRangeBucketKeys(
+    from: Date,
+    to: Date,
+    sameDay: boolean,
+  ): string[] {
+    if (sameDay) {
+      const day = from.toISOString().slice(0, 10);
+      const keys: string[] = [];
+      for (let hour = 0; hour < 24; hour += 1) {
+        const start = Date.UTC(
+          from.getUTCFullYear(),
+          from.getUTCMonth(),
+          from.getUTCDate(),
+          hour,
+        );
+        if (start > to.getTime()) break;
+        keys.push(`${day}T${String(hour).padStart(2, '0')}`);
+      }
+      return keys;
+    }
+
+    const keys: string[] = [];
+    const last = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+    for (
+      let time = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+      time <= last;
+      time += 24 * 60 * 60 * 1000
+    ) {
+      keys.push(new Date(time).toISOString().slice(0, 10));
+    }
+    return keys;
   }
 }

@@ -36,6 +36,12 @@ type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
 };
 
+function parseOverviewDate(raw?: string): Date | null {
+  if (!raw?.trim()) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 @Controller('funnel-event')
 export class FunnelEventController {
   constructor(
@@ -225,7 +231,14 @@ export class FunnelEventController {
   getStatsMonthly(
     @Param('funnelId', ParseIntPipe) funnelId: number,
     @Query('months') months?: string,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
   ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (from && to && from.getTime() <= to.getTime()) {
+      return this.funnelEventService.getStatsForRange(funnelId, from, to);
+    }
     return this.funnelEventService.getStatsMonthly(
       funnelId,
       clampOverviewMonths(months),
@@ -243,7 +256,18 @@ export class FunnelEventController {
   getAnalyticsOverviewMonthly(
     @Param('funnelId', ParseIntPipe) funnelId: number,
     @Query('months') months?: string,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
   ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (from && to && from.getTime() <= to.getTime()) {
+      return this.funnelAnalyticsService.getAnalyticsOverviewForRange(
+        funnelId,
+        from,
+        to,
+      );
+    }
     return this.funnelAnalyticsService.getAnalyticsOverviewMonthly(
       funnelId,
       clampOverviewMonths(months),

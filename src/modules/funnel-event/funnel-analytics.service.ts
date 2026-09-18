@@ -10,6 +10,8 @@ import { Customer } from '../../db/entities/customer.entity';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
 import {
   buildRecentMonthBuckets,
+  buildUtcRangeBucketKeys,
+  overviewRangeBucketSql,
 } from './overview-monthly.util';
 import { And, LessThan, MoreThanOrEqual } from 'typeorm';
 
@@ -191,6 +193,72 @@ export class FunnelAnalyticsService {
     });
 
     return { funnelId, months: monthCount, data };
+  }
+
+  async getAnalyticsOverviewForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    data: {
+      month: string;
+      pageViews: number;
+      buttonClicks: number;
+      uniqueVisitors: number;
+      checkoutOpens: number;
+    }[];
+  }> {
+    await this.assertFunnelExists(funnelId);
+    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
+    const bucketSql = overviewRangeBucketSql('e.created_at', sameDay);
+    const rows = await this.analyticsRepository
+      .createQueryBuilder('e')
+      .select(bucketSql, 'month')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
+        'pageViews',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
+        'buttonClicks',
+      )
+      .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
+        'checkoutOpens',
+      )
+      .where('e.funnel_id = :funnelId', { funnelId })
+      .andWhere('e.created_at >= :from', { from })
+      .andWhere('e.created_at <= :to', { to })
+      .setParameters({
+        pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+        buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
+        checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
+      })
+      .groupBy(bucketSql)
+      .getRawMany<{
+        month: string;
+        pageViews: string;
+        buttonClicks: string;
+        uniqueVisitors: string;
+        checkoutOpens: string;
+      }>();
+
+    const byBucket = new Map(rows.map((row) => [row.month, row]));
+    const data = keys.map((bucket) => {
+      const row = byBucket.get(bucket);
+      return {
+        month: bucket,
+        pageViews: Number(row?.pageViews ?? 0),
+        buttonClicks: Number(row?.buttonClicks ?? 0),
+        uniqueVisitors: Number(row?.uniqueVisitors ?? 0),
+        checkoutOpens: Number(row?.checkoutOpens ?? 0),
+      };
+    });
+
+    return { funnelId, months: data.length, data };
   }
 
   async getFunnelDropoff(funnelId: number): Promise<FunnelDropoffStep[]> {
