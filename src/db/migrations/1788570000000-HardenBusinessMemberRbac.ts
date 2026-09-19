@@ -7,12 +7,6 @@ export class HardenBusinessMemberRbac1788570000000
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
-      INSERT INTO "roles" ("name")
-      VALUES ('Owner')
-      ON CONFLICT ("name") DO NOTHING
-    `);
-
-    await queryRunner.query(`
       ALTER TABLE "business_members"
       ADD COLUMN IF NOT EXISTS "status" character varying(32) NOT NULL DEFAULT 'active'
     `);
@@ -85,7 +79,7 @@ export class HardenBusinessMemberRbac1788570000000
         b."id",
         b."owner_id",
         'Owner',
-        (SELECT r."id" FROM "roles" r WHERE r."name" = 'Owner' LIMIT 1),
+        NULL,
         '[]'::jsonb,
         'active',
         COALESCE(b."created_at", NOW()),

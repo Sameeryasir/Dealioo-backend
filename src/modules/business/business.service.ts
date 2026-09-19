@@ -26,7 +26,7 @@ import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
 import { Role } from '../../db/entities/role.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
-import { isSuperAdmin } from '../../utils/user-roles';
+import { ADMIN_ROLE, isSuperAdmin } from '../../utils/user-roles';
 import {
   ALL_BUSINESS_MEMBER_PERMISSIONS,
 } from '../member/member.constants';
@@ -666,8 +666,9 @@ export class BusinessService {
       },
     });
 
+    // Account role stays Admin. Owner is only the business membership label.
     const ownerRole = await this.roleRepository.findOne({
-      where: { name: 'Owner' },
+      where: { name: ADMIN_ROLE },
     });
 
     let member = existing;

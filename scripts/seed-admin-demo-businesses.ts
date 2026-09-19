@@ -146,7 +146,7 @@ async function main() {
     throw new Error(`User not found: ${OWNER_EMAIL}`);
   }
 
-  const ownerRole = await roleRepo.findOne({ where: { name: 'Owner' } });
+  const ownerRole = await roleRepo.findOne({ where: { name: 'Admin' } });
   const now = new Date();
   const created: Array<{ id: number; name: string; slug: string }> = [];
 

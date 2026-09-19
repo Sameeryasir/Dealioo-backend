@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { config } from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import { faker } from '@faker-js/faker';
 import AppDataSource from '../src/data-source';
 import { ALL_BUSINESS_MEMBER_PERMISSIONS } from '../src/modules/member/member.constants';
 
@@ -191,7 +192,10 @@ async function fillMissing(
   return 'updated';
 }
 
-const STATS_START = new Date(Date.UTC(2026, 3, 1));
+const STATS_START = (() => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+})();
 
 const CAMPAIGN_PLANS: Record<
   string,
@@ -233,6 +237,28 @@ function utcDaysThroughToday(from: Date): Date[] {
     days.push(new Date(cursor));
   }
   return days;
+}
+
+function dailyVolume(day: Date, dayIndex: number): number {
+  const weekday = day.getUTCDay();
+  const weekdayLevel =
+    weekday === 0 ? 0.4 : weekday === 1 ? 0.7 : weekday === 5 || weekday === 6 ? 1.8 : weekday === 4 ? 1.3 : 1;
+  const wave = 0.55 + 0.6 * Math.sin((dayIndex / 4.2) * Math.PI);
+  const quietDay = dayIndex % 13 === 4 ? 0.12 : 1;
+  const busyDay = dayIndex % 9 === 2 ? 1.7 : 1;
+  return Math.max(0, weekdayLevel * wave * quietDay * busyDay);
+}
+
+function copiesForDay(base: number, volume: number): number {
+  const amount = base * volume;
+  if (amount < 0.4) return 0;
+  return Math.min(8, Math.round(amount));
+}
+
+const DAY_HOURS = [8, 9, 11, 12, 13, 17, 18, 19, 20];
+
+function eventHour(dayIndex: number, copy: number): number {
+  return DAY_HOURS[(dayIndex * 2 + copy * 3) % DAY_HOURS.length];
 }
 
 function stampOnDay(day: Date, hour: number): Date | null {
@@ -337,7 +363,10 @@ async function ensureStatCustomers(
     `SELECT id, email FROM customers WHERE email LIKE $1 ORDER BY id`,
     [`${prefix}%`],
   )) as Array<{ id: number; email: string }>;
-  if (existing.length >= 60) return existing;
+  if (existing.length >= 60) {
+    await placeCustomersOnBusyDays(existing, days);
+    return existing;
+  }
 
   const names = [
     'Ayesha Khan',
@@ -364,10 +393,310 @@ async function ensureStatCustomers(
     rows,
     ' ON CONFLICT (email) DO NOTHING',
   );
-  return (await AppDataSource.query(
+  const created = (await AppDataSource.query(
     `SELECT id, email FROM customers WHERE email LIKE $1 ORDER BY id`,
     [`${prefix}%`],
   )) as Array<{ id: number; email: string }>;
+  await placeCustomersOnBusyDays(created, days);
+  return created;
+}
+
+async function placeCustomersOnBusyDays(
+  customers: Array<{ id: number }>,
+  days: Date[],
+): Promise<void> {
+  const bag: Date[] = [];
+  days.forEach((day, index) => {
+    const slots = copiesForDay(4, dailyVolume(day, index));
+    for (let slot = 0; slot < slots; slot += 1) bag.push(day);
+  });
+  const choices = bag.length > 0 ? bag : days;
+  for (let index = 0; index < customers.length; index += 1) {
+    const day = choices[index % choices.length];
+    const at = stampOnDay(day, eventHour(index, index % 3)) ?? day;
+    await AppDataSource.query(
+      `UPDATE customers SET created_at = $2, updated_at = $2 WHERE id = $1`,
+      [customers[index].id, at],
+    );
+  }
+}
+
+const BUNDLE_ADDONS: Record<
+  string,
+  Array<{ name: string; cents: number }>
+> = {
+  'velvet-hand-care': [
+    { name: 'Gel Polish', cents: 1500 },
+    { name: 'Nail Art', cents: 1200 },
+    { name: 'Paraffin Wax', cents: 800 },
+    { name: 'Cuticle Oil', cents: 400 },
+  ],
+  'ember-coffee-house': [
+    { name: 'Oat Milk', cents: 80 },
+    { name: 'Extra Shot', cents: 100 },
+    { name: 'Vanilla Syrup', cents: 60 },
+    { name: 'Pastry', cents: 350 },
+  ],
+  'flame-burger-kitchen': [
+    { name: 'Bacon', cents: 250 },
+    { name: 'Extra Cheese', cents: 150 },
+    { name: 'Fries', cents: 399 },
+    { name: 'Milkshake', cents: 499 },
+  ],
+};
+
+const ADDON_WEIGHTS = [46, 24, 18, 12];
+
+function pickWeightedAddon(
+  addons: Array<{ name: string; cents: number; weight: number }>,
+): { name: string; cents: number } {
+  const total = addons.reduce((sum, addon) => sum + addon.weight, 0);
+  let roll = faker.number.int({ min: 1, max: total });
+  for (const addon of addons) {
+    roll -= addon.weight;
+    if (roll <= 0) return addon;
+  }
+  return addons[0];
+}
+
+async function insertReturningIds(
+  table: string,
+  columns: string[],
+  rows: unknown[][],
+): Promise<number[]> {
+  const ids: number[] = [];
+  const chunkSize = Math.max(1, Math.floor(3000 / columns.length));
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    const chunk = rows.slice(offset, offset + chunkSize);
+    const params: unknown[] = [];
+    const valuesSql = chunk
+      .map((row) => {
+        const placeholders = row.map((value) => {
+          params.push(value);
+          return `$${params.length}`;
+        });
+        return `(${placeholders.join(', ')})`;
+      })
+      .join(', ');
+    const saved = (await AppDataSource.query(
+      `INSERT INTO ${table} (${columns.join(', ')}) VALUES ${valuesSql} RETURNING id`,
+      params,
+    )) as Array<{ id: number }>;
+    for (const row of saved) ids.push(Number(row.id));
+  }
+  return ids;
+}
+
+async function seedBundleAddons(): Promise<{ visits: number; addons: number }> {
+  const totals = { visits: 0, addons: 0 };
+  const slugs = Object.keys(BUNDLE_ADDONS);
+  const businesses = (await AppDataSource.query(
+    `SELECT id, slug FROM businesses WHERE slug = ANY($1::text[]) ORDER BY id`,
+    [slugs],
+  )) as Array<{ id: number; slug: string }>;
+  const days = utcDaysThroughToday(STATS_START);
+  const months = daysByMonth(days);
+
+  for (const business of businesses) {
+    const catalog = BUNDLE_ADDONS[business.slug];
+    if (!catalog) continue;
+    faker.seed(business.id * 211);
+
+    await AppDataSource.query(
+      `DELETE FROM customer_visits
+       WHERE business_id = $1 AND extra_items->>'seed' = 'seed-sameer'`,
+      [business.id],
+    );
+
+    const campaigns = (await AppDataSource.query(
+      `SELECT id, campaign_name
+       FROM campaigns
+       WHERE business_id = $1 AND deleted_at IS NULL
+       ORDER BY id`,
+      [business.id],
+    )) as Array<{ id: number; campaign_name: string }>;
+    const customers = (await AppDataSource.query(
+      `SELECT id FROM customers WHERE email LIKE $1 ORDER BY id`,
+      [`seed.sameer.${business.id}.%@example.com`],
+    )) as Array<{ id: number }>;
+    if (campaigns.length === 0 || customers.length === 0) {
+      console.log(
+        `Skipping bundle add-ons for ${business.slug}: missing campaigns or customers`,
+      );
+      continue;
+    }
+
+    console.log(`Seeding bundle add-ons for ${business.slug}...`);
+    const visitPlan: Array<{
+      customerId: number;
+      campaignId: number;
+      at: Date;
+      addons: Array<{ name: string; cents: number; qty: number }>;
+    }> = [];
+
+    months.forEach((month) => {
+      const visitTotal = faker.number.int({ min: 700, max: 1400 });
+      const byDay = spreadAcrossDays(visitTotal, month.days, month.offset);
+      month.days.forEach((day, dayIndex) => {
+        const count = byDay[dayIndex] ?? 0;
+        for (let copy = 0; copy < count; copy += 1) {
+          const at = stampOnDay(day, eventHour(month.offset + dayIndex, copy));
+          if (!at) continue;
+          const campaignIndex = visitPlan.length % campaigns.length;
+          const campaign = campaigns[campaignIndex];
+          const weighted = catalog.map((addon, index) => ({
+            ...addon,
+            weight:
+              ADDON_WEIGHTS[(index + campaignIndex) % ADDON_WEIGHTS.length],
+          }));
+          const first = pickWeightedAddon(weighted);
+          const qty = faker.number.int({ min: 1, max: 2 });
+          const addons = [{ name: first.name, cents: first.cents, qty }];
+          if (faker.number.int({ min: 1, max: 100 }) <= 35) {
+            const second = pickWeightedAddon(
+              weighted.filter((addon) => addon.name !== first.name),
+            );
+            addons.push({
+              name: second.name,
+              cents: second.cents,
+              qty: 1,
+            });
+          }
+          visitPlan.push({
+            customerId: customers[visitPlan.length % customers.length].id,
+            campaignId: campaign.id,
+            at,
+            addons,
+          });
+        }
+      });
+    });
+
+    const visitIds = await insertReturningIds(
+      'customer_visits',
+      [
+        'customer_id',
+        'campaign_id',
+        'business_id',
+        'visit_date',
+        'source',
+        'extra_items',
+        'created_at',
+      ],
+      visitPlan.map((visit) => [
+        visit.customerId,
+        visit.campaignId,
+        business.id,
+        visit.at,
+        'QR_REDEMPTION',
+        JSON.stringify({ seed: 'seed-sameer' }),
+        visit.at,
+      ]),
+    );
+
+    const addonRows: unknown[][] = [];
+    visitPlan.forEach((visit, index) => {
+      const visitId = visitIds[index];
+      if (!visitId) return;
+      visit.addons.forEach((addon, sortOrder) => {
+        const unitPrice = Math.max(
+          50,
+          Math.round(addon.cents * (faker.number.int({ min: 90, max: 115 }) / 100)),
+        );
+        addonRows.push([
+          visitId,
+          business.id,
+          visit.customerId,
+          addon.name,
+          unitPrice,
+          addon.qty,
+          unitPrice * addon.qty,
+          sortOrder,
+          visit.campaignId,
+          'scanner_purchase',
+          'usd',
+          visit.at,
+        ]);
+      });
+    });
+
+    totals.visits += visitIds.length;
+    totals.addons += await insertBatch(
+      'visit_addon_items',
+      [
+        'customer_visit_id',
+        'business_id',
+        'customer_id',
+        'name',
+        'unit_price_cents',
+        'qty',
+        'line_total_cents',
+        'sort_order',
+        'campaign_id',
+        'source',
+        'currency',
+        'created_at',
+      ],
+      addonRows,
+    );
+  }
+
+  return totals;
+}
+
+async function clearFlatSeedStats(businessId: number): Promise<void> {
+  await AppDataSource.query(
+    `DELETE FROM funnel_payment
+     WHERE business_id = $1 AND stripe_payment_intent_id LIKE 'seed-sameer-%'`,
+    [businessId],
+  );
+  await AppDataSource.query(
+    `DELETE FROM activity_event
+     WHERE business_id = $1 AND idempotency_key LIKE 'seed-sameer-activity:%'`,
+    [businessId],
+  );
+  await AppDataSource.query(
+    `DELETE FROM funnel_analytics_event WHERE visitor_id LIKE $1`,
+    [`seed-sameer-${businessId}-%`],
+  );
+  await AppDataSource.query(
+    `DELETE FROM funnel_event WHERE customer_email LIKE $1`,
+    [`seed.sameer.${businessId}.%@example.com`],
+  );
+}
+
+function spreadAcrossDays(total: number, days: Date[], dayOffset: number): number[] {
+  if (days.length === 0 || total <= 0) return days.map(() => 0);
+  const weights = days.map((day, index) =>
+    Math.max(0.08, dailyVolume(day, dayOffset + index)),
+  );
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  const counts = weights.map((weight) => Math.floor((total * weight) / weightSum));
+  let leftover = total - counts.reduce((sum, count) => sum + count, 0);
+  const order = weights
+    .map((weight, index) => ({ weight, index }))
+    .sort((left, right) => right.weight - left.weight);
+  let cursor = 0;
+  while (leftover > 0) {
+    counts[order[cursor % order.length].index] += 1;
+    leftover -= 1;
+    cursor += 1;
+  }
+  return counts;
+}
+
+function daysByMonth(days: Date[]): Array<{ key: string; days: Date[]; offset: number }> {
+  const groups: Array<{ key: string; days: Date[]; offset: number }> = [];
+  for (const day of days) {
+    const key = day.toISOString().slice(0, 7);
+    const last = groups[groups.length - 1];
+    if (!last || last.key !== key) {
+      groups.push({ key, days: [day], offset: days.indexOf(day) });
+    } else {
+      last.days.push(day);
+    }
+  }
+  return groups;
 }
 
 async function seedBusinessAndCampaignStats(
@@ -386,18 +715,23 @@ async function seedBusinessAndCampaignStats(
   };
   const days = utcDaysThroughToday(STATS_START);
   if (days.length === 0) return totals;
+  const months = daysByMonth(days);
 
   for (const business of businesses) {
     const plans = CAMPAIGN_PLANS[business.slug];
     if (!plans) continue;
+    faker.seed(business.id * 97);
+    console.log(`Seeding one year of dashboard stats for ${business.slug}...`);
 
-    const activityCount = (await AppDataSource.query(
-      `SELECT COUNT(*)::int AS count FROM activity_event WHERE business_id = $1`,
-      [business.id],
-    )) as Array<{ count: number }>;
-    const needsActivity = Number(activityCount[0]?.count ?? 0) === 0;
-    let customers: Array<{ id: number; email: string }> = [];
+    await clearFlatSeedStats(business.id);
 
+    const readyPlans: Array<{
+      campaignId: number;
+      funnelId: number;
+      priceCents: number;
+      share: number;
+    }> = [];
+    const shares = [0.5, 0.3, 0.2];
     for (let planIndex = 0; planIndex < plans.length; planIndex += 1) {
       const ready = await ensureCampaign(
         business.id,
@@ -406,156 +740,198 @@ async function seedBusinessAndCampaignStats(
         plans[planIndex],
       );
       totals.campaigns += 1;
-      const signupRows = (await AppDataSource.query(
-        `SELECT 1 FROM funnel_event WHERE funnel_id = $1 LIMIT 1`,
-        [ready.funnelId],
-      )) as unknown[];
-      const viewRows = (await AppDataSource.query(
-        `SELECT 1 FROM funnel_analytics_event WHERE funnel_id = $1 LIMIT 1`,
-        [ready.funnelId],
-      )) as unknown[];
-      const needsPayments = !ready.hasPaid;
-      const needsSignups = signupRows.length === 0;
-      const needsViews = viewRows.length === 0;
-      if (!needsPayments && !needsSignups && !needsViews) continue;
-      if (customers.length === 0) {
-        customers = await ensureStatCustomers(business.id, days);
-        totals.customers += customers.length;
+      readyPlans.push({
+        campaignId: ready.campaignId,
+        funnelId: ready.funnelId,
+        priceCents: plans[planIndex].priceCents,
+        share: shares[planIndex] ?? 0.2,
+      });
+    }
+    if (readyPlans.length === 0) continue;
+
+    const memberPlan: Array<{ name: string; email: string; at: Date }> = [];
+    const orderCounts = new Map<string, number[]>();
+    const visitCounts = new Map<string, number[]>();
+    months.forEach((month) => {
+      const total = faker.number.int({ min: 2000, max: 3000 });
+      const orders = Math.round(total * 0.55);
+      const visits = Math.round(total * 0.32);
+      const members = Math.max(0, total - orders - visits);
+      orderCounts.set(month.key, spreadAcrossDays(orders, month.days, month.offset));
+      visitCounts.set(month.key, spreadAcrossDays(visits, month.days, month.offset));
+      const memberDayCounts = spreadAcrossDays(members, month.days, month.offset);
+      month.days.forEach((day, dayIndex) => {
+        for (let copy = 0; copy < memberDayCounts[dayIndex]; copy += 1) {
+          const at = stampOnDay(day, eventHour(month.offset + dayIndex, copy));
+          if (!at) continue;
+          const index = memberPlan.length;
+          memberPlan.push({
+            name: faker.person.fullName(),
+            email: `seed.sameer.${business.id}.${index}@example.com`,
+            at,
+          });
+        }
+      });
+    });
+
+    await insertBatch(
+      'customers',
+      ['name', 'email', 'created_at', 'updated_at'],
+      memberPlan.map((customer) => [
+        customer.name,
+        customer.email,
+        customer.at,
+        customer.at,
+      ]),
+      ' ON CONFLICT (email) DO NOTHING',
+    );
+    const savedCustomers = (await AppDataSource.query(
+      `SELECT id, email FROM customers WHERE email LIKE $1 ORDER BY id`,
+      [`seed.sameer.${business.id}.%@example.com`],
+    )) as Array<{ id: number; email: string }>;
+    const customerIdByEmail = new Map(
+      savedCustomers.map((customer) => [customer.email, customer.id]),
+    );
+    if (savedCustomers.length > 0) {
+      const ids: number[] = [];
+      const times: Date[] = [];
+      for (const planned of memberPlan) {
+        const id = customerIdByEmail.get(planned.email);
+        if (!id) continue;
+        ids.push(id);
+        times.push(planned.at);
       }
-      if (customers.length === 0) continue;
+      if (ids.length > 0) {
+        await AppDataSource.query(
+          `UPDATE customers AS customer
+           SET created_at = planned.at, updated_at = planned.at
+           FROM unnest($1::int[], $2::timestamptz[]) AS planned(id, at)
+           WHERE customer.id = planned.id`,
+          [ids, times],
+        );
+      }
+    }
+    totals.customers += savedCustomers.length;
+    if (savedCustomers.length === 0) continue;
 
-      const payments: unknown[][] = [];
-      const signups: unknown[][] = [];
-      const analytics: unknown[][] = [];
-      const paymentsPerDay = planIndex === 0 ? 2 : 1;
-      const viewsPerDay = 4 - planIndex;
-      const clicksPerDay = planIndex === 0 ? 2 : 1;
-      const signupsPerDay = 3 - planIndex;
-
-      days.forEach((day, dayIndex) => {
-        if (needsPayments) {
-          for (let copy = 0; copy < paymentsPerDay; copy += 1) {
-            const at = stampOnDay(day, 11 + copy);
+    const payments: unknown[][] = [];
+    const signups: unknown[][] = [];
+    const analytics: unknown[][] = [];
+    const activityRows: unknown[][] = [];
+    let paymentCopy = 0;
+    months.forEach((month) => {
+      const ordersByDay = orderCounts.get(month.key) ?? [];
+      const visitsByDay = visitCounts.get(month.key) ?? [];
+      month.days.forEach((day, dayIndex) => {
+        const dayNumber = month.offset + dayIndex;
+        const orderTotal = ordersByDay[dayIndex] ?? 0;
+        readyPlans.forEach((plan, planIndex) => {
+          const count =
+            planIndex === readyPlans.length - 1
+              ? orderTotal -
+                readyPlans
+                  .slice(0, planIndex)
+                  .reduce((sum, item) => sum + Math.round(orderTotal * item.share), 0)
+              : Math.round(orderTotal * plan.share);
+          for (let copy = 0; copy < Math.max(0, count); copy += 1) {
+            const at = stampOnDay(day, eventHour(dayNumber, paymentCopy + copy));
             if (!at) continue;
-            const customer = customers[(dayIndex + copy + planIndex) % customers.length];
+            const customer =
+              savedCustomers[(paymentCopy + copy + planIndex) % savedCustomers.length];
+            const amount = Math.max(
+              100,
+              Math.round(
+                plan.priceCents * faker.number.float({ min: 0.85, max: 1.2, fractionDigits: 2 }),
+              ),
+            );
             payments.push([
-              ready.funnelId,
+              plan.funnelId,
               business.id,
-              ready.campaignId,
+              plan.campaignId,
               customer.id,
-              plans[planIndex].priceCents,
+              amount,
               'usd',
               'paid',
               customer.email,
-              `seed-sameer-${business.id}-${ready.campaignId}-${dayIndex}-${copy}`,
+              `seed-sameer-${business.id}-${plan.campaignId}-${dayNumber}-${copy}`,
               at,
               at,
               at,
             ]);
-          }
-        }
-        if (needsSignups) {
-          for (let copy = 0; copy < signupsPerDay; copy += 1) {
-            const at = stampOnDay(day, 10 + copy);
-            if (!at) continue;
-            const customer = customers[(dayIndex + copy) % customers.length];
-            signups.push([
-              ready.funnelId,
-              'signup',
+            if (copy % 2 === 0) {
+              signups.push([
+                plan.funnelId,
+                'signup',
+                customer.id,
+                customer.email,
+                at,
+                at,
+              ]);
+            }
+            analytics.push([
+              plan.funnelId,
               customer.id,
-              customer.email,
-              at,
+              `seed-sameer-${business.id}-v-${dayNumber}-${plan.campaignId}-${copy}`,
+              'page_view',
               at,
             ]);
           }
-        }
-        if (!needsViews) return;
-        for (let copy = 0; copy < viewsPerDay; copy += 1) {
-          const at = stampOnDay(day, 8 + copy);
+          paymentCopy += Math.max(0, count);
+        });
+
+        const visitTotal = visitsByDay[dayIndex] ?? 0;
+        for (let copy = 0; copy < visitTotal; copy += 1) {
+          const at = stampOnDay(day, eventHour(dayNumber, copy + 2));
           if (!at) continue;
-          const customer = customers[(dayIndex + copy) % customers.length];
-          analytics.push([
-            ready.funnelId,
+          const customer = savedCustomers[(dayNumber + copy) % savedCustomers.length];
+          activityRows.push([
+            business.id,
             customer.id,
-            `seed-sameer-${business.id}-${customer.id}`,
-            'page_view',
+            'visited',
+            'Visited the business',
             at,
-          ]);
-        }
-        for (let copy = 0; copy < clicksPerDay; copy += 1) {
-          const at = stampOnDay(day, 13 + copy);
-          if (!at) continue;
-          const customer = customers[(dayIndex + 2 + copy) % customers.length];
-          analytics.push([
-            ready.funnelId,
-            customer.id,
-            `seed-sameer-${business.id}-${customer.id}`,
-            'button_click',
-            at,
+            `seed-sameer-activity:${business.id}:${day.toISOString().slice(0, 10)}:${copy}`,
           ]);
         }
       });
-
-      totals.payments += await insertBatch(
-        'funnel_payment',
-        [
-          'funnel_id',
-          'business_id',
-          'campaign_id',
-          'customer_id',
-          'amount',
-          'currency',
-          'status',
-          'customer_email',
-          'stripe_payment_intent_id',
-          'paid_at',
-          'created_at',
-          'updated_at',
-        ],
-        payments,
-        ' ON CONFLICT (stripe_payment_intent_id) DO NOTHING',
-      );
-      totals.signups += await insertBatch(
-        'funnel_event',
-        [
-          'funnel_id',
-          'event_type',
-          'customer_id',
-          'customer_email',
-          'created_at',
-          'updated_at',
-        ],
-        signups,
-      );
-      await insertBatch(
-        'funnel_analytics_event',
-        ['funnel_id', 'customer_id', 'visitor_id', 'event_type', 'created_at'],
-        analytics,
-      );
-      totals.views += analytics.filter((row) => row[3] === 'page_view').length;
-      totals.clicks += analytics.filter((row) => row[3] === 'button_click').length;
-      totals.seededCampaigns += 1;
-    }
-
-    if (needsActivity && customers.length === 0) {
-      customers = await ensureStatCustomers(business.id, days);
-      totals.customers += customers.length;
-    }
-    if (!needsActivity || customers.length === 0) continue;
-
-    const activityRows = days.flatMap((day, dayIndex) => {
-      const at = stampOnDay(day, 12);
-      if (!at) return [];
-      const customer = customers[dayIndex % customers.length];
-      return [[
-        business.id,
-        customer.id,
-        'visited',
-        'Visited the business',
-        at,
-        `seed-sameer-activity:${business.id}:${day.toISOString().slice(0, 10)}`,
-      ]];
     });
+
+    totals.payments += await insertBatch(
+      'funnel_payment',
+      [
+        'funnel_id',
+        'business_id',
+        'campaign_id',
+        'customer_id',
+        'amount',
+        'currency',
+        'status',
+        'customer_email',
+        'stripe_payment_intent_id',
+        'paid_at',
+        'created_at',
+        'updated_at',
+      ],
+      payments,
+      ' ON CONFLICT (stripe_payment_intent_id) DO NOTHING',
+    );
+    totals.signups += await insertBatch(
+      'funnel_event',
+      [
+        'funnel_id',
+        'event_type',
+        'customer_id',
+        'customer_email',
+        'created_at',
+        'updated_at',
+      ],
+      signups,
+    );
+    totals.views += await insertBatch(
+      'funnel_analytics_event',
+      ['funnel_id', 'customer_id', 'visitor_id', 'event_type', 'created_at'],
+      analytics,
+    );
     totals.activity += await insertBatch(
       'activity_event',
       [
@@ -569,12 +945,20 @@ async function seedBusinessAndCampaignStats(
       activityRows,
       ' ON CONFLICT (idempotency_key) DO NOTHING',
     );
+    totals.seededCampaigns += readyPlans.length;
   }
 
   return totals;
 }
 
 async function main() {
+  if (process.argv.includes('--addons-only')) {
+    await AppDataSource.initialize();
+    const bundle = await seedBundleAddons();
+    console.log(`Bundle visits ${bundle.visits}, add-on lines ${bundle.addons}`);
+    return;
+  }
+
   if (!fs.existsSync(CSV_PATH)) {
     throw new Error(`CSV not found: ${CSV_PATH}`);
   }
@@ -813,6 +1197,7 @@ async function main() {
     }))
     .filter((business) => business.id > 0 && business.slug);
   const stats = await seedBusinessAndCampaignStats(userId, ownedBusinesses);
+  const bundle = await seedBundleAddons();
 
   console.log(`User ${OWNER_EMAIL} (#${userId}) ${userAction}`);
   console.log(
@@ -829,6 +1214,7 @@ async function main() {
     `Payments ${stats.payments}, signups ${stats.signups}, page views ${stats.views}, button clicks ${stats.clicks}`,
   );
   console.log(`Customers ${stats.customers}, visits ${stats.activity}`);
+  console.log(`Bundle visits ${bundle.visits}, add-on lines ${bundle.addons}`);
 }
 
 main()
