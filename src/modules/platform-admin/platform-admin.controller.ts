@@ -19,6 +19,22 @@ export class PlatformAdminController {
   constructor(private readonly platformAdminService: PlatformAdminService) {}
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('overview/trends')
+  getTrends(
+    @Req() req: { user: User },
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.platformAdminService.getTrends(req.user, from, to);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('overview/kpis')
+  getKpis(@Req() req: { user: User }) {
+    return this.platformAdminService.getKpis(req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('overview')
   getOverview(@Req() req: { user: User }) {
     return this.platformAdminService.getOverview(req.user);
@@ -38,7 +54,6 @@ export class PlatformAdminController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('status') statusRaw?: string,
   ) {
-    // All tab = latest read. Unread tab = latest unread.
     const status =
       statusRaw?.trim().toLowerCase() === 'unread' ? 'unread' : 'read';
     return this.platformAdminService.getNotifications(
@@ -49,15 +64,12 @@ export class PlatformAdminController {
     );
   }
 
-  // --- Mark all as read ---
-  // Must stay above :id/read so "read-all" is never treated as an id.
   @UseGuards(AuthGuard('jwt'))
   @Patch('notifications/read-all')
   markAllNotificationsRead(@Req() req: { user: User }) {
     return this.platformAdminService.markAllNotificationsRead(req.user);
   }
 
-  // --- Mark one as read ---
   @UseGuards(AuthGuard('jwt'))
   @Patch('notifications/:id/read')
   markNotificationRead(

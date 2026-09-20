@@ -1,10 +1,11 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, MoreThanOrEqual, Repository } from 'typeorm';
+import { Between, In, MoreThanOrEqual, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -13,10 +14,18 @@ import {
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
-import { Order, OrderStatus } from '../../db/entities/order.entity';
+import {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from '../../db/entities/funnel-payment.entity';
+import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { isSuperAdmin } from '../../utils/user-roles';
+import {
+  buildUtcRangeBucketKeys,
+  overviewRangeBucketSql,
+} from '../funnel-event/overview-monthly.util';
 
 function startOfDay(d: Date): Date {
   const x = new Date(d);
@@ -28,10 +37,6 @@ function addDays(d: Date, days: number): Date {
   const x = new Date(d);
   x.setDate(x.getDate() + days);
   return x;
-}
-
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
 }
 
 function pctChange(current: number, previous: number): number {
@@ -96,6 +101,8 @@ export type PlatformAdminOverview = {
     provider: string;
     createdAt: Date;
     lastLoginAt: Date | null;
+    planName: string | null;
+    planSlug: string | null;
   }>;
 };
 
@@ -106,8 +113,8 @@ export class PlatformAdminService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    @InjectRepository(Order)
-    private readonly orderRepository: Repository<Order>,
+    @InjectRepository(FunnelPayment)
+    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(UserSubscription)
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(AdminNotification)
@@ -122,6 +129,21 @@ export class PlatformAdminService {
         'Only Super Admin can access the platform overview.',
       );
     }
+  }
+
+  private paidPaymentQuery(from: Date, toExclusive?: Date) {
+    const qb = this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .where('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+      .andWhere('COALESCE(payment.paidAt, payment.createdAt) >= :from', {
+        from,
+      });
+    if (toExclusive) {
+      qb.andWhere('COALESCE(payment.paidAt, payment.createdAt) < :to', {
+        to: toExclusive,
+      });
+    }
+    return qb;
   }
 
   async getMeetingRequests(actor: User): Promise<{
@@ -199,8 +221,6 @@ export class PlatformAdminService {
   }> {
     this.assertSuperAdmin(actor);
 
-    // --- Pagination + tab filter ---
-    // Business rule: All = read only, newest first. Unread = unread only.
     const pagination = normalizePagination(page, limit);
     const listWhere =
       status === 'unread'
@@ -250,11 +270,6 @@ export class PlatformAdminService {
     });
   }
 
-  /**
-   * Mark one Super Admin notification as read.
-   * Why: the entity already has is_read / read_at; this is the API that writes them.
-   * Already-read rows stay unchanged (safe to call twice).
-   */
   async markNotificationRead(
     actor: User,
     notificationId: string,
@@ -266,7 +281,6 @@ export class PlatformAdminService {
   }> {
     this.assertSuperAdmin(actor);
 
-    // --- Find the notification ---
     const notification = await this.adminNotificationRepository.findOne({
       where: { id: notificationId },
     });
@@ -274,8 +288,6 @@ export class PlatformAdminService {
       throw new NotFoundException('Notification not found.');
     }
 
-    // --- Update only if still unread ---
-    // Business rule: Super Admin can mark a platform alert as read.
     if (!notification.isRead) {
       const readAt = new Date();
       notification.isRead = true;
@@ -293,10 +305,6 @@ export class PlatformAdminService {
     };
   }
 
-  /**
-   * Mark every visible unread Super Admin notification as read.
-   * Why: powers the "Mark all as read" action. Archived rows are left alone.
-   */
   async markAllNotificationsRead(actor: User): Promise<{
     updatedCount: number;
     unreadCount: number;
@@ -305,8 +313,6 @@ export class PlatformAdminService {
 
     const readAt = new Date();
 
-    // --- Bulk update unread (non-archived) rows ---
-    // Business rule: one click clears the Super Admin unread badge.
     const result = await this.adminNotificationRepository.update(
       { isRead: false, isArchived: false },
       { isRead: true, readAt },
@@ -318,15 +324,99 @@ export class PlatformAdminService {
     };
   }
 
-  async getOverview(actor: User): Promise<PlatformAdminOverview> {
+  async getTrends(
+    actor: User,
+    fromRaw?: string,
+    toRaw?: string,
+  ): Promise<{
+    from: string;
+    to: string;
+    totalRevenueCents: number;
+    newBusinesses: number;
+    points: Array<{
+      bucket: string;
+      revenueCents: number;
+      businesses: number;
+    }>;
+  }> {
     this.assertSuperAdmin(actor);
 
+    const from = new Date(fromRaw ?? '');
+    const to = new Date(toRaw ?? '');
+    if (
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      from.getTime() > to.getTime()
+    ) {
+      throw new BadRequestException('Choose a valid day or month.');
+    }
+
+    if (to.getTime() - from.getTime() > 62 * 24 * 60 * 60 * 1000) {
+      throw new BadRequestException('That date range is too long.');
+    }
+
+    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
+    const paymentTime = 'COALESCE(payment.paid_at, payment.created_at)';
+    const paymentBucket = overviewRangeBucketSql(paymentTime, sameDay);
+    const businessBucket = overviewRangeBucketSql('b.created_at', sameDay);
+
+    const [revenueRows, businessRows] = await Promise.all([
+      this.paidPaymentQuery(from)
+        .select(paymentBucket, 'bucket')
+        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
+        .andWhere('COALESCE(payment.paidAt, payment.createdAt) <= :rangeEnd', {
+          rangeEnd: to,
+        })
+        .groupBy(paymentBucket)
+        .getRawMany<Record<string, string>>(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .select(businessBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('b.created_at >= :from', { from })
+        .andWhere('b.created_at <= :to', { to })
+        .groupBy(businessBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+    ]);
+
+    const revenueMap = new Map(
+      revenueRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.total) || 0,
+      ]),
+    );
+    const businessMap = new Map(
+      businessRows.map((row) => [row.bucket, Number(row.count) || 0]),
+    );
+    const points = keys.map((bucket) => ({
+      bucket,
+      revenueCents: revenueMap.get(bucket) ?? 0,
+      businesses: businessMap.get(bucket) ?? 0,
+    }));
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      totalRevenueCents: points.reduce(
+        (sum, point) => sum + point.revenueCents,
+        0,
+      ),
+      newBusinesses: points.reduce((sum, point) => sum + point.businesses, 0),
+      points,
+    };
+  }
+
+  async getKpis(actor: User): Promise<PlatformAdminOverview['kpis']> {
+    this.assertSuperAdmin(actor);
+    return this.computeKpis();
+  }
+
+  private async computeKpis(): Promise<PlatformAdminOverview['kpis']> {
     const now = new Date();
     const todayStart = startOfDay(now);
     const yesterdayStart = addDays(todayStart, -1);
     const day30Ago = addDays(todayStart, -29);
     const day60Ago = addDays(todayStart, -59);
-    const day30End = addDays(todayStart, 1);
 
     const [
       totalUsers,
@@ -334,16 +424,13 @@ export class PlatformAdminService {
       activeBusinesses,
       newUsersToday,
       newUsersYesterday,
-      businesses,
-      users,
-      ordersTodayRows,
-      ordersYesterdayRows,
+      ordersToday,
+      ordersYesterday,
+      allTimeRevenue,
       businessesLast30,
       businessesPrev30,
       usersLast30,
       usersPrev30,
-      revenueRows,
-      subscriptionRows,
     ] = await Promise.all([
       this.userRepository.count(),
       this.businessRepository.count(),
@@ -354,6 +441,61 @@ export class PlatformAdminService {
       this.userRepository.count({
         where: { createdAt: Between(yesterdayStart, todayStart) },
       }),
+      this.paidPaymentQuery(todayStart)
+        .select('COUNT(*)', 'count')
+        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
+        .getRawOne<{ count: string; total: string }>(),
+      this.paidPaymentQuery(yesterdayStart, todayStart)
+        .select('COUNT(*)', 'count')
+        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
+        .getRawOne<{ count: string; total: string }>(),
+      this.funnelPaymentRepository
+        .createQueryBuilder('payment')
+        .select('COALESCE(SUM(payment.amount), 0)', 'total')
+        .where('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+        .getRawOne<{ total: string }>(),
+      this.businessRepository.count({
+        where: { createdAt: MoreThanOrEqual(day30Ago) },
+      }),
+      this.businessRepository.count({
+        where: { createdAt: Between(day60Ago, day30Ago) },
+      }),
+      this.userRepository.count({
+        where: { createdAt: MoreThanOrEqual(day30Ago) },
+      }),
+      this.userRepository.count({
+        where: { createdAt: Between(day60Ago, day30Ago) },
+      }),
+    ]);
+
+    const ordersTodayCount = Number(ordersToday?.count) || 0;
+    const ordersYesterdayCount = Number(ordersYesterday?.count) || 0;
+    const revenueTodayCents = Number(allTimeRevenue?.total) || 0;
+
+    return {
+      totalBusinesses,
+      activeBusinesses,
+      totalUsers,
+      newUsersToday,
+      ordersToday: ordersTodayCount,
+      revenueTodayCents,
+      businessesChangePct: pctChange(businessesLast30, businessesPrev30),
+      activeBusinessesChangePct: pctChange(
+        activeBusinesses,
+        Math.max(activeBusinesses - businessesLast30, 0),
+      ),
+      usersChangePct: pctChange(usersLast30, usersPrev30),
+      newUsersChangePct: pctChange(newUsersToday, newUsersYesterday),
+      ordersChangePct: pctChange(ordersTodayCount, ordersYesterdayCount),
+      revenueChangePct: 0,
+    };
+  }
+
+  async getOverview(actor: User): Promise<PlatformAdminOverview> {
+    this.assertSuperAdmin(actor);
+
+    const [kpis, businesses, users] = await Promise.all([
+      this.computeKpis(),
       this.businessRepository.find({
         relations: ['owner'],
         order: { createdAt: 'DESC' },
@@ -362,120 +504,26 @@ export class PlatformAdminService {
         relations: ['role'],
         order: { createdAt: 'DESC' },
       }),
-      this.orderRepository.find({
-        where: {
-          createdAt: MoreThanOrEqual(todayStart),
-          status: OrderStatus.PAID,
-        },
-      }),
-      this.orderRepository.find({
-        where: {
-          createdAt: Between(yesterdayStart, todayStart),
-          status: OrderStatus.PAID,
-        },
-      }),
-      this.businessRepository.count({
-        where: { createdAt: MoreThanOrEqual(day30Ago) },
-      }),
-      this.businessRepository.count({
-        where: { createdAt: Between(day60Ago, day30Ago) },
-      }),
-      this.userRepository.count({
-        where: { createdAt: MoreThanOrEqual(day30Ago) },
-      }),
-      this.userRepository.count({
-        where: { createdAt: Between(day60Ago, day30Ago) },
-      }),
-      this.orderRepository
-        .createQueryBuilder('o')
-        .select("TO_CHAR(o.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')", 'day')
-        .addSelect('COALESCE(SUM(o.total_amount), 0)', 'total')
-        .where('o.deleted_at IS NULL')
-        .andWhere('o.status = :status', { status: OrderStatus.PAID })
-        .andWhere('o.created_at >= :from', { from: day30Ago })
-        .andWhere('o.created_at < :to', { to: day30End })
-        .groupBy('day')
-        .orderBy('day', 'ASC')
-        .getRawMany<{ day: string; total: string }>(),
-      this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .innerJoin('sub.plan', 'plan')
-        .select('plan.slug', 'planSlug')
-        .addSelect('plan.name', 'planName')
-        .addSelect('COUNT(*)', 'count')
-        .where('sub.status IN (:...statuses)', {
-          statuses: ['active', 'trialing'],
-        })
-        .groupBy('plan.slug')
-        .addGroupBy('plan.name')
-        .orderBy('COUNT(*)', 'DESC')
-        .getRawMany<{ planSlug: string; planName: string; count: string }>(),
     ]);
 
-    const businessDayRows = await this.businessRepository
-      .createQueryBuilder('b')
-      .select("TO_CHAR(b.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')", 'day')
-      .addSelect('COUNT(*)', 'count')
-      .where('b.created_at >= :from', { from: day30Ago })
-      .andWhere('b.created_at < :to', { to: day30End })
-      .groupBy('day')
-      .orderBy('day', 'ASC')
-      .getRawMany<{ day: string; count: string }>();
-
-    const revenueMap = new Map(
-      revenueRows.map((r) => [r.day, Number(r.total) || 0]),
-    );
-    const businessMap = new Map(
-      businessDayRows.map((r) => [r.day, Number(r.count) || 0]),
-    );
-
-    const revenueLast30Days: Array<{ date: string; amountCents: number }> = [];
-    const businessesLast30Days: Array<{ date: string; count: number }> = [];
-    for (let i = 0; i < 30; i++) {
-      const day = isoDay(addDays(day30Ago, i));
-      revenueLast30Days.push({
-        date: day,
-        amountCents: revenueMap.get(day) ?? 0,
-      });
-      businessesLast30Days.push({
-        date: day,
-        count: businessMap.get(day) ?? 0,
-      });
-    }
-
-    const revenueTodayCents = ordersTodayRows.reduce(
-      (sum, o) => sum + (o.totalAmount || 0),
-      0,
-    );
-    const revenueYesterdayCents = ordersYesterdayRows.reduce(
-      (sum, o) => sum + (o.totalAmount || 0),
-      0,
-    );
-
-    const ownerIds = [
-      ...new Set(
-        businesses
-          .map((b) => b.owner?.id)
-          .filter((id): id is number => typeof id === 'number'),
-      ),
-    ];
-    const ownerPlanByUserId = new Map<
+    const userIds = users.map((user) => user.id);
+    const planByUserId = new Map<
       number,
       { planName: string; planSlug: string }
     >();
-    if (ownerIds.length > 0) {
-      const ownerSubs = await this.subscriptionRepository
+    if (userIds.length > 0) {
+      const userSubs = await this.subscriptionRepository
         .createQueryBuilder('sub')
         .innerJoinAndSelect('sub.plan', 'plan')
-        .where('sub.user_id IN (:...ownerIds)', { ownerIds })
+        .where('sub.user_id IN (:...userIds)', { userIds })
         .andWhere('sub.status IN (:...statuses)', {
-          statuses: ['active', 'trialing'],
+          statuses: ['active', 'trialing', 'past_due'],
         })
         .orderBy('sub.created_at', 'DESC')
         .getMany();
-      for (const sub of ownerSubs) {
-        if (!ownerPlanByUserId.has(sub.userId)) {
-          ownerPlanByUserId.set(sub.userId, {
+      for (const sub of userSubs) {
+        if (!planByUserId.has(sub.userId)) {
+          planByUserId.set(sub.userId, {
             planName: sub.plan?.name ?? '—',
             planSlug: sub.plan?.slug ?? 'unknown',
           });
@@ -483,83 +531,98 @@ export class PlatformAdminService {
       }
     }
 
+    const planFitSlugs = [
+      ...new Set(
+        users
+          .map(
+            (user) =>
+              user.planFitSelectedPlan?.trim() ||
+              user.planFitRecommendedPlan?.trim() ||
+              '',
+          )
+          .filter(Boolean),
+      ),
+    ];
+    const planNameBySlug = new Map<string, string>();
+    if (planFitSlugs.length > 0) {
+      const planRows = await this.subscriptionRepository.manager
+        .getRepository(SubscriptionPlan)
+        .find({
+          where: { slug: In(planFitSlugs) },
+          select: ['slug', 'name'],
+        });
+      for (const row of planRows) {
+        planNameBySlug.set(row.slug, row.name);
+      }
+    }
+
+    for (const user of users) {
+      if (planByUserId.has(user.id)) continue;
+      const slug =
+        user.planFitSelectedPlan?.trim() ||
+        user.planFitRecommendedPlan?.trim() ||
+        '';
+      if (!slug) continue;
+      planByUserId.set(user.id, {
+        planSlug: slug,
+        planName: planNameBySlug.get(slug) ?? slug,
+      });
+    }
+
     return {
-      kpis: {
-        totalBusinesses,
-        activeBusinesses,
-        totalUsers,
-        newUsersToday,
-        ordersToday: ordersTodayRows.length,
-        revenueTodayCents,
-        businessesChangePct: pctChange(businessesLast30, businessesPrev30),
-        activeBusinessesChangePct: pctChange(
-          activeBusinesses,
-          Math.max(activeBusinesses - businessesLast30, 0),
-        ),
-        usersChangePct: pctChange(usersLast30, usersPrev30),
-        newUsersChangePct: pctChange(newUsersToday, newUsersYesterday),
-        ordersChangePct: pctChange(
-          ordersTodayRows.length,
-          ordersYesterdayRows.length,
-        ),
-        revenueChangePct: pctChange(revenueTodayCents, revenueYesterdayCents),
-      },
+      kpis,
       charts: {
-        revenueLast30Days,
-        businessesLast30Days,
-        subscriptionBreakdown: subscriptionRows.map((row) => ({
-          planSlug: row.planSlug,
-          planName: row.planName,
-          count: Number(row.count) || 0,
-        })),
+        revenueLast30Days: [],
+        businessesLast30Days: [],
+        subscriptionBreakdown: [],
       },
-      businesses: businesses.map((business) => {
-        const ownerId = business.owner?.id;
-        const plan =
-          ownerId != null ? ownerPlanByUserId.get(ownerId) ?? null : null;
-        return {
-          id: business.id,
-          name: business.name,
-          slug: business.slug,
-          logoUrl: business.logoUrl,
-          city: business.city,
-          state: business.state,
-          country: business.country,
-          email: business.email,
-          phoneNumber: business.phoneNumber,
-          onboardingCompleted: business.onboardingCompleted,
-          stripeConnected: Boolean(business.stripeAccountId?.trim()),
-          metaConnected: Boolean(
-            business.metaUserId?.trim() ||
-              business.metaConnectionStatus?.trim() === 'ACTIVE',
-          ),
-          twilioConnected: Boolean(
-            business.twilioPhoneSid?.trim() ||
-              business.twilioPhoneNumber?.trim(),
-          ),
-          createdAt: business.createdAt,
-          ownerName: business.owner?.name ?? null,
-          ownerEmail: business.owner?.email ?? null,
-          ownerAvatar: business.owner?.avatar ?? null,
-          planName: plan?.planName ?? null,
-          planSlug: plan?.planSlug ?? null,
-        };
-      }),
+      businesses: businesses.map((business) => ({
+        id: business.id,
+        name: business.name,
+        slug: business.slug,
+        logoUrl: business.logoUrl,
+        city: business.city,
+        state: business.state,
+        country: business.country,
+        email: business.email,
+        phoneNumber: business.phoneNumber,
+        onboardingCompleted: business.onboardingCompleted,
+        stripeConnected: Boolean(business.stripeAccountId?.trim()),
+        metaConnected: Boolean(
+          business.metaUserId?.trim() ||
+            business.metaConnectionStatus?.trim() === 'ACTIVE',
+        ),
+        twilioConnected: Boolean(
+          business.twilioPhoneSid?.trim() ||
+            business.twilioPhoneNumber?.trim(),
+        ),
+        createdAt: business.createdAt,
+        ownerName: business.owner?.name ?? null,
+        ownerEmail: business.owner?.email ?? null,
+        ownerAvatar: business.owner?.avatar ?? null,
+        planName: null,
+        planSlug: null,
+      })),
       users: users
         .filter((user) => user.id !== actor.id)
-        .map((user) => ({
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          avatar: user.avatar ?? null,
-          roleName: user.role?.name ?? null,
-          isActive: user.isActive,
-          emailVerified: user.emailVerified,
-          provider: user.provider,
-          createdAt: user.createdAt,
-          lastLoginAt: user.lastLoginAt,
-        })),
+        .map((user) => {
+          const plan = planByUserId.get(user.id) ?? null;
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            avatar: user.avatar ?? null,
+            roleName: user.role?.name ?? null,
+            isActive: user.isActive,
+            emailVerified: user.emailVerified,
+            provider: user.provider,
+            createdAt: user.createdAt,
+            lastLoginAt: user.lastLoginAt,
+            planName: plan?.planName ?? null,
+            planSlug: plan?.planSlug ?? null,
+          };
+        }),
     };
   }
 }
