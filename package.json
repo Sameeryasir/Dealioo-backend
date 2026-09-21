@@ -29,7 +29,11 @@
     "migration:show": "TS_NODE_TRANSPILE_ONLY=true npm run typeorm -- -d src/data-source.ts migration:show",
     "fill-funnel-pages": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/fill-funnel-pages-from-campaign-names.ts",
     "fill-funnel-pages:dry-run": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/fill-funnel-pages-from-campaign-names.ts --dry-run",
-    "fill-funnel-pages:force": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/fill-funnel-pages-from-campaign-names.ts --force"
+    "fill-funnel-pages:force": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/fill-funnel-pages-from-campaign-names.ts --force",
+    "seed-random-conversion-rates": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/seed-random-conversion-rates.ts",
+    "seed-random-conversion-rates:dry-run": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/seed-random-conversion-rates.ts --dry-run",
+    "seed-random-top-campaign-earnings": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/seed-random-top-campaign-earnings.ts",
+    "seed-random-top-campaign-earnings:dry-run": "TS_NODE_TRANSPILE_ONLY=true npx ts-node -r tsconfig-paths/register scripts/seed-random-top-campaign-earnings.ts --dry-run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1083.0",

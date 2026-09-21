@@ -38,6 +38,7 @@ export type AddonSuggestionItem = {
   addonName: string;
   timesPurchased: number;
   visitCount: number;
+  revenueCents: number;
   sharePercent: number;
   visitSharePercent: number;
   lift: number;
@@ -200,7 +201,7 @@ export class AddonSuggestionService {
     const page = Math.max(1, Math.round(params.page ?? 1));
 
     const cacheKey = [
-      'addon-suggestions-v3',
+      'addon-suggestions-v4',
       params.businessId,
       params.from?.toISOString() ?? '',
       params.to?.toISOString() ?? '',
@@ -368,6 +369,7 @@ export class AddonSuggestionService {
             addonName: row.addonName,
             timesPurchased: row.times,
             visitCount: row.visitCount,
+            revenueCents: Math.max(0, Math.round(row.revenueCents || 0)),
             sharePercent: row.sharePercent,
             visitSharePercent: row.visitSharePercent,
             lift: row.lift,

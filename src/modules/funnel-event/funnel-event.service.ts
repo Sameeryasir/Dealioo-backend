@@ -1840,7 +1840,7 @@ export class FunnelEventService {
   }> {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
     const cacheKey = [
-      'perf-top-campaigns-v4',
+      'perf-top-campaigns-v6',
       params.businessId,
       stabilizePerformanceCacheInstant(params.from),
       stabilizePerformanceCacheInstant(params.to),
@@ -2260,6 +2260,9 @@ export class FunnelEventService {
     const rankedCampaigns = [...byCampaign.values()].sort((a, b) => {
       if (b.earningsCents !== a.earningsCents) {
         return b.earningsCents - a.earningsCents;
+      }
+      if (b.orderCount !== a.orderCount) {
+        return b.orderCount - a.orderCount;
       }
       return a.campaignName.localeCompare(b.campaignName);
     });
