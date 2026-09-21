@@ -607,7 +607,6 @@ export class GoogleAdsService {
       `GTM containers businessId=${businessId} googleUserId=${business.googleUserId ?? 'unknown'} count=${containers.length} scopes=${scopes.join(',')}`,
     );
 
-    // Don't block the response on audit writes (read-path latency).
     void this.auditService.log(businessId, 'gtm_containers_fetched', {
       status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
       metadata: {
@@ -1723,11 +1722,6 @@ export class GoogleAdsService {
     }
   }
 
-  /**
-   * Change: List GTM containers per account in parallel.
-   * Why: Sequential Tag Manager API calls made Ads Tracking Google section slow.
-   * MCP: Context 7 — independent remote work should not wait in a for-loop.
-   */
   private async fetchGtmContainers(
     accessToken: string,
     businessId?: number,

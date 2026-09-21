@@ -1620,7 +1620,6 @@ export class FacebookService {
       `Meta pixels businessId=${businessId} metaUserId=${business.metaUserId ?? 'unknown'} selectedAdAccountId=${business.metaAdAccountId ?? 'none'} count=${pixels.length}`,
     );
 
-    // Don't block the response on audit writes (read-path latency).
     void this.auditService.log(businessId, 'ad_pixels_fetched', {
       status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
       metadata: {
@@ -1633,11 +1632,6 @@ export class FacebookService {
     return pixels;
   }
 
-  /**
-   * Change: Prefer selected Meta ad account, then scan others in parallel.
-   * Why: Sequential Graph calls across every ad account made Ads Tracking slow.
-   * Related: mapWithConcurrency (same pattern as campaign insights).
-   */
   private async fetchAdPixelsForBusiness(
     accessToken: string,
     businessId: number,
@@ -1687,7 +1681,6 @@ export class FacebookService {
       }
     };
 
-    // --- Prefer selected ad account first (usually enough for the dropdown) ---
     const normalizedSelected = selectedAdAccountId
       ? this.normalizeAdAccountId(selectedAdAccountId)
       : null;
@@ -1702,7 +1695,6 @@ export class FacebookService {
       );
     }
 
-    // Fill remaining accounts in parallel (skip the one we already fetched).
     const remaining = adAccounts.filter((account) => {
       const id = account.id.trim();
       if (!id) return false;

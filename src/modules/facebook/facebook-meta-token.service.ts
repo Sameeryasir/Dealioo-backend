@@ -59,10 +59,6 @@ export function assertMetaPermissions(
 export class FacebookMetaTokenService {
   private readonly logger = new Logger(FacebookMetaTokenService.name);
 
-  /**
-   * Short in-process cache so list-pixels / status name resolve don't each
-   * pay a live Meta debug_token round-trip. MCP Context 7 — cache validated secrets briefly.
-   */
   private readonly validatedTokenCache = new Map<
     string,
     { at: number; accessToken: string; metaUserId: string }
@@ -211,7 +207,6 @@ export class FacebookMetaTokenService {
       );
     }
 
-    // --- Fast path: recently validated token (skip live debug_token) ---
     const cacheKey = `${business.id}:${accessToken.slice(-16)}`;
     const cached = this.validatedTokenCache.get(cacheKey);
     if (

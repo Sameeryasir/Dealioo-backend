@@ -71,17 +71,16 @@ export class IntegrationsStatusService {
       return cached.value;
     }
 
-    // Warm display names in the background for the next request (do not block).
     this.warmDisplayNames(businessId, business, fast);
 
     return fast;
   }
 
-  /** Call after connect/disconnect so the next status read is not stale. */
   invalidateBusiness(businessId: number): void {
     this.statusCache.delete(businessId);
     this.nameWarmInflight.delete(businessId);
   }
+
   private sameConnectionIds(
     cached: IntegrationsStatusDto,
     current: IntegrationsStatusDto,
@@ -132,7 +131,6 @@ export class IntegrationsStatusService {
           },
         });
       } catch {
-        // Keep serving fast DB status; names are optional UI polish.
       } finally {
         this.nameWarmInflight.delete(businessId);
       }
