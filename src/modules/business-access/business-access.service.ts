@@ -56,22 +56,22 @@ export class BusinessAccessService {
 
     const cached = await this.membershipCache.get(businessId, user.id);
     if (cached) {
-      if (cached.status !== BUSINESS_MEMBER_STATUS.ACTIVE) {
-        return null;
+      if (cached.status === BUSINESS_MEMBER_STATUS.ACTIVE) {
+        return {
+          access: cached.access,
+          role: cached.role,
+          permissions: cached.permissions,
+          businessId,
+        };
       }
-      return {
-        access: cached.access,
-        role: cached.role,
-        permissions: cached.permissions,
-        businessId,
-      };
+      await this.membershipCache.invalidate(businessId, user.id);
     }
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
       relations: ['owner'],
     });
-    if (!business) {
+    if (!business || business.deletedAt) {
       return null;
     }
 
@@ -200,14 +200,28 @@ export class BusinessAccessService {
     }
 
     const context = await this.getAccessContext(user, businessId);
-    if (!context) {
-      return null;
+    if (context) {
+      return this.businessRepository.findOne({
+        where: { id: businessId },
+        relations: ['owner'],
+      });
     }
 
-    return this.businessRepository.findOne({
+    const business = await this.businessRepository.findOne({
       where: { id: businessId },
       relations: ['owner'],
     });
+    if (!business || business.deletedAt || business.owner?.id !== user.id) {
+      return null;
+    }
+
+    await this.membershipCache.set(businessId, user.id, {
+      access: 'owner',
+      role: 'Owner',
+      status: BUSINESS_MEMBER_STATUS.ACTIVE,
+      permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
+    });
+    return business;
   }
 
   applyAccessibleBusinessFilter(
@@ -239,6 +253,7 @@ export class BusinessAccessService {
           );
       }),
     );
+    qb.andWhere('business.deleted_at IS NULL');
   }
 
   async listAccessibleBusinessIds(userId: number): Promise<number[]> {
@@ -246,15 +261,18 @@ export class BusinessAccessService {
       .createQueryBuilder('business')
       .select('business.id', 'id')
       .where('business.owner_id = :userId', { userId })
+      .andWhere('business.deleted_at IS NULL')
       .getRawMany<{ id: number | string }>();
 
     const memberships = await this.businessMemberRepository
       .createQueryBuilder('member')
+      .innerJoin('member.business', 'business')
       .select('member.business_id', 'businessId')
       .where('member.user_id = :userId', { userId })
       .andWhere('member.status = :status', {
         status: BUSINESS_MEMBER_STATUS.ACTIVE,
       })
+      .andWhere('business.deleted_at IS NULL')
       .getRawMany<{ businessId: number | string }>();
 
     return [

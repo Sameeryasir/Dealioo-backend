@@ -161,7 +161,6 @@ export class BusinessService {
     });
   }
 
-  /** Business must exist and belong to this user (for scoped routes like Stripe dashboard). */
   async findOwnedByUserId(
     userId: number,
     businessId: number,
@@ -290,7 +289,6 @@ export class BusinessService {
         businessName: business.name,
       },
       {
-        // BullMQ custom job IDs cannot contain ':'.
         jobId: `business-post-create-${business.id}`,
         removeOnComplete: true,
         attempts: 3,
@@ -334,9 +332,11 @@ export class BusinessService {
     const isStarter = slug === STARTER_PLAN_SLUG;
     if (!isStarter) return;
 
-    const ownedCount = await this.businessRepository.count({
-      where: { owner: { id: userId } },
-    });
+    const ownedCount = await this.businessRepository
+      .createQueryBuilder('business')
+      .where('business.owner_id = :userId', { userId })
+      .andWhere('business.deleted_at IS NULL')
+      .getCount();
 
     if (ownedCount >= STARTER_MAX_BUSINESSES) {
       throw new ForbiddenException(
@@ -375,7 +375,8 @@ export class BusinessService {
 
     const qb = this.businessRepository
       .createQueryBuilder('business')
-      .leftJoinAndSelect('business.owner', 'owner');
+      .leftJoinAndSelect('business.owner', 'owner')
+      .andWhere('business.deleted_at IS NULL');
 
     if (!listAllBusinesses) {
       this.businessAccessService.applyAccessibleBusinessFilter(qb, user);
@@ -425,9 +426,11 @@ export class BusinessService {
 
     const ownedTotal = listAllBusinesses
       ? total
-      : await this.businessRepository.count({
-          where: { owner: { id: user.id } },
-        });
+      : await this.businessRepository
+          .createQueryBuilder('business')
+          .where('business.owner_id = :ownerId', { ownerId: user.id })
+          .andWhere('business.deleted_at IS NULL')
+          .getCount();
 
     return {
       data: rows.map((row) =>
@@ -443,10 +446,6 @@ export class BusinessService {
     };
   }
 
-  /**
-   * Business rule: detail payload includes summary counts for the Settings profile card.
-   * Counts run in parallel after access check.
-   */
   async getBusinessById(
     businessId: number,
     user: User,
@@ -455,13 +454,12 @@ export class BusinessService {
       user,
       businessId,
     );
-    if (!business) {
+    if (!business || business.deletedAt) {
       throw new NotFoundException(
         'Business not found or you do not have access to this business.',
       );
     }
 
-    // Count locally (no ActivityModule) to avoid Nest circular module imports.
     const [totalCampaigns, totalCustomers, activeAutomations] =
       await Promise.all([
         this.campaignRepository.count({ where: { businessId } }),
@@ -566,7 +564,7 @@ export class BusinessService {
       user,
       businessId,
     );
-    if (!business) {
+    if (!business || business.deletedAt) {
       throw new NotFoundException(
         'Business not found or you do not own this business.',
       );
@@ -578,79 +576,14 @@ export class BusinessService {
       actorUserId: user.id,
     });
 
-    await this.businessRepository.manager.transaction(async (manager) => {
-      await manager.query(
-        `
-          DELETE FROM customer_visit_campaigns
-          WHERE customer_visit_id IN (
-            SELECT id FROM customer_visits WHERE business_id = $1
-          )
-        `,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM customer_visits WHERE business_id = $1`,
-        [businessId],
-      );
-
-      await manager.query(`DELETE FROM coupons WHERE business_id = $1`, [
-        businessId,
-      ]);
-
-      await manager.query(
-        `DELETE FROM funnel_payment WHERE business_id = $1`,
-        [businessId],
-      );
-
-      await manager.query(
-        `DELETE FROM orders WHERE business_id = $1`,
-        [businessId],
-      );
-
-      await manager.query(
-        `DELETE FROM facebook_campaigns WHERE business_id = $1`,
-        [businessId],
-      );
-
-      await manager.query(
-        `DELETE FROM meta_campaign_errors WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM meta_campaign_media WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM meta_publish_attempts WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM meta_campaign_drafts WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM google_campaign_drafts WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM meta_ad_campaign_stats_snapshots WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM meta_funnel_events WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM scanner_purchase_requests WHERE business_id = $1`,
-        [businessId],
-      );
-      await manager.query(
-        `DELETE FROM checkout_access_token WHERE business_id = $1`,
-        [businessId],
-      );
-
-      await manager.getRepository(Business).delete(businessId);
-    });
+    const freedSlug = `deleted-${business.id}-${Date.now()}`;
+    await this.businessRepository.update(
+      { id: business.id },
+      { slug: freedSlug },
+    );
+    await this.businessRepository.softDelete({ id: business.id });
+    business.slug = freedSlug;
+    business.deletedAt = new Date();
 
     return business;
   }
@@ -666,7 +599,6 @@ export class BusinessService {
       },
     });
 
-    // Account role stays Admin. Owner is only the business membership label.
     const ownerRole = await this.roleRepository.findOne({
       where: { name: ADMIN_ROLE },
     });
