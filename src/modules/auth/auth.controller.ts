@@ -23,6 +23,13 @@ import { ResendOtpDto } from './authDto/resend-otp.dto';
 import { ResetPasswordDto } from './authDto/reset-password.dto';
 import type { GoogleAuthMode } from './interfaces/google-auth.interface';
 import { AcceptInvitationDto } from '../invitation/invitationDto/accept-invitation.dto';
+import {
+  clearAuthCookies,
+  REFRESH_TOKEN_COOKIE,
+  readCookie,
+  setAuthCookies,
+  withoutAuthTokens,
+} from './auth-cookies';
 
 @Controller('auth')
 export class AuthController {
@@ -43,8 +50,13 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register-with-invitation')
-  async registerWithInvitation(@Body() dto: RegisterWithInvitationDto) {
-    return await this.authService.registerWithInvitation(dto);
+  async registerWithInvitation(
+    @Body() dto: RegisterWithInvitationDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.registerWithInvitation(dto);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -55,14 +67,25 @@ export class AuthController {
     @Req() req: Request & {
       user: { id: number; email: string; role?: { name: string } | null };
     },
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return await this.authService.acceptBusinessInvitation(dto.token, req.user);
+    const result = await this.authService.acceptBusinessInvitation(
+      dto.token,
+      req.user,
+    );
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
-  async loginUsers(@Body() loginUserDto: LoginUserDto) {
-    return await this.authService.loginUser(loginUserDto);
+  async loginUsers(
+    @Body() loginUserDto: LoginUserDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.loginUser(loginUserDto);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -135,11 +158,9 @@ export class AuthController {
       const profile = await this.googleOAuthService.exchangeCodeForProfile(
         code.trim(),
       );
-      const { redirectUrl } = await this.authService.handleGoogleLogin(
-        profile,
-        mode,
-        frontend,
-      );
+      const { redirectUrl, accessToken, refreshToken } =
+        await this.authService.handleGoogleLogin(profile, mode, frontend);
+      setAuthCookies(res, accessToken, refreshToken);
       return res.redirect(redirectUrl);
     } catch (error) {
       const message =
@@ -164,8 +185,13 @@ export class AuthController {
   }
 
   @Post('verify-otp')
-  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
-    return this.authService.verifyOtp(verifyOtpDto);
+  async verifyOtp(
+    @Body() verifyOtpDto: VerifyOtpDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.verifyOtp(verifyOtpDto);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -178,18 +204,45 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
-  async resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.resetPassword(dto);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('refresh')
-  refreshTokens(@Body() dto: RefreshTokenDto) {
-    return this.authService.refreshAccessToken(dto.refreshToken);
+  async refreshTokens(
+    @Body() dto: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const refreshToken =
+      dto.refreshToken?.trim() ||
+      readCookie(req.headers.cookie, REFRESH_TOKEN_COOKIE) ||
+      '';
+    const result = await this.authService.refreshAccessToken(refreshToken);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
   }
 
   @Post('logout')
-  logout(@Body() dto: RefreshTokenDto) {
-    return this.authService.revokeRefreshToken(dto.refreshToken);
+  async logout(
+    @Body() dto: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const refreshToken =
+      dto.refreshToken?.trim() ||
+      readCookie(req.headers.cookie, REFRESH_TOKEN_COOKIE) ||
+      '';
+    const result = refreshToken
+      ? await this.authService.revokeRefreshToken(refreshToken)
+      : { message: 'Logged out successfully.' };
+    clearAuthCookies(res);
+    return result;
   }
 }

@@ -615,7 +615,7 @@ export class AuthService {
     profile: GoogleAuthProfile,
     mode: GoogleAuthMode = 'login',
     frontendBase?: string,
-  ): Promise<{ redirectUrl: string }> {
+  ): Promise<{ redirectUrl: string; accessToken: string; refreshToken: string }> {
     this.logger.log(
       `OAuth Started — Google ${mode} for ${profile.email}`,
     );
@@ -642,6 +642,8 @@ export class AuthService {
 
       return {
         redirectUrl: this.buildGoogleFrontendRedirect(result, frontendBase),
+        accessToken: session.token,
+        refreshToken: session.refreshToken,
       };
     } catch (error) {
       this.logger.error(
@@ -662,10 +664,7 @@ export class AuthService {
       getFrontendBaseUrl();
     const base = frontend.replace(/\/$/, '');
     const params = new URLSearchParams({
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
       isNewUser: result.isNewUser ? '1' : '0',
-      // Backend source of truth for Meta CompleteRegistration on Google complete.
       isNewCustomer: (result.isNewCustomer ?? result.isNewUser) ? '1' : '0',
       user: Buffer.from(JSON.stringify(result.user), 'utf8').toString('base64url'),
     });
@@ -1048,6 +1047,9 @@ export class AuthService {
   async refreshAccessToken(
     rawToken: string,
   ): Promise<{ token: string; refreshToken: string }> {
+    if (!rawToken.trim()) {
+      throw new UnauthorizedException('Refresh token is required.');
+    }
     const tokenHash = this.hashRefreshToken(rawToken);
     const record = await this.refreshTokenRepository.findOne({
       where: { tokenHash },

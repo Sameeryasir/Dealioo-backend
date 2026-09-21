@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../../../db/entities/user.entity';
+import { ACCESS_TOKEN_COOKIE, readCookie } from '../auth-cookies';
 import { JwtAccessPayload } from './jwt-access-payload.interface';
 
 const USER_VALIDATE_CACHE_TTL_MS = 60_000;
@@ -32,7 +33,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        (req: { headers?: { cookie?: string } }) =>
+          readCookie(req?.headers?.cookie, ACCESS_TOKEN_COOKIE),
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       ignoreExpiration: false,
       secretOrKey: jwtSecret,
     });
