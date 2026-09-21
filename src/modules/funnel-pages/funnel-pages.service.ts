@@ -10,6 +10,7 @@ import {
   isFunnelPageType,
 } from '../../db/entities/funnel-page-type';
 import { FunnelPageVersion } from '../../db/entities/funnel-page-version.entity';
+import { buildCampaignFunnelPageSchemas } from './campaign-funnel-copy.util';
 
 export type SyncFunnelPagesInput = {
   funnelId: number;
@@ -262,33 +263,78 @@ export class FunnelPagesService {
     businessId: number | null;
     createdById?: number | null;
     includePaymentPage?: boolean;
+    campaignName?: string;
+    offer?: string | null;
+    description?: string | null;
   }): Promise<void> {
     const includePaymentPage = input.includePaymentPage !== false;
-    const pages: Record<string, unknown> = includePaymentPage
-      ? {
-          landing: {},
-          signup: {},
-          payment: {},
-          confirmation: {},
-        }
-      : {
-          landing: {},
-          signup: {},
-          confirmation: {},
-        };
+    const campaignName = input.campaignName?.trim();
+    const pages: Record<string, unknown> = campaignName
+      ? buildCampaignFunnelPageSchemas(
+          {
+            campaignName,
+            offer: input.offer,
+            description: input.description,
+          },
+          { includePaymentPage },
+        )
+      : includePaymentPage
+        ? {
+            landing: {},
+            signup: {},
+            payment: {},
+            confirmation: {},
+          }
+        : {
+            landing: {},
+            signup: {},
+            confirmation: {},
+          };
 
-    await this.syncPages({
-      funnelId: input.funnelId,
-      businessId: input.businessId,
-      pages,
-      createdById: input.createdById ?? null,
-      bumpRevision: true,
-      ensurePageTypes: includePaymentPage
+    const pageTypes = (
+      includePaymentPage
         ? FUNNEL_PAGE_TYPES
-        : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT,
-      removePageTypes: includePaymentPage
-        ? undefined
-        : ([FunnelPageType.PAYMENT] as const),
+        : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
+    ) as FunnelPageType[];
+
+    await this.dataSource.transaction(async (manager) => {
+      const pageRepo = manager.getRepository(FunnelPage);
+      const versionRepo = manager.getRepository(FunnelPageVersion);
+      const funnelRepo = manager.getRepository(Funnel);
+
+      const savedPages = await pageRepo.save(
+        pageTypes.map((pageType) =>
+          pageRepo.create({
+            funnelId: input.funnelId,
+            pageType,
+            schema: this.asPageObject(pages[pageType]),
+            currentVersion: 1,
+          }),
+        ),
+      );
+
+      await versionRepo.save(
+        savedPages.map((page) =>
+          versionRepo.create({
+            funnelPageId: page.id,
+            funnelId: input.funnelId,
+            pageType: page.pageType,
+            businessId: input.businessId,
+            versionNumber: 1,
+            schema: structuredClone(page.schema ?? {}),
+            operationId: null,
+            createdById: input.createdById ?? null,
+          }),
+        ),
+      );
+
+      await funnelRepo.update(
+        { id: input.funnelId },
+        {
+          contentRevision: 1,
+          ...(input.businessId != null ? { businessId: input.businessId } : {}),
+        },
+      );
     });
   }
 

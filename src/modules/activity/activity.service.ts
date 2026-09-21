@@ -193,46 +193,68 @@ export class ActivityService {
     return Number(result?.count ?? 0);
   }
 
+  private async getDashboardKpiSnapshot(businessId: number): Promise<{
+    activeCampaigns: number;
+    todayRevenueCents: number;
+  }> {
+    const todayStart = startOfTodayUtc();
+    const cacheKey = `activity-kpi-v1:${businessId}:${todayStart.toISOString()}`;
+
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_CACHE_TTL_MS,
+      async () => {
+        const [activeCampaigns, todayRevenueRow] = await Promise.all([
+          this.campaignRepository.count({
+            where: {
+              businessId,
+              status: CampaignPublicationStatus.PUBLISHED,
+            },
+          }),
+          this.funnelPaymentRepository
+            .createQueryBuilder('payment')
+            .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
+            .where('payment.businessId = :businessId', { businessId })
+            .andWhere('payment.status = :paid', {
+              paid: FunnelPaymentStatus.PAID,
+            })
+            .andWhere(
+              'COALESCE(payment.paidAt, payment.createdAt) >= :todayStart',
+              { todayStart },
+            )
+            .getRawOne<{ revenue: string }>(),
+        ]);
+
+        return {
+          activeCampaigns,
+          todayRevenueCents: Number(todayRevenueRow?.revenue ?? 0),
+        };
+      },
+    );
+  }
+
   private async getBusinessActivitySnapshot(businessId: number): Promise<{
     activeCampaigns: number;
     totalOrders: number;
     totalMembers: number;
     todayRevenueCents: number;
   }> {
-    const todayStart = startOfTodayUtc();
-
-    const [activeCampaigns, totalOrders, totalMembers, todayRevenueRow] =
-      await Promise.all([
-        this.campaignRepository.count({
-          where: {
-            businessId,
-            status: CampaignPublicationStatus.PUBLISHED,
-          },
-        }),
-        this.funnelPaymentRepository.count({
-          where: {
-            businessId,
-            status: FunnelPaymentStatus.PAID,
-          },
-        }),
-        this.countBusinessCustomers(businessId),
-        this.funnelPaymentRepository
-          .createQueryBuilder('payment')
-          .select('COALESCE(SUM(payment.amount), 0)', 'revenue')
-          .where('payment.businessId = :businessId', { businessId })
-          .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
-          .andWhere(
-            'COALESCE(payment.paidAt, payment.createdAt) >= :todayStart',
-            { todayStart },
-          )
-          .getRawOne<{ revenue: string }>(),
-      ]);
+    const [kpi, totalOrders, totalMembers] = await Promise.all([
+      this.getDashboardKpiSnapshot(businessId),
+      this.funnelPaymentRepository.count({
+        where: {
+          businessId,
+          status: FunnelPaymentStatus.PAID,
+        },
+      }),
+      this.countBusinessCustomers(businessId),
+    ]);
 
     return {
-      activeCampaigns,
+      activeCampaigns: kpi.activeCampaigns,
       totalOrders,
       totalMembers,
-      todayRevenueCents: Number(todayRevenueRow?.revenue ?? 0),
+      todayRevenueCents: kpi.todayRevenueCents,
     };
   }
 
@@ -1123,7 +1145,7 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const monthCount = clampOverviewMonths(rawMonthCount);
-    const cacheKey = `activity-monthly:${businessId}:${monthCount}`;
+    const cacheKey = `activity-monthly-v3:${businessId}:${monthCount}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -1145,9 +1167,9 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const buckets = buildRecentMonthBuckets(monthCount);
-    const snapshot = await this.getBusinessActivitySnapshot(businessId);
 
     if (buckets.length === 0) {
+      const snapshot = await this.getBusinessActivitySnapshot(businessId);
       return {
         businessId,
         months: monthCount,
@@ -1158,7 +1180,8 @@ export class ActivityService {
 
     const rangeStart = buckets[0]!.start;
 
-    const [rows, orderRows, memberRows] = await Promise.all([
+    const [snapshot, rows, orderRows, memberRows] = await Promise.all([
+      this.getBusinessActivitySnapshot(businessId),
       this.activityRepository
         .createQueryBuilder('activity')
         .select(
@@ -1288,7 +1311,7 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const cacheKey = `activity-range-v4:${businessId}:${from.toISOString()}:${to.toISOString()}`;
+    const cacheKey = `activity-range-v6:${businessId}:${from.toISOString()}:${to.toISOString()}`;
     return dashboardTtlCache.getOrSet(
       cacheKey,
       DASHBOARD_CACHE_TTL_MS,
@@ -1309,7 +1332,6 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const snapshot = await this.getBusinessActivitySnapshot(businessId);
     const sameDay =
       from.getUTCFullYear() === to.getUTCFullYear() &&
       from.getUTCMonth() === to.getUTCMonth() &&
@@ -1325,7 +1347,8 @@ export class ActivityService {
       ? `TO_CHAR(DATE_TRUNC('hour', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
       : `TO_CHAR(DATE_TRUNC('day', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
 
-    const [activityRows, orderRows, memberRows] = await Promise.all([
+    const [kpi, activityRows, orderRows, memberRows] = await Promise.all([
+      this.getDashboardKpiSnapshot(businessId),
       this.activityRepository
         .createQueryBuilder('activity')
         .select(activityBucket, 'month')
@@ -1432,10 +1455,10 @@ export class ActivityService {
     return {
       businessId,
       months: data.length,
-      activeCampaigns: snapshot.activeCampaigns,
+      activeCampaigns: kpi.activeCampaigns,
       totalOrders: data.reduce((sum, row) => sum + (row.orders ?? 0), 0),
       totalMembers: data.reduce((sum, row) => sum + (row.members ?? 0), 0),
-      todayRevenueCents: snapshot.todayRevenueCents,
+      todayRevenueCents: kpi.todayRevenueCents,
       data,
     };
   }

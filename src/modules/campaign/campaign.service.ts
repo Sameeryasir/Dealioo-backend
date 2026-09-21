@@ -145,11 +145,10 @@ export class CampaignService {
       'You do not have permission to create campaigns for this business.',
     );
 
-    const business = await this.businessAccessService.findAccessibleBusiness(
-      user,
-      businessId,
-    );
-    if (!business) {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+    if (!business || business.deletedAt) {
       throw new NotFoundException('Business not found');
     }
 
@@ -198,22 +197,27 @@ export class CampaignService {
       contentRevision: 0,
     });
     const savedFunnel = await this.funnelRepository.save(funnel);
-    await this.funnelPagesService.initializeEmptyPages({
-      funnelId: savedFunnel.id,
-      businessId: business.id,
-      createdById: user.id,
-      includePaymentPage: campaignType !== CampaignType.POSTPAID,
-    });
-    await this.funnelVersionRepository.save(
-      this.funnelVersionRepository.create({
+    await Promise.all([
+      this.funnelPagesService.initializeEmptyPages({
         funnelId: savedFunnel.id,
         businessId: business.id,
-        versionNumber: 1,
-        schema: {},
-        operationId: null,
         createdById: user.id,
+        includePaymentPage: campaignType !== CampaignType.POSTPAID,
+        campaignName: savedCampaign.campaignName,
+        offer: savedCampaign.offer,
+        description: savedCampaign.description,
       }),
-    );
+      this.funnelVersionRepository.save(
+        this.funnelVersionRepository.create({
+          funnelId: savedFunnel.id,
+          businessId: business.id,
+          versionNumber: 1,
+          schema: {},
+          operationId: null,
+          createdById: user.id,
+        }),
+      ),
+    ]);
 
     if (
       campaignType !== CampaignType.POSTPAID &&

@@ -2,6 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
+  DASHBOARD_CACHE_TTL_MS,
+  dashboardTtlCache,
+} from '../../common/ttl-cache';
+import {
   FunnelAnalyticsEvent,
   FunnelAnalyticsEventType,
 } from '../../db/entities/funnel-analytics-event.entity';
@@ -13,7 +17,6 @@ import {
   buildUtcRangeBucketKeys,
   overviewRangeBucketSql,
 } from './overview-monthly.util';
-import { And, LessThan, MoreThanOrEqual } from 'typeorm';
 
 export type FunnelAnalyticsOverview = {
   funnelId: number;
@@ -92,35 +95,46 @@ export class FunnelAnalyticsService {
   }
 
   async getAnalyticsOverview(funnelId: number): Promise<FunnelAnalyticsOverview> {
-    await this.assertFunnelExists(funnelId);
+    const cacheKey = `funnel-analytics-overview-v1:${funnelId}`;
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, async () => {
+      const [exists, pageViews, buttonClicks, uniqueVisitorsRaw, checkoutOpens] =
+        await Promise.all([
+          this.funnelRepository.exist({ where: { id: funnelId } }),
+          this.analyticsRepository.count({
+            where: { funnelId, eventType: FunnelAnalyticsEventType.PAGE_VIEW },
+          }),
+          this.analyticsRepository.count({
+            where: {
+              funnelId,
+              eventType: FunnelAnalyticsEventType.BUTTON_CLICK,
+            },
+          }),
+          this.analyticsRepository
+            .createQueryBuilder('e')
+            .select('COUNT(DISTINCT e.customer_id)', 'count')
+            .where('e.funnel_id = :funnelId', { funnelId })
+            .andWhere('e.customer_id IS NOT NULL')
+            .getRawOne<{ count: string }>(),
+          this.analyticsRepository.count({
+            where: {
+              funnelId,
+              eventType: FunnelAnalyticsEventType.CHECKOUT_OPEN,
+            },
+          }),
+        ]);
 
-    const pageViews = await this.analyticsRepository.count({
-      where: { funnelId, eventType: FunnelAnalyticsEventType.PAGE_VIEW },
+      if (!exists) {
+        throw new NotFoundException('Funnel not found');
+      }
+
+      return {
+        funnelId,
+        pageViews,
+        buttonClicks,
+        uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
+        checkoutOpens,
+      };
     });
-
-    const buttonClicks = await this.analyticsRepository.count({
-      where: { funnelId, eventType: FunnelAnalyticsEventType.BUTTON_CLICK },
-    });
-
-    const uniqueVisitorsRaw = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select('COUNT(DISTINCT e.customer_id)', 'count')
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.customer_id IS NOT NULL')
-      .getRawOne<{ count: string }>();
-
-    // Change: checkout opens replace sessions — clearer for campaign owners.
-    const checkoutOpens = await this.analyticsRepository.count({
-      where: { funnelId, eventType: FunnelAnalyticsEventType.CHECKOUT_OPEN },
-    });
-
-    return {
-      funnelId,
-      pageViews,
-      buttonClicks,
-      uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
-      checkoutOpens,
-    };
   }
 
   async getAnalyticsOverviewMonthly(
@@ -137,48 +151,74 @@ export class FunnelAnalyticsService {
       checkoutOpens: number;
     }[];
   }> {
-    await this.assertFunnelExists(funnelId);
+    const cacheKey = `funnel-analytics-monthly-v1:${funnelId}:${monthCount}`;
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
+      this.computeAnalyticsOverviewMonthly(funnelId, monthCount),
+    );
+  }
 
+  private async computeAnalyticsOverviewMonthly(
+    funnelId: number,
+    monthCount: number,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    data: {
+      month: string;
+      pageViews: number;
+      buttonClicks: number;
+      uniqueVisitors: number;
+      checkoutOpens: number;
+    }[];
+  }> {
     const buckets = buildRecentMonthBuckets(monthCount);
     if (buckets.length === 0) {
+      await this.assertFunnelExists(funnelId);
       return { funnelId, months: monthCount, data: [] };
     }
 
     const rangeStart = buckets[0]!.start;
-    const rows = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select(
-        `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
-        'month',
-      )
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
-        'pageViews',
-      )
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
-        'buttonClicks',
-      )
-      .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
-        'checkoutOpens',
-      )
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.created_at >= :rangeStart', { rangeStart })
-      .setParameters({
-        pageView: FunnelAnalyticsEventType.PAGE_VIEW,
-        buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
-        checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
-      })
-      .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
-      .getRawMany<{
-        month: string;
-        pageViews: string;
-        buttonClicks: string;
-        uniqueVisitors: string;
-        checkoutOpens: string;
-      }>();
+    const [exists, rows] = await Promise.all([
+      this.funnelRepository.exist({ where: { id: funnelId } }),
+      this.analyticsRepository
+        .createQueryBuilder('e')
+        .select(
+          `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+          'month',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
+          'pageViews',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
+          'buttonClicks',
+        )
+        .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
+          'checkoutOpens',
+        )
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.created_at >= :rangeStart', { rangeStart })
+        .setParameters({
+          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+          buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
+          checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
+        })
+        .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
+        .getRawMany<{
+          month: string;
+          pageViews: string;
+          buttonClicks: string;
+          uniqueVisitors: string;
+          checkoutOpens: string;
+        }>(),
+    ]);
+
+    if (!exists) {
+      throw new NotFoundException('Funnel not found');
+    }
 
     const byMonth = new Map(rows.map((row) => [row.month, row]));
     const data = buckets.map((bucket) => {
@@ -210,41 +250,68 @@ export class FunnelAnalyticsService {
       checkoutOpens: number;
     }[];
   }> {
-    await this.assertFunnelExists(funnelId);
+    const cacheKey = `funnel-analytics-range-v1:${funnelId}:${from.toISOString()}:${to.toISOString()}`;
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
+      this.computeAnalyticsOverviewForRange(funnelId, from, to),
+    );
+  }
+
+  private async computeAnalyticsOverviewForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    funnelId: number;
+    months: number;
+    data: {
+      month: string;
+      pageViews: number;
+      buttonClicks: number;
+      uniqueVisitors: number;
+      checkoutOpens: number;
+    }[];
+  }> {
     const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
     const bucketSql = overviewRangeBucketSql('e.created_at', sameDay);
-    const rows = await this.analyticsRepository
-      .createQueryBuilder('e')
-      .select(bucketSql, 'month')
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
-        'pageViews',
-      )
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
-        'buttonClicks',
-      )
-      .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
-      .addSelect(
-        `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
-        'checkoutOpens',
-      )
-      .where('e.funnel_id = :funnelId', { funnelId })
-      .andWhere('e.created_at >= :from', { from })
-      .andWhere('e.created_at <= :to', { to })
-      .setParameters({
-        pageView: FunnelAnalyticsEventType.PAGE_VIEW,
-        buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
-        checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
-      })
-      .groupBy(bucketSql)
-      .getRawMany<{
-        month: string;
-        pageViews: string;
-        buttonClicks: string;
-        uniqueVisitors: string;
-        checkoutOpens: string;
-      }>();
+    const [exists, rows] = await Promise.all([
+      this.funnelRepository.exist({ where: { id: funnelId } }),
+      this.analyticsRepository
+        .createQueryBuilder('e')
+        .select(bucketSql, 'month')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
+          'pageViews',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
+          'buttonClicks',
+        )
+        .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
+          'checkoutOpens',
+        )
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.created_at >= :from', { from })
+        .andWhere('e.created_at <= :to', { to })
+        .setParameters({
+          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+          buttonClick: FunnelAnalyticsEventType.BUTTON_CLICK,
+          checkoutOpen: FunnelAnalyticsEventType.CHECKOUT_OPEN,
+        })
+        .groupBy(bucketSql)
+        .getRawMany<{
+          month: string;
+          pageViews: string;
+          buttonClicks: string;
+          uniqueVisitors: string;
+          checkoutOpens: string;
+        }>(),
+    ]);
+
+    if (!exists) {
+      throw new NotFoundException('Funnel not found');
+    }
 
     const byBucket = new Map(rows.map((row) => [row.month, row]));
     const data = keys.map((bucket) => {

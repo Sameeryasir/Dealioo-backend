@@ -4,6 +4,9 @@ import { ActivityEvent } from '../../db/entities/activity-event.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Business } from '../../db/entities/business.entity';
+import { Campaign } from '../../db/entities/campaign.entity';
+import { SidebarSectionNotifyService } from '../sidebar-unread/sidebar-section-notify.service';
+import { PusherService } from '../pusher/pusher.service';
 import { ActivityService } from './activity.service';
 
 describe('ActivityService', () => {
@@ -17,6 +20,9 @@ describe('ActivityService', () => {
         { provide: getRepositoryToken(Business), useValue: {} },
         { provide: getRepositoryToken(Customer), useValue: {} },
         { provide: getRepositoryToken(FunnelPayment), useValue: {} },
+        { provide: getRepositoryToken(Campaign), useValue: {} },
+        { provide: SidebarSectionNotifyService, useValue: {} },
+        { provide: PusherService, useValue: {} },
       ],
     }).compile();
 

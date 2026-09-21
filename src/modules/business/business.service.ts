@@ -416,9 +416,8 @@ export class BusinessService {
       );
     }
 
-    qb.addSelect('LOWER(business.name)', 'business_name_sort')
-      .orderBy('business_name_sort', 'ASC')
-      .addOrderBy('business.id', 'ASC')
+    qb.orderBy('business.createdAt', 'DESC')
+      .addOrderBy('business.id', 'DESC')
       .skip(pagination.skip)
       .take(pagination.limit);
 

@@ -115,7 +115,7 @@ export class AddonSuggestionService {
     campaigns: CampaignAddonCounts[];
   }> {
     const cacheKey = [
-      'addon-counts-v2',
+      'addon-counts-v3',
       params.businessId,
       params.from?.toISOString() ?? '',
       params.to?.toISOString() ?? '',
@@ -124,14 +124,16 @@ export class AddonSuggestionService {
     ].join(':');
 
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, async () => {
-      const [aggregated, globalStats] = await Promise.all([
-        this.loadAggregatedCampaigns(params),
-        this.loadGlobalAddonStats({
-          businessId: params.businessId,
-          from: params.from,
-          to: params.to,
-        }),
-      ]);
+      const scopedToCampaign =
+        params.campaignId != null && params.campaignId > 0;
+      const aggregated = await this.loadAggregatedCampaigns(params);
+      const globalStats = scopedToCampaign
+        ? await this.loadGlobalAddonStats({
+            businessId: params.businessId,
+            from: params.from,
+            to: params.to,
+          })
+        : this.buildGlobalAddonStatsFromAggregated(aggregated);
       const limitPerCampaign = Math.min(
         100,
         Math.max(1, Math.round(params.limit ?? 20)),
@@ -198,7 +200,7 @@ export class AddonSuggestionService {
     const page = Math.max(1, Math.round(params.page ?? 1));
 
     const cacheKey = [
-      'addon-suggestions-v2',
+      'addon-suggestions-v3',
       params.businessId,
       params.from?.toISOString() ?? '',
       params.to?.toISOString() ?? '',
@@ -310,14 +312,16 @@ export class AddonSuggestionService {
     to: string | null;
     campaigns: CampaignAddonSuggestions[];
   }> {
-    const [aggregated, globalStats] = await Promise.all([
-      this.loadAggregatedCampaigns(params),
-      this.loadGlobalAddonStats({
-        businessId: params.businessId,
-        from: params.from,
-        to: params.to,
-      }),
-    ]);
+    const scopedToCampaign =
+      params.campaignId != null && params.campaignId > 0;
+    const aggregated = await this.loadAggregatedCampaigns(params);
+    const globalStats = scopedToCampaign
+      ? await this.loadGlobalAddonStats({
+          businessId: params.businessId,
+          from: params.from,
+          to: params.to,
+        })
+      : this.buildGlobalAddonStatsFromAggregated(aggregated);
 
     const campaignsFull: CampaignAddonSuggestions[] = aggregated.map(
       (campaign) => {
@@ -589,6 +593,20 @@ export class AddonSuggestionService {
       }
     }
     return map;
+  }
+
+  private buildGlobalAddonStatsFromAggregated(
+    campaigns: AggregatedCampaign[],
+  ): GlobalAddonStats {
+    const byKey = new Map<string, number>();
+    let totalTimes = 0;
+    for (const campaign of campaigns) {
+      for (const row of campaign.rows) {
+        byKey.set(row.addonKey, (byKey.get(row.addonKey) ?? 0) + row.times);
+        totalTimes += row.times;
+      }
+    }
+    return { totalTimes, byKey };
   }
 
   private async loadGlobalAddonStats(params: {
