@@ -607,7 +607,8 @@ export class GoogleAdsService {
       `GTM containers businessId=${businessId} googleUserId=${business.googleUserId ?? 'unknown'} count=${containers.length} scopes=${scopes.join(',')}`,
     );
 
-    await this.auditService.log(businessId, 'gtm_containers_fetched', {
+    // Don't block the response on audit writes (read-path latency).
+    void this.auditService.log(businessId, 'gtm_containers_fetched', {
       status: GoogleAdsConnectionStatus.TOKEN_EXCHANGED,
       metadata: {
         count: containers.length,
@@ -1722,6 +1723,11 @@ export class GoogleAdsService {
     }
   }
 
+  /**
+   * Change: List GTM containers per account in parallel.
+   * Why: Sequential Tag Manager API calls made Ads Tracking Google section slow.
+   * MCP: Context 7 — independent remote work should not wait in a for-loop.
+   */
   private async fetchGtmContainers(
     accessToken: string,
     businessId?: number,
@@ -1747,49 +1753,70 @@ export class GoogleAdsService {
         );
       }
 
-      for (const account of accounts) {
-        const accountPath =
-          account.path?.trim() ||
-          (account.accountId != null
-            ? `accounts/${String(account.accountId).trim()}`
-            : '');
-        const accountId = String(account.accountId ?? '').trim();
+      const accountJobs = accounts
+        .map((account) => {
+          const accountPath =
+            account.path?.trim() ||
+            (account.accountId != null
+              ? `accounts/${String(account.accountId).trim()}`
+              : '');
+          const accountId = String(account.accountId ?? '').trim();
+          if (!accountPath || !accountId) {
+            this.logger.warn(
+              `GTM account skipped businessId=${businessId ?? 'unknown'} missing accountId/path`,
+            );
+            return null;
+          }
+          return { account, accountPath, accountId };
+        })
+        .filter(
+          (
+            row,
+          ): row is {
+            account: (typeof accounts)[number];
+            accountPath: string;
+            accountId: string;
+          } => row != null,
+        );
 
-        if (!accountPath || !accountId) {
-          this.logger.warn(
-            `GTM account skipped businessId=${businessId ?? 'unknown'} missing accountId/path`,
+      await Promise.all(
+        accountJobs.map(async ({ account, accountPath, accountId }) => {
+          this.logger.log(
+            `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} accountName=${account.name ?? 'unknown'}`,
           );
-          continue;
-        }
 
-        this.logger.log(
-          `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} accountName=${account.name ?? 'unknown'}`,
-        );
+          try {
+            const containersRes = await tagmanager.accounts.containers.list({
+              parent: accountPath,
+            });
+            const containerRows = containersRes.data.container ?? [];
 
-        const containersRes = await tagmanager.accounts.containers.list({
-          parent: accountPath,
-        });
-        const containerRows = containersRes.data.container ?? [];
+            this.logger.log(
+              `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} containerCount=${containerRows.length}`,
+            );
 
-        this.logger.log(
-          `GTM containers.list businessId=${businessId ?? 'unknown'} parent=${accountPath} containerCount=${containerRows.length}`,
-        );
+            for (const container of containerRows) {
+              const publicId = container.publicId?.trim();
+              if (!publicId) continue;
 
-        for (const container of containerRows) {
-          const publicId = container.publicId?.trim();
-          if (!publicId) continue;
-
-          byPublicId.set(publicId, {
-            id: publicId,
-            name: container.name?.trim() || null,
-            accountId,
-            accountName: account.name?.trim() || null,
-            containerId: container.containerId
-              ? String(container.containerId)
-              : null,
-          });
-        }
-      }
+              byPublicId.set(publicId, {
+                id: publicId,
+                name: container.name?.trim() || null,
+                accountId,
+                accountName: account.name?.trim() || null,
+                containerId: container.containerId
+                  ? String(container.containerId)
+                  : null,
+              });
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.logger.warn(
+              `GTM containers.list skipped businessId=${businessId ?? 'unknown'} parent=${accountPath} message=${message}`,
+            );
+          }
+        }),
+      );
 
       const containers = [...byPublicId.values()].sort((a, b) =>
         (a.name ?? a.id).localeCompare(b.name ?? b.id),

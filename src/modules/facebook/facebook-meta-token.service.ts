@@ -59,6 +59,16 @@ export function assertMetaPermissions(
 export class FacebookMetaTokenService {
   private readonly logger = new Logger(FacebookMetaTokenService.name);
 
+  /**
+   * Short in-process cache so list-pixels / status name resolve don't each
+   * pay a live Meta debug_token round-trip. MCP Context 7 — cache validated secrets briefly.
+   */
+  private readonly validatedTokenCache = new Map<
+    string,
+    { at: number; accessToken: string; metaUserId: string }
+  >();
+  private static readonly VALIDATED_TOKEN_TTL_MS = 5 * 60_000;
+
   decryptBusinessToken(business: Business): string | null {
     const stored = business.metaAccessToken?.trim();
     if (!stored) return null;
@@ -201,15 +211,30 @@ export class FacebookMetaTokenService {
       );
     }
 
+    // --- Fast path: recently validated token (skip live debug_token) ---
+    const cacheKey = `${business.id}:${accessToken.slice(-16)}`;
+    const cached = this.validatedTokenCache.get(cacheKey);
+    if (
+      cached &&
+      Date.now() - cached.at < FacebookMetaTokenService.VALIDATED_TOKEN_TTL_MS
+    ) {
+      return {
+        accessToken: cached.accessToken,
+        metaUserId: cached.metaUserId,
+      };
+    }
+
     const debug = await this.debugUserAccessToken(accessToken);
 
     if (!debug?.is_valid) {
+      this.validatedTokenCache.delete(cacheKey);
       throw new BadRequestException(
         'Meta access token is invalid or expired. Reconnect Facebook in Settings → Integrations.',
       );
     }
 
     if (debug.user_id && debug.user_id !== metaUserId) {
+      this.validatedTokenCache.delete(cacheKey);
       throw new BadRequestException(
         'Facebook token does not match this business. Reconnect Facebook in Settings → Integrations.',
       );
@@ -219,6 +244,12 @@ export class FacebookMetaTokenService {
       debug.scopes ?? [],
       this.requiredScopesForBusiness(business),
     );
+
+    this.validatedTokenCache.set(cacheKey, {
+      at: Date.now(),
+      accessToken,
+      metaUserId,
+    });
 
     return { accessToken, metaUserId };
   }

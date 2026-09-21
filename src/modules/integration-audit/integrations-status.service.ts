@@ -8,6 +8,13 @@ import type { IntegrationsStatusDto } from './dto/integrations-status.dto';
 
 @Injectable()
 export class IntegrationsStatusService {
+  private readonly statusCache = new Map<
+    number,
+    { at: number; value: IntegrationsStatusDto }
+  >();
+  private static readonly STATUS_CACHE_TTL_MS = 90_000;
+  private readonly nameWarmInflight = new Set<number>();
+
   constructor(
     private readonly businessAccessService: BusinessAccessService,
     private readonly stripeService: StripeService,
@@ -30,25 +37,12 @@ export class IntegrationsStatusService {
     const facebook = this.facebookService.getConnectionStatus(business);
     const googleAds = this.googleAdsService.getConnectionStatus(business);
 
-    const [stripeAccountName, metaAdAccountName, googleCustomerName] =
-      await Promise.all([
-        stripe.connected && stripe.stripeAccountId
-          ? this.stripeService.resolveAccountDisplayName(stripe.stripeAccountId)
-          : Promise.resolve(null),
-        facebook.connected && facebook.metaAdAccountId
-          ? this.facebookService.resolveSelectedAdAccountName(business)
-          : Promise.resolve(null),
-        googleAds.connected && googleAds.googleCustomerId
-          ? this.googleAdsService.resolveSelectedCustomerName(business)
-          : Promise.resolve(null),
-      ]);
-
-    return {
+    const fast: IntegrationsStatusDto = {
       stripe: {
         connected: stripe.connected,
         status: stripe.status,
         stripeAccountId: stripe.stripeAccountId?.trim() || null,
-        stripeAccountName,
+        stripeAccountName: null,
       },
       facebook: {
         connected: facebook.connected,
@@ -56,7 +50,7 @@ export class IntegrationsStatusService {
         metaOauthScopes: facebook.metaOauthScopes,
         missingRequiredScopes: facebook.missingRequiredScopes,
         metaAdAccountId: facebook.metaAdAccountId?.trim() || null,
-        metaAdAccountName,
+        metaAdAccountName: null,
       },
       googleAds: {
         connected: googleAds.connected,
@@ -64,8 +58,84 @@ export class IntegrationsStatusService {
         googleOauthScopes: googleAds.googleOauthScopes,
         missingRequiredScopes: googleAds.missingRequiredScopes,
         googleCustomerId: googleAds.googleCustomerId?.trim() || null,
-        googleCustomerName,
+        googleCustomerName: null,
       },
     };
+
+    const cached = this.statusCache.get(businessId);
+    if (
+      cached &&
+      Date.now() - cached.at < IntegrationsStatusService.STATUS_CACHE_TTL_MS &&
+      this.sameConnectionIds(cached.value, fast)
+    ) {
+      return cached.value;
+    }
+
+    // Warm display names in the background for the next request (do not block).
+    this.warmDisplayNames(businessId, business, fast);
+
+    return fast;
+  }
+
+  /** Call after connect/disconnect so the next status read is not stale. */
+  invalidateBusiness(businessId: number): void {
+    this.statusCache.delete(businessId);
+    this.nameWarmInflight.delete(businessId);
+  }
+  private sameConnectionIds(
+    cached: IntegrationsStatusDto,
+    current: IntegrationsStatusDto,
+  ): boolean {
+    return (
+      cached.stripe.stripeAccountId === current.stripe.stripeAccountId &&
+      cached.stripe.connected === current.stripe.connected &&
+      cached.facebook.metaAdAccountId === current.facebook.metaAdAccountId &&
+      cached.facebook.connected === current.facebook.connected &&
+      cached.googleAds.googleCustomerId === current.googleAds.googleCustomerId &&
+      cached.googleAds.connected === current.googleAds.connected
+    );
+  }
+
+  private warmDisplayNames(
+    businessId: number,
+    business: Awaited<
+      ReturnType<BusinessAccessService['findAccessibleBusiness']>
+    >,
+    base: IntegrationsStatusDto,
+  ): void {
+    if (!business || this.nameWarmInflight.has(businessId)) return;
+    this.nameWarmInflight.add(businessId);
+
+    void (async () => {
+      try {
+        const [stripeAccountName, metaAdAccountName, googleCustomerName] =
+          await Promise.all([
+            base.stripe.connected && base.stripe.stripeAccountId
+              ? this.stripeService.resolveAccountDisplayName(
+                  base.stripe.stripeAccountId,
+                )
+              : Promise.resolve(null),
+            base.facebook.connected && base.facebook.metaAdAccountId
+              ? this.facebookService.resolveSelectedAdAccountName(business)
+              : Promise.resolve(null),
+            base.googleAds.connected && base.googleAds.googleCustomerId
+              ? this.googleAdsService.resolveSelectedCustomerName(business)
+              : Promise.resolve(null),
+          ]);
+
+        this.statusCache.set(businessId, {
+          at: Date.now(),
+          value: {
+            stripe: { ...base.stripe, stripeAccountName },
+            facebook: { ...base.facebook, metaAdAccountName },
+            googleAds: { ...base.googleAds, googleCustomerName },
+          },
+        });
+      } catch {
+        // Keep serving fast DB status; names are optional UI polish.
+      } finally {
+        this.nameWarmInflight.delete(businessId);
+      }
+    })();
   }
 }

@@ -1610,13 +1610,18 @@ export class FacebookService {
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaToken(business);
 
-    const pixels = await this.fetchAdPixelsForBusiness(accessToken, businessId);
+    const pixels = await this.fetchAdPixelsForBusiness(
+      accessToken,
+      businessId,
+      business.metaAdAccountId?.trim() || null,
+    );
 
     this.logger.log(
       `Meta pixels businessId=${businessId} metaUserId=${business.metaUserId ?? 'unknown'} selectedAdAccountId=${business.metaAdAccountId ?? 'none'} count=${pixels.length}`,
     );
 
-    await this.auditService.log(businessId, 'ad_pixels_fetched', {
+    // Don't block the response on audit writes (read-path latency).
+    void this.auditService.log(businessId, 'ad_pixels_fetched', {
       status: FacebookConnectionStatus.AD_ACCOUNT_SELECTED,
       metadata: {
         count: pixels.length,
@@ -1628,14 +1633,20 @@ export class FacebookService {
     return pixels;
   }
 
+  /**
+   * Change: Prefer selected Meta ad account, then scan others in parallel.
+   * Why: Sequential Graph calls across every ad account made Ads Tracking slow.
+   * Related: mapWithConcurrency (same pattern as campaign insights).
+   */
   private async fetchAdPixelsForBusiness(
     accessToken: string,
     businessId: number,
+    selectedAdAccountId: string | null,
   ): Promise<FacebookAdPixelDto[]> {
     const adAccounts = await this.listAccessibleAdAccounts(accessToken);
 
     this.logger.log(
-      `Meta pixels fetch start businessId=${businessId} adAccountCount=${adAccounts.length}`,
+      `Meta pixels fetch start businessId=${businessId} adAccountCount=${adAccounts.length} selectedAdAccountId=${selectedAdAccountId ?? 'none'}`,
     );
 
     if (adAccounts.length === 0) {
@@ -1647,10 +1658,7 @@ export class FacebookService {
 
     const byId = new Map<string, FacebookAdPixelDto>();
 
-    for (const account of adAccounts) {
-      const adAccountId = account.id.trim();
-      if (!adAccountId) continue;
-
+    const fetchPixelsForAccount = async (adAccountId: string, accountName: string | null) => {
       try {
         const response = await this.graphGetWithToken<{
           data?: Array<{ id?: string | number; name?: string }>;
@@ -1669,7 +1677,7 @@ export class FacebookService {
         }
 
         this.logger.log(
-          `Meta pixels ad_account.adspixels businessId=${businessId} adAccountId=${adAccountId} accountName=${account.name ?? 'unknown'} returned=${response.data?.length ?? 0}`,
+          `Meta pixels ad_account.adspixels businessId=${businessId} adAccountId=${adAccountId} accountName=${accountName ?? 'unknown'} returned=${response.data?.length ?? 0}`,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1677,6 +1685,40 @@ export class FacebookService {
           `Meta pixels fetch skipped businessId=${businessId} adAccountId=${adAccountId} message=${message}`,
         );
       }
+    };
+
+    // --- Prefer selected ad account first (usually enough for the dropdown) ---
+    const normalizedSelected = selectedAdAccountId
+      ? this.normalizeAdAccountId(selectedAdAccountId)
+      : null;
+    const selectedAccount = normalizedSelected
+      ? adAccounts.find((a) => a.id === normalizedSelected)
+      : undefined;
+
+    if (selectedAccount) {
+      await fetchPixelsForAccount(
+        selectedAccount.id.trim(),
+        selectedAccount.name ?? null,
+      );
+    }
+
+    // Fill remaining accounts in parallel (skip the one we already fetched).
+    const remaining = adAccounts.filter((account) => {
+      const id = account.id.trim();
+      if (!id) return false;
+      if (normalizedSelected && id === normalizedSelected) return false;
+      return true;
+    });
+
+    if (remaining.length > 0) {
+      await this.mapWithConcurrency(
+        remaining,
+        INSIGHTS_FETCH_CONCURRENCY,
+        async (account) => {
+          await fetchPixelsForAccount(account.id.trim(), account.name ?? null);
+          return null;
+        },
+      );
     }
 
     const pixels = [...byId.values()].sort((a, b) =>
