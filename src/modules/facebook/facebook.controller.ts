@@ -14,7 +14,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { ConnectFacebookDto } from './dto/connect-facebook.dto';
 import { FacebookAdAccountDto } from './dto/facebook-ad-account.dto';
@@ -48,9 +47,8 @@ export class FacebookController {
       error: error ?? null,
     });
 
-    const frontend = getFrontendBaseUrl().replace(/\/$/, '');
-
-    // Not now / deny — redirect to Dealioo (never return raw API JSON in the browser).
+    // Path-absolute redirects keep the same host as this request (dealioo.io vs www).
+    // Do not bounce to FRONTEND_URL[0] — host-only auth cookies would be dropped.
     if (error?.trim()) {
       const reason = encodeURIComponent(
         errorDescription?.trim() ||
@@ -58,7 +56,7 @@ export class FacebookController {
           'Facebook connection was cancelled.',
       );
       return res.redirect(
-        `${frontend}/facebook/connect/error?cancelled=1&reason=${reason}`,
+        `/facebook/connect/error?cancelled=1&reason=${reason}`,
       );
     }
 
@@ -75,7 +73,7 @@ export class FacebookController {
         ? `&granted=${encodeURIComponent(granted)}`
         : '';
       return res.redirect(
-        `${frontend}/facebook/connected?businessId=${result.businessId}${grantedParam}`,
+        `/facebook/connected?businessId=${result.businessId}${grantedParam}`,
       );
     } catch (err) {
       const message =
@@ -83,7 +81,7 @@ export class FacebookController {
           ? err.message
           : 'Facebook connection failed. Please try again.';
       return res.redirect(
-        `${frontend}/facebook/connect/error?reason=${encodeURIComponent(message)}`,
+        `/facebook/connect/error?reason=${encodeURIComponent(message)}`,
       );
     }
   }
