@@ -12,10 +12,11 @@ const TRANSIENT_META_CODES = new Set([
 ]);
 
 const NON_RETRYABLE_META_CODES = new Set([
-  190, 
-  10, 
-  200, 
-  294, 
+  100,
+  190,
+  10,
+  200,
+  294,
 ]);
 
 function extractStatusCode(err: unknown): number | null {
@@ -61,18 +62,26 @@ export function isTransientMetaPublishError(err: unknown): boolean {
     message.includes('oauth') ||
     (message.includes('disabled') && message.includes('ad account')) ||
     message.includes('not linked to this meta account') ||
+    message.includes('promoted object') ||
+    message.includes('promoted_object') ||
+    message.includes('invalid combination') ||
     (message.includes('invalid') &&
       (message.includes('creative') ||
         message.includes('page') ||
         message.includes('targeting') ||
         message.includes('objective') ||
-        message.includes('budget'))) ||
+        message.includes('budget') ||
+        message.includes('parameter'))) ||
     message.includes('unsupported creative') ||
     message.includes('video cards are not supported in carousel') ||
     message.includes('carousel video cards are not supported') ||
     message.includes('landing page url is required') ||
     message.includes('complete all builder steps')
   ) {
+    return false;
+  }
+
+  if (err instanceof MetaApiStepError) {
     return false;
   }
 
@@ -103,11 +112,6 @@ export function isTransientMetaPublishError(err: unknown): boolean {
 
   if (httpStatus === 429) {
     return true;
-  }
-
-  
-  if (err instanceof MetaApiStepError) {
-    return false;
   }
 
   return false;

@@ -603,6 +603,8 @@ export class MetaPublishService {
         })
         .catch(() => undefined);
     } catch (err) {
+      const shouldMarkFailed =
+        isFinalAttempt || !isTransientMetaPublishError(err);
       throw await this.handlePublishFailure(
         userId,
         businessId,
@@ -611,7 +613,7 @@ export class MetaPublishService {
         jobId,
         err,
         { metaCampaignId, metaAdsetId, metaCreativeId, metaAdId },
-        { markDraftFailed: isFinalAttempt },
+        { markDraftFailed: shouldMarkFailed },
       );
     }
   }
