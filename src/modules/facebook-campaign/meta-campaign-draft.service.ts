@@ -216,6 +216,7 @@ export class MetaCampaignDraftService {
       promotedObject: normalizeDraftPromotedObject(
         dto.optimizationGoal,
         dto.promotedObject,
+        campaignData.objective,
       ),
       audience: {
         country: dto.audience.country.toUpperCase(),

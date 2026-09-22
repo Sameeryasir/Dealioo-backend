@@ -19,13 +19,20 @@ import {
 
 export function optimizationGoalNeedsPixel(
   optimizationGoal: string | null | undefined,
+  objective?: string | null,
 ): boolean {
   const goal = String(optimizationGoal ?? '').trim();
-  return (
+  const campaignObjective = String(objective ?? '').trim();
+  if (
     goal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
-    goal === MetaOptimizationGoal.VALUE ||
-    goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS
-  );
+    goal === MetaOptimizationGoal.VALUE
+  ) {
+    return true;
+  }
+  if (goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS) {
+    return campaignObjective !== MetaCampaignObjective.OUTCOME_TRAFFIC;
+  }
+  return false;
 }
 
 export function optimizationGoalNeedsConversionEvent(
@@ -38,6 +45,54 @@ export function optimizationGoalNeedsConversionEvent(
   );
 }
 
+const META_CUSTOM_EVENT_ALIASES: Record<string, string> = {
+  VIEW_CONTENT: 'CONTENT_VIEW',
+  VIEWCONTENT: 'CONTENT_VIEW',
+  INITIATE_CHECKOUT: 'INITIATED_CHECKOUT',
+  COMPLETE_REGISTRATION: 'COMPLETE_REGISTRATION',
+};
+
+const CONVERSION_EVENTS_BY_OBJECTIVE: Partial<
+  Record<MetaCampaignObjective, readonly string[]>
+> = {
+  [MetaCampaignObjective.OUTCOME_LEADS]: [
+    'LEAD',
+    'COMPLETE_REGISTRATION',
+    'CONTACT',
+    'FIND_LOCATION',
+    'SCHEDULE',
+    'START_TRIAL',
+    'SUBMIT_APPLICATION',
+    'SUBSCRIBE',
+  ],
+  [MetaCampaignObjective.OUTCOME_SALES]: [
+    'PURCHASE',
+    'INITIATED_CHECKOUT',
+    'ADD_PAYMENT_INFO',
+    'ADD_TO_CART',
+    'COMPLETE_REGISTRATION',
+    'DONATE',
+    'START_TRIAL',
+    'SUBSCRIBE',
+    'CONTENT_VIEW',
+  ],
+};
+
+export function normalizeMetaCustomEventType(
+  raw: string | null | undefined,
+): string {
+  const trimmed = String(raw ?? '').trim().toUpperCase();
+  if (!trimmed) return '';
+  return META_CUSTOM_EVENT_ALIASES[trimmed] ?? trimmed;
+}
+
+export function allowedConversionEventsForObjective(
+  objective: string | null | undefined,
+): readonly string[] {
+  const key = String(objective ?? '').trim() as MetaCampaignObjective;
+  return CONVERSION_EVENTS_BY_OBJECTIVE[key] ?? [];
+}
+
 export function buildMetaPromotedObjectForGoal(
   optimizationGoal: string | null | undefined,
   promotedObject?: {
@@ -45,25 +100,41 @@ export function buildMetaPromotedObjectForGoal(
     customEventType?: string | null;
     pageId?: string | null;
   } | null,
+  objective?: string | null,
 ): Record<string, string> | undefined {
   const goal = String(optimizationGoal ?? '').trim();
   const pixelId = promotedObject?.pixelId?.trim() || '';
-  const customEventType = promotedObject?.customEventType?.trim() || '';
+  const customEventType = normalizeMetaCustomEventType(
+    promotedObject?.customEventType,
+  );
+  const campaignObjective = String(objective ?? '').trim();
 
   if (
     goal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
     goal === MetaOptimizationGoal.VALUE
   ) {
     if (!pixelId || !customEventType) return undefined;
+    const eventForGoal =
+      goal === MetaOptimizationGoal.VALUE ? 'PURCHASE' : customEventType;
+    const allowed = allowedConversionEventsForObjective(campaignObjective);
+    if (allowed.length > 0 && !allowed.includes(eventForGoal)) {
+      return undefined;
+    }
     return {
       pixel_id: pixelId,
-      custom_event_type: customEventType,
+      custom_event_type: eventForGoal,
     };
   }
 
   if (goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS) {
+    if (campaignObjective === MetaCampaignObjective.OUTCOME_TRAFFIC) {
+      return undefined;
+    }
     if (!pixelId) return undefined;
-    return { pixel_id: pixelId };
+    return {
+      pixel_id: pixelId,
+      custom_event_type: 'CONTENT_VIEW',
+    };
   }
 
   return undefined;
@@ -76,6 +147,7 @@ export function normalizeDraftPromotedObject(
     customEventType?: string | null;
     pageId?: string | null;
   } | null,
+  objective?: string | null,
 ):
   | {
       pixelId?: string;
@@ -84,8 +156,11 @@ export function normalizeDraftPromotedObject(
     }
   | undefined {
   const goal = String(optimizationGoal ?? '').trim();
+  const campaignObjective = String(objective ?? '').trim();
   const pixelId = promotedObject?.pixelId?.trim() || '';
-  const customEventType = promotedObject?.customEventType?.trim() || '';
+  const customEventType = normalizeMetaCustomEventType(
+    promotedObject?.customEventType,
+  );
   const pageId = promotedObject?.pageId?.trim() || '';
 
   if (
@@ -100,6 +175,9 @@ export function normalizeDraftPromotedObject(
   }
 
   if (goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS) {
+    if (campaignObjective === MetaCampaignObjective.OUTCOME_TRAFFIC) {
+      return undefined;
+    }
     if (!pixelId) return undefined;
     return { pixelId };
   }
@@ -186,19 +264,31 @@ export function assertPublishReady(
   }
   assertScheduleOrder(adSet.startDateTime, adSet.endDateTime);
 
-  if (optimizationGoalNeedsPixel(adSet.optimizationGoal)) {
+  if (optimizationGoalNeedsPixel(adSet.optimizationGoal, campaign.objective)) {
     if (!adSet.promotedObject?.pixelId?.trim()) {
       throw new BadRequestException(
         'Select a Dataset (Meta Pixel) before publishing this performance goal.',
       );
     }
-    if (
-      optimizationGoalNeedsConversionEvent(adSet.optimizationGoal) &&
-      !adSet.promotedObject?.customEventType?.trim()
-    ) {
-      throw new BadRequestException(
-        'Select a conversion event before publishing this performance goal. Landing page views only need a Dataset — conversions/value need Dataset + event.',
+    if (optimizationGoalNeedsConversionEvent(adSet.optimizationGoal)) {
+      const eventType = normalizeMetaCustomEventType(
+        adSet.promotedObject?.customEventType,
       );
+      if (!eventType) {
+        throw new BadRequestException(
+          'Select a conversion event before publishing this performance goal. Landing page views only need a Dataset — conversions/value need Dataset + event.',
+        );
+      }
+      const eventForGoal =
+        adSet.optimizationGoal === MetaOptimizationGoal.VALUE
+          ? 'PURCHASE'
+          : eventType;
+      const allowed = allowedConversionEventsForObjective(campaign.objective);
+      if (allowed.length > 0 && !allowed.includes(eventForGoal)) {
+        throw new BadRequestException(
+          `Conversion event "${eventForGoal}" is not valid for this campaign objective. Choose one of: ${allowed.join(', ')}.`,
+        );
+      }
     }
   }
 
@@ -233,7 +323,7 @@ export function humanizeMetaPublishDetail(detail: string): string {
     return `${raw} Reconnect Meta Ads so Dealioo can publish with a fresh token.`;
   }
   if (lower.includes('pixel') || lower.includes('promoted_object')) {
-    return `${raw} For conversions/value: select Dataset + conversion event (no Page in promoted object). For landing page views: select Dataset only. Facebook Page is chosen on the Ad creative step.`;
+    return `${raw} For Traffic + Landing page views, do not attach a Dataset as promoted object. For Leads/Sales conversions, use Dataset + a valid conversion event (no Facebook Page in promoted object).`;
   }
   if (lower.includes('targeting') || lower.includes('geo_locations')) {
     return `${raw} Check included locations and age range on the Ad set step.`;

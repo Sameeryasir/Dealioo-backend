@@ -575,6 +575,7 @@ export async function buildAdSetPayloadFromDraft(
   const promotedObject = buildMetaPromotedObjectForGoal(
     adSet.optimizationGoal,
     adSet.promotedObject,
+    campaign.objective,
   );
   if (promotedObject) {
     body.promoted_object = promotedObject;
