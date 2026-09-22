@@ -36,7 +36,6 @@ import { SaveCampaignStepDto, MetaBudgetStrategy } from './dto/save-campaign-ste
 import {
   MetaAdSetBudgetType,
   MetaCampaignObjective,
-  MetaOptimizationGoal,
 } from './meta-campaign.constants';
 import {
   assertAtLeastOnePlacement,
@@ -46,6 +45,7 @@ import {
   budgetToMetaMinorUnits,
   combineDateAndTime,
 } from './meta-adset-draft-validation';
+import { normalizeDraftPromotedObject } from './meta-publish-preflight';
 import {
   assertAdCreativeMedia,
   assertAdCreativeDestinationUrl,
@@ -213,12 +213,10 @@ export class MetaCampaignDraftService {
       endDateTime,
       optimizationGoal: dto.optimizationGoal,
       destinationType: dto.destinationType,
-      promotedObject:
-        dto.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
-        dto.optimizationGoal === MetaOptimizationGoal.VALUE ||
-        dto.optimizationGoal === MetaOptimizationGoal.LANDING_PAGE_VIEWS
-          ? dto.promotedObject
-          : undefined,
+      promotedObject: normalizeDraftPromotedObject(
+        dto.optimizationGoal,
+        dto.promotedObject,
+      ),
       audience: {
         country: dto.audience.country.toUpperCase(),
         region: dto.audience.region?.trim() || undefined,

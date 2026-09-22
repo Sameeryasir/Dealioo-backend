@@ -8,6 +8,7 @@ import {
   MetaGender,
 } from './meta-campaign.constants';
 import { budgetToMetaMinorUnits } from './meta-adset-draft-validation';
+import { buildMetaPromotedObjectForGoal } from './meta-publish-preflight';
 import {
   buildCampaignPayload,
   buildCreativePayload,
@@ -571,17 +572,12 @@ export async function buildAdSetPayloadFromDraft(
     body.bid_amount = Math.round(adSet.bidAmount * 100);
   }
 
-  if (
-    (adSet.optimizationGoal === 'OFFSITE_CONVERSIONS' ||
-      adSet.optimizationGoal === 'VALUE' ||
-      adSet.optimizationGoal === 'LANDING_PAGE_VIEWS') &&
-    adSet.promotedObject?.pixelId
-  ) {
-    body.promoted_object = {
-      pixel_id: adSet.promotedObject.pixelId,
-      custom_event_type: adSet.promotedObject.customEventType || undefined,
-      page_id: adSet.promotedObject.pageId || undefined,
-    };
+  const promotedObject = buildMetaPromotedObjectForGoal(
+    adSet.optimizationGoal,
+    adSet.promotedObject,
+  );
+  if (promotedObject) {
+    body.promoted_object = promotedObject;
   }
 
   return body;

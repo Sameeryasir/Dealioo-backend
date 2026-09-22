@@ -28,6 +28,89 @@ export function optimizationGoalNeedsPixel(
   );
 }
 
+export function optimizationGoalNeedsConversionEvent(
+  optimizationGoal: string | null | undefined,
+): boolean {
+  const goal = String(optimizationGoal ?? '').trim();
+  return (
+    goal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
+    goal === MetaOptimizationGoal.VALUE
+  );
+}
+
+export function buildMetaPromotedObjectForGoal(
+  optimizationGoal: string | null | undefined,
+  promotedObject?: {
+    pixelId?: string | null;
+    customEventType?: string | null;
+    pageId?: string | null;
+  } | null,
+): Record<string, string> | undefined {
+  const goal = String(optimizationGoal ?? '').trim();
+  const pixelId = promotedObject?.pixelId?.trim() || '';
+  const customEventType = promotedObject?.customEventType?.trim() || '';
+
+  if (
+    goal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
+    goal === MetaOptimizationGoal.VALUE
+  ) {
+    if (!pixelId || !customEventType) return undefined;
+    return {
+      pixel_id: pixelId,
+      custom_event_type: customEventType,
+    };
+  }
+
+  if (goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS) {
+    if (!pixelId) return undefined;
+    return { pixel_id: pixelId };
+  }
+
+  return undefined;
+}
+
+export function normalizeDraftPromotedObject(
+  optimizationGoal: string | null | undefined,
+  promotedObject?: {
+    pixelId?: string | null;
+    customEventType?: string | null;
+    pageId?: string | null;
+  } | null,
+):
+  | {
+      pixelId?: string;
+      customEventType?: string;
+      pageId?: string;
+    }
+  | undefined {
+  const goal = String(optimizationGoal ?? '').trim();
+  const pixelId = promotedObject?.pixelId?.trim() || '';
+  const customEventType = promotedObject?.customEventType?.trim() || '';
+  const pageId = promotedObject?.pageId?.trim() || '';
+
+  if (
+    goal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
+    goal === MetaOptimizationGoal.VALUE
+  ) {
+    if (!pixelId) return undefined;
+    return {
+      pixelId,
+      ...(customEventType ? { customEventType } : {}),
+    };
+  }
+
+  if (goal === MetaOptimizationGoal.LANDING_PAGE_VIEWS) {
+    if (!pixelId) return undefined;
+    return { pixelId };
+  }
+
+  if (pageId) {
+    return { pageId };
+  }
+
+  return undefined;
+}
+
 export function assertPublishReady(
   campaign: CampaignStepDataDto,
   adSet: AdSetStepDataDto,
@@ -110,12 +193,11 @@ export function assertPublishReady(
       );
     }
     if (
-      (adSet.optimizationGoal === MetaOptimizationGoal.OFFSITE_CONVERSIONS ||
-        adSet.optimizationGoal === MetaOptimizationGoal.VALUE) &&
+      optimizationGoalNeedsConversionEvent(adSet.optimizationGoal) &&
       !adSet.promotedObject?.customEventType?.trim()
     ) {
       throw new BadRequestException(
-        'Select a conversion event before publishing this performance goal.',
+        'Select a conversion event before publishing this performance goal. Landing page views only need a Dataset — conversions/value need Dataset + event.',
       );
     }
   }
@@ -151,7 +233,7 @@ export function humanizeMetaPublishDetail(detail: string): string {
     return `${raw} Reconnect Meta Ads so Dealioo can publish with a fresh token.`;
   }
   if (lower.includes('pixel') || lower.includes('promoted_object')) {
-    return `${raw} Check Dataset (Meta Pixel) and conversion event on the Ad set step.`;
+    return `${raw} For conversions/value: select Dataset + conversion event (no Page in promoted object). For landing page views: select Dataset only. Facebook Page is chosen on the Ad creative step.`;
   }
   if (lower.includes('targeting') || lower.includes('geo_locations')) {
     return `${raw} Check included locations and age range on the Ad set step.`;
