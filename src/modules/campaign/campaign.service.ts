@@ -129,7 +129,6 @@ export class CampaignService {
       businessId,
       campaignName,
       campaignType,
-      campaignCategory,
       websiteUrl,
       imageUrl: dtoImageUrl,
       offer,
@@ -179,7 +178,6 @@ export class CampaignService {
       createdByUserId: user.id,
       campaignName,
       campaignType,
-      campaignCategory,
       websiteUrl,
       imageUrl,
       offer: offer.trim(),
@@ -365,9 +363,6 @@ export class CampaignService {
     if (updateCampaignDto.campaignName !== undefined) {
       campaign.campaignName = updateCampaignDto.campaignName;
     }
-    if (updateCampaignDto.campaignCategory !== undefined) {
-      campaign.campaignCategory = updateCampaignDto.campaignCategory;
-    }
     if (updateCampaignDto.websiteUrl !== undefined) {
       campaign.websiteUrl = updateCampaignDto.websiteUrl;
     }
@@ -409,6 +404,13 @@ export class CampaignService {
     }
 
     const saved = await this.campaignRepository.save(campaign);
+
+    if (updateCampaignDto.offer !== undefined) {
+      await this.funnelPagesService.ensureLandingEyebrowForCampaign(
+        saved.id,
+        saved.offer,
+      );
+    }
 
     if (updateCampaignDto.status !== undefined) {
       await this.funnelRepository.update(

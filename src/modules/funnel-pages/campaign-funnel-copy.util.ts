@@ -4,6 +4,7 @@ export type CampaignFunnelPageCopy = {
   subheadline: string;
   body: string;
   ctaLabel: string;
+  eyebrow?: string;
 };
 
 export type CampaignFunnelCopyInput = {
@@ -59,6 +60,7 @@ export function buildCampaignFunnelCopy(input: CampaignFunnelCopyInput): {
       subheadline: `A limited guest offer for ${offer} — claim it online and enjoy it in-store.`,
       body: landingBody,
       ctaLabel: `Get ${name}`,
+      eyebrow: offer,
     },
     signup: {
       pageTitle: `Join for ${name}`,
@@ -98,5 +100,24 @@ export function buildCampaignFunnelPageSchemas(
   if (includePaymentPage) {
     pages.payment = { ...copy.payment };
   }
+  return pages;
+}
+
+export function applyOfferEyebrowToPages(
+  pages: Record<string, unknown>,
+  offer?: string | null,
+): Record<string, unknown> {
+  const trimmed = offer?.trim();
+  if (!trimmed) {
+    return pages;
+  }
+
+  const landing = pages.landing;
+  if (typeof landing !== 'object' || landing === null || Array.isArray(landing)) {
+    pages.landing = { eyebrow: trimmed };
+    return pages;
+  }
+
+  (landing as Record<string, unknown>).eyebrow = trimmed;
   return pages;
 }

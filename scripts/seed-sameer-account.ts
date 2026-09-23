@@ -320,8 +320,8 @@ async function ensureCampaign(
     const inserted = (await AppDataSource.query(
       `INSERT INTO campaigns (
          business_id, created_by, campaign_name, website_url, offer, price,
-         status, campaign_type, campaign_category, description
-       ) VALUES ($1, $2, $3, $4, $5, $6, 'published', 'prepaid', $7, $8)
+         status, campaign_type, description
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'published', 'prepaid', $7)
        RETURNING id`,
       [
         businessId,
@@ -330,7 +330,6 @@ async function ensureCampaign(
         `https://${slug}.example.com`,
         plan.name,
         (plan.priceCents / 100).toFixed(2),
-        plan.category,
         plan.name,
       ],
     )) as Array<{ id: number }>;

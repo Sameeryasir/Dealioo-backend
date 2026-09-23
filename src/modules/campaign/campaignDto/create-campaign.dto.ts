@@ -13,7 +13,6 @@ import {
 } from 'class-validator';
 import {
   CampaignPublicationStatus,
-  CampaignCategory,
   CampaignType,
 } from '../../../db/entities/campaign.entity';
 
@@ -30,9 +29,6 @@ export class CreateCampaignDto {
 
   @IsEnum(CampaignType)
   campaignType!: CampaignType;
-
-  @IsEnum(CampaignCategory)
-  campaignCategory!: CampaignCategory;
 
   @IsString()
   @IsNotEmpty()
@@ -64,7 +60,7 @@ export class CreateCampaignDto {
   )
   @IsString()
   @IsNotEmpty()
-  @MaxLength(50)
+  @MaxLength(100)
   offer!: string;
 
   @Transform(({ value }) =>

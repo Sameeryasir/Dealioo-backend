@@ -12,7 +12,6 @@ import {
   Min,
 } from 'class-validator';
 import {
-  CampaignCategory,
   CampaignPublicationStatus,
 } from '../../../db/entities/campaign.entity';
 
@@ -22,10 +21,6 @@ export class UpdateCampaignDto {
   @IsNotEmpty()
   @MaxLength(30)
   campaignName?: string;
-
-  @IsOptional()
-  @IsEnum(CampaignCategory)
-  campaignCategory?: CampaignCategory;
 
   @IsOptional()
   @IsString()
@@ -55,7 +50,7 @@ export class UpdateCampaignDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(50)
+  @MaxLength(100)
   offer?: string;
 
   @IsOptional()

@@ -270,6 +270,7 @@ export class FunnelService {
     campaignId: number;
     businessId: number | null;
     campaignType: CampaignType;
+    offer: string | null;
     pixelId: string | null;
     googleTagManagerId: string | null;
     googleAdsSignupConversionLabel: string | null;
@@ -302,7 +303,7 @@ export class FunnelService {
 
     const campaign = await this.campaignRepository.findOne({
       where: { id: funnel.campaignId },
-      select: { id: true, businessId: true, campaignType: true },
+      select: { id: true, businessId: true, campaignType: true, offer: true },
     });
     if (!campaign) {
       throw new NotFoundException('Campaign not found for funnel');
@@ -340,9 +341,16 @@ export class FunnelService {
     const pageTypes = this.publicPagesForStep(step);
     const resolvedStep = pageTypes[0] ?? FunnelPageType.LANDING;
 
-    const pages = await this.funnelPagesService.loadSubsetPages(
-      funnel.id,
-      pageTypes,
+    if (pageTypes.includes(FunnelPageType.LANDING)) {
+      await this.funnelPagesService.ensureLandingEyebrowFromOffer(
+        funnel.id,
+        campaign.offer,
+      );
+    }
+
+    const pages = this.funnelPagesService.applyOfferEyebrowToPages(
+      await this.funnelPagesService.loadSubsetPages(funnel.id, pageTypes),
+      campaign.offer,
     );
 
     return {
@@ -350,6 +358,7 @@ export class FunnelService {
       campaignId: funnel.campaignId,
       businessId,
       campaignType,
+      offer: campaign.offer?.trim() || null,
       pixelId: tracking.pixelId,
       googleTagManagerId: tracking.googleTagManagerId,
       googleAdsSignupConversionLabel: tracking.googleAdsSignupConversionLabel,
@@ -495,7 +504,20 @@ export class FunnelService {
     if (!funnel) {
       return null;
     }
-    funnel.pages = await this.funnelPagesService.loadAssembledPages(funnel.id);
+
+    const campaign = await this.campaignRepository.findOne({
+      where: { id: campaignId },
+      select: { id: true, offer: true },
+    });
+    await this.funnelPagesService.ensureLandingEyebrowFromOffer(
+      funnel.id,
+      campaign?.offer,
+    );
+
+    funnel.pages = this.funnelPagesService.applyOfferEyebrowToPages(
+      await this.funnelPagesService.loadAssembledPages(funnel.id),
+      campaign?.offer,
+    );
     return funnel;
   }
 

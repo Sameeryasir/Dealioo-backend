@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
+import { Campaign } from '../../db/entities/campaign.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { FunnelPage } from '../../db/entities/funnel-page.entity';
 import {
@@ -10,7 +11,10 @@ import {
   isFunnelPageType,
 } from '../../db/entities/funnel-page-type';
 import { FunnelPageVersion } from '../../db/entities/funnel-page-version.entity';
-import { buildCampaignFunnelPageSchemas } from './campaign-funnel-copy.util';
+import {
+  applyOfferEyebrowToPages,
+  buildCampaignFunnelPageSchemas,
+} from './campaign-funnel-copy.util';
 
 export type SyncFunnelPagesInput = {
   funnelId: number;
@@ -25,7 +29,7 @@ export type SyncFunnelPagesInput = {
 };
 
 @Injectable()
-export class FunnelPagesService {
+export class FunnelPagesService implements OnModuleInit {
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(Funnel)
@@ -35,6 +39,97 @@ export class FunnelPagesService {
     @InjectRepository(FunnelPageVersion)
     private readonly funnelPageVersionRepository: Repository<FunnelPageVersion>,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.backfillLandingEyebrowsFromCampaignOffers();
+    } catch {
+    }
+  }
+
+  applyOfferEyebrowToPages(
+    pages: Record<string, unknown>,
+    offer?: string | null,
+  ): Record<string, unknown> {
+    return applyOfferEyebrowToPages(pages, offer);
+  }
+
+  async ensureLandingEyebrowFromOffer(
+    funnelId: number,
+    offer?: string | null,
+  ): Promise<void> {
+    const trimmed = offer?.trim();
+    if (!trimmed || funnelId <= 0) {
+      return;
+    }
+
+    const page = await this.funnelPageRepository.findOne({
+      where: { funnelId, pageType: FunnelPageType.LANDING },
+    });
+    if (!page) {
+      return;
+    }
+
+    const schema = this.asPageObject(page.schema);
+    const current =
+      typeof schema.eyebrow === 'string' ? schema.eyebrow.trim() : '';
+    if (current === trimmed) {
+      return;
+    }
+
+    schema.eyebrow = trimmed;
+    page.schema = schema;
+    await this.funnelPageRepository.save(page);
+  }
+
+  async ensureLandingEyebrowForCampaign(
+    campaignId: number,
+    offer?: string | null,
+  ): Promise<void> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { campaignId },
+      select: { id: true },
+    });
+    if (!funnel) {
+      return;
+    }
+    await this.ensureLandingEyebrowFromOffer(funnel.id, offer);
+  }
+
+  async backfillLandingEyebrowsFromCampaignOffers(): Promise<number> {
+    const rows = await this.funnelPageRepository
+      .createQueryBuilder('fp')
+      .innerJoin(Funnel, 'f', 'f.id = fp.funnel_id AND f.deleted_at IS NULL')
+      .innerJoin(Campaign, 'c', 'c.id = f.campaign_id AND c.deleted_at IS NULL')
+      .select('fp.id', 'id')
+      .addSelect('fp.schema', 'schema')
+      .addSelect('c.offer', 'offer')
+      .where('fp.page_type = :pageType', { pageType: FunnelPageType.LANDING })
+      .andWhere("c.offer IS NOT NULL AND TRIM(c.offer) <> ''")
+      .getRawMany<{ id: string; schema: Record<string, unknown> | string; offer: string }>();
+
+    let updated = 0;
+    for (const row of rows) {
+      const offer = row.offer?.trim();
+      if (!offer) continue;
+
+      const schema =
+        typeof row.schema === 'string'
+          ? this.asPageObject(JSON.parse(row.schema))
+          : this.asPageObject(row.schema);
+      const current =
+        typeof schema.eyebrow === 'string' ? schema.eyebrow.trim() : '';
+      if (current === offer) continue;
+
+      schema.eyebrow = offer;
+      await this.funnelPageRepository.update(
+        { id: row.id },
+        { schema },
+      );
+      updated += 1;
+    }
+    return updated;
+  }
 
   assembleFromRows(rows: FunnelPage[]): Record<string, unknown> {
     const pages: Record<string, unknown> = {};
