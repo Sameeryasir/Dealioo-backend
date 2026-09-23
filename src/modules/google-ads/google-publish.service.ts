@@ -14,6 +14,7 @@ import type { Customer, MutateOperation, resources, services } from 'google-ads-
 import { DataSource, Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
+import { GoogleCampaign } from '../../db/entities/google-campaign.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
 import { BusinessAccessService } from '../business-access/business-access.service';
@@ -80,6 +81,8 @@ export class GooglePublishService {
     private readonly dataSource: DataSource,
     @InjectRepository(GoogleCampaignDraft)
     private readonly draftRepository: Repository<GoogleCampaignDraft>,
+    @InjectRepository(GoogleCampaign)
+    private readonly googleCampaignRepository: Repository<GoogleCampaign>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly businessAccessService: BusinessAccessService,
@@ -398,6 +401,13 @@ export class GooglePublishService {
     const draftData = draft.draftData!;
     const ctx: PublishContext = { customer, customerId, draftData };
 
+    const tracking = await this.findOrCreateTrackingRow(
+      userId,
+      businessId,
+      customerId,
+      draft,
+    );
+
     await this.completeStep(draft, 'preparing');
 
     let budgetId = draft.googleBudgetId;
@@ -411,6 +421,9 @@ export class GooglePublishService {
       budgetId = await this.createCampaignBudget(ctx);
       draft.googleBudgetId = budgetId;
       await this.draftRepository.save(draft);
+      await this.syncTrackingPartial(tracking.id, {
+        googleBudgetId: budgetId,
+      });
       await this.completeStep(draft, 'budget');
     }
 
@@ -419,6 +432,10 @@ export class GooglePublishService {
       campaignId = await this.createCampaign(ctx, budgetId!);
       draft.googleCampaignId = campaignId;
       await this.draftRepository.save(draft);
+      await this.syncTrackingPartial(tracking.id, {
+        googleCampaignId: campaignId,
+        googleBudgetId: budgetId,
+      });
     }
 
     await this.beginStep(draft, 'campaign');
@@ -434,7 +451,13 @@ export class GooglePublishService {
       adGroupId = await this.createAdGroup(ctx, campaignId!);
       draft.googleAdGroupId = adGroupId;
       await this.draftRepository.save(draft);
+      await this.syncTrackingPartial(tracking.id, {
+        googleAdGroupId: adGroupId,
+      });
+      await this.createAdGroupDemographics(ctx, adGroupId!);
       await this.completeStep(draft, 'ad_group');
+    } else {
+      await this.createAdGroupDemographics(ctx, adGroupId);
     }
 
     if (keywordIds.length === 0) {
@@ -442,6 +465,9 @@ export class GooglePublishService {
       keywordIds = await this.createKeywords(ctx, adGroupId!);
       draft.googleKeywordIds = keywordIds;
       await this.draftRepository.save(draft);
+      await this.syncTrackingPartial(tracking.id, {
+        googleKeywordIds: keywordIds,
+      });
       await this.completeStep(draft, 'keywords');
     }
 
@@ -451,6 +477,9 @@ export class GooglePublishService {
       draft.googleAdId = adId;
       await this.draftRepository.save(draft);
       await this.uploadBusinessBrandingAssets(ctx, campaignId!);
+      await this.syncTrackingPartial(tracking.id, {
+        googleAdId: adId,
+      });
       await this.completeStep(draft, 'ads');
     }
 
@@ -467,6 +496,27 @@ export class GooglePublishService {
     draft.googleAdId = adId;
     draft.googleKeywordIds = keywordIds;
     await this.draftRepository.save(draft);
+
+    await this.googleCampaignRepository.update(tracking.id, {
+      googleCampaignId: campaignId,
+      googleBudgetId: budgetId,
+      googleAdGroupId: adGroupId,
+      googleAdId: adId,
+      googleKeywordIds: keywordIds,
+      campaignName:
+        draft.campaignName?.trim() ||
+        draft.draftData?.campaignName?.trim() ||
+        campaignId,
+      goal: draft.goal ?? draft.draftData?.goal ?? null,
+      campaignType: draft.campaignType ?? draft.draftData?.campaignType ?? null,
+      budget:
+        draft.dailyBudget ??
+        (draft.draftData?.dailyBudget != null
+          ? String(draft.draftData.dailyBudget)
+          : null),
+      status: 'PAUSED',
+      errorMessage: null,
+    });
 
     this.logger.log(
       `Google publish done: draft=${draft.id} business=${businessId} job=${jobId} user=${userId} campaign=${campaignId} adGroup=${adGroupId} ad=${adId}`,
@@ -486,6 +536,125 @@ export class GooglePublishService {
         source: 'google',
       })
       .catch(() => undefined);
+  }
+
+  private async findOrCreateTrackingRow(
+    userId: number,
+    businessId: number,
+    customerId: string,
+    draft: GoogleCampaignDraft,
+  ): Promise<GoogleCampaign> {
+    const byDraft = await this.googleCampaignRepository.findOne({
+      where: { businessId, draftId: draft.id },
+    });
+    if (byDraft) {
+      await this.googleCampaignRepository.update(byDraft.id, {
+        status: 'PENDING',
+        errorMessage: null,
+        customerId,
+        campaignName:
+          draft.campaignName?.trim() ||
+          draft.draftData?.campaignName?.trim() ||
+          byDraft.campaignName,
+        goal: draft.goal ?? draft.draftData?.goal ?? byDraft.goal,
+        campaignType:
+          draft.campaignType ??
+          draft.draftData?.campaignType ??
+          byDraft.campaignType,
+        budget:
+          draft.dailyBudget ??
+          (draft.draftData?.dailyBudget != null
+            ? String(draft.draftData.dailyBudget)
+            : byDraft.budget),
+        googleCampaignId: draft.googleCampaignId ?? byDraft.googleCampaignId,
+        googleBudgetId: draft.googleBudgetId ?? byDraft.googleBudgetId,
+        googleAdGroupId: draft.googleAdGroupId ?? byDraft.googleAdGroupId,
+        googleAdId: draft.googleAdId ?? byDraft.googleAdId,
+        googleKeywordIds: draft.googleKeywordIds ?? byDraft.googleKeywordIds,
+      });
+      const refreshed = await this.googleCampaignRepository.findOne({
+        where: { id: byDraft.id },
+      });
+      if (refreshed) return refreshed;
+      return byDraft;
+    }
+
+    if (draft.googleCampaignId) {
+      const [existing] = await this.googleCampaignRepository.find({
+        where: {
+          businessId,
+          googleCampaignId: draft.googleCampaignId,
+        },
+        order: { createdAt: 'DESC' },
+        take: 1,
+      });
+
+      if (existing) {
+        await this.googleCampaignRepository.update(existing.id, {
+          draftId: draft.id,
+          status: 'PENDING',
+          errorMessage: null,
+          customerId,
+        });
+        return existing;
+      }
+    }
+
+    return this.googleCampaignRepository.save({
+      userId,
+      businessId,
+      draftId: draft.id,
+      customerId,
+      campaignName:
+        draft.campaignName?.trim() ||
+        draft.draftData?.campaignName?.trim() ||
+        null,
+      goal: draft.goal ?? draft.draftData?.goal ?? null,
+      campaignType: draft.campaignType ?? draft.draftData?.campaignType ?? null,
+      budget:
+        draft.dailyBudget ??
+        (draft.draftData?.dailyBudget != null
+          ? String(draft.draftData.dailyBudget)
+          : null),
+      status: 'PENDING',
+      errorMessage: null,
+      googleCampaignId: draft.googleCampaignId,
+      googleBudgetId: draft.googleBudgetId,
+      googleAdGroupId: draft.googleAdGroupId,
+      googleAdId: draft.googleAdId,
+      googleKeywordIds: draft.googleKeywordIds,
+    });
+  }
+
+  private async syncTrackingPartial(
+    trackingId: string,
+    partial: {
+      googleCampaignId?: string | null;
+      googleBudgetId?: string | null;
+      googleAdGroupId?: string | null;
+      googleAdId?: string | null;
+      googleKeywordIds?: string[] | null;
+    },
+  ): Promise<void> {
+    const update: Partial<GoogleCampaign> = {};
+    if (partial.googleCampaignId) {
+      update.googleCampaignId = partial.googleCampaignId;
+    }
+    if (partial.googleBudgetId) {
+      update.googleBudgetId = partial.googleBudgetId;
+    }
+    if (partial.googleAdGroupId) {
+      update.googleAdGroupId = partial.googleAdGroupId;
+    }
+    if (partial.googleAdId) {
+      update.googleAdId = partial.googleAdId;
+    }
+    if (partial.googleKeywordIds) {
+      update.googleKeywordIds = partial.googleKeywordIds;
+    }
+    if (Object.keys(update).length > 0) {
+      await this.googleCampaignRepository.update(trackingId, update);
+    }
   }
 
   private async createCampaignBudget(ctx: PublishContext): Promise<string> {
@@ -1090,6 +1259,90 @@ export class GooglePublishService {
     return id;
   }
 
+  private async createAdGroupDemographics(
+    ctx: PublishContext,
+    adGroupId: string,
+  ): Promise<void> {
+    const adGroupResource = ResourceNames.adGroup(ctx.customerId, adGroupId);
+    const selectedAges = new Set(ctx.draftData.ageRanges ?? []);
+    const allAgeTypes = [
+      enums.AgeRangeType.AGE_RANGE_18_24,
+      enums.AgeRangeType.AGE_RANGE_25_34,
+      enums.AgeRangeType.AGE_RANGE_35_44,
+      enums.AgeRangeType.AGE_RANGE_45_54,
+      enums.AgeRangeType.AGE_RANGE_55_64,
+      enums.AgeRangeType.AGE_RANGE_65_UP,
+    ] as const;
+
+    const includedAgeTypes = new Set<number>();
+    if (selectedAges.has('18-24')) {
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_18_24);
+    }
+    if (selectedAges.has('25-34')) {
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_25_34);
+    }
+    if (selectedAges.has('35-44')) {
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_35_44);
+    }
+    if (selectedAges.has('45-54')) {
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_45_54);
+    }
+    if (selectedAges.has('55+')) {
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_55_64);
+      includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_65_UP);
+    }
+
+    if (includedAgeTypes.size > 0 && includedAgeTypes.size < allAgeTypes.length) {
+      for (const ageType of allAgeTypes) {
+        if (includedAgeTypes.has(ageType)) continue;
+        const label = `age_exclude:${ageType}`;
+        try {
+          await this.mutateOne(ctx, 'ad_group', label, {
+            entity: 'ad_group_criterion',
+            operation: 'create',
+            resource: {
+              ad_group: adGroupResource,
+              negative: true,
+              age_range: { type: ageType },
+            },
+          });
+        } catch (err) {
+          if (!this.isAlreadyExistsGoogleError(err)) {
+            throw err;
+          }
+          this.logger.log(
+            `Google age criterion already present, skipping op=${label}`,
+          );
+        }
+      }
+    }
+
+    const gender = (ctx.draftData.gender ?? 'ALL').toUpperCase();
+    if (gender === 'MALE' || gender === 'FEMALE') {
+      const excludeType =
+        gender === 'MALE' ? enums.GenderType.FEMALE : enums.GenderType.MALE;
+      const label = `gender_exclude:${excludeType}`;
+      try {
+        await this.mutateOne(ctx, 'ad_group', label, {
+          entity: 'ad_group_criterion',
+          operation: 'create',
+          resource: {
+            ad_group: adGroupResource,
+            negative: true,
+            gender: { type: excludeType },
+          },
+        });
+      } catch (err) {
+        if (!this.isAlreadyExistsGoogleError(err)) {
+          throw err;
+        }
+        this.logger.log(
+          `Google gender criterion already present, skipping op=${label}`,
+        );
+      }
+    }
+  }
+
   private async createKeywords(
     ctx: PublishContext,
     adGroupId: string,
@@ -1493,6 +1746,20 @@ export class GooglePublishService {
     draft.errorMessage = withStep;
     draft.publishStep = step;
     await this.draftRepository.save(draft);
+
+    await this.googleCampaignRepository.update(
+      { businessId: draft.businessId, draftId: draft.id },
+      {
+        status: 'FAILED',
+        errorMessage: withStep,
+        googleCampaignId: draft.googleCampaignId,
+        googleBudgetId: draft.googleBudgetId,
+        googleAdGroupId: draft.googleAdGroupId,
+        googleAdId: draft.googleAdId,
+        googleKeywordIds: draft.googleKeywordIds,
+      },
+    );
+
     this.logger.error(
       `Google publish failed for draft=${draft.id} at step=${step}: ${withStep}`,
     );

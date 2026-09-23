@@ -2,10 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { Business } from '../../db/entities/business.entity';
+import { GoogleCampaign } from '../../db/entities/google-campaign.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
 import { User } from '../../db/entities/user.entity';
@@ -44,6 +47,12 @@ import {
 import {
   createDefaultGoogleCampaignDraftData,
 } from './google-campaign-draft-defaults';
+import {
+  createGoogleAdsApiClient,
+  createGoogleAdsCustomer,
+  normalizeGoogleCustomerId,
+} from './google-ads-sdk.client';
+import { GoogleAdsTokenService } from './google-ads-token.service';
 
 type DraftColumnPatch = {
   draftData?: GoogleCampaignBuilderDraftData | null;
@@ -69,12 +78,19 @@ type DraftColumnPatch = {
 
 @Injectable()
 export class GoogleCampaignDraftService {
+  private readonly logger = new Logger(GoogleCampaignDraftService.name);
+
   constructor(
     @InjectRepository(GoogleCampaignDraft)
     private readonly draftRepository: Repository<GoogleCampaignDraft>,
+    @InjectRepository(GoogleCampaign)
+    private readonly googleCampaignRepository: Repository<GoogleCampaign>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly googleAdsTokenService: GoogleAdsTokenService,
   ) {}
 
   
@@ -503,7 +519,15 @@ export class GoogleCampaignDraftService {
       order: { updatedAt: 'DESC' },
     });
 
-    return drafts.map((draft) => ({
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+
+    const synced = business
+      ? await this.syncPublishedDraftsWithGoogle(business, drafts)
+      : drafts;
+
+    return synced.map((draft) => ({
       id: draft.id,
       businessId: draft.businessId,
       status: draft.status,
@@ -521,6 +545,108 @@ export class GoogleCampaignDraftService {
       logoPreviewUrl: draft.draftData?.logoPreviewUrl?.trim() || null,
       selectedFunnelName: draft.draftData?.selectedFunnelName?.trim() || null,
     }));
+  }
+
+  private async syncPublishedDraftsWithGoogle(
+    business: Business,
+    drafts: GoogleCampaignDraft[],
+  ): Promise<GoogleCampaignDraft[]> {
+    const published = drafts.filter((draft) => {
+      const status = (draft.status ?? '').toUpperCase();
+      const publishStatus = (draft.publishStatus ?? '').toUpperCase();
+      return (
+        Boolean(draft.googleCampaignId?.trim()) &&
+        (status === GoogleCampaignDraftStatus.PUBLISHED ||
+          publishStatus === 'PUBLISHED' ||
+          Boolean(draft.googleAdId))
+      );
+    });
+
+    if (published.length === 0) {
+      return drafts;
+    }
+
+    let liveIds: Set<string>;
+    try {
+      liveIds = await this.fetchLiveGoogleCampaignIds(business);
+    } catch (err) {
+      this.logger.warn(
+        `Could not sync Google campaigns for business ${business.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return drafts;
+    }
+
+    const missing = published.filter(
+      (draft) => !liveIds.has(String(draft.googleCampaignId).trim()),
+    );
+    if (missing.length === 0) {
+      return drafts;
+    }
+
+    const missingIds = missing.map((draft) => draft.id);
+    const missingGoogleIds = missing
+      .map((draft) => draft.googleCampaignId?.trim())
+      .filter((id): id is string => Boolean(id));
+
+    await this.draftRepository.delete({ id: In(missingIds) });
+    if (missingGoogleIds.length > 0) {
+      await this.googleCampaignRepository.delete({
+        businessId: business.id,
+        googleCampaignId: In(missingGoogleIds),
+      });
+    }
+
+    this.logger.log(
+      `Synced Google campaigns for business ${business.id}: removed ${missing.length} deleted campaign(s).`,
+    );
+
+    const removed = new Set(missingIds);
+    return drafts.filter((draft) => !removed.has(draft.id));
+  }
+
+  private async fetchLiveGoogleCampaignIds(
+    business: Business,
+  ): Promise<Set<string>> {
+    const credentials =
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+    const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
+    const loginCustomerId = normalizeGoogleCustomerId(
+      credentials.loginCustomerId || customerId,
+    );
+    if (!customerId) {
+      return new Set();
+    }
+
+    const client = createGoogleAdsApiClient({
+      clientId: this.googleAdsTokenService.getClientId(),
+      clientSecret: this.googleAdsTokenService.getClientSecret(),
+      developerToken: this.googleAdsTokenService.getDeveloperToken(),
+    });
+    const customer = createGoogleAdsCustomer(client, {
+      customerId,
+      refreshToken: credentials.refreshToken,
+      loginCustomerId,
+    });
+
+    const query = `
+      SELECT campaign.id, campaign.status
+      FROM campaign
+      WHERE campaign.status != 'REMOVED'
+    `.trim();
+
+    type Row = {
+      campaign?: { id?: string | number; status?: string | number };
+    };
+
+    const rows = (await customer.query(query)) as Row[];
+    const live = new Set<string>();
+    for (const row of rows) {
+      const id = String(row.campaign?.id ?? '').replace(/\D/g, '');
+      if (id) live.add(id);
+    }
+    return live;
   }
 
   async getDraft(
@@ -559,6 +685,58 @@ export class GoogleCampaignDraftService {
       errorMessage: draft.errorMessage ?? null,
       updatedAt: draft.updatedAt ?? null,
     };
+  }
+
+  async deleteDraft(
+    user: User,
+    businessId: number,
+    draftId: string,
+  ): Promise<{ deleted: true; draftId: string }> {
+    await this.assertBusinessAccess(user, businessId, 'create');
+
+    const draft = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        businessId,
+        userId: user.id,
+      },
+    });
+
+    if (!draft) {
+      throw new NotFoundException('Google campaign draft not found.');
+    }
+
+    const status = (draft.status ?? '').toUpperCase();
+    const publishStatus = (draft.publishStatus ?? '').toUpperCase();
+    const isPublishing =
+      status === GoogleCampaignDraftStatus.PUBLISHING ||
+      status === GoogleCampaignDraftStatus.VALIDATING ||
+      publishStatus === 'QUEUED' ||
+      publishStatus === 'PUBLISHING';
+    const isPublished =
+      status === GoogleCampaignDraftStatus.PUBLISHED ||
+      publishStatus === 'PUBLISHED' ||
+      Boolean(draft.googleCampaignId && draft.googleAdId);
+
+    if (isPublishing) {
+      throw new BadRequestException(
+        'This campaign is publishing. Wait for it to finish before deleting.',
+      );
+    }
+
+    if (isPublished) {
+      throw new BadRequestException(
+        'Published campaigns cannot be deleted here. Delete them from Google Ads instead.',
+      );
+    }
+
+    await this.googleCampaignRepository.delete({
+      businessId,
+      draftId: draft.id,
+    });
+    await this.draftRepository.remove(draft);
+
+    return { deleted: true, draftId: draft.id };
   }
 
   async updateDraftProgress(
@@ -1145,31 +1323,24 @@ export class GoogleCampaignDraftService {
     goal: NonNullable<GoogleCampaignBuilderDraftData['goal']>,
     dto: SaveGoogleGoalDetailsStepDto,
   ): void {
-    if (goal === 'SALES') {
-      if (!dto.salesChannel) {
-        throw new BadRequestException('Choose how customers buy from you.');
+    const funnelGoals =
+      goal === 'SALES' || goal === 'LEADS' || goal === 'WEBSITE_TRAFFIC';
+
+    if (funnelGoals) {
+      if (dto.destinationType && dto.destinationType !== 'dealioo_funnel') {
+        throw new BadRequestException(
+          'Google campaigns must send traffic to a Dealioo funnel.',
+        );
       }
-      if (
-        (dto.salesChannel === 'WEBSITE' ||
-          dto.salesChannel === 'ONLINE_STORE' ||
-          dto.salesChannel === 'MULTIPLE') &&
-        !this.isValidHttpUrl(dto.websiteUrl)
-      ) {
-        throw new BadRequestException('Enter a valid website URL.');
+      if (!this.isValidHttpUrl(dto.landingPageUrl || dto.websiteUrl)) {
+        throw new BadRequestException(
+          'Select a published Dealioo funnel with a valid link.',
+        );
       }
-      if (
-        (dto.salesChannel === 'PHYSICAL_STORE' ||
-          dto.salesChannel === 'MULTIPLE') &&
-        !dto.businessLocation?.trim()
-      ) {
-        throw new BadRequestException('Add your business location.');
-      }
-      if (
-        dto.salesChannel === 'PHONE_ORDERS' &&
-        !dto.businessPhone?.trim()
-      ) {
-        throw new BadRequestException('Add a phone number.');
-      }
+    }
+
+    if (goal === 'SALES' && !dto.salesChannel) {
+      throw new BadRequestException('Choose how customers buy from you.');
     }
 
     if (goal === 'LEADS') {
@@ -1180,87 +1351,21 @@ export class GoogleCampaignDraftService {
       if (!primary || methods.length !== 1) {
         throw new BadRequestException('Choose one primary lead method.');
       }
-      if (
-        primary === 'CONTACT_FORM' &&
-        !this.isValidHttpUrl(dto.landingPageUrl || dto.websiteUrl)
-      ) {
-        throw new BadRequestException('Add a landing page URL.');
-      }
-      if (primary === 'GOOGLE_LEAD_FORM') {
-        if (!dto.businessName?.trim()) {
-          throw new BadRequestException('Add a business name.');
-        }
-        if (!dto.googleLeadFormHeadline?.trim()) {
-          throw new BadRequestException('Add a lead form headline.');
-        }
-        if (!dto.googleLeadFormDescription?.trim()) {
-          throw new BadRequestException('Add a lead form description.');
-        }
-        if (!dto.googleLeadFormCta?.trim()) {
-          throw new BadRequestException('Choose a call to action.');
-        }
-        if (!dto.googleLeadFormCtaDescription?.trim()) {
-          throw new BadRequestException('Add a CTA description.');
-        }
-        if (!dto.googleLeadFormFields?.length) {
-          throw new BadRequestException('Select at least one form field.');
-        }
-        if (!this.isValidHttpUrl(dto.googleLeadFormPrivacyUrl)) {
-          throw new BadRequestException('Add a privacy policy URL.');
-        }
-        if (!dto.googleLeadFormThankYouHeadline?.trim()) {
-          throw new BadRequestException('Add a thank-you headline.');
-        }
-        if (!dto.googleLeadFormThankYouMessage?.trim()) {
-          throw new BadRequestException('Add a thank-you message.');
-        }
-        if (!dto.googleLeadFormPostSubmitAction?.trim()) {
-          throw new BadRequestException('Choose a post-submit action.');
-        }
-        if (
-          dto.googleLeadFormPostSubmitAction === 'VISIT_WEBSITE' &&
-          !this.isValidHttpUrl(
-            dto.googleLeadFormPostSubmitUrl || dto.websiteUrl || dto.landingPageUrl,
-          )
-        ) {
-          throw new BadRequestException(
-            'Add a website URL for the post-submit action.',
-          );
-        }
-      }
-      if (primary === 'PHONE_CALLS' && !dto.businessPhone?.trim()) {
-        throw new BadRequestException('Add a phone number.');
-      }
-    }
-
-    if (goal === 'WEBSITE_TRAFFIC') {
-      if (!this.isValidHttpUrl(dto.websiteUrl)) {
+      if (primary !== 'CONTACT_FORM') {
         throw new BadRequestException(
-          'Where should visitors go? Add a valid URL.',
+          'Leads campaigns must use a Dealioo funnel form destination.',
         );
       }
-      if (!dto.trafficAction) {
-        throw new BadRequestException('Choose an action for visitors.');
-      }
     }
 
-    if (goal === 'AWARENESS') {
-      if (!dto.businessName?.trim()) {
-        throw new BadRequestException('Add your business name.');
-      }
+    if (goal === 'WEBSITE_TRAFFIC' && !dto.trafficAction) {
+      throw new BadRequestException('Choose an action for visitors.');
     }
 
-    if (goal === 'LOCAL_VISITS') {
-      if (!dto.businessLocation?.trim()) {
-        throw new BadRequestException('Add your business location.');
-      }
-      if (!dto.businessPhone?.trim()) {
-        throw new BadRequestException('Add a phone number.');
-      }
-    }
-
-    if (goal === 'APP_PROMOTION' && !dto.appName?.trim()) {
-      throw new BadRequestException('Add your app name.');
+    if (goal === 'LOCAL_VISITS' || goal === 'APP_PROMOTION') {
+      throw new BadRequestException(
+        'This goal is not supported. Choose Sales, Leads, or Website Traffic to send people to a Dealioo funnel.',
+      );
     }
   }
 

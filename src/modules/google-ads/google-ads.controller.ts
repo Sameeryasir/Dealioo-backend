@@ -322,6 +322,21 @@ export class GoogleAdsController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Delete('business/:businessId/drafts/:draftId')
+  @HttpCode(HttpStatus.OK)
+  async deleteDraft(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<{ deleted: true; draftId: string }> {
+    return this.googleCampaignDraftService.deleteDraft(
+      req.user,
+      businessId,
+      draftId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Put('business/:businessId/drafts/:draftId/progress')
   async updateDraftProgress(
     @Req() req,

@@ -87,45 +87,46 @@ export function validateGoogleDraftForPublish(
     });
   }
 
-  if (draft.goal === 'SALES') {
-    if (!draft.salesChannel) {
+  const funnelGoals =
+    draft.goal === 'SALES' ||
+    draft.goal === 'LEADS' ||
+    draft.goal === 'WEBSITE_TRAFFIC';
+
+  if (draft.goal === 'LOCAL_VISITS' || draft.goal === 'APP_PROMOTION') {
+    errors.push({
+      step: 1,
+      field: 'goal',
+      message:
+        'This goal is not supported. Choose Sales, Leads, or Website Traffic to send people to a Dealioo funnel.',
+    });
+  }
+
+  if (funnelGoals) {
+    if (draft.destinationType && draft.destinationType !== 'dealioo_funnel') {
       errors.push({
         step: 2,
-        field: 'salesChannel',
-        message: 'Choose how customers buy from you.',
+        field: 'destinationType',
+        message: 'Google campaigns must send traffic to a Dealioo funnel.',
       });
-    } else {
-      const needsWebsite =
-        draft.salesChannel === 'WEBSITE' ||
-        draft.salesChannel === 'ONLINE_STORE' ||
-        draft.salesChannel === 'MULTIPLE';
-      const needsLocation =
-        draft.salesChannel === 'PHYSICAL_STORE' ||
-        draft.salesChannel === 'MULTIPLE';
-      const needsPhone = draft.salesChannel === 'PHONE_ORDERS';
-
-      if (needsWebsite && !isValidHttpUrl(draft.websiteUrl)) {
-        errors.push({
-          step: 2,
-          field: 'websiteUrl',
-          message: 'Enter a valid website URL.',
-        });
-      }
-      if (needsLocation && !draft.businessLocation?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'businessLocation',
-          message: 'Add your business location.',
-        });
-      }
-      if (needsPhone && !draft.businessPhone?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'businessPhone',
-          message: 'Add a phone number.',
-        });
-      }
     }
+    if (
+      !draft.selectedFunnelId ||
+      !isValidHttpUrl(draft.landingPageUrl || draft.websiteUrl)
+    ) {
+      errors.push({
+        step: 2,
+        field: 'destinationType',
+        message: 'Select a published Dealioo funnel with a valid link.',
+      });
+    }
+  }
+
+  if (draft.goal === 'SALES' && !draft.salesChannel) {
+    errors.push({
+      step: 2,
+      field: 'salesChannel',
+      message: 'Choose how customers buy from you.',
+    });
   }
 
   if (draft.goal === 'LEADS') {
@@ -133,167 +134,20 @@ export function validateGoogleDraftForPublish(
       (id) => id !== 'WHATSAPP' && id !== 'APPOINTMENT_BOOKING',
     );
     const primary = methods[0] ?? null;
-    if (!primary || methods.length !== 1) {
+    if (!primary || methods.length !== 1 || primary !== 'CONTACT_FORM') {
       errors.push({
         step: 2,
         field: 'leadContactMethods',
-        message: 'Choose one primary lead method.',
-      });
-    }
-    if (
-      primary === 'CONTACT_FORM' &&
-      !isValidHttpUrl(draft.landingPageUrl || draft.websiteUrl)
-    ) {
-      errors.push({
-        step: 2,
-        field: 'landingPageUrl',
-        message: 'Add a landing page URL.',
-      });
-    }
-    if (primary === 'GOOGLE_LEAD_FORM') {
-      if (!draft.businessName?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'businessName',
-          message: 'Add a business name.',
-        });
-      }
-      if (!draft.googleLeadFormHeadline?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormHeadline',
-          message: 'Add a lead form headline.',
-        });
-      }
-      if (!draft.googleLeadFormDescription?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormDescription',
-          message: 'Add a lead form description.',
-        });
-      }
-      if (!draft.googleLeadFormCta?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormCta',
-          message: 'Choose a call to action.',
-        });
-      }
-      if (!draft.googleLeadFormCtaDescription?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormCtaDescription',
-          message: 'Add a CTA description.',
-        });
-      }
-      if (!draft.googleLeadFormFields?.length) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormFields',
-          message: 'Select at least one form field.',
-        });
-      }
-      if (!isValidHttpUrl(draft.googleLeadFormPrivacyUrl)) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormPrivacyUrl',
-          message: 'Add a privacy policy URL.',
-        });
-      }
-      if (!draft.googleLeadFormThankYouHeadline?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormThankYouHeadline',
-          message: 'Add a thank-you headline.',
-        });
-      }
-      if (!draft.googleLeadFormThankYouMessage?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormThankYouMessage',
-          message: 'Add a thank-you message.',
-        });
-      }
-      if (!draft.googleLeadFormPostSubmitAction?.trim()) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormPostSubmitAction',
-          message: 'Choose a post-submit action.',
-        });
-      }
-      if (
-        draft.googleLeadFormPostSubmitAction === 'VISIT_WEBSITE' &&
-        !isValidHttpUrl(
-          draft.googleLeadFormPostSubmitUrl ||
-            draft.websiteUrl ||
-            draft.landingPageUrl,
-        )
-      ) {
-        errors.push({
-          step: 2,
-          field: 'googleLeadFormPostSubmitUrl',
-          message: 'Add a website URL for the post-submit action.',
-        });
-      }
-    }
-    if (primary === 'PHONE_CALLS' && !draft.businessPhone?.trim()) {
-      errors.push({
-        step: 2,
-        field: 'businessPhone',
-        message: 'Add a phone number.',
+        message: 'Leads campaigns must use a Dealioo funnel form destination.',
       });
     }
   }
 
-  if (draft.goal === 'WEBSITE_TRAFFIC') {
-    if (!isValidHttpUrl(draft.websiteUrl)) {
-      errors.push({
-        step: 2,
-        field: 'websiteUrl',
-        message: 'Where should visitors go? Add a valid URL.',
-      });
-    }
-    if (!draft.trafficAction) {
-      errors.push({
-        step: 2,
-        field: 'trafficAction',
-        message: 'Choose an action for visitors.',
-      });
-    }
-  }
-
-  if (draft.goal === 'AWARENESS') {
-    if (!draft.businessName?.trim()) {
-      errors.push({
-        step: 2,
-        field: 'businessName',
-        message: 'Add your business name.',
-      });
-    }
-  }
-
-  if (draft.goal === 'LOCAL_VISITS') {
-    if (!draft.businessLocation?.trim()) {
-      errors.push({
-        step: 2,
-        field: 'businessLocation',
-        message: 'Add your business location.',
-      });
-    }
-    if (!draft.businessPhone?.trim()) {
-      errors.push({
-        step: 2,
-        field: 'businessPhone',
-        message: 'Add a phone number.',
-      });
-    }
-  }
-
-  if (draft.goal === 'APP_PROMOTION' && !draft.appName?.trim()) {
+  if (draft.goal === 'WEBSITE_TRAFFIC' && !draft.trafficAction) {
     errors.push({
       step: 2,
-      field: 'appName',
-      message: 'Add your app name.',
+      field: 'trafficAction',
+      message: 'Choose an action for visitors.',
     });
   }
 

@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import { Business } from '../../db/entities/business.entity';
+import { GoogleCampaign } from '../../db/entities/google-campaign.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { BusinessModule } from '../business/business.module';
@@ -23,6 +24,7 @@ import { GooglePublishService } from './google-publish.service';
     TypeOrmModule.forFeature([
       Business,
       IntegrationAuditLog,
+      GoogleCampaign,
       GoogleCampaignDraft,
     ]),
     BullModule.registerQueue({ name: GOOGLE_PUBLISH_QUEUE }),
