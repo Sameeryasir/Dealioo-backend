@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -12,6 +13,9 @@ import { User } from '../../db/entities/user.entity';
 import { CreateUserDto } from './userDto/create-user.dto';
 import { UpdateProfileDto } from './userDto/update-profile.dto';
 import { UpdateUserDto } from './userDto/update-user.dto';
+import { USERS_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
+import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import { SpacesService } from '../spaces/spaces.service';
 
 @Injectable()
 export class UserService {
@@ -20,6 +24,7 @@ export class UserService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
+    private readonly spacesService: SpacesService,
   ) {}
   async getAllUsers(createdByUserId: number): Promise<User[]> {
     return this.userRepository.find({
@@ -77,6 +82,37 @@ export class UserService {
 
     return this.userRepository.save(user);
   }
+
+  async updateOwnAvatar(
+    userId: number,
+    file: Express.Multer.File | undefined,
+  ): Promise<User> {
+    if (!file) {
+      throw new BadRequestException('Choose a profile photo to upload.');
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const avatarUrl = await persistUploadedFile(
+      this.spacesService,
+      file,
+      USERS_UPLOAD_SUBDIR,
+    );
+    if (!avatarUrl) {
+      throw new BadRequestException('Could not upload profile photo.');
+    }
+
+    user.avatar = avatarUrl;
+    return this.userRepository.save(user);
+  }
+
   async createUser(createUserDto: CreateUserDto, user: User): Promise<User> {
     const { email, password, phone, name, role: roleName } = createUserDto;
   

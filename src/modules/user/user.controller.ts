@@ -8,14 +8,23 @@ import {
   Post,
   Put,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { User } from '../../db/entities/user.entity';
 import { CreateUserDto } from './userDto/create-user.dto';
 import { UserService } from './user.service';
 import { UpdateUserDto } from './userDto/update-user.dto';
 import { UpdateProfileDto } from './userDto/update-profile.dto';
+import {
+  BUSINESS_LOGO_UPLOAD_MIMES,
+  createUploadMulterOptions,
+  sanitizeStoredUploadFileName,
+  USERS_UPLOAD_SUBDIR,
+} from '../../utils/disk-file-upload-multer';
 
 @Controller('user')
 export class UserController {
@@ -34,6 +43,27 @@ export class UserController {
     @Body() updateProfileDto: UpdateProfileDto,
   ): Promise<User> {
     return this.userService.updateOwnProfile(req.user.id, updateProfileDto);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('me/avatar')
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createUploadMulterOptions(USERS_UPLOAD_SUBDIR, {
+        allowedMimeTypes: BUSINESS_LOGO_UPLOAD_MIMES,
+        buildStoredFileName: (file) =>
+          sanitizeStoredUploadFileName(file.originalname),
+        fileFilterErrorMessage:
+          'Only image files are allowed for the profile photo (PNG, JPEG, WebP, GIF).',
+      }),
+    ),
+  )
+  async updateOwnAvatar(
+    @Req() req: { user: User },
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ): Promise<User> {
+    return this.userService.updateOwnAvatar(req.user.id, file);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -72,10 +102,14 @@ export class UserController {
 
     return this.userService.activateUser(id, user);
   }
-  
+
   @UseGuards(AuthGuard('jwt'))
   @Put(':id')
-  async updateUser(@Param('id') id: number, @Req() req, @Body() updateUserDto: UpdateUserDto): Promise<User> {
+  async updateUser(
+    @Param('id') id: number,
+    @Req() req,
+    @Body() updateUserDto: UpdateUserDto,
+  ): Promise<User> {
     const user = req.user;
 
     return this.userService.updateUser(id, updateUserDto, user);

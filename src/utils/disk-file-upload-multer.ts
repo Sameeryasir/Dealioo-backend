@@ -34,6 +34,8 @@ export const CAMPAIGNS_UPLOAD_SUBDIR = 'campaigns';
 
 export const BUSINESSES_UPLOAD_SUBDIR = 'businesses';
 
+export const USERS_UPLOAD_SUBDIR = 'users';
+
 export function publicUploadFileUrl(
   subdir: string,
   storedFileName: string,
