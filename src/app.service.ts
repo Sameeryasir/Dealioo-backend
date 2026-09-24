@@ -7,7 +7,7 @@ export class AppService {
 
     return {
       status: 'ok',
-      service: 'retention-backend',
+      service: 'dealio-backend',
       publicBaseUrl,
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.floor(process.uptime()),

@@ -241,17 +241,19 @@ export class GoogleAdsTokenService {
   }
 
   getClientId(): string {
-    const id = process.env.GOOGLE_CLIENT_ID?.trim();
+    const id = process.env.GOOGLE_ADS_CLIENT_ID?.trim();
     if (!id) {
-      throw new BadRequestException('GOOGLE_CLIENT_ID is not configured.');
+      throw new BadRequestException('GOOGLE_ADS_CLIENT_ID is not configured.');
     }
     return id;
   }
 
   getClientSecret(): string {
-    const secret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+    const secret = process.env.GOOGLE_ADS_CLIENT_SECRET?.trim();
     if (!secret) {
-      throw new BadRequestException('GOOGLE_CLIENT_SECRET is not configured.');
+      throw new BadRequestException(
+        'GOOGLE_ADS_CLIENT_SECRET is not configured.',
+      );
     }
     return secret;
   }

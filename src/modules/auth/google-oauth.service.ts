@@ -27,16 +27,16 @@ export class GoogleOAuthService {
 
   constructor(private readonly configService: ConfigService) {
     this.clientID =
-      this.configService.get<string>('GOOGLE_CLIENT_ID')?.trim() || '';
+      this.configService.get<string>('GOOGLE_LOGIN_CLIENT_ID')?.trim() || '';
     this.clientSecret =
-      this.configService.get<string>('GOOGLE_CLIENT_SECRET')?.trim() || '';
+      this.configService.get<string>('GOOGLE_LOGIN_CLIENT_SECRET')?.trim() || '';
     this.callbackURL =
-      this.configService.get<string>('GOOGLE_CALLBACK_URL')?.trim() || '';
+      this.configService.get<string>('GOOGLE_LOGIN_CALLBACK_URL')?.trim() || '';
     this.authURI =
-      this.configService.get<string>('GOOGLE_AUTH_URI')?.trim() ||
+      this.configService.get<string>('GOOGLE_LOGIN_AUTH_URI')?.trim() ||
       'https://accounts.google.com/o/oauth2/auth';
     this.tokenURI =
-      this.configService.get<string>('GOOGLE_TOKEN_URI')?.trim() ||
+      this.configService.get<string>('GOOGLE_LOGIN_TOKEN_URI')?.trim() ||
       'https://oauth2.googleapis.com/token';
     this.stateSecret =
       this.configService.get<string>('JWT_SECRET')?.trim() ||
@@ -45,7 +45,7 @@ export class GoogleOAuthService {
 
     if (!this.clientID || !this.clientSecret || !this.callbackURL) {
       throw new Error(
-        'GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL must be set for Google login.',
+        'GOOGLE_LOGIN_CLIENT_ID, GOOGLE_LOGIN_CLIENT_SECRET, and GOOGLE_LOGIN_CALLBACK_URL must be set for Google login.',
       );
     }
   }

@@ -301,7 +301,7 @@ export class GoogleAdsService {
       throw new BadRequestException(
         err instanceof Error
           ? err.message
-          : 'GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET is not configured.',
+          : 'GOOGLE_ADS_CLIENT_ID / GOOGLE_ADS_CLIENT_SECRET is not configured.',
       );
     }
   }
@@ -2028,10 +2028,10 @@ export class GoogleAdsService {
   }
 
   private getRedirectUri(): string {
-    const uri = process.env.GOOGLE_REDIRECT_URI?.trim();
+    const uri = process.env.GOOGLE_ADS_REDIRECT_URI?.trim();
     if (!uri) {
       throw new InternalServerErrorException(
-        'Set GOOGLE_REDIRECT_URI to your OAuth callback URL (e.g. frontend /auth/google/callback).',
+        'Set GOOGLE_ADS_REDIRECT_URI to your OAuth callback URL (e.g. frontend /auth/google/callback).',
       );
     }
     return uri;

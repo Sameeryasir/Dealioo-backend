@@ -13,13 +13,13 @@ export const GOOGLE_TAG_MANAGER_READONLY_SCOPE =
   'https://www.googleapis.com/auth/tagmanager.readonly';
 
 export function createGoogleOAuth2Client(redirectUri?: string) {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const clientId = process.env.GOOGLE_ADS_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_ADS_CLIENT_SECRET?.trim();
   if (!clientId) {
-    throw new Error('GOOGLE_CLIENT_ID is not configured.');
+    throw new Error('GOOGLE_ADS_CLIENT_ID is not configured.');
   }
   if (!clientSecret) {
-    throw new Error('GOOGLE_CLIENT_SECRET is not configured.');
+    throw new Error('GOOGLE_ADS_CLIENT_SECRET is not configured.');
   }
 
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
