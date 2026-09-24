@@ -19,7 +19,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { BusinessService } from '../business/business.service';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConversionGoalsResponseDto } from './dto/google-ads-conversion-goals.dto';
@@ -367,8 +366,8 @@ export class GoogleAdsController {
     @Query('error_description') errorDescription: string,
     @Res() res: Response,
   ) {
-    const frontendBase = getFrontendBaseUrl();
-
+    // Path-absolute redirects keep the same host as this request (via /api rewrite).
+    // Do not bounce to FRONTEND_URL[0] — host-only auth cookies would be dropped.
     try {
       const result = await this.googleAdsService.handleOAuthCallback(
         code,
@@ -379,7 +378,7 @@ export class GoogleAdsController {
       );
 
       return res.redirect(
-        `${frontendBase}/google/select-customer?businessId=${result.businessId}`,
+        `/google/select-customer?businessId=${result.businessId}`,
       );
     } catch (err) {
       const businessId =
@@ -391,11 +390,9 @@ export class GoogleAdsController {
         params.set('businessId', String(businessId));
       }
 
-      return res.redirect(
-        `${frontendBase}/google/select-customer?${params.toString()}`,
-      );
+      return res.redirect(`/google/select-customer?${params.toString()}`);
     }
-  } 
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('connect/:businessId')
