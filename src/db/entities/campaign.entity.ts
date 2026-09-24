@@ -78,6 +78,15 @@ export class Campaign {
   price!: number | null;
 
   @Column({
+    name: 'original_price',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
+  originalPrice!: number | null;
+
+  @Column({
     type: 'enum',
     enum: CampaignPublicationStatus,
     default: CampaignPublicationStatus.UNPUBLISHED,

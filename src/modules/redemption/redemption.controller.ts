@@ -192,6 +192,14 @@ export class RedemptionController {
         expiresAt: liveCoupon.expiresAt,
         campaignName: liveCoupon.campaign?.campaignName ?? null,
         customerName: liveCoupon.customer?.name ?? null,
+        price:
+          liveCoupon.campaign?.price != null
+            ? Number(liveCoupon.campaign.price)
+            : null,
+        originalPrice:
+          liveCoupon.campaign?.originalPrice != null
+            ? Number(liveCoupon.campaign.originalPrice)
+            : null,
         passAvailable: false,
         passUnavailableReason: passDisplay.passUnavailableReason,
         passMessage: passDisplay.passMessage,
@@ -215,6 +223,14 @@ export class RedemptionController {
       expiresAt: liveCoupon.expiresAt,
       campaignName: liveCoupon.campaign?.campaignName ?? null,
       customerName: liveCoupon.customer?.name ?? null,
+      price:
+        liveCoupon.campaign?.price != null
+          ? Number(liveCoupon.campaign.price)
+          : null,
+      originalPrice:
+        liveCoupon.campaign?.originalPrice != null
+          ? Number(liveCoupon.campaign.originalPrice)
+          : null,
       passAvailable: true,
       passUnavailableReason: null,
       passMessage: null,

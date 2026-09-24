@@ -4,6 +4,7 @@ export type BusinessFunnelSummary = {
   id: number;
   campaignName: string;
   price: number | null;
+  originalPrice: number | null;
   imageUrl: string | null;
   campaignType: CampaignType | null;
 };

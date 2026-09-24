@@ -20,6 +20,10 @@ export class UpdateCampaignDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(30)
+  @Matches(/^(?=.*\p{L}.*\p{L})(?!^[\d\s\W_]+$).+$/u, {
+    message:
+      'Campaign name must include letters — numbers alone are not allowed.',
+  })
   campaignName?: string;
 
   @IsOptional()
@@ -51,6 +55,9 @@ export class UpdateCampaignDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @Matches(/^(?=.*\p{L}.*\p{L})(?!^[\d\s\W_]+$).+$/u, {
+    message: 'Offer name must include letters — numbers alone are not allowed.',
+  })
   offer?: string;
 
   @IsOptional()
@@ -59,6 +66,10 @@ export class UpdateCampaignDto {
   )
   @IsString()
   @MaxLength(80)
+  @Matches(/^(?=.*\p{L}.*\p{L})(?!^[\d\s\W_]+$).+$/u, {
+    message:
+      'Description must include letters — numbers alone are not allowed.',
+  })
   description?: string;
 
   @IsOptional()
@@ -67,6 +78,19 @@ export class UpdateCampaignDto {
   @Min(0)
   @Max(99_999_999.99)
   price?: number;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === null || value === undefined) {
+      return null;
+    }
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : value;
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(99_999_999.99)
+  originalPrice?: number | null;
 
   @IsOptional()
   @IsEnum(CampaignPublicationStatus)

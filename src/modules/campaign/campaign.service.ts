@@ -134,8 +134,11 @@ export class CampaignService {
       offer,
       description,
       price,
+      originalPrice,
       status,
     } = createCampaignDto;
+
+    this.assertDealPricing(price ?? null, originalPrice ?? null);
 
     await this.businessAccessService.assertAnyPermission(
       user,
@@ -183,6 +186,7 @@ export class CampaignService {
       offer: offer.trim(),
       description: createCampaignDto.description.trim(),
       price: price ?? null,
+      originalPrice: originalPrice ?? null,
       status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
     const savedCampaign = await this.campaignRepository.save(campaign);
@@ -375,6 +379,14 @@ export class CampaignService {
     if (updateCampaignDto.price !== undefined) {
       campaign.price = updateCampaignDto.price;
     }
+    if (updateCampaignDto.originalPrice !== undefined) {
+      campaign.originalPrice = updateCampaignDto.originalPrice;
+    }
+
+    this.assertDealPricing(
+      campaign.price != null ? Number(campaign.price) : null,
+      campaign.originalPrice != null ? Number(campaign.originalPrice) : null,
+    );
 
     const previousStatus = campaign.status;
     const becomingUnpublished =
@@ -681,5 +693,24 @@ export class CampaignService {
     });
 
     return { deleted: true, campaignId };
+  }
+
+  private assertDealPricing(
+    price: number | null,
+    originalPrice: number | null,
+  ): void {
+    if (originalPrice == null) return;
+
+    if (price == null) {
+      throw new BadRequestException(
+        'Set a deal price before adding an original price.',
+      );
+    }
+
+    if (!(originalPrice > price)) {
+      throw new BadRequestException(
+        'Original price must be higher than the deal price to show a discount.',
+      );
+    }
   }
 }

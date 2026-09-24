@@ -182,6 +182,7 @@ export type GuestAvailableBusinessDealResult = {
   id: number;
   campaignName: string;
   price: number | null;
+  originalPrice: number | null;
   imageUrl: string | null;
   campaignType: 'prepaid' | 'postpaid' | null;
 };
@@ -1918,6 +1919,7 @@ export class RedemptionService {
           id: true,
           campaignName: true,
           price: true,
+          originalPrice: true,
           imageUrl: true,
           campaignType: true,
         },
@@ -1938,6 +1940,10 @@ export class RedemptionService {
       }
       const price =
         funnel.campaign?.price != null ? Number(funnel.campaign.price) : null;
+      const originalPrice =
+        funnel.campaign?.originalPrice != null
+          ? Number(funnel.campaign.originalPrice)
+          : null;
       const campaignType =
         funnel.campaign?.campaignType === CampaignType.POSTPAID
           ? ('postpaid' as const)
@@ -1949,6 +1955,10 @@ export class RedemptionService {
         id: funnel.id,
         campaignName,
         price: price != null && Number.isFinite(price) ? price : null,
+        originalPrice:
+          originalPrice != null && Number.isFinite(originalPrice)
+            ? originalPrice
+            : null,
         imageUrl: funnel.campaign?.imageUrl?.trim() || null,
         campaignType,
       });

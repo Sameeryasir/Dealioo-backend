@@ -303,7 +303,14 @@ export class FunnelService {
 
     const campaign = await this.campaignRepository.findOne({
       where: { id: funnel.campaignId },
-      select: { id: true, businessId: true, campaignType: true, offer: true },
+      select: {
+        id: true,
+        businessId: true,
+        campaignType: true,
+        offer: true,
+        price: true,
+        originalPrice: true,
+      },
     });
     if (!campaign) {
       throw new NotFoundException('Campaign not found for funnel');
@@ -359,6 +366,15 @@ export class FunnelService {
       businessId,
       campaignType,
       offer: campaign.offer?.trim() || null,
+      price:
+        campaign.price != null && Number.isFinite(Number(campaign.price))
+          ? Number(campaign.price)
+          : null,
+      originalPrice:
+        campaign.originalPrice != null &&
+        Number.isFinite(Number(campaign.originalPrice))
+          ? Number(campaign.originalPrice)
+          : null,
       pixelId: tracking.pixelId,
       googleTagManagerId: tracking.googleTagManagerId,
       googleAdsSignupConversionLabel: tracking.googleAdsSignupConversionLabel,
@@ -441,6 +457,7 @@ export class FunnelService {
         campaign: {
           campaignName: true,
           price: true,
+          originalPrice: true,
           imageUrl: true,
           campaignType: true,
         },
@@ -453,6 +470,10 @@ export class FunnelService {
       campaignName: funnel.campaign.campaignName,
       price:
         funnel.campaign.price != null ? Number(funnel.campaign.price) : null,
+      originalPrice:
+        funnel.campaign.originalPrice != null
+          ? Number(funnel.campaign.originalPrice)
+          : null,
       imageUrl: funnel.campaign.imageUrl?.trim() || null,
       campaignType: funnel.campaign.campaignType ?? null,
     }));
