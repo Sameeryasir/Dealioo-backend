@@ -51,6 +51,7 @@ import {
   formatGoogleAdsSdkError,
   fromMicros,
   ResourceNames,
+  toMicros,
 } from './google-ads-sdk.client';
 import { enums } from 'google-ads-api';
 
@@ -82,6 +83,16 @@ type GoogleAdsSearchRow = {
     id?: string | number;
     name?: string;
     status?: string | number;
+  };
+  campaignBudget?: {
+    id?: string | number;
+    amountMicros?: string | number;
+    amount_micros?: string | number;
+  };
+  campaign_budget?: {
+    id?: string | number;
+    amountMicros?: string | number;
+    amount_micros?: string | number;
   };
   metrics?: {
     costMicros?: string | number;
@@ -1355,6 +1366,327 @@ export class GoogleAdsService {
     return { deleted: true, googleCampaignId: campaignId };
   }
 
+  async updatePublishedCampaignForBusiness(
+    user: User,
+    businessId: number,
+    googleCampaignId: string,
+    input: {
+      name?: string;
+      status?: 'ENABLED' | 'PAUSED';
+      dailyBudget?: number;
+    },
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    name: string | null;
+    status: string | null;
+    dailyBudget: string | null;
+  }> {
+    const campaignId = String(googleCampaignId ?? '').replace(/\D/g, '');
+    if (!campaignId) {
+      throw new BadRequestException('Google campaign id is required.');
+    }
+
+    const nextName = input.name?.trim() || null;
+    const nextStatus = input.status ?? null;
+    const nextBudget =
+      input.dailyBudget != null ? Number(input.dailyBudget) : null;
+
+    if (
+      nextName == null &&
+      nextStatus == null &&
+      (nextBudget == null || !Number.isFinite(nextBudget))
+    ) {
+      throw new BadRequestException(
+        'Provide a name, status, or daily budget to update.',
+      );
+    }
+    if (nextStatus != null && nextStatus !== 'ENABLED' && nextStatus !== 'PAUSED') {
+      throw new BadRequestException(
+        'Campaign status must be ENABLED or PAUSED.',
+      );
+    }
+    if (nextBudget != null && (!Number.isFinite(nextBudget) || nextBudget < 1)) {
+      throw new BadRequestException(
+        'Daily budget must be a number of at least 1.',
+      );
+    }
+
+    let updatedName: string | null = nextName;
+    let updatedStatus: string | null = nextStatus;
+    let updatedBudget: string | null =
+      nextBudget != null ? String(nextBudget) : null;
+
+    if (nextName != null || nextStatus != null) {
+      const result = await this.updateCampaignFieldsForBusiness(
+        user,
+        businessId,
+        campaignId,
+        {
+          ...(nextName != null ? { name: nextName } : {}),
+          ...(nextStatus != null ? { status: nextStatus } : {}),
+        },
+      );
+      updatedName = result.name;
+      updatedStatus = result.status;
+    }
+
+    if (nextBudget != null) {
+      const budgetResult = await this.updateCampaignBudgetForBusiness(
+        user,
+        businessId,
+        campaignId,
+        nextBudget,
+      );
+      updatedBudget = budgetResult.dailyBudget;
+    }
+
+    return {
+      updated: true,
+      googleCampaignId: campaignId,
+      name: updatedName,
+      status: updatedStatus,
+      dailyBudget: updatedBudget,
+    };
+  }
+
+  private async updateCampaignFieldsForBusiness(
+    user: User,
+    businessId: number,
+    campaignId: string,
+    fields: { name?: string; status?: 'ENABLED' | 'PAUSED' },
+  ): Promise<{ name: string | null; status: string | null }> {
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    const normalizedCustomerId = this.normalizeCustomerId(customerId!);
+    const normalizedLoginCustomerId = loginCustomerId
+      ? this.normalizeCustomerId(loginCustomerId)
+      : normalizedCustomerId;
+
+    const client = this.getGoogleAdsApiClient();
+    const customer = createGoogleAdsCustomer(client, {
+      customerId: normalizedCustomerId,
+      refreshToken,
+      loginCustomerId: normalizedLoginCustomerId,
+    });
+
+    const resource: {
+      resource_name: string;
+      name?: string;
+      status?: number;
+    } = {
+      resource_name: ResourceNames.campaign(normalizedCustomerId, campaignId),
+    };
+    if (fields.name != null) resource.name = fields.name;
+    if (fields.status === 'ENABLED') {
+      resource.status = enums.CampaignStatus.ENABLED;
+    } else if (fields.status === 'PAUSED') {
+      resource.status = enums.CampaignStatus.PAUSED;
+    }
+
+    try {
+      await this.withSdkTimeout(
+        customer.campaigns.update([resource]),
+        'googleAds:updateCampaignFields',
+      );
+    } catch (err) {
+      throw new BadRequestException(
+        formatGoogleAdsSdkError(
+          err,
+          'Could not update Google Ads campaign. Try again in Google Ads.',
+        ),
+      );
+    }
+
+    this.logger.log(
+      `Google Ads campaign ${campaignId} updated for business ${businessId}`,
+    );
+
+    return {
+      name: fields.name ?? null,
+      status: fields.status ?? null,
+    };
+  }
+
+  async updateCampaignStatusForBusiness(
+    user: User,
+    businessId: number,
+    googleCampaignId: string,
+    status: 'ENABLED' | 'PAUSED',
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    status: 'ENABLED' | 'PAUSED';
+  }> {
+    const campaignId = String(googleCampaignId ?? '').replace(/\D/g, '');
+    if (!campaignId) {
+      throw new BadRequestException('Google campaign id is required.');
+    }
+    if (status !== 'ENABLED' && status !== 'PAUSED') {
+      throw new BadRequestException(
+        'Campaign status must be ENABLED or PAUSED.',
+      );
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    const normalizedCustomerId = this.normalizeCustomerId(customerId!);
+    const normalizedLoginCustomerId = loginCustomerId
+      ? this.normalizeCustomerId(loginCustomerId)
+      : normalizedCustomerId;
+
+    const client = this.getGoogleAdsApiClient();
+    const customer = createGoogleAdsCustomer(client, {
+      customerId: normalizedCustomerId,
+      refreshToken,
+      loginCustomerId: normalizedLoginCustomerId,
+    });
+
+    const resourceName = ResourceNames.campaign(
+      normalizedCustomerId,
+      campaignId,
+    );
+    const nextStatus =
+      status === 'ENABLED'
+        ? enums.CampaignStatus.ENABLED
+        : enums.CampaignStatus.PAUSED;
+
+    try {
+      await this.withSdkTimeout(
+        customer.campaigns.update([
+          {
+            resource_name: resourceName,
+            status: nextStatus,
+          },
+        ]),
+        'googleAds:updateCampaignStatus',
+      );
+    } catch (err) {
+      throw new BadRequestException(
+        formatGoogleAdsSdkError(
+          err,
+          'Could not update Google Ads campaign status. Try again in Google Ads.',
+        ),
+      );
+    }
+
+    this.logger.log(
+      `Google Ads campaign ${campaignId} set to ${status} for business ${businessId}`,
+    );
+
+    return { updated: true, googleCampaignId: campaignId, status };
+  }
+
+  async updateCampaignBudgetForBusiness(
+    user: User,
+    businessId: number,
+    googleCampaignId: string,
+    dailyBudget: number,
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    dailyBudget: string;
+  }> {
+    const campaignId = String(googleCampaignId ?? '').replace(/\D/g, '');
+    if (!campaignId) {
+      throw new BadRequestException('Google campaign id is required.');
+    }
+    if (!Number.isFinite(dailyBudget) || dailyBudget < 1) {
+      throw new BadRequestException(
+        'Daily budget must be a number of at least 1.',
+      );
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId);
+    const { refreshToken, customerId, loginCustomerId } =
+      await this.tokenService.assertBusinessGoogleCredentials(business);
+
+    const normalizedCustomerId = this.normalizeCustomerId(customerId!);
+    const normalizedLoginCustomerId = loginCustomerId
+      ? this.normalizeCustomerId(loginCustomerId)
+      : normalizedCustomerId;
+
+    const budgetId = await this.resolveCampaignBudgetId(
+      refreshToken,
+      normalizedCustomerId,
+      campaignId,
+      normalizedLoginCustomerId,
+    );
+    if (!budgetId) {
+      throw new BadRequestException(
+        'Could not find a daily budget for this campaign.',
+      );
+    }
+
+    const client = this.getGoogleAdsApiClient();
+    const customer = createGoogleAdsCustomer(client, {
+      customerId: normalizedCustomerId,
+      refreshToken,
+      loginCustomerId: normalizedLoginCustomerId,
+    });
+
+    try {
+      await this.withSdkTimeout(
+        customer.campaignBudgets.update([
+          {
+            resource_name: ResourceNames.campaignBudget(
+              normalizedCustomerId,
+              budgetId,
+            ),
+            amount_micros: toMicros(dailyBudget),
+          },
+        ]),
+        'googleAds:updateCampaignBudget',
+      );
+    } catch (err) {
+      throw new BadRequestException(
+        formatGoogleAdsSdkError(
+          err,
+          'Could not update Google Ads campaign budget. Try again in Google Ads.',
+        ),
+      );
+    }
+
+    this.logger.log(
+      `Google Ads campaign ${campaignId} budget set to ${dailyBudget} for business ${businessId}`,
+    );
+
+    return {
+      updated: true,
+      googleCampaignId: campaignId,
+      dailyBudget: String(dailyBudget),
+    };
+  }
+
+  private async resolveCampaignBudgetId(
+    refreshToken: string,
+    customerId: string,
+    campaignId: string,
+    loginCustomerId: string,
+  ): Promise<string | null> {
+    const query = `
+      SELECT campaign_budget.id
+      FROM campaign
+      WHERE campaign.id = ${campaignId}
+      LIMIT 1
+    `.trim();
+
+    const rows = await this.googleAdsSearch<GoogleAdsSearchRow>(
+      refreshToken,
+      customerId,
+      query,
+      loginCustomerId,
+    );
+    const budget =
+      rows[0]?.campaignBudget ?? rows[0]?.campaign_budget ?? null;
+    const id = String(budget?.id ?? '').replace(/\D/g, '');
+    return id || null;
+  }
+
   private async fetchCampaignStats(
     refreshToken: string,
     customerId: string,
@@ -1365,6 +1697,8 @@ export class GoogleAdsService {
         campaign.id,
         campaign.name,
         campaign.status,
+        campaign_budget.id,
+        campaign_budget.amount_micros,
         metrics.cost_micros,
         metrics.impressions,
         metrics.clicks,
@@ -1388,6 +1722,8 @@ export class GoogleAdsService {
         id: string;
         name: string;
         status: string | null;
+        budgetId: string | null;
+        dailyBudgetMicros: number | null;
         costMicros: number;
         impressions: number;
         clicks: number;
@@ -1400,16 +1736,36 @@ export class GoogleAdsService {
       const id = String(row.campaign?.id ?? '').replace(/\D/g, '');
       if (!id) continue;
 
+      const budget = row.campaignBudget ?? row.campaign_budget ?? null;
+      const budgetId = String(budget?.id ?? '').replace(/\D/g, '') || null;
+      const dailyBudgetMicrosRaw = budget?.amountMicros ?? budget?.amount_micros;
+      const dailyBudgetMicros =
+        dailyBudgetMicrosRaw != null
+          ? this.toNumber(dailyBudgetMicrosRaw)
+          : null;
+
       const existing = aggregated.get(id) ?? {
         id,
         name: row.campaign?.name?.trim() || 'Unnamed campaign',
         status: this.normalizeEnumValue(row.campaign?.status),
+        budgetId,
+        dailyBudgetMicros,
         costMicros: 0,
         impressions: 0,
         clicks: 0,
         conversions: 0,
         conversionValue: 0,
       };
+
+      if (!existing.budgetId && budgetId) {
+        existing.budgetId = budgetId;
+      }
+      if (
+        existing.dailyBudgetMicros == null &&
+        dailyBudgetMicros != null
+      ) {
+        existing.dailyBudgetMicros = dailyBudgetMicros;
+      }
 
       existing.costMicros += this.toNumber(
         row.metrics?.costMicros ?? row.metrics?.cost_micros,
@@ -1429,7 +1785,11 @@ export class GoogleAdsService {
       name: row.name,
       status: row.status,
       effectiveStatus: row.status,
-      dailyBudget: null,
+      budgetId: row.budgetId,
+      dailyBudget:
+        row.dailyBudgetMicros != null
+          ? String(fromMicros(row.dailyBudgetMicros))
+          : null,
       insights: {
         spend: String(fromMicros(row.costMicros)),
         impressions: String(row.impressions),

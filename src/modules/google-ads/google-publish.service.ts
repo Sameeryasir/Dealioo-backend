@@ -126,15 +126,6 @@ export class GooglePublishService {
       }
 
       if (
-        draft.status === GoogleCampaignDraftStatus.PUBLISHED &&
-        draft.googleCampaignId
-      ) {
-        throw new BadRequestException(
-          'This draft was already published. Create a new campaign to publish again.',
-        );
-      }
-
-      if (
         draft.status === GoogleCampaignDraftStatus.PUBLISHING &&
         draft.publishJobId
       ) {
@@ -165,12 +156,15 @@ export class GooglePublishService {
           'Previous publish did not finish. Retry to continue.';
       }
 
-      if (
-        draft.status !== GoogleCampaignDraftStatus.DRAFT &&
-        draft.status !== GoogleCampaignDraftStatus.FAILED
-      ) {
+      const canPublishOrRepublish =
+        draft.status === GoogleCampaignDraftStatus.DRAFT ||
+        draft.status === GoogleCampaignDraftStatus.FAILED ||
+        (draft.status === GoogleCampaignDraftStatus.PUBLISHED &&
+          Boolean(draft.googleCampaignId));
+
+      if (!canPublishOrRepublish) {
         throw new BadRequestException(
-          'This campaign cannot be published right now. It may already be publishing or published.',
+          'This campaign cannot be published right now. It may already be publishing.',
         );
       }
 
@@ -329,7 +323,9 @@ export class GooglePublishService {
 
     if (
       draft.status === GoogleCampaignDraftStatus.PUBLISHED &&
-      draft.googleCampaignId
+      draft.googleCampaignId &&
+      draft.publishStatus === GoogleCampaignPublishStatus.PUBLISHED &&
+      !draft.publishJobId
     ) {
       this.logger.log(`Draft ${draftId} already published; skipping job.`);
       return;
@@ -480,6 +476,13 @@ export class GooglePublishService {
       await this.syncTrackingPartial(tracking.id, {
         googleAdId: adId,
       });
+      await this.completeStep(draft, 'ads');
+    } else {
+      await this.beginStep(draft, 'ads');
+      await this.updateResponsiveSearchAd(ctx, adGroupId!, adId);
+      if (campaignId && budgetId) {
+        await this.updateExistingCampaignBasics(ctx, campaignId, budgetId);
+      }
       await this.completeStep(draft, 'ads');
     }
 
@@ -1444,6 +1447,76 @@ export class GooglePublishService {
       );
     }
     return id;
+  }
+
+  private async updateResponsiveSearchAd(
+    ctx: PublishContext,
+    adGroupId: string,
+    adId: string,
+  ): Promise<void> {
+    const payload = buildResponsiveSearchAdPayloadFromDraft(ctx.draftData);
+    await this.mutateOne(ctx, 'ads', 'responsive_search_ad_update', {
+      entity: 'ad_group_ad',
+      operation: 'update',
+      resource: {
+        resource_name: ResourceNames.adGroupAd(
+          ctx.customerId,
+          adGroupId,
+          adId,
+        ),
+        ad: {
+          final_urls: payload.finalUrls,
+          responsive_search_ad: {
+            headlines: payload.headlines,
+            descriptions: payload.descriptions,
+            path1: payload.path1,
+            path2: payload.path2,
+          },
+        },
+      },
+    });
+  }
+
+  private async updateExistingCampaignBasics(
+    ctx: PublishContext,
+    campaignId: string,
+    budgetId: string,
+  ): Promise<void> {
+    const campaignPayload = buildCampaignPayloadFromDraft(ctx.draftData);
+    const budgetPayload = buildCampaignBudgetPayloadFromDraft(ctx.draftData);
+
+    try {
+      await this.mutateOne(ctx, 'campaign', 'campaign_name_update', {
+        entity: 'campaign',
+        operation: 'update',
+        resource: {
+          resource_name: ResourceNames.campaign(ctx.customerId, campaignId),
+          name: campaignPayload.name,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Campaign name update skipped: ${this.publishErrorMessage(err)}`,
+      );
+    }
+
+    try {
+      await this.mutateOne(ctx, 'budget', 'campaign_budget_update', {
+        entity: 'campaign_budget',
+        operation: 'update',
+        resource: {
+          resource_name: ResourceNames.campaignBudget(
+            ctx.customerId,
+            budgetId,
+          ),
+          amount_micros: budgetPayload.amountMicros,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Campaign budget update skipped: ${this.publishErrorMessage(err)}`,
+      );
+    }
   }
 
   private async uploadBusinessBrandingAssets(

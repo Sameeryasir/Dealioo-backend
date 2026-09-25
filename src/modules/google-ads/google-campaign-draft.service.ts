@@ -1405,14 +1405,6 @@ export class GoogleCampaignDraftService {
 
     const status = draft.status as GoogleCampaignDraftStatusValue;
 
-    
-    if (status === GoogleCampaignDraftStatus.PUBLISHED) {
-      throw new BadRequestException(
-        'This campaign was already published. Create a new campaign to make changes.',
-      );
-    }
-
-    
     if (status === GoogleCampaignDraftStatus.PUBLISHING) {
       const updatedAt = draft.updatedAt?.getTime?.() ?? 0;
       const staleMs = 15 * 60 * 1000;

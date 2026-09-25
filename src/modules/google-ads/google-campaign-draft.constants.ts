@@ -23,6 +23,7 @@ export type GoogleCampaignPublishStatusValue =
 export const GOOGLE_DRAFT_EDITABLE_STATUSES: GoogleCampaignDraftStatusValue[] = [
   GoogleCampaignDraftStatus.DRAFT,
   GoogleCampaignDraftStatus.FAILED,
+  GoogleCampaignDraftStatus.PUBLISHED,
 ];
 
 export const DRAFT_CONFLICT_MESSAGE =

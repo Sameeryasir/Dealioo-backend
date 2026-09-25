@@ -12,6 +12,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Patch,
   Query,
   Req,
   Res,
@@ -27,6 +28,11 @@ import { GoogleAdsConnectionStatusDto } from './dto/google-ads-connection-status
 import { GoogleAdsCustomerDto } from './dto/google-ads-customer.dto';
 import { GoogleTagManagerContainerDto } from './dto/google-tag-manager-container.dto';
 import { SetGoogleAdsCustomerDto } from './dto/set-google-ads-customer.dto';
+import {
+  UpdateGoogleAdsCampaignBudgetDto,
+  UpdateGoogleAdsCampaignDto,
+  UpdateGoogleAdsCampaignStatusDto,
+} from './dto/update-google-ads-campaign.dto';
 import {
   GoogleCampaignDraftListItemDto,
   GoogleCampaignDraftResumeResponseDto,
@@ -503,6 +509,73 @@ export class GoogleAdsController {
       req.user,
       businessId,
       googleCampaignId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('ads/campaigns/:businessId/:googleCampaignId')
+  async updatePublishedCampaign(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('googleCampaignId') googleCampaignId: string,
+    @Body() body: UpdateGoogleAdsCampaignDto,
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    name: string | null;
+    status: string | null;
+    dailyBudget: string | null;
+  }> {
+    return this.googleAdsService.updatePublishedCampaignForBusiness(
+      req.user,
+      businessId,
+      googleCampaignId,
+      {
+        name: body?.name,
+        status: body?.status,
+        dailyBudget:
+          body?.dailyBudget != null ? Number(body.dailyBudget) : undefined,
+      },
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('ads/campaigns/:businessId/:googleCampaignId/status')
+  async updateCampaignStatus(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('googleCampaignId') googleCampaignId: string,
+    @Body() body: UpdateGoogleAdsCampaignStatusDto,
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    status: 'ENABLED' | 'PAUSED';
+  }> {
+    return this.googleAdsService.updateCampaignStatusForBusiness(
+      req.user,
+      businessId,
+      googleCampaignId,
+      body?.status,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('ads/campaigns/:businessId/:googleCampaignId/budget')
+  async updateCampaignBudget(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('googleCampaignId') googleCampaignId: string,
+    @Body() body: UpdateGoogleAdsCampaignBudgetDto,
+  ): Promise<{
+    updated: true;
+    googleCampaignId: string;
+    dailyBudget: string;
+  }> {
+    return this.googleAdsService.updateCampaignBudgetForBusiness(
+      req.user,
+      businessId,
+      googleCampaignId,
+      Number(body?.dailyBudget),
     );
   }
 
