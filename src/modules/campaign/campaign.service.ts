@@ -707,6 +707,18 @@ export class CampaignService {
       );
     }
 
+    if (!Number.isFinite(price) || price < 0 || price > 999_999.99) {
+      throw new BadRequestException('Enter a valid deal price.');
+    }
+
+    if (
+      !Number.isFinite(originalPrice) ||
+      originalPrice < 0 ||
+      originalPrice > 999_999.99
+    ) {
+      throw new BadRequestException('Enter a valid original price.');
+    }
+
     if (!(originalPrice > price)) {
       throw new BadRequestException(
         'Original price must be higher than the deal price to show a discount.',

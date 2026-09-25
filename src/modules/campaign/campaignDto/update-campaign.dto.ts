@@ -76,7 +76,7 @@ export class UpdateCampaignDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  @Max(99_999_999.99)
+  @Max(999_999.99)
   price?: number;
 
   @IsOptional()
@@ -89,7 +89,7 @@ export class UpdateCampaignDto {
   })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  @Max(99_999_999.99)
+  @Max(999_999.99)
   originalPrice?: number | null;
 
   @IsOptional()
