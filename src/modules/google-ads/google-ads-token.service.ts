@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
-import { GoogleAdsConnectionStatus } from './google-ads-connection-status';
 import {
   GOOGLE_TAG_MANAGER_READONLY_SCOPE,
   refreshGoogleAccessToken,
@@ -154,7 +153,9 @@ export class GoogleAdsTokenService {
     if (cached && expiresAt > Date.now() + 60_000) {
       try {
         return decryptSecret(cached);
-      } catch {}
+      } catch {
+        // Fall through and refresh with the stored refresh token.
+      }
     }
 
     try {
@@ -168,13 +169,14 @@ export class GoogleAdsTokenService {
 
       return refreshed.accessToken;
     } catch (err) {
-      if (this.isInvalidGrantError(err)) {
-        await this.invalidateGoogleTokens(business.id);
-        throw new BadRequestException(
-          'Google Ads access expired or was revoked. Reconnect Google Ads in Settings → Integrations.',
-        );
-      }
-      throw err;
+      this.logger.warn(
+        `Google access token refresh failed for business ${business.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      throw new BadRequestException(
+        'Could not refresh Google Ads access right now. Please try again in a moment. Your connection stays active until you disconnect.',
+      );
     }
   }
 
@@ -186,9 +188,7 @@ export class GoogleAdsTokenService {
     try {
       const credentials = await refreshGoogleAccessToken(refreshToken);
       if (!credentials.access_token) {
-        throw new BadRequestException(
-          'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
-        );
+        throw new Error('Google did not return an access token on refresh.');
       }
 
       const expiresIn =
@@ -206,38 +206,8 @@ export class GoogleAdsTokenService {
       };
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
-      if (this.isInvalidGrantError(err)) throw err;
-      throw new BadRequestException(
-        'Google access token expired. Disconnect and reconnect Google Ads in Settings → Integrations.',
-      );
+      throw err;
     }
-  }
-
-  private isInvalidGrantError(err: unknown): boolean {
-    if (!err || typeof err !== 'object') return false;
-    const anyErr = err as {
-      message?: string;
-      response?: { data?: { error?: string; error_description?: string } };
-      data?: { error?: string };
-    };
-    const parts = [
-      anyErr.message,
-      anyErr.response?.data?.error,
-      anyErr.response?.data?.error_description,
-      anyErr.data?.error,
-    ]
-      .filter(Boolean)
-      .join(' ');
-    return /invalid_grant/i.test(parts);
-  }
-
-  private async invalidateGoogleTokens(businessId: number): Promise<void> {
-    await this.businessRepository.update(businessId, {
-      googleAccessToken: null,
-      googleRefreshToken: null,
-      googleTokenExpiresAt: null,
-      googleConnectionStatus: GoogleAdsConnectionStatus.FAILED,
-    });
   }
 
   getClientId(): string {

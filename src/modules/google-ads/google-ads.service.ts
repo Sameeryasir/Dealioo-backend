@@ -1881,7 +1881,7 @@ export class GoogleAdsService {
       throw new BadRequestException(
         formatGoogleAdsSdkError(
           err,
-          'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
+          'Google Ads API request failed. Please try again in a moment.',
         ),
       );
     }

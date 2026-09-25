@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { BillingOverviewCache } from '../../db/entities/billing-overview-cache.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -101,6 +102,8 @@ export class UserSubscriptionsService {
     private readonly planRepository: Repository<SubscriptionPlan>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(BillingOverviewCache)
+    private readonly billingOverviewCacheRepository: Repository<BillingOverviewCache>,
     private readonly stripeService: StripeService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     @Inject(
@@ -208,6 +211,8 @@ export class UserSubscriptionsService {
       cancellationComment: dto.comment?.trim() || null,
       cancelsAt: cancellationDate ? new Date(cancellationDate) : null,
     });
+
+    await this.billingOverviewCacheRepository.delete({ userId });
 
     return {
       success: true,

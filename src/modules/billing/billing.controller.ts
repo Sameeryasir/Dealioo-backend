@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   StreamableFile,
   UseGuards,
@@ -35,8 +36,11 @@ export class BillingController {
   @Get('overview')
   getOverview(
     @Req() req: { user: { id: number } },
+    @Query('refresh') refresh?: string,
   ): Promise<BillingOverviewResponse> {
-    return this.billingService.getOverview(req.user.id);
+    const forceRefresh =
+      refresh === '1' || refresh?.toLowerCase() === 'true';
+    return this.billingService.getOverview(req.user.id, { forceRefresh });
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })

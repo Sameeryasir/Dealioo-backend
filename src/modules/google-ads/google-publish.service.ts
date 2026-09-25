@@ -1686,7 +1686,7 @@ export class GooglePublishService {
     } catch (err) {
       const googleMessage = formatGoogleAdsSdkError(
         err,
-        'Google Ads API request failed. Reconnect Google Ads in Settings → Integrations.',
+        'Google Ads API request failed. Please try again in a moment.',
       );
       throw new BadRequestException(
         `[${step}/${operationLabel}] ${googleMessage}`,

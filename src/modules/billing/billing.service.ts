@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { BillingOverviewCache } from '../../db/entities/billing-overview-cache.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -35,9 +36,16 @@ import type {
   UpgradeSubscriptionResponse,
 } from './billing.types';
 
+const BILLING_CACHE_TTL_MS = (() => {
+  const raw = process.env.BILLING_OVERVIEW_CACHE_TTL_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60 * 1000;
+})();
+
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
+  private readonly refreshInFlight = new Set<number>();
 
   constructor(
     @InjectRepository(User)
@@ -46,10 +54,83 @@ export class BillingService {
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(SubscriptionPlan)
     private readonly planRepository: Repository<SubscriptionPlan>,
+    @InjectRepository(BillingOverviewCache)
+    private readonly overviewCacheRepository: Repository<BillingOverviewCache>,
     private readonly stripeService: StripeService,
   ) {}
 
-  async getOverview(userId: number): Promise<BillingOverviewResponse> {
+  async getOverview(
+    userId: number,
+    options?: { forceRefresh?: boolean },
+  ): Promise<BillingOverviewResponse> {
+    const forceRefresh = Boolean(options?.forceRefresh);
+    const cached = await this.overviewCacheRepository.findOne({
+      where: { userId },
+    });
+
+    if (cached && !forceRefresh) {
+      const ageMs = Date.now() - new Date(cached.fetchedAt).getTime();
+      if (ageMs >= 0 && ageMs < BILLING_CACHE_TTL_MS) {
+        return cached.payload;
+      }
+
+      this.scheduleOverviewRefresh(userId);
+      return cached.payload;
+    }
+
+    return this.refreshOverviewFromStripe(userId);
+  }
+
+  private scheduleOverviewRefresh(userId: number): void {
+    if (this.refreshInFlight.has(userId)) return;
+    this.refreshInFlight.add(userId);
+    void this.refreshOverviewFromStripe(userId)
+      .catch((error) => {
+        this.logger.warn(
+          `Background billing cache refresh failed for user ${userId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      })
+      .finally(() => {
+        this.refreshInFlight.delete(userId);
+      });
+  }
+
+  private async saveOverviewCache(
+    userId: number,
+    payload: BillingOverviewResponse,
+  ): Promise<void> {
+    const existing = await this.overviewCacheRepository.findOne({
+      where: { userId },
+    });
+    const fetchedAt = new Date();
+    if (existing) {
+      existing.payload = payload;
+      existing.fetchedAt = fetchedAt;
+      await this.overviewCacheRepository.save(existing);
+      return;
+    }
+    await this.overviewCacheRepository.save(
+      this.overviewCacheRepository.create({
+        userId,
+        payload,
+        fetchedAt,
+      }),
+    );
+  }
+
+  private async invalidateOverviewCache(userId: number): Promise<void> {
+    await this.overviewCacheRepository.delete({ userId });
+  }
+
+  async clearOverviewCache(userId: number): Promise<void> {
+    await this.invalidateOverviewCache(userId);
+  }
+
+  async refreshOverviewFromStripe(
+    userId: number,
+  ): Promise<BillingOverviewResponse> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
       select: { id: true, name: true, email: true, stripeCustomerId: true },
@@ -80,12 +161,14 @@ export class BillingService {
 
     if (!stripeCustomerId) {
       this.logger.warn(`No Stripe customer id for user ${userId}.`);
-      return {
+      const payload: BillingOverviewResponse = {
         subscription: this.toLocalSubscriptionSummary(localSub),
         paymentMethod: null,
         billingDetails: fallbackDetails,
         invoices: [],
       };
+      await this.saveOverviewCache(userId, payload);
+      return payload;
     }
 
     const [customer, invoicesList, paymentMethods] = await Promise.all([
@@ -136,12 +219,14 @@ export class BillingService {
       paymentMethods.data,
     );
 
-    return {
+    const payload: BillingOverviewResponse = {
       subscription: this.toSubscriptionSummary(localSub, stripeSubscription),
       paymentMethod,
       billingDetails,
       invoices: invoicesList.data.map((invoice) => this.mapInvoice(invoice)),
     };
+    await this.saveOverviewCache(userId, payload);
+    return payload;
   }
 
   async createSetupIntent(userId: number): Promise<BillingSetupIntentResponse> {
@@ -208,6 +293,15 @@ export class BillingService {
           null,
       ) ?? null;
 
+    await this.invalidateOverviewCache(userId);
+    void this.refreshOverviewFromStripe(userId).catch((error) => {
+      this.logger.warn(
+        `Could not refresh billing cache after card update for user ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+
     return { success: true, paymentMethod };
   }
 
@@ -242,13 +336,24 @@ export class BillingService {
       address: dto.address,
     });
 
+    const billingDetails = this.mapBillingDetails(customer, {
+      name: user?.name?.trim() || null,
+      email: user?.email?.trim() || null,
+      address: null,
+    });
+
+    await this.invalidateOverviewCache(userId);
+    void this.refreshOverviewFromStripe(userId).catch((error) => {
+      this.logger.warn(
+        `Could not refresh billing cache after billing details update for user ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+
     return {
       success: true,
-      billingDetails: this.mapBillingDetails(customer, {
-        name: user?.name?.trim() || null,
-        email: user?.email?.trim() || null,
-        address: null,
-      }),
+      billingDetails,
     };
   }
 
@@ -285,6 +390,15 @@ export class BillingService {
       cancellationReason: null,
       cancellationComment: null,
       cancelsAt: null,
+    });
+
+    await this.invalidateOverviewCache(userId);
+    void this.refreshOverviewFromStripe(userId).catch((error) => {
+      this.logger.warn(
+        `Could not refresh billing cache after resume for user ${userId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     });
 
     return {

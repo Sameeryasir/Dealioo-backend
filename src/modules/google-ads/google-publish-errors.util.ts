@@ -21,13 +21,10 @@ export function isTransientGooglePublishError(err: unknown): boolean {
   const httpStatus = extractStatusCode(err);
 
   if (
-    message.includes('reconnect google') ||
     message.includes('not connected') ||
     message.includes('no google ads account selected') ||
     message.includes('customer account') ||
-    (message.includes('token') && message.includes('expired')) ||
-    message.includes('permission') ||
-    message.includes('oauth') ||
+    message.includes('permission was not granted') ||
     message.includes('complete all required builder steps') ||
     message.includes('draft failed publish validation') ||
     message.includes('not wired yet')
