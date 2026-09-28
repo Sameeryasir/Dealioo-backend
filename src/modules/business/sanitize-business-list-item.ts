@@ -7,6 +7,9 @@ export type PublicBusinessListItem = {
   slug: string;
   description: string | null;
   logoUrl: string | null;
+  logoPrimaryColor: string | null;
+  logoSecondaryColor: string | null;
+  logoAccentColor: string | null;
   businessType: string | null;
   currency: string | null;
   websiteUrl: string | null;
@@ -91,6 +94,9 @@ export function sanitizeBusinessListItem(
     slug: business.slug?.trim() || `business-${business.id}`,
     description: business.description,
     logoUrl: business.logoUrl,
+    logoPrimaryColor: business.logoPrimaryColor ?? null,
+    logoSecondaryColor: business.logoSecondaryColor ?? null,
+    logoAccentColor: business.logoAccentColor ?? null,
     businessType: business.businessType ?? null,
     currency: business.currency ?? null,
     websiteUrl: business.websiteUrl,

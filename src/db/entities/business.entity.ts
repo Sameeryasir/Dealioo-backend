@@ -29,6 +29,20 @@ export class Business {
   @Column({ name: 'logo_url', type: 'text', nullable: true })
   logoUrl: string | null;
 
+  @Column({ name: 'logo_primary_color', type: 'varchar', length: 16, nullable: true })
+  logoPrimaryColor: string | null;
+
+  @Column({
+    name: 'logo_secondary_color',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
+  logoSecondaryColor: string | null;
+
+  @Column({ name: 'logo_accent_color', type: 'varchar', length: 16, nullable: true })
+  logoAccentColor: string | null;
+
   /** Industry / business type (e.g. Restaurant, Retail). */
   @Column({ name: 'business_type', type: 'varchar', length: 64, nullable: true })
   businessType: string | null;
