@@ -94,4 +94,7 @@ export type GoogleCampaignDraftListItemDto = {
   updatedAt: Date;
   logoPreviewUrl: string | null;
   selectedFunnelName: string | null;
+  selectedFunnelId: number | null;
+  googleCampaignId: string | null;
+  landingPageUrl: string | null;
 };

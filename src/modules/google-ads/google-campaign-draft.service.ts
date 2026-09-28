@@ -544,6 +544,12 @@ export class GoogleCampaignDraftService {
       updatedAt: draft.updatedAt,
       logoPreviewUrl: draft.draftData?.logoPreviewUrl?.trim() || null,
       selectedFunnelName: draft.draftData?.selectedFunnelName?.trim() || null,
+      selectedFunnelId:
+        typeof draft.draftData?.selectedFunnelId === 'number'
+          ? draft.draftData.selectedFunnelId
+          : null,
+      googleCampaignId: draft.googleCampaignId?.trim() || null,
+      landingPageUrl: draft.draftData?.landingPageUrl?.trim() || null,
     }));
   }
 
@@ -737,6 +743,115 @@ export class GoogleCampaignDraftService {
     await this.draftRepository.remove(draft);
 
     return { deleted: true, draftId: draft.id };
+  }
+
+  async duplicateDraft(
+    user: User,
+    businessId: number,
+    draftId: string,
+  ): Promise<GoogleCampaignDraftListItemDto> {
+    await this.assertBusinessAccess(user, businessId, 'create');
+
+    const source = await this.draftRepository.findOne({
+      where: {
+        id: draftId.trim(),
+        businessId,
+        userId: user.id,
+      },
+    });
+
+    if (!source) {
+      throw new NotFoundException('Google campaign draft not found.');
+    }
+
+    const status = (source.status ?? '').toUpperCase();
+    const publishStatus = (source.publishStatus ?? '').toUpperCase();
+    const isPublishing =
+      status === GoogleCampaignDraftStatus.PUBLISHING ||
+      status === GoogleCampaignDraftStatus.VALIDATING ||
+      publishStatus === 'QUEUED' ||
+      publishStatus === 'PUBLISHING';
+
+    if (isPublishing) {
+      throw new BadRequestException(
+        'This campaign is publishing. Wait for it to finish before duplicating.',
+      );
+    }
+
+    if (!source.draftData) {
+      throw new BadRequestException(
+        'This campaign has no saved setup to duplicate yet.',
+      );
+    }
+
+    const baseName = (source.campaignName ?? source.draftData.campaignName ?? 'Campaign')
+      .trim()
+      .replace(/\s*\(Copy(?:\s+\d+)?\)\s*$/i, '');
+    const copyName = `${baseName || 'Campaign'} (Copy)`.slice(0, 255);
+
+    const clonedData = JSON.parse(
+      JSON.stringify(source.draftData),
+    ) as typeof source.draftData;
+    clonedData.campaignName = copyName;
+
+    const now = new Date();
+    const created = this.draftRepository.create({
+      userId: user.id,
+      businessId,
+      createdBy: user.id,
+      updatedBy: user.id,
+      currentStep: source.currentStep || 1,
+      status: GoogleCampaignDraftStatus.DRAFT,
+      draftData: clonedData,
+      campaignName: copyName,
+      goal: source.goal,
+      campaignType: source.campaignType,
+      businessName: source.businessName,
+      dailyBudget: source.dailyBudget,
+      googleCampaignId: null,
+      googleBudgetId: null,
+      googleAdGroupId: null,
+      googleAdId: null,
+      googleKeywordIds: null,
+      errorMessage: null,
+      version: 1,
+      completedSteps: [...(source.completedSteps ?? [])],
+      lastSavedAt: now,
+      publishStatus: null,
+      publishJobId: null,
+      publishStep: null,
+      publishProgress: 0,
+      publishedAt: null,
+      lastIdempotencyKey: null,
+      lastIdempotencyResponse: null,
+    });
+
+    const saved = await this.draftRepository.save(created);
+
+    return {
+      id: saved.id,
+      businessId: saved.businessId,
+      status: saved.status,
+      currentStep: saved.currentStep,
+      completedSteps: saved.completedSteps ?? [],
+      version: saved.version ?? 1,
+      lastSavedAt: saved.lastSavedAt,
+      campaignName: saved.campaignName,
+      goal: saved.goal,
+      publishStatus: saved.publishStatus ?? null,
+      publishStep: saved.publishStep ?? null,
+      publishProgress: saved.publishProgress ?? null,
+      errorMessage: saved.errorMessage ?? null,
+      updatedAt: saved.updatedAt,
+      logoPreviewUrl: saved.draftData?.logoPreviewUrl?.trim() || null,
+      selectedFunnelName: saved.draftData?.selectedFunnelName?.trim() || null,
+      selectedFunnelId:
+        typeof saved.draftData?.selectedFunnelId === 'number'
+          ? saved.draftData.selectedFunnelId
+          : null,
+      googleCampaignId: null,
+      landingPageUrl: saved.draftData?.landingPageUrl?.trim() || null,
+    };
   }
 
   async updateDraftProgress(

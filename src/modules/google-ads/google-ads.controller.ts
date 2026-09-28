@@ -327,6 +327,20 @@ export class GoogleAdsController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/:draftId/duplicate')
+  async duplicateDraft(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('draftId') draftId: string,
+  ): Promise<GoogleCampaignDraftListItemDto> {
+    return this.googleCampaignDraftService.duplicateDraft(
+      req.user,
+      businessId,
+      draftId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Delete('business/:businessId/drafts/:draftId')
   @HttpCode(HttpStatus.OK)
   async deleteDraft(
