@@ -13,9 +13,13 @@ import { FunnelPageType } from './funnel-page-type';
 import type { Business } from './business.entity';
 import type { User } from './user.entity';
 @Entity('funnel_page_versions')
-@Index('uq_funnel_page_versions_page_version', ['funnelPageId', 'versionNumber'], {
-  unique: true,
-})
+@Index(
+  'uq_funnel_page_versions_page_version',
+  ['funnelPageId', 'versionNumber'],
+  {
+    unique: true,
+  },
+)
 @Index('IDX_funnel_page_versions_funnel_created', ['funnelId', 'createdAt'])
 @Index('IDX_funnel_page_versions_funnel_type_created', [
   'funnelId',
@@ -30,9 +34,13 @@ export class FunnelPageVersion {
   @Column({ name: 'funnel_page_id', type: 'uuid' })
   funnelPageId: string;
 
-  @ManyToOne(() => require('./funnel-page.entity').FunnelPage, (page) => page.versions, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./funnel-page.entity').FunnelPage,
+    (page: FunnelPage) => page.versions,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'funnel_page_id' })
   funnelPage: FunnelPage;
 
@@ -54,7 +62,10 @@ export class FunnelPageVersion {
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -70,7 +81,10 @@ export class FunnelPageVersion {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'created_by' })
   createdBy: User | null;
 

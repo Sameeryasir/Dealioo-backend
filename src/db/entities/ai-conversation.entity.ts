@@ -31,7 +31,9 @@ export class AiConversation {
   @Column({ name: 'business_id', type: 'int' })
   businessId!: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
@@ -45,7 +47,10 @@ export class AiConversation {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById!: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'created_by' })
   createdBy!: User | null;
 
@@ -71,7 +76,10 @@ export class AiConversation {
   })
   lastMessageAt!: Date | null;
 
-  @OneToMany(() => require('./ai-message.entity').AiMessage, (message) => message.conversation)
+  @OneToMany(
+    () => require('./ai-message.entity').AiMessage,
+    (message: AiMessage) => message.conversation,
+  )
   messages!: AiMessage[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

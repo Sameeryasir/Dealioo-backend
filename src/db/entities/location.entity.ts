@@ -13,7 +13,10 @@ export class Location {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE', nullable: false })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+    nullable: false,
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

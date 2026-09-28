@@ -10,7 +10,10 @@ import {
 } from 'typeorm';
 import type { Customer } from './customer.entity';
 import type { Funnel } from './funnel.entity';
-import type { FunnelPayment, FunnelPaymentStatus } from './funnel-payment.entity';
+import type {
+  FunnelPayment,
+  FunnelPaymentStatus,
+} from './funnel-payment.entity';
 export enum FunnelEventType {
   SIGNUP = 'signup',
   PAYMENT = 'payment',
@@ -24,7 +27,10 @@ export class FunnelEvent {
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
@@ -38,7 +44,10 @@ export class FunnelEvent {
   @Column({ name: 'customer_id', nullable: true })
   customerId: number | null;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+    nullable: true,
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer | null;
 
@@ -48,7 +57,10 @@ export class FunnelEvent {
   @Column({ name: 'funnel_payment_id', nullable: true })
   funnelPaymentId: number | null;
 
-  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_payment_id' })
   funnelPayment: FunnelPayment | null;
 
@@ -74,7 +86,12 @@ export class FunnelEvent {
   })
   stripePaymentIntentId: string | null;
 
-  @Column({ name: 'customer_email', type: 'varchar', length: 320, nullable: true })
+  @Column({
+    name: 'customer_email',
+    type: 'varchar',
+    length: 320,
+    nullable: true,
+  })
   customerEmail: string | null;
 
   @Column({ name: 'receipt_url', type: 'text', nullable: true })

@@ -14,7 +14,11 @@ import type { Conversation } from './conversation.entity';
 import type { User } from './user.entity';
 
 @Entity('business_user_conversation_read_state')
-@Unique('UQ_biz_user_conversation_read', ['userId', 'businessId', 'conversationId'])
+@Unique('UQ_biz_user_conversation_read', [
+  'userId',
+  'businessId',
+  'conversationId',
+])
 @Index('IDX_biz_user_conversation_read_business', ['businessId'])
 export class BusinessUserConversationReadState {
   @PrimaryGeneratedColumn()
@@ -30,7 +34,9 @@ export class BusinessUserConversationReadState {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

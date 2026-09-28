@@ -26,14 +26,20 @@ export class AutomationExecutionStep {
   @Column({ name: 'execution_id' })
   executionId!: number;
 
-  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'CASCADE' })
+  @ManyToOne(
+    () => require('./automation-execution.entity').AutomationExecution,
+    { onDelete: 'CASCADE' },
+  )
   @JoinColumn({ name: 'execution_id' })
   execution!: AutomationExecution;
 
   @Column({ name: 'node_id', type: 'int', nullable: true })
   nodeId!: number | null;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'node_id' })
   node!: AutomationNode | null;
 

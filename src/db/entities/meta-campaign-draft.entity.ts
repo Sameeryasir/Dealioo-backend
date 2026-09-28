@@ -32,13 +32,28 @@ export class MetaCampaignDraft {
   @Column({ name: 'ad_creative_data', type: 'jsonb', nullable: true })
   adCreativeData: Record<string, unknown> | null;
 
-  @Column({ name: 'meta_campaign_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_campaign_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaCampaignId: string | null;
 
-  @Column({ name: 'meta_adset_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_adset_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaAdsetId: string | null;
 
-  @Column({ name: 'meta_creative_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_creative_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaCreativeId: string | null;
 
   @Column({ name: 'meta_ad_id', type: 'varchar', length: 64, nullable: true })
@@ -61,10 +76,20 @@ export class MetaCampaignDraft {
   @Column({ name: 'last_saved_at', type: 'timestamptz', nullable: true })
   lastSavedAt: Date | null;
 
-  @Column({ name: 'publish_status', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'publish_status',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   publishStatus: string | null;
 
-  @Column({ name: 'publish_job_id', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'publish_job_id',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   publishJobId: string | null;
 
   @Column({ name: 'publish_step', type: 'varchar', length: 64, nullable: true })

@@ -24,7 +24,7 @@ export class Customer {
 
   @OneToMany(
     () => require('./business-customer.entity').BusinessCustomer,
-    (businessCustomer) => businessCustomer.customer,
+    (businessCustomer: BusinessCustomer) => businessCustomer.customer,
   )
   businessCustomers: BusinessCustomer[];
 

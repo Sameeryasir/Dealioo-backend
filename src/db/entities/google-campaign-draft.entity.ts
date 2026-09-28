@@ -37,16 +37,31 @@ export class GoogleCampaignDraft {
   @Column({ name: 'draft_data', type: 'jsonb', nullable: true })
   draftData: GoogleCampaignBuilderDraftData | null;
 
-  @Column({ name: 'campaign_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'campaign_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   campaignName: string | null;
 
   @Column({ name: 'goal', type: 'varchar', length: 32, nullable: true })
   goal: GoogleCampaignGoalId | null;
 
-  @Column({ name: 'campaign_type', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'campaign_type',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   campaignType: GoogleCampaignTypeId | null;
 
-  @Column({ name: 'business_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'business_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   businessName: string | null;
 
   @Column({
@@ -110,10 +125,20 @@ export class GoogleCampaignDraft {
   @Column({ name: 'last_saved_at', type: 'timestamptz', nullable: true })
   lastSavedAt: Date | null;
 
-  @Column({ name: 'publish_status', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'publish_status',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   publishStatus: string | null;
 
-  @Column({ name: 'publish_job_id', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'publish_job_id',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   publishJobId: string | null;
 
   @Column({ name: 'publish_step', type: 'varchar', length: 64, nullable: true })

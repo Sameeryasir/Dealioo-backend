@@ -106,7 +106,13 @@ export class GoogleWalletService {
     const qrOrRedemptionUrl = pass.qrOrRedemptionUrl?.trim();
     const qrToken = pass.qrToken?.trim();
 
-    if (!passId || !offerName || !businessName || !qrOrRedemptionUrl || !qrToken) {
+    if (
+      !passId ||
+      !offerName ||
+      !businessName ||
+      !qrOrRedemptionUrl ||
+      !qrToken
+    ) {
       throw new InternalServerErrorException(
         'Google Wallet pass requires passId, offerName, businessName, qrOrRedemptionUrl, and qrToken.',
       );
@@ -394,14 +400,15 @@ export class GoogleWalletService {
     if (nextStatus === GoogleWalletStatus.ADDED) {
       updatePayload.googleWalletAddedAt = receivedAt;
       updatePayload.googleWalletRemovedAt = null;
-    } else if (
-      nextStatus === GoogleWalletStatus.REMOVED &&
-      wasAdded
-    ) {
+    } else if (nextStatus === GoogleWalletStatus.REMOVED && wasAdded) {
       updatePayload.googleWalletRemovedAt = receivedAt;
     }
 
-    await this.couponRepository.update({ id: couponId }, updatePayload);
+    // Partial<Coupon> is wider than TypeORM's QueryDeepPartialEntity (relation fields); cast keeps same payload.
+    await this.couponRepository.update(
+      { id: couponId },
+      updatePayload as Parameters<Repository<Coupon>['update']>[1],
+    );
 
     this.logger.log(
       `Google Wallet reconciled couponId=${couponId} objectId=${objectId} eventType=${eventType || 'unknown'} status=${nextStatus} hasUsers=${walletState.hasUsers}`,
@@ -436,7 +443,9 @@ export class GoogleWalletService {
     classId: string;
     nonce: string;
   } {
-    let eventType = String(dto.eventType ?? '').trim().toLowerCase();
+    let eventType = String(dto.eventType ?? '')
+      .trim()
+      .toLowerCase();
     let objectId = String(dto.objectId ?? '').trim();
     let classId = String(dto.classId ?? '').trim();
     let nonce = String(dto.nonce ?? '').trim();
@@ -446,7 +455,10 @@ export class GoogleWalletService {
       try {
         const decoded = JSON.parse(signedMessage) as GoogleWalletCallbackDto;
         eventType =
-          eventType || String(decoded.eventType ?? '').trim().toLowerCase();
+          eventType ||
+          String(decoded.eventType ?? '')
+            .trim()
+            .toLowerCase();
         objectId = objectId || String(decoded.objectId ?? '').trim();
         classId = classId || String(decoded.classId ?? '').trim();
         nonce = nonce || String(decoded.nonce ?? '').trim();

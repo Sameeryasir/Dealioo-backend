@@ -10,7 +10,12 @@ export class StripeWebhookEvent {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'stripe_event_id', type: 'varchar', length: 255, unique: true })
+  @Column({
+    name: 'stripe_event_id',
+    type: 'varchar',
+    length: 255,
+    unique: true,
+  })
   stripeEventId: string;
 
   @Column({ name: 'event_type', type: 'varchar', length: 128 })

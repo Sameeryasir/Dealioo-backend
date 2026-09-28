@@ -1,10 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  EntityManager,
-  In,
-  Repository,
-} from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -36,9 +32,7 @@ import { LogRedeemedRewardDto } from './activityDto/log-redeemed-reward.dto';
 import { LogSignedUpDto } from './activityDto/log-signed-up.dto';
 import { LogVisitedDto } from './activityDto/log-visited.dto';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
-import {
-  CustomerVisitSource,
-} from '../../db/entities/customer-visit.entity';
+import { CustomerVisitSource } from '../../db/entities/customer-visit.entity';
 import { CouponPaymentStatus } from '../../db/entities/coupon.entity';
 import { visitedActivityDescription } from './visited-activity-description.util';
 import {
@@ -58,15 +52,17 @@ import {
   clampOverviewMonths,
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
-import { SidebarSectionNotifyService, extractActorUserIdFromMetadata } from '../sidebar-unread/sidebar-section-notify.service';
+import {
+  SidebarSectionNotifyService,
+  extractActorUserIdFromMetadata,
+} from '../sidebar-unread/sidebar-section-notify.service';
 import { PusherService } from '../pusher/pusher.service';
 import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
 
 function withActivityActorMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): { metadata: Record<string, unknown> | null; actorUserId: number | null } {
-  const base =
-    metadata && typeof metadata === 'object' ? { ...metadata } : {};
+  const base = metadata && typeof metadata === 'object' ? { ...metadata } : {};
   const actorUserId = extractActorUserIdFromMetadata(base);
   if (actorUserId != null) {
     // Canonical key so unread/Pusher can always exclude the acting staff member.
@@ -153,10 +149,8 @@ export class ActivityService {
    * Customers table has no businessId, so membership is inferred from relations.
    */
   private businessCustomersBaseQuery(businessId: number) {
-    return this.customerRepository
-      .createQueryBuilder('customer')
-      .where(
-        `customer.id IN (
+    return this.customerRepository.createQueryBuilder('customer').where(
+      `customer.id IN (
           SELECT activity.customer_id
           FROM activity_event activity
           WHERE activity.business_id = :businessId
@@ -178,8 +172,8 @@ export class ActivityService {
           WHERE payment.business_id = :businessId
             AND payment.status = :paid
         )`,
-        { businessId, paid: FunnelPaymentStatus.PAID },
-      );
+      { businessId, paid: FunnelPaymentStatus.PAID },
+    );
   }
 
   /**
@@ -324,6 +318,7 @@ export class ActivityService {
       select: ['id'],
     });
     if (existing) {
+      // TypeORM QueryDeepPartialEntity rejects null inside Record jsonb; cast keeps runtime JSON nulls.
       await manager.update(ActivityEvent, existing.id, {
         description,
         occurredAt,
@@ -333,7 +328,7 @@ export class ActivityService {
           campaignName,
           campaignType: campaignTypeRaw || null,
         },
-      });
+      } as Parameters<EntityManager['update']>[2]);
       return;
     }
 
@@ -359,9 +354,7 @@ export class ActivityService {
       select: ['id', 'name', 'email'],
     });
     const guestName =
-      customer?.name?.trim() ||
-      customer?.email?.trim() ||
-      'A guest';
+      customer?.name?.trim() || customer?.email?.trim() || 'A guest';
     const guestEmail = customer?.email?.trim() || null;
 
     void this.pusherService.notifyGuestJoined({
@@ -429,8 +422,7 @@ export class ActivityService {
   }
 
   async logVisited(params: LogVisitedDto): Promise<void> {
-    const visitSource =
-      params.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
+    const visitSource = params.visitSource ?? CustomerVisitSource.QR_REDEMPTION;
     const offerName = params.offerName?.trim() || null;
     const payload: CreateActivityEventDto = {
       businessId: params.businessId,
@@ -489,8 +481,7 @@ export class ActivityService {
       customerId = customer?.id ?? null;
     }
 
-    let campaignName =
-      payment.funnel?.campaign?.campaignName?.trim() || null;
+    let campaignName = payment.funnel?.campaign?.campaignName?.trim() || null;
     let offerName = payment.funnel?.campaign?.offer?.trim() || null;
     let campaignType =
       payment.funnel?.campaign?.campaignType === CampaignType.POSTPAID
@@ -515,8 +506,7 @@ export class ActivityService {
       }
     }
 
-    const businessName =
-      payment.business?.name?.trim() || 'Business';
+    const businessName = payment.business?.name?.trim() || 'Business';
     const amountLabel = formatMoney(payment.amount, payment.currency);
     const isScannerWalkIn = isScannerFunnelPayment(payment);
     const paymentPlace = resolveActivityPaymentPlace({
@@ -833,7 +823,10 @@ export class ActivityService {
       typeof metadata.campaignType === 'string'
         ? metadata.campaignType.trim().toLowerCase()
         : '';
-    if (fromMeta === CampaignType.POSTPAID || fromMeta === CampaignType.PREPAID) {
+    if (
+      fromMeta === CampaignType.POSTPAID ||
+      fromMeta === CampaignType.PREPAID
+    ) {
       return fromMeta;
     }
     const campaignId =
@@ -887,7 +880,9 @@ export class ActivityService {
     return 'online';
   }
 
-  private resolveVisitChannel(row: ActivityEvent): 'scanned' | 'in_store' | null {
+  private resolveVisitChannel(
+    row: ActivityEvent,
+  ): 'scanned' | 'in_store' | null {
     if (row.eventType !== ActivityEventType.VISITED) {
       return null;
     }
@@ -988,11 +983,7 @@ export class ActivityService {
     let moneyLabel = '';
     if (counterExtrasOnly && extraItemsCents > 0) {
       moneyLabel = `${formatMoney(extraItemsCents, currency)} counter extras`;
-    } else if (
-      amountCents != null &&
-      amountCents > 0 &&
-      extraItemsCents > 0
-    ) {
+    } else if (amountCents != null && amountCents > 0 && extraItemsCents > 0) {
       moneyLabel = `${formatMoney(amountCents, currency)} offer + ${formatMoney(extraItemsCents, currency)} extras`;
     } else if (amountCents != null && amountCents > 0) {
       moneyLabel = `${formatMoney(amountCents, currency)} offer`;
@@ -1147,10 +1138,8 @@ export class ActivityService {
     const monthCount = clampOverviewMonths(rawMonthCount);
     const cacheKey = `activity-monthly-v3:${businessId}:${monthCount}`;
 
-    return dashboardTtlCache.getOrSet(
-      cacheKey,
-      DASHBOARD_CACHE_TTL_MS,
-      () => this.computeBusinessSummaryMonthly(businessId, monthCount),
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
+      this.computeBusinessSummaryMonthly(businessId, monthCount),
     );
   }
 
@@ -1178,7 +1167,7 @@ export class ActivityService {
       };
     }
 
-    const rangeStart = buckets[0]!.start;
+    const rangeStart = buckets[0].start;
 
     const [snapshot, rows, orderRows, memberRows] = await Promise.all([
       this.getBusinessActivitySnapshot(businessId),
@@ -1255,9 +1244,7 @@ export class ActivityService {
         )
         .addSelect('COUNT(*)', 'members')
         .andWhere('customer.createdAt >= :rangeStart', { rangeStart })
-        .groupBy(
-          `DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC')`,
-        )
+        .groupBy(`DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC')`)
         .getRawMany<{ month: string; members: string }>(),
     ]);
 
@@ -1312,10 +1299,8 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const cacheKey = `activity-range-v6:${businessId}:${from.toISOString()}:${to.toISOString()}`;
-    return dashboardTtlCache.getOrSet(
-      cacheKey,
-      DASHBOARD_CACHE_TTL_MS,
-      () => this.computeBusinessSummaryForRange(businessId, from, to),
+    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
+      this.computeBusinessSummaryForRange(businessId, from, to),
     );
   }
 
@@ -1485,9 +1470,17 @@ export class ActivityService {
     }
 
     const keys: string[] = [];
-    const last = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+    const last = Date.UTC(
+      to.getUTCFullYear(),
+      to.getUTCMonth(),
+      to.getUTCDate(),
+    );
     for (
-      let time = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+      let time = Date.UTC(
+        from.getUTCFullYear(),
+        from.getUTCMonth(),
+        from.getUTCDate(),
+      );
       time <= last;
       time += 24 * 60 * 60 * 1000
     ) {

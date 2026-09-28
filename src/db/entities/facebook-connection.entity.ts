@@ -48,6 +48,9 @@ export class FacebookConnection {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @OneToMany(() => require('./facebook-page.entity').FacebookPage, (page) => page.connection)
+  @OneToMany(
+    () => require('./facebook-page.entity').FacebookPage,
+    (page: FacebookPage) => page.connection,
+  )
   pages: FacebookPage[];
 }

@@ -22,16 +22,23 @@ export class FunnelVersion {
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.versions, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./funnel.entity').Funnel,
+    (funnel: Funnel) => funnel.versions,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel;
 
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -47,7 +54,10 @@ export class FunnelVersion {
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdById: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'created_by' })
   createdBy: User | null;
 

@@ -20,7 +20,9 @@ export class BusinessTracking {
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

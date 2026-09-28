@@ -192,8 +192,7 @@ export class FunnelService {
 
     const saved = await this.funnelRepository.save(funnel);
     const pagesPayload = stripPaymentPage(
-      dto.pages ??
-        (await this.funnelPagesService.loadAssembledPages(saved.id)),
+      dto.pages ?? (await this.funnelPagesService.loadAssembledPages(saved.id)),
     );
     const { assembledPages, changedTypes } =
       await this.funnelPagesService.syncPages({
@@ -271,6 +270,9 @@ export class FunnelService {
     businessId: number | null;
     campaignType: CampaignType;
     offer: string | null;
+    // price / originalPrice are returned for public funnel checkout UI
+    price: number | null;
+    originalPrice: number | null;
     pixelId: string | null;
     googleTagManagerId: string | null;
     googleAdsSignupConversionLabel: string | null;
@@ -607,10 +609,7 @@ export class FunnelService {
     if (dto.pages !== undefined) {
       const pages = isPostpaid
         ? (() => {
-            const { payment: _payment, ...rest } = dto.pages as Record<
-              string,
-              unknown
-            >;
+            const { payment: _payment, ...rest } = dto.pages;
             return rest;
           })()
         : dto.pages;
@@ -656,10 +655,7 @@ export class FunnelService {
   }
 
   async deleteFunnel(id: number, user: User): Promise<void> {
-    requireAdminRole(
-      user,
-      'You do not have permission to delete a funnel.',
-    );
+    requireAdminRole(user, 'You do not have permission to delete a funnel.');
 
     const funnel = await this.funnelRepository.findOne({
       where: { id },
@@ -679,7 +675,9 @@ export class FunnelService {
     await this.funnelRepository.delete({ id });
   }
 
-  private async getLatestLegacyVersionNumber(funnelId: number): Promise<number> {
+  private async getLatestLegacyVersionNumber(
+    funnelId: number,
+  ): Promise<number> {
     const result = await this.funnelVersionRepository
       .createQueryBuilder('version')
       .select('MAX(version.versionNumber)', 'max')

@@ -48,10 +48,14 @@ export class FunnelPayment {
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.payments, {
-    onDelete: 'SET NULL',
-    nullable: true,
-  })
+  @ManyToOne(
+    () => require('./funnel.entity').Funnel,
+    (funnel: Funnel) => funnel.payments,
+    {
+      onDelete: 'SET NULL',
+      nullable: true,
+    },
+  )
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
@@ -70,17 +74,24 @@ export class FunnelPayment {
   @Column({ name: 'customer_id', type: 'int', nullable: true })
   customerId!: number | null;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer | null;
 
   @Column({ name: 'order_id', type: 'int', nullable: true })
   orderId!: number | null;
 
-  @ManyToOne(() => require('./order.entity').Order, (order) => order.payments, {
-    onDelete: 'SET NULL',
-    nullable: true,
-  })
+  @ManyToOne(
+    () => require('./order.entity').Order,
+    (order: Order) => order.payments,
+    {
+      onDelete: 'SET NULL',
+      nullable: true,
+    },
+  )
   @JoinColumn({ name: 'order_id' })
   order!: Order | null;
 

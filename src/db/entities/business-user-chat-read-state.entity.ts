@@ -29,7 +29,9 @@ export class BusinessUserChatReadState {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 

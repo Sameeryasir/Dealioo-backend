@@ -58,13 +58,23 @@ export class GoogleCampaign {
   @Column({ name: 'google_keyword_ids', type: 'jsonb', nullable: true })
   googleKeywordIds: string[] | null;
 
-  @Column({ name: 'campaign_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'campaign_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   campaignName: string | null;
 
   @Column({ type: 'varchar', length: 64, nullable: true })
   goal: string | null;
 
-  @Column({ name: 'campaign_type', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'campaign_type',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   campaignType: string | null;
 
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true })

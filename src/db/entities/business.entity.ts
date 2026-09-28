@@ -30,14 +30,24 @@ export class Business {
   logoUrl: string | null;
 
   /** Industry / business type (e.g. Restaurant, Retail). */
-  @Column({ name: 'business_type', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'business_type',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   businessType: string | null;
 
   /** ISO currency code the business deals in (e.g. USD, PKR). */
   @Column({ name: 'currency', type: 'varchar', length: 3, nullable: true })
   currency: string | null;
 
-  @Column({ name: 'website_url', type: 'varchar', length: 2048, nullable: true })
+  @Column({
+    name: 'website_url',
+    type: 'varchar',
+    length: 2048,
+    nullable: true,
+  })
   websiteUrl: string | null;
 
   @Column({ type: 'varchar', nullable: true })
@@ -88,7 +98,12 @@ export class Business {
   @Column({ name: 'meta_connected_at', type: 'timestamptz', nullable: true })
   metaConnectedAt: Date | null;
 
-  @Column({ name: 'meta_ad_account_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_ad_account_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaAdAccountId: string | null;
 
   @Column({
@@ -99,7 +114,11 @@ export class Business {
   })
   metaConnectionStatus: string | null;
 
-  @Column({ name: 'meta_token_expires_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'meta_token_expires_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   metaTokenExpiresAt: Date | null;
 
   @Column({ name: 'meta_oauth_scopes', type: 'text', nullable: true })
@@ -108,7 +127,12 @@ export class Business {
   @Column({ name: 'meta_requested_scopes', type: 'text', nullable: true })
   metaRequestedScopes: string | null;
 
-  @Column({ name: 'google_user_id', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'google_user_id',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   googleUserId: string | null;
 
   @Column({ name: 'google_refresh_token', type: 'text', nullable: true })
@@ -120,7 +144,12 @@ export class Business {
   @Column({ name: 'google_connected_at', type: 'timestamptz', nullable: true })
   googleConnectedAt: Date | null;
 
-  @Column({ name: 'google_customer_id', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'google_customer_id',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   googleCustomerId: string | null;
 
   @Column({
@@ -139,7 +168,11 @@ export class Business {
   })
   googleConnectionStatus: string | null;
 
-  @Column({ name: 'google_token_expires_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'google_token_expires_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   googleTokenExpiresAt: Date | null;
 
   @Column({ name: 'google_oauth_scopes', type: 'text', nullable: true })
@@ -164,16 +197,22 @@ export class Business {
   @Column({ name: 'twilio_connected_at', type: 'timestamptz', nullable: true })
   twilioConnectedAt: Date | null;
 
-  @ManyToOne(() => require('./user.entity').User, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'owner_id' })
   owner: User;
 
-  @OneToMany(() => require('./campaign.entity').Campaign, (campaign) => campaign.business)
+  @OneToMany(
+    () => require('./campaign.entity').Campaign,
+    (campaign: Campaign) => campaign.business,
+  )
   campaigns: Campaign[];
 
   @OneToMany(
     () => require('./business-customer.entity').BusinessCustomer,
-    (businessCustomer) => businessCustomer.business,
+    (businessCustomer: BusinessCustomer) => businessCustomer.business,
   )
   businessCustomers: BusinessCustomer[];
 

@@ -30,31 +30,42 @@ export class AutomationExecutionRecipient {
   @Column({ name: 'execution_id' })
   executionId!: number;
 
-  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'CASCADE' })
+  @ManyToOne(
+    () => require('./automation-execution.entity').AutomationExecution,
+    { onDelete: 'CASCADE' },
+  )
   @JoinColumn({ name: 'execution_id' })
   execution!: AutomationExecution;
 
   @Column({ name: 'step_id', type: 'int', nullable: true })
   stepId!: number | null;
 
-  @ManyToOne(() => require('./automation-execution-step.entity').AutomationExecutionStep, {
-    onDelete: 'SET NULL',
-    nullable: true,
-  })
+  @ManyToOne(
+    () => require('./automation-execution-step.entity').AutomationExecutionStep,
+    {
+      onDelete: 'SET NULL',
+      nullable: true,
+    },
+  )
   @JoinColumn({ name: 'step_id' })
   step!: AutomationExecutionStep | null;
 
   @Column({ name: 'customer_id' })
   customerId!: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer;
 
   @Column({ name: 'node_id', type: 'int', nullable: true })
   nodeId!: number | null;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'node_id' })
   node!: AutomationNode | null;
 

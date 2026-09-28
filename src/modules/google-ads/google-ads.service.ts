@@ -16,7 +16,6 @@ import { AdminNotificationWriter } from '../admin-notifications/admin-notificati
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { businessAccessWhere } from '../../utils/business-access';
-import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import {
   GoogleAdsConversionGoalDto,
@@ -61,7 +60,11 @@ const GOOGLE_ADS_SDK_TIMEOUT_MS = 12_000;
 function buildEnumNameByNumber(enumObject: Record<string, string | number>) {
   const byNumber = new Map<number, string>();
   for (const [key, value] of Object.entries(enumObject)) {
-    if (typeof value === 'number' && Number.isFinite(value) && !/^\d+$/.test(key)) {
+    if (
+      typeof value === 'number' &&
+      Number.isFinite(value) &&
+      !/^\d+$/.test(key)
+    ) {
       byNumber.set(value, key);
     }
   }
@@ -69,14 +72,12 @@ function buildEnumNameByNumber(enumObject: Record<string, string | number>) {
 }
 
 const CONVERSION_CATEGORY_BY_NUMBER = buildEnumNameByNumber(
-  enums.ConversionActionCategory as unknown as Record<string, string | number>,
+  enums.ConversionActionCategory,
 );
 const CONVERSION_ORIGIN_BY_NUMBER = buildEnumNameByNumber(
-  enums.ConversionOrigin as unknown as Record<string, string | number>,
+  enums.ConversionOrigin,
 );
-const ASSET_FIELD_TYPE_BY_NUMBER = buildEnumNameByNumber(
-  enums.AssetFieldType as unknown as Record<string, string | number>,
-);
+const ASSET_FIELD_TYPE_BY_NUMBER = buildEnumNameByNumber(enums.AssetFieldType);
 
 type GoogleAdsSearchRow = {
   campaign?: {
@@ -172,11 +173,19 @@ type GoogleAdsSearchRow = {
     text_asset?: { text?: string };
     imageAsset?: {
       fullSize?: { url?: string; heightPixels?: number; widthPixels?: number };
-      full_size?: { url?: string; height_pixels?: number; width_pixels?: number };
+      full_size?: {
+        url?: string;
+        height_pixels?: number;
+        width_pixels?: number;
+      };
     };
     image_asset?: {
       fullSize?: { url?: string; heightPixels?: number; widthPixels?: number };
-      full_size?: { url?: string; height_pixels?: number; width_pixels?: number };
+      full_size?: {
+        url?: string;
+        height_pixels?: number;
+        width_pixels?: number;
+      };
     };
     structuredSnippetAsset?: {
       header?: string;
@@ -267,7 +276,9 @@ export class GoogleAdsService {
 
     const business = await this.loadOwnedBusiness(user, businessId);
 
-    if (business.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED) {
+    if (
+      business.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED
+    ) {
       return { restored: true };
     }
 
@@ -357,7 +368,6 @@ export class GoogleAdsService {
       const clientSecret = this.tokenService.getClientSecret();
       businessId = parseGoogleOAuthState(state, clientSecret);
 
-      
       this.logger.log(
         `Google OAuth grantedScope (callback query) business=${businessId}: ${grantedScope ?? '(empty)'}`,
       );
@@ -366,8 +376,6 @@ export class GoogleAdsService {
       this.logger.log(
         `Google OAuth parsed callbackScopes business=${businessId}: ${JSON.stringify(callbackScopes)}`,
       );
-      
-      
 
       const business = await this.businessRepository.findOne({
         where: { id: businessId },
@@ -413,9 +421,7 @@ export class GoogleAdsService {
       this.tokenService.assertGoogleScopes(grantedScopes);
 
       const tokenExpiresAt =
-        tokenJson.expiry_date != null
-          ? new Date(tokenJson.expiry_date)
-          : null;
+        tokenJson.expiry_date != null ? new Date(tokenJson.expiry_date) : null;
 
       await this.businessRepository.update(businessId, {
         googleUserId,
@@ -493,16 +499,15 @@ export class GoogleAdsService {
       : [GOOGLE_ADS_REQUIRED_SCOPE];
 
     const hasGoogleLogin = Boolean(
-      normalized.googleUserId?.trim() &&
-        normalized.googleRefreshToken?.trim(),
+      normalized.googleUserId?.trim() && normalized.googleRefreshToken?.trim(),
     );
 
     const status = normalized.googleConnectionStatus ?? null;
 
     const connected = Boolean(
       hasGoogleLogin &&
-        missingRequiredScopes.length === 0 &&
-        status !== GoogleAdsConnectionStatus.INITIATED,
+      missingRequiredScopes.length === 0 &&
+      status !== GoogleAdsConnectionStatus.INITIATED,
     );
 
     return {
@@ -532,7 +537,8 @@ export class GoogleAdsService {
         customerId,
         loginCustomerId,
       );
-      return meta.name?.trim() || null;
+      // tryFetchCustomerMeta can return null on lookup failure
+      return meta?.name?.trim() || null;
     } catch {
       return null;
     }
@@ -726,9 +732,7 @@ export class GoogleAdsService {
       metadata: { connectedAccount: 'Google Ads was removed' },
     });
 
-    this.logger.log(
-      `Google Ads disconnected for business ${businessId}`,
-    );
+    this.logger.log(`Google Ads disconnected for business ${businessId}`);
 
     return { disconnected: true };
   }
@@ -913,11 +917,9 @@ export class GoogleAdsService {
     loginCustomerId: string,
     assetSelect: string,
     fieldTypeFilter: string,
-    resources: Array<'customer_asset' | 'campaign_asset' | 'asset_group_asset'> = [
-      'customer_asset',
-      'campaign_asset',
-      'asset_group_asset',
-    ],
+    resources: Array<
+      'customer_asset' | 'campaign_asset' | 'asset_group_asset'
+    > = ['customer_asset', 'campaign_asset', 'asset_group_asset'],
   ): Promise<GoogleAdsSearchRow[]> {
     const queryByResource: Record<string, string> = {
       customer_asset: `
@@ -1276,8 +1278,13 @@ export class GoogleAdsService {
       UNKNOWN: 'Unknown',
       UNSPECIFIED: 'Unspecified',
     };
-    return labels[category] ?? category.replace(/_/g, ' ').toLowerCase()
-      .replace(/\b\w/g, (char) => char.toUpperCase());
+    return (
+      labels[category] ??
+      category
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+    );
   }
 
   private conversionOriginLabel(origin: string): string {
@@ -1291,8 +1298,13 @@ export class GoogleAdsService {
       UNKNOWN: 'Unknown',
       UNSPECIFIED: 'Unspecified',
     };
-    return labels[origin] ?? origin.replace(/_/g, ' ').toLowerCase()
-      .replace(/\b\w/g, (char) => char.toUpperCase());
+    return (
+      labels[origin] ??
+      origin
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+    );
   }
 
   async deleteCampaignForBusiness(
@@ -1401,12 +1413,19 @@ export class GoogleAdsService {
         'Provide a name, status, or daily budget to update.',
       );
     }
-    if (nextStatus != null && nextStatus !== 'ENABLED' && nextStatus !== 'PAUSED') {
+    if (
+      nextStatus != null &&
+      nextStatus !== 'ENABLED' &&
+      nextStatus !== 'PAUSED'
+    ) {
       throw new BadRequestException(
         'Campaign status must be ENABLED or PAUSED.',
       );
     }
-    if (nextBudget != null && (!Number.isFinite(nextBudget) || nextBudget < 1)) {
+    if (
+      nextBudget != null &&
+      (!Number.isFinite(nextBudget) || nextBudget < 1)
+    ) {
       throw new BadRequestException(
         'Daily budget must be a number of at least 1.',
       );
@@ -1681,8 +1700,7 @@ export class GoogleAdsService {
       query,
       loginCustomerId,
     );
-    const budget =
-      rows[0]?.campaignBudget ?? rows[0]?.campaign_budget ?? null;
+    const budget = rows[0]?.campaignBudget ?? rows[0]?.campaign_budget ?? null;
     const id = String(budget?.id ?? '').replace(/\D/g, '');
     return id || null;
   }
@@ -1738,7 +1756,8 @@ export class GoogleAdsService {
 
       const budget = row.campaignBudget ?? row.campaign_budget ?? null;
       const budgetId = String(budget?.id ?? '').replace(/\D/g, '') || null;
-      const dailyBudgetMicrosRaw = budget?.amountMicros ?? budget?.amount_micros;
+      const dailyBudgetMicrosRaw =
+        budget?.amountMicros ?? budget?.amount_micros;
       const dailyBudgetMicros =
         dailyBudgetMicrosRaw != null
           ? this.toNumber(dailyBudgetMicrosRaw)
@@ -1760,10 +1779,7 @@ export class GoogleAdsService {
       if (!existing.budgetId && budgetId) {
         existing.budgetId = budgetId;
       }
-      if (
-        existing.dailyBudgetMicros == null &&
-        dailyBudgetMicros != null
-      ) {
+      if (existing.dailyBudgetMicros == null && dailyBudgetMicros != null) {
         existing.dailyBudgetMicros = dailyBudgetMicros;
       }
 
@@ -1822,9 +1838,11 @@ export class GoogleAdsService {
     return this.parseCustomerResource(rows[0]?.customer);
   }
 
-  private parseCustomerResource(
-    customer?: GoogleAdsSearchRow['customer'],
-  ): { name: string | null; currency: string | null; isManager: boolean } {
+  private parseCustomerResource(customer?: GoogleAdsSearchRow['customer']): {
+    name: string | null;
+    currency: string | null;
+    isManager: boolean;
+  } {
     if (!customer) {
       return { name: null, currency: null, isManager: false };
     }
@@ -1834,9 +1852,7 @@ export class GoogleAdsService {
       customer.descriptive_name?.trim() ||
       null;
     const currency =
-      customer.currencyCode?.trim() ||
-      customer.currency_code?.trim() ||
-      null;
+      customer.currencyCode?.trim() || customer.currency_code?.trim() || null;
 
     return {
       name,
@@ -2029,7 +2045,10 @@ export class GoogleAdsService {
     refreshToken: string,
     rootIds: string[],
   ): Promise<GoogleAdsCustomerDto[]> {
-    const enriched = await this.enrichAccessibleCustomers(refreshToken, rootIds);
+    const enriched = await this.enrichAccessibleCustomers(
+      refreshToken,
+      rootIds,
+    );
     const byId = new Map(enriched.map((customer) => [customer.id, customer]));
 
     const managerIds = enriched
@@ -2233,10 +2252,11 @@ export class GoogleAdsService {
 
     try {
       const rows = await this.withSdkTimeout(
-        customer.query(query) as Promise<T[]>,
+        customer.query(query),
         'googleAds:search',
       );
-      return Array.isArray(rows) ? rows : [];
+      // SDK returns IGoogleAdsRow[]; callers provide T via generic.
+      return (Array.isArray(rows) ? rows : []) as T[];
     } catch (err) {
       throw new BadRequestException(
         formatGoogleAdsSdkError(

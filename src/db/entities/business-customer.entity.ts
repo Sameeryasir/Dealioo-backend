@@ -19,20 +19,28 @@ export class BusinessCustomer {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, (business) => business.businessCustomers, {
-    nullable: false,
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./business.entity').Business,
+    (business: Business) => business.businessCustomers,
+    {
+      nullable: false,
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, (customer) => customer.businessCustomers, {
-    nullable: false,
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./customer.entity').Customer,
+    (customer: Customer) => customer.businessCustomers,
+    {
+      nullable: false,
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 

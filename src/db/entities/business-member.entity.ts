@@ -83,7 +83,7 @@ export class BusinessMember {
   @OneToMany(
     () =>
       require('./business-member-permission.entity').BusinessMemberPermission,
-    (permissionRow) => permissionRow.businessMember,
+    (permissionRow: BusinessMemberPermission) => permissionRow.businessMember,
   )
   permissionRows!: BusinessMemberPermission[];
 

@@ -17,14 +17,22 @@ export class OnboardingEvent {
   @Column({ name: 'user_id', type: 'int', nullable: true })
   userId!: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'user_id' })
   user!: User | null;
 
   @Column({ name: 'event_name', type: 'varchar', length: 64 })
   eventName!: string;
 
-  @Column({ name: 'idempotency_key', type: 'varchar', length: 191, unique: true })
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 191,
+    unique: true,
+  })
   idempotencyKey!: string;
 
   @Column({ type: 'jsonb', nullable: true })

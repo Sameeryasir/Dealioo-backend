@@ -17,21 +17,28 @@ export class AutomationLog {
   @Column({ name: 'execution_id' })
   executionId: number;
 
-  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'CASCADE' })
+  @ManyToOne(
+    () => require('./automation-execution.entity').AutomationExecution,
+    { onDelete: 'CASCADE' },
+  )
   @JoinColumn({ name: 'execution_id' })
   execution: AutomationExecution;
 
   @Column({ name: 'node_id' })
   nodeId: number;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'node_id' })
   node: AutomationNode;
 
   @Column({ name: 'customer_id', nullable: false })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 

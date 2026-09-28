@@ -22,7 +22,9 @@ export class CheckoutAccessToken {
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
@@ -38,7 +40,10 @@ export class CheckoutAccessToken {
   @Column({ name: 'funnel_payment_id', type: 'int', nullable: true })
   funnelPaymentId: number | null;
 
-  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_payment_id' })
   funnelPayment: FunnelPayment | null;
 

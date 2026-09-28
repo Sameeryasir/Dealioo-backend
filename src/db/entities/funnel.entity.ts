@@ -24,16 +24,23 @@ export class Funnel {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @OneToOne(() => require('./campaign.entity').Campaign, (campaign) => campaign.funnel, {
-    onDelete: 'CASCADE',
-  })
+  @OneToOne(
+    () => require('./campaign.entity').Campaign,
+    (campaign: Campaign) => campaign.funnel,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
   @Column({ name: 'business_id', type: 'int', nullable: true })
   businessId: number | null;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
@@ -45,17 +52,29 @@ export class Funnel {
   @Column({ name: 'content_revision', type: 'int', default: 0 })
   contentRevision: number;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'updated_by' })
   updatedBy: User | null;
 
-  @OneToMany(() => require('./funnel-payment.entity').FunnelPayment, (payment) => payment.funnel)
+  @OneToMany(
+    () => require('./funnel-payment.entity').FunnelPayment,
+    (payment: FunnelPayment) => payment.funnel,
+  )
   payments: FunnelPayment[];
 
-  @OneToMany(() => require('./funnel-version.entity').FunnelVersion, (version) => version.funnel)
+  @OneToMany(
+    () => require('./funnel-version.entity').FunnelVersion,
+    (version: FunnelVersion) => version.funnel,
+  )
   versions: FunnelVersion[];
 
-  @OneToMany(() => require('./funnel-page.entity').FunnelPage, (page) => page.funnel)
+  @OneToMany(
+    () => require('./funnel-page.entity').FunnelPage,
+    (page: FunnelPage) => page.funnel,
+  )
   pageRows: FunnelPage[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

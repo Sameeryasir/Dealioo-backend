@@ -43,8 +43,7 @@ export class FunnelPagesService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     try {
       await this.backfillLandingEyebrowsFromCampaignOffers();
-    } catch {
-    }
+    } catch {}
   }
 
   applyOfferEyebrowToPages(
@@ -106,7 +105,11 @@ export class FunnelPagesService implements OnModuleInit {
       .addSelect('c.offer', 'offer')
       .where('fp.page_type = :pageType', { pageType: FunnelPageType.LANDING })
       .andWhere("c.offer IS NOT NULL AND TRIM(c.offer) <> ''")
-      .getRawMany<{ id: string; schema: Record<string, unknown> | string; offer: string }>();
+      .getRawMany<{
+        id: string;
+        schema: Record<string, unknown> | string;
+        offer: string;
+      }>();
 
     let updated = 0;
     for (const row of rows) {
@@ -122,10 +125,10 @@ export class FunnelPagesService implements OnModuleInit {
       if (current === offer) continue;
 
       schema.eyebrow = offer;
-      await this.funnelPageRepository.update(
-        { id: row.id },
-        { schema },
-      );
+      // jsonb Record update: TypeORM QueryDeepPartialEntity is overly strict for plain objects
+      await this.funnelPageRepository.update({ id: row.id }, {
+        schema,
+      } as Parameters<Repository<FunnelPage>['update']>[1]);
       updated += 1;
     }
     return updated;
@@ -192,9 +195,7 @@ export class FunnelPagesService implements OnModuleInit {
       return [pageId];
     }
 
-    const mentioned = FUNNEL_PAGE_TYPES.filter((type) =>
-      text.includes(type),
-    );
+    const mentioned = FUNNEL_PAGE_TYPES.filter((type) => text.includes(type));
     if (mentioned.length > 0) {
       return mentioned;
     }
@@ -265,7 +266,9 @@ export class FunnelPagesService implements OnModuleInit {
           continue;
         }
 
-        if (this.stableStringify(page.schema) === this.stableStringify(nextSchema)) {
+        if (
+          this.stableStringify(page.schema) === this.stableStringify(nextSchema)
+        ) {
           continue;
         }
 
@@ -387,9 +390,7 @@ export class FunnelPagesService implements OnModuleInit {
           };
 
     const pageTypes = (
-      includePaymentPage
-        ? FUNNEL_PAGE_TYPES
-        : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
+      includePaymentPage ? FUNNEL_PAGE_TYPES : FUNNEL_PAGE_TYPES_WITHOUT_PAYMENT
     ) as FunnelPageType[];
 
     await this.dataSource.transaction(async (manager) => {

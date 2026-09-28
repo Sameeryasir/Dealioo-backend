@@ -30,7 +30,10 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
@@ -40,7 +43,10 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'customer_id', nullable: true })
   customerId: number | null;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer | null;
 
@@ -69,7 +75,12 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'utm_medium', type: 'varchar', length: 255, nullable: true })
   utmMedium: string | null;
 
-  @Column({ name: 'utm_campaign', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'utm_campaign',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   utmCampaign: string | null;
 
   @Column({ name: 'referrer', type: 'varchar', length: 512, nullable: true })

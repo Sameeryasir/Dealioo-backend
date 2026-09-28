@@ -37,7 +37,10 @@ export class BusinessInvitation {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
@@ -60,7 +63,10 @@ export class BusinessInvitation {
   })
   status!: BusinessInvitationStatus;
 
-  @ManyToOne(() => require('./user.entity').User, { nullable: false, onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./user.entity').User, {
+    nullable: false,
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'invited_by' })
   invitedBy!: User;
 

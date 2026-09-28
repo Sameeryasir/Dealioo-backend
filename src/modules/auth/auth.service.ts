@@ -54,6 +54,7 @@ import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import {
   ADMIN_ROLE,
   MEMBER_ROLE,
+  SUPER_ADMIN_ROLE,
 } from '../../utils/user-roles';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
@@ -189,9 +190,8 @@ export class AuthService {
     user: AuthUserPayload;
     isNewCustomer: boolean;
   }> {
-    const preview = await this.invitationService.findPendingInvitationByRawToken(
-      dto.token,
-    );
+    const preview =
+      await this.invitationService.findPendingInvitationByRawToken(dto.token);
     const email = this.invitationService.normalizeEmail(preview.email);
 
     const existingWithPassword = await this.userRepository
@@ -363,7 +363,7 @@ export class AuthService {
         await permissionRepo.save(
           permissionKeys.map((permission) =>
             permissionRepo.create({
-              businessMember: member!,
+              businessMember: member,
               permission,
             }),
           ),
@@ -547,9 +547,7 @@ export class AuthService {
     return adminRole;
   }
 
-  async loginUser(
-    loginUserDto: LoginUserDto,
-  ): Promise<{
+  async loginUser(loginUserDto: LoginUserDto): Promise<{
     message: string;
     token: string;
     refreshToken: string;
@@ -588,8 +586,7 @@ export class AuthService {
     if (!user.emailVerified) {
       try {
         await this.sendOtpForUser(user);
-      } catch {
-      }
+      } catch {}
       throw new ForbiddenException({
         statusCode: 403,
         error: 'EMAIL_NOT_VERIFIED',
@@ -610,15 +607,16 @@ export class AuthService {
     };
   }
 
- 
   async handleGoogleLogin(
     profile: GoogleAuthProfile,
     mode: GoogleAuthMode = 'login',
     frontendBase?: string,
-  ): Promise<{ redirectUrl: string; accessToken: string; refreshToken: string }> {
-    this.logger.log(
-      `OAuth Started — Google ${mode} for ${profile.email}`,
-    );
+  ): Promise<{
+    redirectUrl: string;
+    accessToken: string;
+    refreshToken: string;
+  }> {
+    this.logger.log(`OAuth Started — Google ${mode} for ${profile.email}`);
 
     try {
       const { user, isNewUser } = await this.resolveGoogleUser(profile, mode);
@@ -666,7 +664,9 @@ export class AuthService {
     const params = new URLSearchParams({
       isNewUser: result.isNewUser ? '1' : '0',
       isNewCustomer: (result.isNewCustomer ?? result.isNewUser) ? '1' : '0',
-      user: Buffer.from(JSON.stringify(result.user), 'utf8').toString('base64url'),
+      user: Buffer.from(JSON.stringify(result.user), 'utf8').toString(
+        'base64url',
+      ),
     });
     return `${base}/auth/google/complete#${params.toString()}`;
   }
@@ -794,10 +794,9 @@ export class AuthService {
       );
     }
 
-    const displayName = [profile.firstName, profile.lastName]
-      .filter(Boolean)
-      .join(' ')
-      .trim() || email.split('@')[0];
+    const displayName =
+      [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim() ||
+      email.split('@')[0];
 
     const created = this.userRepository.create({
       email,
@@ -1075,9 +1074,7 @@ export class AuthService {
     return this.issueAuthTokens(user);
   }
 
-  async revokeRefreshToken(
-    rawToken: string,
-  ): Promise<{ message: string }> {
+  async revokeRefreshToken(rawToken: string): Promise<{ message: string }> {
     const tokenHash = this.hashRefreshToken(rawToken);
     const record = await this.refreshTokenRepository.findOne({
       where: { tokenHash },
@@ -1094,9 +1091,7 @@ export class AuthService {
   // --- Change: verifyOtp returns isNewCustomer ---
   // Why: CompleteRegistration fires after OTP; only first email verification = new registration.
   // MCP context 7: backend owns acquisition truth; frontend only mirrors the flag.
-  async verifyOtp(
-    verifyOtpDto: VerifyOtpDto,
-  ): Promise<{
+  async verifyOtp(verifyOtpDto: VerifyOtpDto): Promise<{
     message: string;
     token: string;
     refreshToken: string;
@@ -1137,9 +1132,7 @@ export class AuthService {
     return { message: 'OTP validated successfully.' };
   }
 
-  async resetPassword(
-    dto: ResetPasswordDto,
-  ): Promise<{
+  async resetPassword(dto: ResetPasswordDto): Promise<{
     message: string;
     token: string;
     refreshToken: string;

@@ -24,19 +24,39 @@ export class FacebookCampaign {
   @Column({ name: 'ad_account_id', type: 'varchar', length: 64 })
   adAccountId: string;
 
-  @Column({ name: 'meta_campaign_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_campaign_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaCampaignId: string | null;
 
-  @Column({ name: 'meta_adset_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_adset_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaAdsetId: string | null;
 
-  @Column({ name: 'meta_creative_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_creative_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaCreativeId: string | null;
 
   @Column({ name: 'meta_ad_id', type: 'varchar', length: 64, nullable: true })
   metaAdId: string | null;
 
-  @Column({ name: 'campaign_name', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'campaign_name',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   campaignName: string | null;
 
   @Column({ type: 'varchar', length: 64, nullable: true })
@@ -51,7 +71,12 @@ export class FacebookCampaign {
   @Column({ name: 'end_time', type: 'timestamptz', nullable: true })
   endTime: Date | null;
 
-  @Column({ name: 'facebook_page_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'facebook_page_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   facebookPageId: string | null;
 
   @Column({

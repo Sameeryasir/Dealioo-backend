@@ -31,7 +31,11 @@ export class MetaProductEvent {
   @Column({ type: 'varchar', length: 32, default: 'dealioo' })
   product!: string;
 
-  @Column({ type: 'varchar', length: 32, default: MetaProductEventStatus.PENDING })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: MetaProductEventStatus.PENDING,
+  })
   status!: MetaProductEventStatus;
 
   @Column({ name: 'event_time', type: 'bigint' })
@@ -40,7 +44,12 @@ export class MetaProductEvent {
   @Column({ name: 'event_source_url', type: 'text', nullable: true })
   eventSourceUrl!: string | null;
 
-  @Column({ name: 'action_source', type: 'varchar', length: 32, default: 'website' })
+  @Column({
+    name: 'action_source',
+    type: 'varchar',
+    length: 32,
+    default: 'website',
+  })
   actionSource!: string;
 
   @Column({ type: 'varchar', length: 255, nullable: true })

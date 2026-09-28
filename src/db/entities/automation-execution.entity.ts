@@ -35,21 +35,27 @@ export class AutomationExecution {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 
   @Column({ name: 'customer_id', nullable: false })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'current_node_id' })
   currentNodeId: number;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'current_node_id' })
   currentNode: AutomationNode;
 
@@ -140,7 +146,10 @@ export class AutomationExecution {
   })
   purpose: AutomationPurpose;
 
-  @OneToMany(() => require('./automation-log.entity').AutomationLog, (log) => log.execution)
+  @OneToMany(
+    () => require('./automation-log.entity').AutomationLog,
+    (log: AutomationLog) => log.execution,
+  )
   logs: AutomationLog[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

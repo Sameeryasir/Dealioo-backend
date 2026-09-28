@@ -35,7 +35,9 @@ export class Automation {
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
@@ -61,14 +63,20 @@ export class Automation {
   @Column({ name: 'campaign_id', nullable: true })
   campaignId: number | null;
 
-  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./campaign.entity').Campaign, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign | null;
 
   @Column({ name: 'funnel_id', nullable: true })
   funnelId: number | null;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel | null;
 
@@ -92,13 +100,22 @@ export class Automation {
   @Column({ type: 'int', default: 1 })
   version: number;
 
-  @OneToMany(() => require('./automation-node.entity').AutomationNode, (node) => node.automation)
+  @OneToMany(
+    () => require('./automation-node.entity').AutomationNode,
+    (node: AutomationNode) => node.automation,
+  )
   nodes: AutomationNode[];
 
-  @OneToMany(() => require('./automation-connection.entity').AutomationConnection, (connection) => connection.automation)
+  @OneToMany(
+    () => require('./automation-connection.entity').AutomationConnection,
+    (connection: AutomationConnection) => connection.automation,
+  )
   connections: AutomationConnection[];
 
-  @OneToMany(() => require('./automation-execution.entity').AutomationExecution, (execution) => execution.automation)
+  @OneToMany(
+    () => require('./automation-execution.entity').AutomationExecution,
+    (execution: AutomationExecution) => execution.automation,
+  )
   executions: AutomationExecution[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

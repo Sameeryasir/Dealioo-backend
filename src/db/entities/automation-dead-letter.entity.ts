@@ -21,7 +21,10 @@ export class AutomationDeadLetter {
   @Column({ name: 'execution_id', type: 'int', nullable: true })
   executionId: number | null;
 
-  @ManyToOne(() => require('./automation-execution.entity').AutomationExecution, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(
+    () => require('./automation-execution.entity').AutomationExecution,
+    { onDelete: 'SET NULL', nullable: true },
+  )
   @JoinColumn({ name: 'execution_id' })
   execution: AutomationExecution | null;
 
@@ -52,7 +55,11 @@ export class AutomationDeadLetter {
   @Column({ type: 'int', default: 0 })
   attempts: number;
 
-  @Column({ type: 'varchar', length: 32, default: AutomationDeadLetterStatus.PENDING })
+  @Column({
+    type: 'varchar',
+    length: 32,
+    default: AutomationDeadLetterStatus.PENDING,
+  })
   status: AutomationDeadLetterStatus;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

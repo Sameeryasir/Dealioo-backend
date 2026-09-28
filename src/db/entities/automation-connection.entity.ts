@@ -15,14 +15,18 @@ export class AutomationConnection {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 
   @Column({ name: 'source_node_id' })
   sourceNodeId: number;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'source_node_id' })
   sourceNode: AutomationNode;
 
@@ -32,7 +36,9 @@ export class AutomationConnection {
   @Column({ type: 'varchar', length: 64, nullable: true })
   branch: string | null;
 
-  @ManyToOne(() => require('./automation-node.entity').AutomationNode, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation-node.entity').AutomationNode, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'target_node_id' })
   targetNode: AutomationNode;
 }

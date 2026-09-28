@@ -27,7 +27,9 @@ export class AutomationNode {
   @Column({ name: 'automation_id' })
   automationId: number;
 
-  @ManyToOne(() => require('./automation.entity').Automation, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./automation.entity').Automation, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'automation_id' })
   automation: Automation;
 

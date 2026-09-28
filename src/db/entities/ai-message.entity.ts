@@ -13,10 +13,7 @@ import { AiMessagePage } from './ai-message-page';
 import { AiMessageStatus } from './ai-message-status';
 
 @Entity('ai_messages')
-@Index('IDX_ai_messages_conversation_created', [
-  'conversationId',
-  'createdAt',
-])
+@Index('IDX_ai_messages_conversation_created', ['conversationId', 'createdAt'])
 @Index('IDX_ai_messages_job_id', ['jobId'])
 export class AiMessage {
   @PrimaryGeneratedColumn('uuid')
@@ -27,7 +24,7 @@ export class AiMessage {
 
   @ManyToOne(
     () => require('./ai-conversation.entity').AiConversation,
-    (conversation) => conversation.messages,
+    (conversation: AiConversation) => conversation.messages,
     {
       onDelete: 'CASCADE',
     },

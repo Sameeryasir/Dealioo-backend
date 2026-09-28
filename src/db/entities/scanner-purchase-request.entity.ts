@@ -7,9 +7,13 @@ import {
 } from 'typeorm';
 
 @Entity('scanner_purchase_requests')
-@Index('UQ_scanner_purchase_business_idempotency', ['businessId', 'idempotencyKey'], {
-  unique: true,
-})
+@Index(
+  'UQ_scanner_purchase_business_idempotency',
+  ['businessId', 'idempotencyKey'],
+  {
+    unique: true,
+  },
+)
 export class ScannerPurchaseRequest {
   @PrimaryGeneratedColumn()
   id: number;

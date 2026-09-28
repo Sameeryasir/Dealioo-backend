@@ -21,10 +21,14 @@ export class UserSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => require('./user.entity').User, (user: User) => user.subscriptions, {
-    nullable: false,
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./user.entity').User,
+    (user: User) => user.subscriptions,
+    {
+      nullable: false,
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'user_id' })
   user: User;
 
@@ -35,9 +39,10 @@ export class UserSubscription {
     () => require('./subscription-plan.entity').SubscriptionPlan,
     (plan: SubscriptionPlan) => plan.userSubscriptions,
     {
-    nullable: false,
-    onDelete: 'RESTRICT',
-  })
+      nullable: false,
+      onDelete: 'RESTRICT',
+    },
+  )
   @JoinColumn({ name: 'plan_id' })
   plan: SubscriptionPlan;
 
@@ -62,7 +67,12 @@ export class UserSubscription {
   @Column({ name: 'cancel_requested_at', type: 'timestamptz', nullable: true })
   cancelRequestedAt: Date | null;
 
-  @Column({ name: 'cancellation_reason', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'cancellation_reason',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   cancellationReason: string | null;
 
   @Column({ name: 'cancellation_comment', type: 'text', nullable: true })

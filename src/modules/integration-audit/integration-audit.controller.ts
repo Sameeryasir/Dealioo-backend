@@ -31,12 +31,13 @@ export class IntegrationAuditController {
   async listForBusiness(
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    // Required @Req must come before optional @Query params (TS1016).
+    @Req() req: AuthRequest,
     @Query('provider') provider?: string,
     @Query('eventType') eventType?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('tzOffset') tzOffsetRaw?: string,
-    @Req() req: AuthRequest,
   ) {
     requireAdminRole(
       req.user,

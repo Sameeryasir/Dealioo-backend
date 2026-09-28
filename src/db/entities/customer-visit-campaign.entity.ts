@@ -23,16 +23,22 @@ export class CustomerVisitCampaign {
   @Column({ name: 'customer_visit_id' })
   customerVisitId: number;
 
-  @ManyToOne(() => require('./customer-visit.entity').CustomerVisit, (visit) => visit.visitCampaigns, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./customer-visit.entity').CustomerVisit,
+    (visit: CustomerVisit) => visit.visitCampaigns,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'customer_visit_id' })
   customerVisit: CustomerVisit;
 
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 

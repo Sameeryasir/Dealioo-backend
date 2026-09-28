@@ -40,35 +40,47 @@ export class Coupon {
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
   @Column({ name: 'funnel_id', type: 'int', nullable: true })
   funnelId!: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel.entity').Funnel, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_id' })
   funnel!: Funnel;
 
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'funnel_payment_id', type: 'int', nullable: true })
   funnelPaymentId: number | null;
 
-  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./funnel-payment.entity').FunnelPayment, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'funnel_payment_id' })
   funnelPayment: FunnelPayment | null;
 
@@ -99,23 +111,43 @@ export class Coupon {
   @Column({ name: 'redeemed_by_user_id', type: 'int', nullable: true })
   redeemedByUserId: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'redeemed_by_user_id' })
   redeemedByUser: User | null;
 
-  @Column({ name: 'scanner_device', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'scanner_device',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   scannerDevice: string | null;
 
   @Column({ name: 'expires_at', type: 'timestamptz', nullable: true })
   expiresAt: Date | null;
 
-  @Column({ name: 'signup_pass_email_scheduled_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'signup_pass_email_scheduled_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   signupPassEmailScheduledAt: Date | null;
 
-  @Column({ name: 'signup_pass_email_sent_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'signup_pass_email_sent_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   signupPassEmailSentAt: Date | null;
 
-  @Column({ name: 'signup_pass_email_cancelled_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'signup_pass_email_cancelled_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   signupPassEmailCancelledAt: Date | null;
 
   @Column({
@@ -144,7 +176,11 @@ export class Coupon {
   })
   googleWalletPendingAt!: Date | null;
 
-  @Column({ name: 'google_wallet_added_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'google_wallet_added_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   googleWalletAddedAt!: Date | null;
 
   @Column({

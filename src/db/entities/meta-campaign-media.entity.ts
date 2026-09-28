@@ -32,10 +32,20 @@ export class MetaCampaignMedia {
   @Column({ name: 'size_bytes', type: 'bigint', default: 0 })
   sizeBytes: string;
 
-  @Column({ name: 'storage_key', type: 'varchar', length: 1024, nullable: true })
+  @Column({
+    name: 'storage_key',
+    type: 'varchar',
+    length: 1024,
+    nullable: true,
+  })
   storageKey: string | null;
 
-  @Column({ name: 'storage_url', type: 'varchar', length: 2048, nullable: true })
+  @Column({
+    name: 'storage_url',
+    type: 'varchar',
+    length: 2048,
+    nullable: true,
+  })
   storageUrl: string | null;
 
   @Column({
@@ -54,7 +64,12 @@ export class MetaCampaignMedia {
   })
   metaImageHash: string | null;
 
-  @Column({ name: 'meta_video_id', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'meta_video_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   metaVideoId: string | null;
 
   @Column({ name: 'error_message', type: 'text', nullable: true })

@@ -20,10 +20,14 @@ export class BusinessMemberPermission {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @ManyToOne(() => require('./business-member.entity').BusinessMember, (member) => member.permissionRows, {
-    nullable: false,
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./business-member.entity').BusinessMember,
+    (member: BusinessMember) => member.permissionRows,
+    {
+      nullable: false,
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'business_member_id' })
   businessMember!: BusinessMember;
 

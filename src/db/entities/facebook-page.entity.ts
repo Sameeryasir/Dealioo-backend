@@ -19,9 +19,13 @@ export class FacebookPage {
   @Column({ name: 'connection_id', type: 'int' })
   connectionId: number;
 
-  @ManyToOne(() => require('./facebook-connection.entity').FacebookConnection, (connection) => connection.pages, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./facebook-connection.entity').FacebookConnection,
+    (connection: FacebookConnection) => connection.pages,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'connection_id' })
   connection: FacebookConnection;
 

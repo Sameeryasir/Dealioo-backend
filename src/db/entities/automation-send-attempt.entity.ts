@@ -7,12 +7,11 @@ import {
 } from 'typeorm';
 
 @Entity('automation_send_attempt')
-@Index('UQ_automation_send_attempt_key', [
-  'automationId',
-  'customerId',
-  'actionType',
-  'attempt',
-], { unique: true })
+@Index(
+  'UQ_automation_send_attempt_key',
+  ['automationId', 'customerId', 'actionType', 'attempt'],
+  { unique: true },
+)
 export class AutomationSendAttempt {
   @PrimaryGeneratedColumn()
   id: number;

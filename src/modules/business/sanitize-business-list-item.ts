@@ -42,9 +42,9 @@ export function sanitizeBusinessListItem(
     metaStatus === 'SYNCING';
   const metaConnected = Boolean(
     business.metaUserId?.trim() &&
-      business.metaAccessToken?.trim() &&
-      business.metaAdAccountId?.trim() &&
-      metaReadyStatus,
+    business.metaAccessToken?.trim() &&
+    business.metaAdAccountId?.trim() &&
+    metaReadyStatus,
   );
 
   const googleStatus = (business.googleConnectionStatus ?? '')
@@ -55,12 +55,11 @@ export function sanitizeBusinessListItem(
     googleStatus === 'ACTIVE' ||
     googleStatus === 'SYNCING' ||
     googleStatus === 'TOKEN_EXCHANGED';
+  // INITIATED/FAILED are already excluded by googleReadyStatus above — no need to re-check.
   const googleAdsConnected = Boolean(
     business.googleUserId?.trim() &&
-      business.googleRefreshToken?.trim() &&
-      googleReadyStatus &&
-      googleStatus !== 'INITIATED' &&
-      googleStatus !== 'FAILED',
+    business.googleRefreshToken?.trim() &&
+    googleReadyStatus,
   );
 
   const twilioPhoneNumber = business.twilioPhoneNumber?.trim() || null;
@@ -75,7 +74,7 @@ export function sanitizeBusinessListItem(
   const viewerUserId = options?.viewerUserId ?? null;
   const isOwner = Boolean(
     options?.isSuperAdmin ||
-      (viewerUserId != null && ownerId != null && ownerId === viewerUserId),
+    (viewerUserId != null && ownerId != null && ownerId === viewerUserId),
   );
 
   const flags = {

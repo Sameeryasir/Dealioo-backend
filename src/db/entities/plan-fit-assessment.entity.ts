@@ -36,7 +36,12 @@ export class PlanFitAssessment {
   @Column({ type: 'varchar', length: 16 })
   confidence!: string;
 
-  @Column({ name: 'selected_plan_slug', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'selected_plan_slug',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   selectedPlanSlug!: string | null;
 
   @Column({ name: 'recommendation_accepted', type: 'boolean', nullable: true })

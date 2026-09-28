@@ -30,28 +30,39 @@ export class RedemptionLog {
   @Column({ name: 'coupon_id', type: 'int', nullable: true })
   couponId: number | null;
 
-  @ManyToOne(() => require('./coupon.entity').Coupon, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./coupon.entity').Coupon, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'coupon_id' })
   coupon: Coupon | null;
 
   @Column({ name: 'customer_id', type: 'int', nullable: true })
   customerId: number | null;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer | null;
 
   @Column({ name: 'campaign_id', type: 'int', nullable: true })
   campaignId: number | null;
 
-  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./campaign.entity').Campaign, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign | null;
 
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
@@ -67,7 +78,12 @@ export class RedemptionLog {
   @Column({ type: 'boolean', default: false })
   success: boolean;
 
-  @Column({ name: 'failure_reason', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'failure_reason',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   failureReason: string | null;
 
   @Column({ name: 'event_type', type: 'varchar', length: 32, nullable: true })
@@ -76,7 +92,12 @@ export class RedemptionLog {
   @Column({ name: 'ip_address', type: 'varchar', length: 64, nullable: true })
   ipAddress: string | null;
 
-  @Column({ name: 'idempotency_key', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'idempotency_key',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   idempotencyKey: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

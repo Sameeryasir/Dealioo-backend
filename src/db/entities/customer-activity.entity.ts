@@ -49,14 +49,18 @@ export class CustomerActivity {
   @Column({ name: 'business_id', type: 'int' })
   businessId!: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'customer_id', type: 'int' })
   customerId!: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer!: Customer;
 
@@ -66,7 +70,12 @@ export class CustomerActivity {
   @Column({ type: 'varchar', length: 32 })
   source!: CustomerActivitySource;
 
-  @Column({ name: 'reference_type', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'reference_type',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   referenceType!: CustomerActivityReferenceType | null;
 
   @Column({ name: 'reference_id', type: 'varchar', length: 64, nullable: true })

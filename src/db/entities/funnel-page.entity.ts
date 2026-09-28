@@ -14,7 +14,9 @@ import { FunnelPageType } from './funnel-page-type';
 import type { FunnelPageVersion } from './funnel-page-version.entity';
 
 @Entity('funnel_pages')
-@Index('uq_funnel_pages_funnel_type', ['funnelId', 'pageType'], { unique: true })
+@Index('uq_funnel_pages_funnel_type', ['funnelId', 'pageType'], {
+  unique: true,
+})
 @Index('IDX_funnel_pages_funnel_id', ['funnelId'])
 export class FunnelPage {
   @PrimaryGeneratedColumn('uuid')
@@ -23,9 +25,13 @@ export class FunnelPage {
   @Column({ name: 'funnel_id', type: 'int' })
   funnelId: number;
 
-  @ManyToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.pageRows, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./funnel.entity').Funnel,
+    (funnel: Funnel) => funnel.pageRows,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'funnel_id' })
   funnel: Funnel;
 
@@ -43,7 +49,10 @@ export class FunnelPage {
   @Column({ name: 'current_version', type: 'int', default: 1 })
   currentVersion: number;
 
-  @OneToMany(() => require('./funnel-page-version.entity').FunnelPageVersion, (version) => version.funnelPage)
+  @OneToMany(
+    () => require('./funnel-page-version.entity').FunnelPageVersion,
+    (version: FunnelPageVersion) => version.funnelPage,
+  )
   versions: FunnelPageVersion[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

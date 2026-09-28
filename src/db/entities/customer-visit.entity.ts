@@ -34,53 +34,72 @@ export class CustomerVisit {
   @Column({ name: 'customer_id' })
   customerId: number;
 
-  @ManyToOne(() => require('./customer.entity').Customer, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./customer.entity').Customer, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'customer_id' })
   customer: Customer;
 
   @Column({ name: 'campaign_id' })
   campaignId: number;
 
-  @ManyToOne(() => require('./campaign.entity').Campaign, { onDelete: 'RESTRICT' })
+  @ManyToOne(() => require('./campaign.entity').Campaign, {
+    onDelete: 'RESTRICT',
+  })
   @JoinColumn({ name: 'campaign_id' })
   campaign: Campaign;
 
-  @OneToMany(() => require('./customer-visit-campaign.entity').CustomerVisitCampaign, (row) => row.customerVisit, {
-    cascade: true,
-  })
+  @OneToMany(
+    () => require('./customer-visit-campaign.entity').CustomerVisitCampaign,
+    (row: CustomerVisitCampaign) => row.customerVisit,
+    {
+      cascade: true,
+    },
+  )
   visitCampaigns: CustomerVisitCampaign[];
 
   @OneToMany(
     () => require('./visit-addon-item.entity').VisitAddonItem,
-    (row) => row.customerVisit,
+    (row: VisitAddonItem) => row.customerVisit,
   )
   addonItems: VisitAddonItem[];
 
   @Column({ name: 'business_id' })
   businessId: number;
 
-  @ManyToOne(() => require('./business.entity').Business, { onDelete: 'CASCADE' })
+  @ManyToOne(() => require('./business.entity').Business, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'business_id' })
   business: Business;
 
   @Column({ name: 'coupon_id', type: 'int', nullable: true })
   couponId: number | null;
 
-  @ManyToOne(() => require('./coupon.entity').Coupon, { onDelete: 'RESTRICT', nullable: true })
+  @ManyToOne(() => require('./coupon.entity').Coupon, {
+    onDelete: 'RESTRICT',
+    nullable: true,
+  })
   @JoinColumn({ name: 'coupon_id' })
   coupon: Coupon | null;
 
   @Column({ name: 'order_id', type: 'int', nullable: true })
   orderId: number | null;
 
-  @ManyToOne(() => require('./order.entity').Order, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./order.entity').Order, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'order_id' })
   order: Order | null;
 
   @Column({ name: 'staff_user_id', type: 'int', nullable: true })
   staffUserId: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { onDelete: 'SET NULL', nullable: true })
+  @ManyToOne(() => require('./user.entity').User, {
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'staff_user_id' })
   staffUser: User | null;
 

@@ -30,20 +30,31 @@ export class Campaign {
   @Column({ name: 'business_id' })
   businessId!: number;
 
-  @ManyToOne(() => require('./business.entity').Business, (business) => business.campaigns, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(
+    () => require('./business.entity').Business,
+    (business: Business) => business.campaigns,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'business_id' })
   business!: Business;
 
   @Column({ name: 'created_by', type: 'int', nullable: true })
   createdByUserId!: number | null;
 
-  @ManyToOne(() => require('./user.entity').User, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => require('./user.entity').User, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'created_by' })
   createdByUser!: User | null;
 
-  @OneToOne(() => require('./funnel.entity').Funnel, (funnel) => funnel.campaign, { nullable: true })
+  @OneToOne(
+    () => require('./funnel.entity').Funnel,
+    (funnel: Funnel) => funnel.campaign,
+    { nullable: true },
+  )
   funnel!: Funnel | null;
 
   @Column({ name: 'campaign_name', type: 'varchar', length: 255 })
@@ -93,10 +104,20 @@ export class Campaign {
   })
   status!: CampaignPublicationStatus;
 
-  @Column({ name: 'stripe_product_id', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'stripe_product_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   stripeProductId!: string | null;
 
-  @Column({ name: 'stripe_price_id', type: 'varchar', length: 255, nullable: true })
+  @Column({
+    name: 'stripe_price_id',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
   stripePriceId!: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })

@@ -53,13 +53,23 @@ export class User {
   phoneVerified: boolean;
 
   /** Nullable for Google-only users (no password set). */
-  @Column({ name: 'password_hash', type: 'varchar', nullable: true, select: false })
+  @Column({
+    name: 'password_hash',
+    type: 'varchar',
+    nullable: true,
+    select: false,
+  })
   passwordHash: string | null;
 
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
-  @Column({ name: 'two_factor_secret', type: 'varchar', nullable: true, select: false })
+  @Column({
+    name: 'two_factor_secret',
+    type: 'varchar',
+    nullable: true,
+    select: false,
+  })
   twoFactorSecret: string | null;
 
   @Column({ name: 'two_factor_enabled', type: 'boolean', default: false })
@@ -80,22 +90,45 @@ export class User {
   @Column({ name: 'plan_fit_answers', type: 'jsonb', nullable: true })
   planFitAnswers: Record<string, string> | null;
 
-  @Column({ name: 'plan_fit_recommended_plan', type: 'varchar', nullable: true })
+  @Column({
+    name: 'plan_fit_recommended_plan',
+    type: 'varchar',
+    nullable: true,
+  })
   planFitRecommendedPlan: string | null;
 
-  @Column({ name: 'plan_fit_completed_at', type: 'timestamptz', nullable: true })
+  @Column({
+    name: 'plan_fit_completed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
   planFitCompletedAt: Date | null;
 
   @Column({ name: 'plan_fit_scores', type: 'jsonb', nullable: true })
   planFitScores: Record<string, number> | null;
 
-  @Column({ name: 'plan_fit_version', type: 'varchar', length: 32, nullable: true })
+  @Column({
+    name: 'plan_fit_version',
+    type: 'varchar',
+    length: 32,
+    nullable: true,
+  })
   planFitVersion: string | null;
 
-  @Column({ name: 'plan_fit_confidence', type: 'varchar', length: 16, nullable: true })
+  @Column({
+    name: 'plan_fit_confidence',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
   planFitConfidence: string | null;
 
-  @Column({ name: 'plan_fit_selected_plan', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'plan_fit_selected_plan',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   planFitSelectedPlan: string | null;
 
   @Column({
@@ -129,7 +162,9 @@ export class User {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @ManyToOne(() => require('./role.entity').Role, (role: Role) => role.users, { nullable: false })
+  @ManyToOne(() => require('./role.entity').Role, (role: Role) => role.users, {
+    nullable: false,
+  })
   @JoinColumn({ name: 'role_id' })
   role: Role;
 
