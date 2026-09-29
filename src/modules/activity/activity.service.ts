@@ -107,6 +107,7 @@ export type ActivityMonthlyPoint = {
   prepaidForOffer: number;
   messageSent: number;
   prepaidRevenueCents: number;
+  extraItemsRevenueCents: number;
   orders: number;
   members: number;
   paidRevenueCents?: number;
@@ -126,6 +127,15 @@ function formatMoney(amountCents: number, currency: string): string {
   }
   return `${(amountCents / 100).toFixed(2)} ${normalized.toUpperCase()}`;
 }
+
+const PREPAID_EXTRA_ITEMS_REVENUE_SQL = `COALESCE(SUM(
+  CASE
+    WHEN activity.event_type = :prepaid
+      AND COALESCE((activity.metadata->>'counterExtrasOnly')::boolean, false) IS NOT TRUE
+    THEN COALESCE(NULLIF(activity.metadata->>'extraItemsCents', '')::int, 0)
+    ELSE 0
+  END
+), 0)`;
 
 @Injectable()
 export class ActivityService {
@@ -1136,7 +1146,7 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const monthCount = clampOverviewMonths(rawMonthCount);
-    const cacheKey = `activity-monthly-v3:${businessId}:${monthCount}`;
+    const cacheKey = `activity-monthly-v4:${businessId}:${monthCount}`;
 
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeBusinessSummaryMonthly(businessId, monthCount),
@@ -1203,6 +1213,7 @@ export class ActivityService {
         ), 0)`,
           'prepaidRevenueCents',
         )
+        .addSelect(PREPAID_EXTRA_ITEMS_REVENUE_SQL, 'extraItemsRevenueCents')
         .where('activity.businessId = :businessId', { businessId })
         .andWhere('activity.occurredAt >= :rangeStart', { rangeStart })
         .groupBy(`DATE_TRUNC('month', activity.occurred_at AT TIME ZONE 'UTC')`)
@@ -1219,6 +1230,7 @@ export class ActivityService {
           prepaidForOffer: string;
           messageSent: string;
           prepaidRevenueCents: string;
+          extraItemsRevenueCents: string;
         }>(),
       this.funnelPaymentRepository
         .createQueryBuilder('payment')
@@ -1227,6 +1239,7 @@ export class ActivityService {
           'month',
         )
         .addSelect('COUNT(*)', 'orders')
+        .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
         .where('payment.businessId = :businessId', { businessId })
         .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
         .andWhere(
@@ -1236,7 +1249,12 @@ export class ActivityService {
         .groupBy(
           `DATE_TRUNC('month', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC')`,
         )
-        .getRawMany<{ month: string; orders: string }>(),
+        .getRawMany<{
+          month: string;
+          orders: string;
+          paidRevenueCents?: string;
+          paidrevenuecents?: string;
+        }>(),
       this.businessCustomersBaseQuery(businessId)
         .select(
           `TO_CHAR(DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
@@ -1272,8 +1290,12 @@ export class ActivityService {
         prepaidForOffer,
         messageSent,
         prepaidRevenueCents: Number(row?.prepaidRevenueCents ?? 0),
+        extraItemsRevenueCents: Number(row?.extraItemsRevenueCents ?? 0),
         orders: Number(orderRow?.orders ?? 0),
         members: Number(memberRow?.members ?? 0),
+        paidRevenueCents: Number(
+          orderRow?.paidRevenueCents ?? orderRow?.paidrevenuecents ?? 0,
+        ),
       };
     });
 
@@ -1298,7 +1320,7 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const cacheKey = `activity-range-v6:${businessId}:${from.toISOString()}:${to.toISOString()}`;
+    const cacheKey = `activity-range-v7:${businessId}:${from.toISOString()}:${to.toISOString()}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeBusinessSummaryForRange(businessId, from, to),
     );
@@ -1363,6 +1385,7 @@ export class ActivityService {
         ), 0)`,
           'prepaidRevenueCents',
         )
+        .addSelect(PREPAID_EXTRA_ITEMS_REVENUE_SQL, 'extraItemsRevenueCents')
         .where('activity.businessId = :businessId', { businessId })
         .andWhere('activity.occurredAt >= :from', { from })
         .andWhere('activity.occurredAt <= :to', { to })
@@ -1380,6 +1403,7 @@ export class ActivityService {
           prepaidForOffer: string;
           messageSent: string;
           prepaidRevenueCents: string;
+          extraItemsRevenueCents: string;
         }>(),
       this.funnelPaymentRepository
         .createQueryBuilder('payment')
@@ -1429,6 +1453,9 @@ export class ActivityService {
         prepaidForOffer,
         messageSent,
         prepaidRevenueCents: Number(activityRow?.prepaidRevenueCents ?? 0),
+        extraItemsRevenueCents: Number(
+          activityRow?.extraItemsRevenueCents ?? 0,
+        ),
         orders: Number(orderRow?.orders ?? 0),
         members: Number(memberRow?.members ?? 0),
         paidRevenueCents: Number(
