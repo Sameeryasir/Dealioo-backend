@@ -1,12 +1,3 @@
-/**
- * Change summary:
- * - What: Timezone-aware day/hour chart buckets (viewer calendar, not UTC-only).
- * - Why: Month view mixed local from/to with UTC buckets, so “today” and day
- *   labels could shift or include the wrong previous-month day across zones.
- * - Related: activity.service, funnel-event/analytics range charts.
- * - MCP context 7: validate IANA zone before embedding in SQL; default UTC.
- */
-
 export const DEFAULT_OVERVIEW_MONTHS = 6;
 export const MAX_OVERVIEW_MONTHS = 120;
 
@@ -29,8 +20,6 @@ export function formatMonthKey(date: Date): string {
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
 }
-
-// --- Timezone helpers (IANA only; invalid → UTC) ---
 
 export function resolveSafeTimeZone(raw?: string | null): string {
   const candidate = (raw ?? 'UTC').trim() || 'UTC';
@@ -76,11 +65,6 @@ function getZonedParts(date: Date, timeZone: string): ZonedParts {
   };
 }
 
-/**
- * Build chart bucket keys in the viewer's calendar (day or hour).
- * Month view always includes every local day from `from` through `to`
- * (so “today” is present when the frontend ends the range at end-of-today).
- */
 export function buildZonedRangeBucketKeys(
   from: Date,
   to: Date,
@@ -103,7 +87,6 @@ export function buildZonedRangeBucketKeys(
     return { sameDay: true, keys };
   }
 
-  // --- Multi-day: walk civil calendar dates in the viewer zone ---
   const keys: string[] = [];
   let year = start.year;
   let month = start.month;
@@ -114,7 +97,6 @@ export function buildZonedRangeBucketKeys(
     if (year === end.year && month === end.month && day === end.day) {
       break;
     }
-    // Increment using UTC date math on Y-M-D components (DST-safe for keys).
     const next = new Date(Date.UTC(year, month - 1, day + 1));
     year = next.getUTCFullYear();
     month = next.getUTCMonth() + 1;
@@ -124,7 +106,6 @@ export function buildZonedRangeBucketKeys(
   return { sameDay: false, keys };
 }
 
-/** @deprecated Prefer buildZonedRangeBucketKeys with an explicit IANA zone. */
 export function buildUtcRangeBucketKeys(
   from: Date,
   to: Date,
@@ -137,7 +118,6 @@ export function overviewRangeBucketSql(
   sameDay: boolean,
   timeZone: string = 'UTC',
 ): string {
-  // Zone already validated — escape quotes before embedding in SQL.
   const tz = resolveSafeTimeZone(timeZone).replace(/'/g, "''");
   return sameDay
     ? `TO_CHAR(DATE_TRUNC('hour', ${columnSql} AT TIME ZONE '${tz}'), 'YYYY-MM-DD"T"HH24')`
