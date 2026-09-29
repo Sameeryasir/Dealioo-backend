@@ -8,7 +8,7 @@
  */
 
 export const DEFAULT_OVERVIEW_MONTHS = 6;
-export const MAX_OVERVIEW_MONTHS = 12;
+export const MAX_OVERVIEW_MONTHS = 120;
 
 export type OverviewMonthBucket = {
   month: string;
