@@ -7,14 +7,17 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { And, DataSource, In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import {
   Campaign,
   CampaignPublicationStatus,
   CampaignType,
 } from '../../db/entities/campaign.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
-import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
+import {
+  CustomerVisit,
+  CustomerVisitSource,
+} from '../../db/entities/customer-visit.entity';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -35,14 +38,13 @@ import {
   extraItemsForApi,
   resolveCounterExtras,
   visitAddOnAmountDollars,
+  type ResolvedCounterExtras,
 } from '../../utils/normalize-extra-items';
 import {
   replaceVisitAddonItems,
   resolveVisitStoredExtraItems,
 } from '../../utils/visit-addon-items.util';
-import {
-  VisitAddonItemSource,
-} from '../../db/entities/visit-addon-item.entity';
+import { VisitAddonItemSource } from '../../db/entities/visit-addon-item.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -76,7 +78,6 @@ import { CustomerService } from '../customer/customer.service';
 import { PendingFunnelPaymentService } from '../payment/pending-funnel-payment.service';
 import { CouponService } from '../redemption/coupon.service';
 import {
-  Coupon,
   CouponPaymentStatus,
   CouponStatus,
 } from '../../db/entities/coupon.entity';
@@ -107,9 +108,7 @@ import {
   type BusinessFunnelEventDateFilter,
   type BusinessFunnelEventStatusFilter,
 } from './funnelEventDto/get-business-funnel-events-query.dto';
-import {
-  ScannerPurchaseMeans,
-} from './funnelEventDto/scanner-purchase-deals.dto';
+import { ScannerPurchaseMeans } from './funnelEventDto/scanner-purchase-deals.dto';
 import {
   applyPerformanceCampaignEarningsFilters,
   PERFORMANCE_NET_EARNINGS_CENTS_SQL,
@@ -187,10 +186,7 @@ export class FunnelEventService {
     let signupStatus: 'new' | 'returning_continue' | 'already_paid' | undefined;
     let alreadyPaidPrepaid = false;
 
-    if (
-      dto.eventType === FunnelEventType.SIGNUP &&
-      tracked.event.customerId
-    ) {
+    if (dto.eventType === FunnelEventType.SIGNUP && tracked.event.customerId) {
       const businessId = funnel.campaign?.businessId;
       const isPostpaid =
         String(funnel.campaign?.campaignType ?? '').toLowerCase() ===
@@ -210,10 +206,7 @@ export class FunnelEventService {
 
       if (alreadyPaidPrepaid) {
         signupStatus = 'already_paid';
-      } else if (
-        'isReturningGuest' in tracked &&
-        tracked.isReturningGuest
-      ) {
+      } else if ('isReturningGuest' in tracked && tracked.isReturningGuest) {
         signupStatus = 'returning_continue';
       } else {
         signupStatus = 'new';
@@ -388,7 +381,6 @@ export class FunnelEventService {
     });
   }
 
-
   async syncPaidFunnelPaymentAutomation(
     funnelPaymentId: number,
   ): Promise<void> {
@@ -456,12 +448,14 @@ export class FunnelEventService {
       );
     }
 
-    const uniqueFunnelIds = [...new Set(params.funnelIds)].sort((a, b) => a - b);
+    const uniqueFunnelIds = [...new Set(params.funnelIds)].sort(
+      (a, b) => a - b,
+    );
     if (uniqueFunnelIds.length === 0) {
       throw new BadRequestException('Select at least one deal.');
     }
 
-    let resolvedExtras;
+    let resolvedExtras: ResolvedCounterExtras;
     try {
       resolvedExtras = resolveCounterExtras({
         amountDollars: params.extraItemsAmount,
@@ -579,7 +573,7 @@ export class FunnelEventService {
         expectedTotalCents += dollarsToCents(campaignPrice);
       }
 
-      funnelsForPurchase.push(funnel as Funnel & { campaign: Campaign });
+      funnelsForPurchase.push(funnel);
     }
 
     const usesStaffEnteredOfferAmount =
@@ -874,7 +868,7 @@ export class FunnelEventService {
       const primaryOrderId =
         (
           await manager.findOne(FunnelPayment, {
-            where: { id: created[0]!.paymentId },
+            where: { id: created[0].paymentId },
           })
         )?.orderId ?? null;
 
@@ -953,7 +947,7 @@ export class FunnelEventService {
       }
 
       if (visitCampaignIds.length > 0) {
-        const primaryCampaignId = visitCampaignIds[0]!;
+        const primaryCampaignId = visitCampaignIds[0];
         const savedVisit = await this.customerVisitRepository.save({
           customerId,
           campaignId: primaryCampaignId,
@@ -965,8 +959,7 @@ export class FunnelEventService {
           source: CustomerVisitSource.STAFF_LOOKUP,
           orderSubtotal: visitOrderSubtotalDollars,
           extraItems:
-            visitOrderSubtotalDollars != null &&
-            visitOrderSubtotalDollars > 0
+            visitOrderSubtotalDollars != null && visitOrderSubtotalDollars > 0
               ? normalizedExtraItems
               : null,
           visitCampaigns: visitCampaignIds.map((campaignId) => ({
@@ -982,8 +975,7 @@ export class FunnelEventService {
           staffUserId,
           source: VisitAddonItemSource.SCANNER_PURCHASE,
           items:
-            visitOrderSubtotalDollars != null &&
-            visitOrderSubtotalDollars > 0
+            visitOrderSubtotalDollars != null && visitOrderSubtotalDollars > 0
               ? normalizedExtraItems
               : [],
         });
@@ -1031,7 +1023,7 @@ export class FunnelEventService {
       }
 
       for (let index = 0; index < deals.length; index += 1) {
-        const deal = deals[index]!;
+        const deal = deals[index];
         try {
           await this.activityService.logPrepaidForOffer({
             paymentId: deal.paymentId,
@@ -1147,7 +1139,7 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const cacheKey = `funnel-stats-monthly-v1:${funnelId}:${monthCount}`;
+    const cacheKey = `funnel-stats-monthly-v2:${funnelId}:${monthCount}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeStatsMonthly(funnelId, monthCount),
     );
@@ -1181,7 +1173,7 @@ export class FunnelEventService {
       return { funnelId, months: monthCount, currency: null, data: [] };
     }
 
-    const rangeStart = buckets[0]!.start;
+    const rangeStart = buckets[0].start;
 
     const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
       this.funnelRepository.findOne({
@@ -1220,10 +1212,9 @@ export class FunnelEventService {
         .addSelect('COALESCE(SUM(p.amount), 0)', 'revenue')
         .where('p.funnel_id = :funnelId', { funnelId })
         .andWhere('p.status = :paid', { paid: FunnelPaymentStatus.PAID })
-        .andWhere(
-          'COALESCE(p.paid_at, p.created_at) >= :rangeStart',
-          { rangeStart },
-        )
+        .andWhere('COALESCE(p.paid_at, p.created_at) >= :rangeStart', {
+          rangeStart,
+        })
         .groupBy(
           `DATE_TRUNC('month', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC')`,
         )
@@ -1254,7 +1245,7 @@ export class FunnelEventService {
       return {
         month: bucket.month,
         signups: signupOnly + paidAfterSignup,
-        payments: Number(paymentRow?.payments ?? 0),
+        payments: paidAfterSignup,
         signupOnly,
         paidAfterSignup,
         revenue: Number(paymentRow?.revenue ?? 0),
@@ -1286,7 +1277,7 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const cacheKey = `funnel-stats-range-v1:${funnelId}:${from.toISOString()}:${to.toISOString()}`;
+    const cacheKey = `funnel-stats-range-v2:${funnelId}:${from.toISOString()}:${to.toISOString()}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeStatsForRange(funnelId, from, to),
     );
@@ -1367,7 +1358,9 @@ export class FunnelEventService {
     }
 
     const eventsByBucket = new Map(eventRows.map((row) => [row.month, row]));
-    const paymentsByBucket = new Map(paymentRows.map((row) => [row.month, row]));
+    const paymentsByBucket = new Map(
+      paymentRows.map((row) => [row.month, row]),
+    );
     const data = keys.map((bucket) => {
       const eventRow = eventsByBucket.get(bucket);
       const paymentRow = paymentsByBucket.get(bucket);
@@ -1376,7 +1369,7 @@ export class FunnelEventService {
       return {
         month: bucket,
         signups: signupOnly + paidAfterSignup,
-        payments: Number(paymentRow?.payments ?? 0),
+        payments: paidAfterSignup,
         signupOnly,
         paidAfterSignup,
         revenue: Number(paymentRow?.revenue ?? 0),
@@ -1461,9 +1454,7 @@ export class FunnelEventService {
     return this.customerJourneyService.getJourney(params);
   }
 
-  private async trackSignup(
-    dto: TrackFunnelEventDto,
-  ): Promise<{
+  private async trackSignup(dto: TrackFunnelEventDto): Promise<{
     event: FunnelEvent;
     shouldRunAutomation: boolean;
     isReturningGuest: boolean;
@@ -1521,9 +1512,7 @@ export class FunnelEventService {
         where: { id: dto.funnelPaymentId, funnelId: dto.funnelId },
       });
       if (!payment) {
-        throw new NotFoundException(
-          'Funnel payment not found for this funnel',
-        );
+        throw new NotFoundException('Funnel payment not found for this funnel');
       }
     } else if (dto.stripePaymentIntentId) {
       payment = await this.funnelPaymentRepository.findOne({
@@ -1545,7 +1534,9 @@ export class FunnelEventService {
     }
 
     if (!dto.customerId) {
-      throw new BadRequestException('customerId is required for payment events');
+      throw new BadRequestException(
+        'customerId is required for payment events',
+      );
     }
 
     const customerId = await this.resolveCustomerId(dto.customerId);
@@ -1560,7 +1551,7 @@ export class FunnelEventService {
     // Never trust client "paid" unless funnel_payment is actually PAID.
     const paymentStatus = this.resolveTrackedPaymentStatus(dto, payment);
 
-    let existing = await this.findPaymentEventRow(
+    const existing = await this.findPaymentEventRow(
       dto.funnelId,
       customerId,
       funnelPaymentId,
@@ -1574,10 +1565,8 @@ export class FunnelEventService {
         existing.visitorId = visitorId;
       }
       this.applyPaymentFieldsToRow(existing, dto, payment, paymentStatus);
-      const savedExisting = await this.funnelEventRepository.save(existing);
-      const event = Array.isArray(savedExisting)
-        ? savedExisting[0]!
-        : savedExisting;
+      const event: FunnelEvent =
+        await this.funnelEventRepository.save(existing);
       const isPaidNow = this.isPaidFunnelEvent(event);
       return {
         event,
@@ -1600,8 +1589,8 @@ export class FunnelEventService {
       receiptUrl: dto.receiptUrl ?? payment?.receiptUrl ?? null,
     });
 
-    const saved = await this.funnelEventRepository.save(event);
-    const savedEvent = Array.isArray(saved) ? saved[0]! : saved;
+    const savedEvent: FunnelEvent =
+      await this.funnelEventRepository.save(event);
     return {
       event: savedEvent,
       shouldRunAutomation: this.isPaidFunnelEvent(savedEvent),
@@ -1620,11 +1609,9 @@ export class FunnelEventService {
     }
     if (
       dto.paymentStatus &&
-      Object.values(FunnelPaymentStatus).includes(
-        dto.paymentStatus as FunnelPaymentStatus,
-      )
+      Object.values(FunnelPaymentStatus).includes(dto.paymentStatus)
     ) {
-      return dto.paymentStatus as FunnelPaymentStatus;
+      return dto.paymentStatus;
     }
     return null;
   }
@@ -1658,7 +1645,10 @@ export class FunnelEventService {
       }
     }
 
-    const journeyRow = await this.findRowByFunnelAndCustomer(funnelId, customerId);
+    const journeyRow = await this.findRowByFunnelAndCustomer(
+      funnelId,
+      customerId,
+    );
     if (!journeyRow) {
       return null;
     }
@@ -1681,7 +1671,8 @@ export class FunnelEventService {
     resolvedPaymentStatus?: FunnelPaymentStatus | null,
   ): void {
     row.eventType = FunnelEventType.PAYMENT;
-    row.funnelPaymentId = payment?.id ?? dto.funnelPaymentId ?? row.funnelPaymentId;
+    row.funnelPaymentId =
+      payment?.id ?? dto.funnelPaymentId ?? row.funnelPaymentId;
     row.amount = dto.amount ?? payment?.amount ?? row.amount;
     row.currency = dto.currency ?? payment?.currency ?? row.currency;
     row.paymentStatus =
@@ -1708,9 +1699,7 @@ export class FunnelEventService {
     });
   }
 
-  private async resolveCustomerId(
-    customerId: number,
-  ): Promise<number | null> {
+  private async resolveCustomerId(customerId: number): Promise<number | null> {
     const exists = await this.customerRepository.exist({
       where: { id: customerId },
     });
@@ -2432,8 +2421,12 @@ export class FunnelEventService {
 
     for (const row of dailyTotalRows) {
       const day = sameUtcDay
-        ? String(row.day ?? '').trim().slice(0, 13)
-        : String(row.day ?? '').trim().slice(0, 10);
+        ? String(row.day ?? '')
+            .trim()
+            .slice(0, 13)
+        : String(row.day ?? '')
+            .trim()
+            .slice(0, 10);
       if (
         sameUtcDay
           ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
@@ -2442,10 +2435,7 @@ export class FunnelEventService {
         continue;
       }
       dailyTotalsMap.set(day, {
-        earningsCents: Math.max(
-          0,
-          Math.round(Number(row.earningsCents) || 0),
-        ),
+        earningsCents: Math.max(0, Math.round(Number(row.earningsCents) || 0)),
         orderCount: Math.max(0, Math.round(Number(row.orderCount) || 0)),
         uniqueCustomerCount: Math.max(
           0,
@@ -2456,8 +2446,12 @@ export class FunnelEventService {
 
     for (const row of dailyCampaignRows) {
       const day = sameUtcDay
-        ? String(row.day ?? '').trim().slice(0, 13)
-        : String(row.day ?? '').trim().slice(0, 10);
+        ? String(row.day ?? '')
+            .trim()
+            .slice(0, 13)
+        : String(row.day ?? '')
+            .trim()
+            .slice(0, 10);
       if (
         sameUtcDay
           ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
@@ -2474,10 +2468,7 @@ export class FunnelEventService {
         continue;
       }
       dailyByCampaignMap.set(`${day}:${campaignId}`, {
-        earningsCents: Math.max(
-          0,
-          Math.round(Number(row.earningsCents) || 0),
-        ),
+        earningsCents: Math.max(0, Math.round(Number(row.earningsCents) || 0)),
         orderCount: Math.max(0, Math.round(Number(row.orderCount) || 0)),
         uniqueCustomerCount: Math.max(
           0,
@@ -2488,7 +2479,7 @@ export class FunnelEventService {
 
     const dayKeys = new Set<string>([
       ...dailyTotalsMap.keys(),
-      ...[...dailyByCampaignMap.keys()].map((key) => key.split(':')[0]!),
+      ...[...dailyByCampaignMap.keys()].map((key) => key.split(':')[0]),
     ]);
     if (params.from && params.to && !sameUtcDay) {
       const cursor = new Date(
@@ -2603,7 +2594,8 @@ export class FunnelEventService {
     };
   }> {
     const pagination = normalizePagination(page, limit);
-    const statusFilter: BusinessFunnelEventStatusFilter = filters.status ?? 'all';
+    const statusFilter: BusinessFunnelEventStatusFilter =
+      filters.status ?? 'all';
     const dateFilter: BusinessFunnelEventDateFilter = filters.date ?? 'all';
     const search = normalizeBusinessFunnelEventSearch(filters.search);
 
@@ -3033,8 +3025,7 @@ export class FunnelEventService {
     }
 
     for (const payment of sortedPayments) {
-      const campaign =
-        payment.campaign ?? payment.funnel?.campaign ?? null;
+      const campaign = payment.campaign ?? payment.funnel?.campaign ?? null;
       const campaignName = campaign?.campaignName?.trim();
       if (campaignName && !seenCampaignNames.has(campaignName.toLowerCase())) {
         seenCampaignNames.add(campaignName.toLowerCase());
@@ -3113,7 +3104,8 @@ export class FunnelEventService {
           );
     const counterExtrasOnly = isCounterExtrasOnlyScannerPayment({
       onlineAmountCents: anyPaid ? rawOnlineAmountCents : null,
-      businessAmountDollars: totalVisitNetDollars > 0 ? totalVisitNetDollars : null,
+      businessAmountDollars:
+        totalVisitNetDollars > 0 ? totalVisitNetDollars : null,
       paymentSource: primary?.paymentSource ?? null,
       collectionChannel: primary?.collectionChannel ?? null,
       orderSource: order.source ?? null,
@@ -3147,9 +3139,9 @@ export class FunnelEventService {
         'Order',
       campaignType:
         campaignTypes.length === 1
-          ? campaignTypes[0]!
+          ? campaignTypes[0]
           : campaignTypes.length > 1
-            ? campaignTypes[0]!
+            ? campaignTypes[0]
             : primary?.campaign?.campaignType === CampaignType.POSTPAID
               ? CampaignType.POSTPAID
               : primary?.campaign?.campaignType === CampaignType.PREPAID
@@ -3164,8 +3156,7 @@ export class FunnelEventService {
             phone: customer.phone,
           }
         : null,
-      customerEmail:
-        customer?.email ?? primary?.customerEmail ?? null,
+      customerEmail: customer?.email ?? primary?.customerEmail ?? null,
       amount: hasOnline ? onlineAmountCents : null,
       currency: order.currency || primary?.currency || 'usd',
       paymentStatus: anyPaid
@@ -3179,12 +3170,13 @@ export class FunnelEventService {
         : null,
       businessVisitedAt: hasBusiness
         ? (visitForOrder?.visitedAt ??
-            sortedPayments
-              .map((payment) => visitByPaymentId.get(payment.id)?.visitedAt)
-              .find((value) => value != null) ??
-            null)
+          sortedPayments
+            .map((payment) => visitByPaymentId.get(payment.id)?.visitedAt)
+            .find((value) => value != null) ??
+          null)
         : null,
-      extraItems: hasBusiness && visitExtraItems.length > 0 ? visitExtraItems : [],
+      extraItems:
+        hasBusiness && visitExtraItems.length > 0 ? visitExtraItems : [],
       paidAt: anyPaid ? paidAt : null,
       funnelPaymentId: primary?.id ?? null,
       paymentCollectedAt,
@@ -3256,7 +3248,10 @@ export class FunnelEventService {
         [paymentIds],
       );
     const customerIdFromCoupon = new Map(
-      couponRows.map((row) => [Number(row.funnelPaymentId), Number(row.customerId)]),
+      couponRows.map((row) => [
+        Number(row.funnelPaymentId),
+        Number(row.customerId),
+      ]),
     );
 
     const unresolvedEmails = [
@@ -3268,7 +3263,7 @@ export class FunnelEventService {
               !customerIdFromCoupon.has(payment.id) &&
               Boolean(payment.customerEmail?.trim()),
           )
-          .map((payment) => payment.customerEmail!.trim().toLowerCase()),
+          .map((payment) => payment.customerEmail.trim().toLowerCase()),
       ),
     ];
 
@@ -3301,7 +3296,10 @@ export class FunnelEventService {
         continue;
       }
       const email = payment.customerEmail?.trim().toLowerCase();
-      result.set(payment.id, email ? (customersByEmail.get(email) ?? null) : null);
+      result.set(
+        payment.id,
+        email ? (customersByEmail.get(email) ?? null) : null,
+      );
     }
 
     return result;
@@ -3560,5 +3558,4 @@ export class FunnelEventService {
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
-
 }

@@ -12,10 +12,7 @@ export function clampOverviewMonths(raw: unknown): number {
   if (!Number.isFinite(parsed)) {
     return DEFAULT_OVERVIEW_MONTHS;
   }
-  return Math.min(
-    MAX_OVERVIEW_MONTHS,
-    Math.max(1, Math.floor(parsed)),
-  );
+  return Math.min(MAX_OVERVIEW_MONTHS, Math.max(1, Math.floor(parsed)));
 }
 
 export function formatMonthKey(date: Date): string {
@@ -28,25 +25,22 @@ export function buildUtcRangeBucketKeys(
   from: Date,
   to: Date,
 ): { sameDay: boolean; keys: string[] } {
-  const sameDay =
-    from.getUTCFullYear() === to.getUTCFullYear() &&
-    from.getUTCMonth() === to.getUTCMonth() &&
-    from.getUTCDate() === to.getUTCDate();
+  const spanMs = to.getTime() - from.getTime();
+  const sameDay = spanMs >= 0 && spanMs <= 28 * 60 * 60 * 1000;
 
   if (sameDay) {
-    const day = from.toISOString().slice(0, 10);
     const keys: string[] = [];
-    for (let hour = 0; hour < 24; hour += 1) {
-      const start = Date.UTC(
-        from.getUTCFullYear(),
-        from.getUTCMonth(),
-        from.getUTCDate(),
-        hour,
-      );
-      if (start > to.getTime()) break;
-      keys.push(`${day}T${String(hour).padStart(2, '0')}`);
+    const hourMs = 60 * 60 * 1000;
+    const startHour = Date.UTC(
+      from.getUTCFullYear(),
+      from.getUTCMonth(),
+      from.getUTCDate(),
+      from.getUTCHours(),
+    );
+    for (let time = startHour; time <= to.getTime(); time += hourMs) {
+      keys.push(new Date(time).toISOString().slice(0, 13));
     }
-    return { sameDay, keys };
+    return { sameDay: true, keys };
   }
 
   const keys: string[] = [];
@@ -62,7 +56,7 @@ export function buildUtcRangeBucketKeys(
   ) {
     keys.push(new Date(time).toISOString().slice(0, 10));
   }
-  return { sameDay, keys };
+  return { sameDay: false, keys };
 }
 
 export function overviewRangeBucketSql(
@@ -74,7 +68,9 @@ export function overviewRangeBucketSql(
     : `TO_CHAR(DATE_TRUNC('day', ${columnSql} AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
 }
 
-export function buildRecentMonthBuckets(monthCount: number): OverviewMonthBucket[] {
+export function buildRecentMonthBuckets(
+  monthCount: number,
+): OverviewMonthBucket[] {
   const now = new Date();
   const buckets: OverviewMonthBucket[] = [];
 

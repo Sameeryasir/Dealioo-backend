@@ -49,6 +49,7 @@ import {
 } from './activity-payment-place.util';
 import {
   buildRecentMonthBuckets,
+  buildUtcRangeBucketKeys,
   clampOverviewMonths,
   monthKeyToMap,
 } from '../funnel-event/overview-monthly.util';
@@ -1339,11 +1340,7 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const sameDay =
-      from.getUTCFullYear() === to.getUTCFullYear() &&
-      from.getUTCMonth() === to.getUTCMonth() &&
-      from.getUTCDate() === to.getUTCDate();
-    const bucketKeys = this.buildActivityRangeBucketKeys(from, to, sameDay);
+    const { sameDay, keys: bucketKeys } = buildUtcRangeBucketKeys(from, to);
     const activityBucket = sameDay
       ? `TO_CHAR(DATE_TRUNC('hour', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
       : `TO_CHAR(DATE_TRUNC('day', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
@@ -1473,46 +1470,5 @@ export class ActivityService {
       todayRevenueCents: kpi.todayRevenueCents,
       data,
     };
-  }
-
-  private buildActivityRangeBucketKeys(
-    from: Date,
-    to: Date,
-    sameDay: boolean,
-  ): string[] {
-    if (sameDay) {
-      const day = from.toISOString().slice(0, 10);
-      const keys: string[] = [];
-      for (let hour = 0; hour < 24; hour += 1) {
-        const start = Date.UTC(
-          from.getUTCFullYear(),
-          from.getUTCMonth(),
-          from.getUTCDate(),
-          hour,
-        );
-        if (start > to.getTime()) break;
-        keys.push(`${day}T${String(hour).padStart(2, '0')}`);
-      }
-      return keys;
-    }
-
-    const keys: string[] = [];
-    const last = Date.UTC(
-      to.getUTCFullYear(),
-      to.getUTCMonth(),
-      to.getUTCDate(),
-    );
-    for (
-      let time = Date.UTC(
-        from.getUTCFullYear(),
-        from.getUTCMonth(),
-        from.getUTCDate(),
-      );
-      time <= last;
-      time += 24 * 60 * 60 * 1000
-    ) {
-      keys.push(new Date(time).toISOString().slice(0, 10));
-    }
-    return keys;
   }
 }

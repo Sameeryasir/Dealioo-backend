@@ -39,4 +39,4 @@ export class TtlCache {
 
 export const dashboardTtlCache = new TtlCache();
 
-export const DASHBOARD_CACHE_TTL_MS = 45_000;
+export const DASHBOARD_CACHE_TTL_MS = 10_000;
