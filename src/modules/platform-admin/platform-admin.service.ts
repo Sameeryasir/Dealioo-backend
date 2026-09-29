@@ -23,8 +23,9 @@ import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { isSuperAdmin } from '../../utils/user-roles';
 import {
-  buildUtcRangeBucketKeys,
+  buildZonedRangeBucketKeys,
   overviewRangeBucketSql,
+  resolveSafeTimeZone,
 } from '../funnel-event/overview-monthly.util';
 
 function startOfDay(d: Date): Date {
@@ -328,6 +329,7 @@ export class PlatformAdminService {
     actor: User,
     fromRaw?: string,
     toRaw?: string,
+    timeZoneRaw?: string,
   ): Promise<{
     from: string;
     to: string;
@@ -355,10 +357,15 @@ export class PlatformAdminService {
       throw new BadRequestException('That date range is too long.');
     }
 
-    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
+    const chartTz = resolveSafeTimeZone(timeZoneRaw);
+    const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
     const paymentTime = 'COALESCE(payment.paid_at, payment.created_at)';
-    const paymentBucket = overviewRangeBucketSql(paymentTime, sameDay);
-    const businessBucket = overviewRangeBucketSql('b.created_at', sameDay);
+    const paymentBucket = overviewRangeBucketSql(paymentTime, sameDay, chartTz);
+    const businessBucket = overviewRangeBucketSql(
+      'b.created_at',
+      sameDay,
+      chartTz,
+    );
 
     const [revenueRows, businessRows] = await Promise.all([
       this.paidPaymentQuery(from)
@@ -590,11 +597,10 @@ export class PlatformAdminService {
         stripeConnected: Boolean(business.stripeAccountId?.trim()),
         metaConnected: Boolean(
           business.metaUserId?.trim() ||
-            business.metaConnectionStatus?.trim() === 'ACTIVE',
+          business.metaConnectionStatus?.trim() === 'ACTIVE',
         ),
         twilioConnected: Boolean(
-          business.twilioPhoneSid?.trim() ||
-            business.twilioPhoneNumber?.trim(),
+          business.twilioPhoneSid?.trim() || business.twilioPhoneNumber?.trim(),
         ),
         createdAt: business.createdAt,
         ownerName: business.owner?.name ?? null,

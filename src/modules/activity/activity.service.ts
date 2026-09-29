@@ -49,9 +49,11 @@ import {
 } from './activity-payment-place.util';
 import {
   buildRecentMonthBuckets,
-  buildUtcRangeBucketKeys,
+  buildZonedRangeBucketKeys,
   clampOverviewMonths,
   monthKeyToMap,
+  overviewRangeBucketSql,
+  resolveSafeTimeZone,
 } from '../funnel-event/overview-monthly.util';
 import {
   SidebarSectionNotifyService,
@@ -1312,6 +1314,7 @@ export class ActivityService {
     businessId: number,
     from: Date,
     to: Date,
+    timeZone?: string,
   ): Promise<{
     businessId: number;
     months: number;
@@ -1321,9 +1324,11 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const cacheKey = `activity-range-v7:${businessId}:${from.toISOString()}:${to.toISOString()}`;
+    const chartTz = resolveSafeTimeZone(timeZone);
+    // Cache key includes zone so UTC+5 “today” and UTC “today” never collide.
+    const cacheKey = `activity-range-v8:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeBusinessSummaryForRange(businessId, from, to),
+      this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
     );
   }
 
@@ -1331,6 +1336,7 @@ export class ActivityService {
     businessId: number,
     from: Date,
     to: Date,
+    timeZone: string = 'UTC',
   ): Promise<{
     businessId: number;
     months: number;
@@ -1340,16 +1346,29 @@ export class ActivityService {
     todayRevenueCents: number;
     data: ActivityMonthlyPoint[];
   }> {
-    const { sameDay, keys: bucketKeys } = buildUtcRangeBucketKeys(from, to);
-    const activityBucket = sameDay
-      ? `TO_CHAR(DATE_TRUNC('hour', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
-      : `TO_CHAR(DATE_TRUNC('day', activity.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
-    const paymentBucket = sameDay
-      ? `TO_CHAR(DATE_TRUNC('hour', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
-      : `TO_CHAR(DATE_TRUNC('day', COALESCE(payment.paid_at, payment.created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
-    const memberBucket = sameDay
-      ? `TO_CHAR(DATE_TRUNC('hour', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24')`
-      : `TO_CHAR(DATE_TRUNC('day', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`;
+    // Bucket by the viewer's local calendar so month charts include “today”
+    // and do not shift days across timezones.
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const { sameDay, keys: bucketKeys } = buildZonedRangeBucketKeys(
+      from,
+      to,
+      chartTz,
+    );
+    const activityBucket = overviewRangeBucketSql(
+      'activity.occurred_at',
+      sameDay,
+      chartTz,
+    );
+    const paymentBucket = overviewRangeBucketSql(
+      'COALESCE(payment.paid_at, payment.created_at)',
+      sameDay,
+      chartTz,
+    );
+    const memberBucket = overviewRangeBucketSql(
+      'customer.created_at',
+      sameDay,
+      chartTz,
+    );
 
     const [kpi, activityRows, orderRows, memberRows] = await Promise.all([
       this.getDashboardKpiSnapshot(businessId),

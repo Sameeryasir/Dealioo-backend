@@ -195,6 +195,7 @@ export class FunnelEventController {
       from,
       to,
       limit: query.limit ?? 10,
+      timeZone: query.timezone,
     });
   }
 
@@ -233,11 +234,17 @@ export class FunnelEventController {
     @Query('months') months?: string,
     @Query('from') fromRaw?: string,
     @Query('to') toRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
   ) {
     const from = parseOverviewDate(fromRaw);
     const to = parseOverviewDate(toRaw);
     if (from && to && from.getTime() <= to.getTime()) {
-      return this.funnelEventService.getStatsForRange(funnelId, from, to);
+      return this.funnelEventService.getStatsForRange(
+        funnelId,
+        from,
+        to,
+        timeZoneRaw,
+      );
     }
     return this.funnelEventService.getStatsMonthly(
       funnelId,
@@ -258,6 +265,7 @@ export class FunnelEventController {
     @Query('months') months?: string,
     @Query('from') fromRaw?: string,
     @Query('to') toRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
   ) {
     const from = parseOverviewDate(fromRaw);
     const to = parseOverviewDate(toRaw);
@@ -266,6 +274,7 @@ export class FunnelEventController {
         funnelId,
         from,
         to,
+        timeZoneRaw,
       );
     }
     return this.funnelAnalyticsService.getAnalyticsOverviewMonthly(

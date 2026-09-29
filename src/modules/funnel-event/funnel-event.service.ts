@@ -89,8 +89,9 @@ import { SignupQrEmailService } from '../redemption/signup-qr-email.service';
 import { TrackFunnelEventDto } from './funnelEventDto/track-funnel-event.dto';
 import {
   buildRecentMonthBuckets,
-  buildUtcRangeBucketKeys,
+  buildZonedRangeBucketKeys,
   overviewRangeBucketSql,
+  resolveSafeTimeZone,
 } from './overview-monthly.util';
 import { isOnlineFunnelPayment } from '../../common/payment-provenance.util';
 import {
@@ -1047,6 +1048,16 @@ export class FunnelEventService {
             }`,
           );
         }
+
+        try {
+          await this.syncPaidFunnelPaymentAutomation(deal.paymentId);
+        } catch (syncError) {
+          this.logger.warn(
+            `Scanner purchase funnel_event payment sync failed payment=${deal.paymentId}: ${
+              syncError instanceof Error ? syncError.message : String(syncError)
+            }`,
+          );
+        }
       }
 
       return purchased;
@@ -1075,20 +1086,35 @@ export class FunnelEventService {
       throw new NotFoundException('Funnel not found');
     }
 
-    const rows = await this.funnelEventRepository.find({
-      where: { funnelId },
-    });
+    const [rows, paidPayments] = await Promise.all([
+      this.funnelEventRepository.find({
+        where: { funnelId },
+      }),
+      this.funnelPaymentRepository.find({
+        where: { funnelId, status: FunnelPaymentStatus.PAID },
+        select: ['id', 'customerId', 'amount', 'currency'],
+      }),
+    ]);
+
+    const paidPaymentIds = new Set(paidPayments.map((payment) => payment.id));
+    const paidCustomerIds = new Set(
+      paidPayments
+        .map((payment) => payment.customerId)
+        .filter((id): id is number => id != null && id > 0),
+    );
 
     let signupOnly = 0;
     let paidAfterSignup = 0;
 
     for (const row of rows) {
-      const signedUp = row.customerId !== null;
-      const paid = row.funnelPaymentId !== null;
-
-      if (!signedUp) {
+      if (row.customerId == null) {
         continue;
       }
+
+      const paidViaLinkedPayment =
+        row.funnelPaymentId != null && paidPaymentIds.has(row.funnelPaymentId);
+      const paidViaCustomerPayment = paidCustomerIds.has(row.customerId);
+      const paid = paidViaLinkedPayment || paidViaCustomerPayment;
 
       if (paid) {
         paidAfterSignup += 1;
@@ -1096,11 +1122,6 @@ export class FunnelEventService {
         signupOnly += 1;
       }
     }
-
-    const paidPayments = await this.funnelPaymentRepository.find({
-      where: { funnelId, status: FunnelPaymentStatus.PAID },
-      select: ['amount', 'currency'],
-    });
 
     let revenue = 0;
     let currency: string | null = null;
@@ -1114,7 +1135,7 @@ export class FunnelEventService {
 
     return {
       funnelId,
-      signups: signupOnly + paidAfterSignup,
+      signups: signupOnly,
       payments: paidAfterSignup,
       signupOnly,
       paidAfterSignup,
@@ -1139,10 +1160,29 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const cacheKey = `funnel-stats-monthly-v2:${funnelId}:${monthCount}`;
+    const cacheKey = `funnel-stats-monthly-v3:${funnelId}:${monthCount}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeStatsMonthly(funnelId, monthCount),
     );
+  }
+
+  private eventHasActualPaidPaymentSql(eventAlias = 'e'): string {
+    return `EXISTS (
+      SELECT 1
+      FROM funnel_payment p_paid
+      WHERE p_paid.funnel_id = ${eventAlias}.funnel_id
+        AND p_paid.status = '${FunnelPaymentStatus.PAID}'
+        AND (
+          (
+            ${eventAlias}.funnel_payment_id IS NOT NULL
+            AND p_paid.id = ${eventAlias}.funnel_payment_id
+          )
+          OR (
+            p_paid.customer_id IS NOT NULL
+            AND p_paid.customer_id = ${eventAlias}.customer_id
+          )
+        )
+    )`;
   }
 
   private async computeStatsMonthly(
@@ -1187,11 +1227,11 @@ export class FunnelEventService {
           'month',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NULL)`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasActualPaidPaymentSql('e')})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NOT NULL)`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasActualPaidPaymentSql('e')})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
@@ -1244,7 +1284,7 @@ export class FunnelEventService {
 
       return {
         month: bucket.month,
-        signups: signupOnly + paidAfterSignup,
+        signups: signupOnly,
         payments: paidAfterSignup,
         signupOnly,
         paidAfterSignup,
@@ -1264,6 +1304,7 @@ export class FunnelEventService {
     funnelId: number,
     from: Date,
     to: Date,
+    timeZone?: string,
   ): Promise<{
     funnelId: number;
     months: number;
@@ -1277,9 +1318,10 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const cacheKey = `funnel-stats-range-v2:${funnelId}:${from.toISOString()}:${to.toISOString()}`;
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const cacheKey = `funnel-stats-range-v4:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeStatsForRange(funnelId, from, to),
+      this.computeStatsForRange(funnelId, from, to, chartTz),
     );
   }
 
@@ -1287,6 +1329,7 @@ export class FunnelEventService {
     funnelId: number,
     from: Date,
     to: Date,
+    timeZone: string = 'UTC',
   ): Promise<{
     funnelId: number;
     months: number;
@@ -1300,11 +1343,17 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
-    const eventBucket = overviewRangeBucketSql('e.created_at', sameDay);
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
+    const eventBucket = overviewRangeBucketSql(
+      'e.created_at',
+      sameDay,
+      chartTz,
+    );
     const paymentBucket = overviewRangeBucketSql(
       'COALESCE(p.paid_at, p.created_at)',
       sameDay,
+      chartTz,
     );
 
     const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
@@ -1316,11 +1365,11 @@ export class FunnelEventService {
         .createQueryBuilder('e')
         .select(eventBucket, 'month')
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NULL)`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasActualPaidPaymentSql('e')})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND e.funnel_payment_id IS NOT NULL)`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasActualPaidPaymentSql('e')})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
@@ -1368,7 +1417,7 @@ export class FunnelEventService {
       const paidAfterSignup = Number(eventRow?.paidAfterSignup ?? 0);
       return {
         month: bucket,
-        signups: signupOnly + paidAfterSignup,
+        signups: signupOnly,
         payments: paidAfterSignup,
         signupOnly,
         paidAfterSignup,
@@ -1546,16 +1595,12 @@ export class FunnelEventService {
 
     const visitorId = dto.visitorId?.trim() ?? null;
     const funnelPaymentId = payment?.id ?? dto.funnelPaymentId ?? null;
-    const stripePaymentIntentId =
-      dto.stripePaymentIntentId ?? payment?.stripePaymentIntentId ?? null;
-    // Never trust client "paid" unless funnel_payment is actually PAID.
     const paymentStatus = this.resolveTrackedPaymentStatus(dto, payment);
 
     const existing = await this.findPaymentEventRow(
       dto.funnelId,
       customerId,
       funnelPaymentId,
-      stripePaymentIntentId,
     );
 
     if (existing) {
@@ -1584,7 +1629,7 @@ export class FunnelEventService {
       currency: dto.currency ?? payment?.currency ?? null,
       paymentStatus,
       stripePaymentIntentId:
-        dto.stripePaymentIntentId ?? payment?.stripePaymentIntentId ?? null,
+        payment?.stripePaymentIntentId ?? dto.stripePaymentIntentId ?? null,
       customerEmail: dto.customerEmail ?? payment?.customerEmail ?? null,
       receiptUrl: dto.receiptUrl ?? payment?.receiptUrl ?? null,
     });
@@ -1624,7 +1669,6 @@ export class FunnelEventService {
     funnelId: number,
     customerId: number,
     funnelPaymentId: number | null,
-    stripePaymentIntentId: string | null,
   ): Promise<FunnelEvent | null> {
     if (funnelPaymentId != null) {
       const byPayment = await this.funnelEventRepository.findOne({
@@ -1632,16 +1676,6 @@ export class FunnelEventService {
       });
       if (byPayment) {
         return byPayment;
-      }
-    }
-
-    const piId = stripePaymentIntentId?.trim();
-    if (piId) {
-      const byIntent = await this.funnelEventRepository.findOne({
-        where: { funnelId, stripePaymentIntentId: piId },
-      });
-      if (byIntent) {
-        return byIntent;
       }
     }
 
@@ -1682,8 +1716,8 @@ export class FunnelEventService {
         ? FunnelPaymentStatus.PENDING
         : row.paymentStatus);
     row.stripePaymentIntentId =
-      dto.stripePaymentIntentId ??
       payment?.stripePaymentIntentId ??
+      dto.stripePaymentIntentId ??
       row.stripePaymentIntentId;
     row.customerEmail =
       dto.customerEmail ?? payment?.customerEmail ?? row.customerEmail;
@@ -1774,6 +1808,7 @@ export class FunnelEventService {
     from?: Date | null;
     to?: Date | null;
     limit?: number;
+    timeZone?: string;
   }): Promise<{
     businessId: number;
     from: string | null;
@@ -1828,16 +1863,22 @@ export class FunnelEventService {
     }>;
   }> {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
+    const chartTz = resolveSafeTimeZone(params.timeZone);
     const cacheKey = [
-      'perf-top-campaigns-v6',
+      'perf-top-campaigns-v7',
       params.businessId,
       stabilizePerformanceCacheInstant(params.from),
       stabilizePerformanceCacheInstant(params.to),
       limit,
+      chartTz,
     ].join(':');
 
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeBusinessTopEarningCampaigns({ ...params, limit }),
+      this.computeBusinessTopEarningCampaigns({
+        ...params,
+        limit,
+        timeZone: chartTz,
+      }),
     );
   }
 
@@ -1846,6 +1887,7 @@ export class FunnelEventService {
     from?: Date | null;
     to?: Date | null;
     limit: number;
+    timeZone?: string;
   }): Promise<{
     businessId: number;
     from: string | null;
@@ -1917,21 +1959,18 @@ export class FunnelEventService {
         ? resolvePerformancePreviousWindow(params.from, params.to)
         : null;
     const hasRange = Boolean(params.from && params.to);
-    const sameUtcDay =
-      params.from != null &&
-      params.to != null &&
-      params.from.getUTCFullYear() === params.to.getUTCFullYear() &&
-      params.from.getUTCMonth() === params.to.getUTCMonth() &&
-      params.from.getUTCDate() === params.to.getUTCDate();
-    const dayExpr = sameUtcDay
-      ? `to_char(
-            date_trunc('hour', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
-            'YYYY-MM-DD"T"HH24'
-          )`
-      : `to_char(
-            date_trunc('day', COALESCE(p.paid_at, p.created_at) AT TIME ZONE 'UTC'),
-            'YYYY-MM-DD'
-          )`;
+    // Bucket days/hours in the viewer's timezone so “today” matches their calendar.
+    const chartTz = resolveSafeTimeZone(params.timeZone);
+    const rangeBuckets =
+      params.from && params.to
+        ? buildZonedRangeBucketKeys(params.from, params.to, chartTz)
+        : { sameDay: false, keys: [] as string[] };
+    const sameDay = rangeBuckets.sameDay;
+    const dayExpr = overviewRangeBucketSql(
+      'COALESCE(p.paid_at, p.created_at)',
+      sameDay,
+      chartTz,
+    );
 
     const emptyDailyCampaign: Array<{
       day: string;
@@ -2420,7 +2459,7 @@ export class FunnelEventService {
     >();
 
     for (const row of dailyTotalRows) {
-      const day = sameUtcDay
+      const day = sameDay
         ? String(row.day ?? '')
             .trim()
             .slice(0, 13)
@@ -2428,7 +2467,7 @@ export class FunnelEventService {
             .trim()
             .slice(0, 10);
       if (
-        sameUtcDay
+        sameDay
           ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
           : !/^\d{4}-\d{2}-\d{2}$/.test(day)
       ) {
@@ -2445,7 +2484,7 @@ export class FunnelEventService {
     }
 
     for (const row of dailyCampaignRows) {
-      const day = sameUtcDay
+      const day = sameDay
         ? String(row.day ?? '')
             .trim()
             .slice(0, 13)
@@ -2453,7 +2492,7 @@ export class FunnelEventService {
             .trim()
             .slice(0, 10);
       if (
-        sameUtcDay
+        sameDay
           ? !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(day)
           : !/^\d{4}-\d{2}-\d{2}$/.test(day)
       ) {
@@ -2480,27 +2519,10 @@ export class FunnelEventService {
     const dayKeys = new Set<string>([
       ...dailyTotalsMap.keys(),
       ...[...dailyByCampaignMap.keys()].map((key) => key.split(':')[0]),
+      // Always include every viewer-local day/hour in the selected range
+      // (so current-month charts end on “today”, even with $0).
+      ...rangeBuckets.keys,
     ]);
-    if (params.from && params.to && !sameUtcDay) {
-      const cursor = new Date(
-        Date.UTC(
-          params.from.getUTCFullYear(),
-          params.from.getUTCMonth(),
-          params.from.getUTCDate(),
-        ),
-      );
-      const end = new Date(
-        Date.UTC(
-          params.to.getUTCFullYear(),
-          params.to.getUTCMonth(),
-          params.to.getUTCDate(),
-        ),
-      );
-      while (cursor.getTime() <= end.getTime()) {
-        dayKeys.add(cursor.toISOString().slice(0, 10));
-        cursor.setUTCDate(cursor.getUTCDate() + 1);
-      }
-    }
 
     const sortedDays = [...dayKeys].sort();
     const dailyTotals = sortedDays.map((date) => {

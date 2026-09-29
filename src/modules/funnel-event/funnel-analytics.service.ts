@@ -9,13 +9,18 @@ import {
   FunnelAnalyticsEvent,
   FunnelAnalyticsEventType,
 } from '../../db/entities/funnel-analytics-event.entity';
+import {
+  FunnelEvent,
+  FunnelEventType,
+} from '../../db/entities/funnel-event.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
 import {
   buildRecentMonthBuckets,
-  buildUtcRangeBucketKeys,
+  buildZonedRangeBucketKeys,
   overviewRangeBucketSql,
+  resolveSafeTimeZone,
 } from './overview-monthly.util';
 
 export type FunnelAnalyticsOverview = {
@@ -43,6 +48,8 @@ export class FunnelAnalyticsService {
   constructor(
     @InjectRepository(FunnelAnalyticsEvent)
     private readonly analyticsRepository: Repository<FunnelAnalyticsEvent>,
+    @InjectRepository(FunnelEvent)
+    private readonly funnelEventRepository: Repository<FunnelEvent>,
     @InjectRepository(Funnel)
     private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(Customer)
@@ -94,11 +101,22 @@ export class FunnelAnalyticsService {
     return this.analyticsRepository.save(record);
   }
 
-  async getAnalyticsOverview(funnelId: number): Promise<FunnelAnalyticsOverview> {
-    const cacheKey = `funnel-analytics-overview-v1:${funnelId}`;
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, async () => {
-      const [exists, pageViews, buttonClicks, uniqueVisitorsRaw, checkoutOpens] =
-        await Promise.all([
+  async getAnalyticsOverview(
+    funnelId: number,
+  ): Promise<FunnelAnalyticsOverview> {
+    // Cache bumped: unique visitors now come from registrations, not analytics customer_id.
+    const cacheKey = `funnel-analytics-overview-v2:${funnelId}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_CACHE_TTL_MS,
+      async () => {
+        const [
+          exists,
+          pageViews,
+          buttonClicks,
+          uniqueVisitorsRaw,
+          checkoutOpens,
+        ] = await Promise.all([
           this.funnelRepository.exist({ where: { id: funnelId } }),
           this.analyticsRepository.count({
             where: { funnelId, eventType: FunnelAnalyticsEventType.PAGE_VIEW },
@@ -109,10 +127,14 @@ export class FunnelAnalyticsService {
               eventType: FunnelAnalyticsEventType.BUTTON_CLICK,
             },
           }),
-          this.analyticsRepository
+          // Unique visitors = distinct customers who registered (signup) on this funnel.
+          this.funnelEventRepository
             .createQueryBuilder('e')
             .select('COUNT(DISTINCT e.customer_id)', 'count')
             .where('e.funnel_id = :funnelId', { funnelId })
+            .andWhere('e.event_type = :signup', {
+              signup: FunnelEventType.SIGNUP,
+            })
             .andWhere('e.customer_id IS NOT NULL')
             .getRawOne<{ count: string }>(),
           this.analyticsRepository.count({
@@ -123,18 +145,19 @@ export class FunnelAnalyticsService {
           }),
         ]);
 
-      if (!exists) {
-        throw new NotFoundException('Funnel not found');
-      }
+        if (!exists) {
+          throw new NotFoundException('Funnel not found');
+        }
 
-      return {
-        funnelId,
-        pageViews,
-        buttonClicks,
-        uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
-        checkoutOpens,
-      };
-    });
+        return {
+          funnelId,
+          pageViews,
+          buttonClicks,
+          uniqueVisitors: Number(uniqueVisitorsRaw?.count ?? 0),
+          checkoutOpens,
+        };
+      },
+    );
   }
 
   async getAnalyticsOverviewMonthly(
@@ -151,7 +174,7 @@ export class FunnelAnalyticsService {
       checkoutOpens: number;
     }[];
   }> {
-    const cacheKey = `funnel-analytics-monthly-v1:${funnelId}:${monthCount}`;
+    const cacheKey = `funnel-analytics-monthly-v2:${funnelId}:${monthCount}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeAnalyticsOverviewMonthly(funnelId, monthCount),
     );
@@ -177,15 +200,13 @@ export class FunnelAnalyticsService {
       return { funnelId, months: monthCount, data: [] };
     }
 
-    const rangeStart = buckets[0]!.start;
-    const [exists, rows] = await Promise.all([
+    const rangeStart = buckets[0].start;
+    const monthBucketSql = `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`;
+    const [exists, rows, signupRows] = await Promise.all([
       this.funnelRepository.exist({ where: { id: funnelId } }),
       this.analyticsRepository
         .createQueryBuilder('e')
-        .select(
-          `TO_CHAR(DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
-          'month',
-        )
+        .select(monthBucketSql, 'month')
         .addSelect(
           `COUNT(*) FILTER (WHERE e.event_type = :pageView)`,
           'pageViews',
@@ -194,7 +215,6 @@ export class FunnelAnalyticsService {
           `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
           'buttonClicks',
         )
-        .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
         .addSelect(
           `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
           'checkoutOpens',
@@ -211,9 +231,19 @@ export class FunnelAnalyticsService {
           month: string;
           pageViews: string;
           buttonClicks: string;
-          uniqueVisitors: string;
           checkoutOpens: string;
         }>(),
+      // Unique registered customers per month (signup events with customer_id).
+      this.funnelEventRepository
+        .createQueryBuilder('e')
+        .select(monthBucketSql, 'month')
+        .addSelect('COUNT(DISTINCT e.customer_id)', 'uniqueVisitors')
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.event_type = :signup', { signup: FunnelEventType.SIGNUP })
+        .andWhere('e.customer_id IS NOT NULL')
+        .andWhere('e.created_at >= :rangeStart', { rangeStart })
+        .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
+        .getRawMany<{ month: string; uniqueVisitors: string }>(),
     ]);
 
     if (!exists) {
@@ -221,13 +251,16 @@ export class FunnelAnalyticsService {
     }
 
     const byMonth = new Map(rows.map((row) => [row.month, row]));
+    const uniqueByMonth = new Map(
+      signupRows.map((row) => [row.month, Number(row.uniqueVisitors ?? 0)]),
+    );
     const data = buckets.map((bucket) => {
       const row = byMonth.get(bucket.month);
       return {
         month: bucket.month,
         pageViews: Number(row?.pageViews ?? 0),
         buttonClicks: Number(row?.buttonClicks ?? 0),
-        uniqueVisitors: Number(row?.uniqueVisitors ?? 0),
+        uniqueVisitors: uniqueByMonth.get(bucket.month) ?? 0,
         checkoutOpens: Number(row?.checkoutOpens ?? 0),
       };
     });
@@ -239,6 +272,7 @@ export class FunnelAnalyticsService {
     funnelId: number,
     from: Date,
     to: Date,
+    timeZone?: string,
   ): Promise<{
     funnelId: number;
     months: number;
@@ -250,9 +284,10 @@ export class FunnelAnalyticsService {
       checkoutOpens: number;
     }[];
   }> {
-    const cacheKey = `funnel-analytics-range-v1:${funnelId}:${from.toISOString()}:${to.toISOString()}`;
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const cacheKey = `funnel-analytics-range-v3:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeAnalyticsOverviewForRange(funnelId, from, to),
+      this.computeAnalyticsOverviewForRange(funnelId, from, to, chartTz),
     );
   }
 
@@ -260,6 +295,7 @@ export class FunnelAnalyticsService {
     funnelId: number,
     from: Date,
     to: Date,
+    timeZone: string = 'UTC',
   ): Promise<{
     funnelId: number;
     months: number;
@@ -271,9 +307,10 @@ export class FunnelAnalyticsService {
       checkoutOpens: number;
     }[];
   }> {
-    const { sameDay, keys } = buildUtcRangeBucketKeys(from, to);
-    const bucketSql = overviewRangeBucketSql('e.created_at', sameDay);
-    const [exists, rows] = await Promise.all([
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
+    const bucketSql = overviewRangeBucketSql('e.created_at', sameDay, chartTz);
+    const [exists, rows, signupRows] = await Promise.all([
       this.funnelRepository.exist({ where: { id: funnelId } }),
       this.analyticsRepository
         .createQueryBuilder('e')
@@ -286,7 +323,6 @@ export class FunnelAnalyticsService {
           `COUNT(*) FILTER (WHERE e.event_type = :buttonClick)`,
           'buttonClicks',
         )
-        .addSelect(`COUNT(DISTINCT e.customer_id)`, 'uniqueVisitors')
         .addSelect(
           `COUNT(*) FILTER (WHERE e.event_type = :checkoutOpen)`,
           'checkoutOpens',
@@ -304,9 +340,20 @@ export class FunnelAnalyticsService {
           month: string;
           pageViews: string;
           buttonClicks: string;
-          uniqueVisitors: string;
           checkoutOpens: string;
         }>(),
+      // Unique registered customers per day/hour bucket.
+      this.funnelEventRepository
+        .createQueryBuilder('e')
+        .select(bucketSql, 'month')
+        .addSelect('COUNT(DISTINCT e.customer_id)', 'uniqueVisitors')
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.event_type = :signup', { signup: FunnelEventType.SIGNUP })
+        .andWhere('e.customer_id IS NOT NULL')
+        .andWhere('e.created_at >= :from', { from })
+        .andWhere('e.created_at <= :to', { to })
+        .groupBy(bucketSql)
+        .getRawMany<{ month: string; uniqueVisitors: string }>(),
     ]);
 
     if (!exists) {
@@ -314,13 +361,16 @@ export class FunnelAnalyticsService {
     }
 
     const byBucket = new Map(rows.map((row) => [row.month, row]));
+    const uniqueByBucket = new Map(
+      signupRows.map((row) => [row.month, Number(row.uniqueVisitors ?? 0)]),
+    );
     const data = keys.map((bucket) => {
       const row = byBucket.get(bucket);
       return {
         month: bucket,
         pageViews: Number(row?.pageViews ?? 0),
         buttonClicks: Number(row?.buttonClicks ?? 0),
-        uniqueVisitors: Number(row?.uniqueVisitors ?? 0),
+        uniqueVisitors: uniqueByBucket.get(bucket) ?? 0,
         checkoutOpens: Number(row?.checkoutOpens ?? 0),
       };
     });
@@ -381,7 +431,9 @@ export class FunnelAnalyticsService {
   }
 
   private async assertFunnelExists(funnelId: number): Promise<void> {
-    const exists = await this.funnelRepository.exist({ where: { id: funnelId } });
+    const exists = await this.funnelRepository.exist({
+      where: { id: funnelId },
+    });
     if (!exists) {
       throw new NotFoundException('Funnel not found');
     }

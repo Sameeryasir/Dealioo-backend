@@ -114,6 +114,7 @@ export class ActivityController {
     @Query('months', new DefaultValuePipe(6), ParseIntPipe) months: number,
     @Query('from') fromRaw: string | undefined,
     @Query('to') toRaw: string | undefined,
+    @Query('timezone') timeZoneRaw: string | undefined,
     @Req() req?: AuthRequest,
   ) {
     await this.redemptionService.verifyBusinessAccess(
@@ -129,6 +130,7 @@ export class ActivityController {
         businessId,
         from,
         to,
+        timeZoneRaw,
       );
     }
 

@@ -24,8 +24,9 @@ export class PlatformAdminController {
     @Req() req: { user: User },
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('timezone') timeZone?: string,
   ) {
-    return this.platformAdminService.getTrends(req.user, from, to);
+    return this.platformAdminService.getTrends(req.user, from, to, timeZone);
   }
 
   @UseGuards(AuthGuard('jwt'))

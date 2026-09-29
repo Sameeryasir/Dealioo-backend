@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class GetBusinessTopCampaignsQueryDto {
   @IsOptional()
@@ -16,4 +23,10 @@ export class GetBusinessTopCampaignsQueryDto {
   @Min(1)
   @Max(50)
   limit?: number;
+
+  /** Viewer IANA timezone so daily chart buckets match their local calendar. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  timezone?: string;
 }
