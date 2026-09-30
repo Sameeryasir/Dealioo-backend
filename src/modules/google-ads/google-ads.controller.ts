@@ -377,7 +377,7 @@ export class GoogleAdsController {
     );
   }
 
- @Get('callback/oauth')
+  @Get('callback/oauth')
   async oauthCallback(
     @Query('code') code: string,
     @Query('state') state: string,
@@ -398,7 +398,7 @@ export class GoogleAdsController {
       );
 
       return res.redirect(
-        `/google/select-customer?businessId=${result.businessId}`,
+        `/google/connected?businessId=${result.businessId}`,
       );
     } catch (err) {
       const businessId =
