@@ -16,6 +16,7 @@ import { Customer } from '../../db/entities/customer.entity';
 import { ActivityService } from '../activity/activity.service';
 import { CustomerActivityService } from '../customer-activity/customer-activity.service';
 import { FunnelEventService } from '../funnel-event/funnel-event.service';
+import { CouponService } from '../redemption/coupon.service';
 import { logStripePayment, warnStripePayment } from './payment-logger';
 
 export type PaymentFinalizeSource =
@@ -58,6 +59,7 @@ export class PaymentFinalizeService {
     private readonly customerActivityService: CustomerActivityService,
     @Inject(forwardRef(() => FunnelEventService))
     private readonly funnelEventService: FunnelEventService,
+    private readonly couponService: CouponService,
   ) {}
 
   async finalizeSuccessfulPayment(
@@ -182,6 +184,28 @@ export class PaymentFinalizeService {
         alreadyPaid: result.alreadyPaid,
         finalized: result.finalized,
       };
+    }
+
+    if (!result.finalized) {
+      return {
+        paymentId: result.paymentId,
+        orderId: result.orderId,
+        customerId: result.customerId,
+        alreadyPaid: result.alreadyPaid,
+        finalized: result.finalized,
+      };
+    }
+
+    try {
+      await this.couponService.syncCouponsForFunnelPayment(result.paymentId);
+    } catch (err) {
+      warnStripePayment({
+        phase: 'finalize_successful_payment',
+        outcome: 'coupon_sync_failed',
+        paymentId: result.paymentId,
+        syncSource: input.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     await this.runPostPaidSideEffects(result.paymentId, input.source);

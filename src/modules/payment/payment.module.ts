@@ -6,6 +6,7 @@ import { Order } from '../../db/entities/order.entity';
 import { StripeWebhookEvent } from '../../db/entities/stripe-webhook-event.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { AuthModule } from '../auth/auth.module';
@@ -37,6 +38,7 @@ import { PendingFunnelPaymentService } from './pending-funnel-payment.service';
       StripeWebhookEvent,
       Customer,
       CheckoutAccessToken,
+      BusinessCustomer,
     ]),
     StripeModule,
     AuthModule,

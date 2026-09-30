@@ -229,6 +229,7 @@ export class CampaignService {
         .createCatalogForNewCampaign({
           campaign: savedCampaign,
           stripeAccountId: business.stripeAccountId,
+          currency: business.currency,
         })
         .catch(() => undefined);
     }

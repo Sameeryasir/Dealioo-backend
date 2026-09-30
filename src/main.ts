@@ -23,13 +23,21 @@ async function bootstrap() {
   });
 
   const sessionSecret =
-    process.env.JWT_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    'dealioo-oauth-session';
+    process.env.SESSION_SECRET?.trim() || process.env.JWT_SECRET?.trim() || '';
+  if (!sessionSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'SESSION_SECRET or JWT_SECRET must be set in production (OAuth session signing).',
+      );
+    }
+    console.warn(
+      '[bootstrap] SESSION_SECRET/JWT_SECRET unset; using insecure dev session secret.',
+    );
+  }
   app.use(
     session({
       name: 'dealioo.sid',
-      secret: sessionSecret,
+      secret: sessionSecret || 'dealioo-oauth-session-dev-only',
       resave: false,
       saveUninitialized: true,
       cookie: {

@@ -13,6 +13,8 @@ import { PaymentFinalizeService } from './payment-finalize.service';
 
 type PaymentIntentPayload = {
   id: string;
+  amount?: number | null;
+  currency?: string | null;
   metadata?: Record<string, string> | null;
   last_payment_error?: { message?: string } | null;
   payment_method?: string | { id?: string } | null;
@@ -157,6 +159,19 @@ export class PaymentWebhookHandler {
     paymentIntentId?: string,
     checkoutSessionId?: string,
   ): Promise<FunnelPayment | null> {
+    if (paymentIntentId) {
+      const byPi = await this.funnelPaymentRepository.findOne({
+        where: { stripePaymentIntentId: paymentIntentId },
+      });
+      if (byPi) return byPi;
+    }
+    if (checkoutSessionId?.trim()) {
+      const bySession = await this.funnelPaymentRepository.findOne({
+        where: { stripeCheckoutSessionId: checkoutSessionId.trim() },
+      });
+      if (bySession) return bySession;
+    }
+
     const paymentIdRaw = metadata?.paymentId;
     if (paymentIdRaw) {
       const paymentId = Number.parseInt(paymentIdRaw, 10);
@@ -166,18 +181,71 @@ export class PaymentWebhookHandler {
         });
       }
     }
-    if (paymentIntentId) {
-      const byPi = await this.funnelPaymentRepository.findOne({
-        where: { stripePaymentIntentId: paymentIntentId },
-      });
-      if (byPi) return byPi;
-    }
-    if (checkoutSessionId?.trim()) {
-      return this.funnelPaymentRepository.findOne({
-        where: { stripeCheckoutSessionId: checkoutSessionId.trim() },
-      });
-    }
     return null;
+  }
+
+  private assertPaymentMatchesStripeEvent(
+    payment: FunnelPayment,
+    opts: {
+      connectedAccountId?: string;
+      amount?: number | null;
+      currency?: string | null;
+      paymentIntentId?: string;
+      phase: string;
+    },
+  ): boolean {
+    const eventAccount = opts.connectedAccountId?.trim();
+    const storedAccount = payment.stripeConnectedAccountId?.trim();
+    if (eventAccount && storedAccount && eventAccount !== storedAccount) {
+      warnStripePayment({
+        phase: opts.phase,
+        outcome: 'account_mismatch',
+        paymentId: payment.id,
+        paymentIntentId: opts.paymentIntentId ?? null,
+        error: `event account ${eventAccount} != payment ${storedAccount}`,
+      });
+      return false;
+    }
+
+    if (
+      opts.amount != null &&
+      Number.isFinite(opts.amount) &&
+      payment.amount != null &&
+      opts.amount !== payment.amount
+    ) {
+      warnStripePayment({
+        phase: opts.phase,
+        outcome: 'amount_mismatch',
+        paymentId: payment.id,
+        paymentIntentId: opts.paymentIntentId ?? null,
+        error: `event amount ${opts.amount} != payment ${payment.amount}`,
+      });
+      return false;
+    }
+
+    const eventCurrency = opts.currency?.trim().toLowerCase();
+    const storedCurrency = payment.currency?.trim().toLowerCase();
+    if (eventCurrency && storedCurrency && eventCurrency !== storedCurrency) {
+      warnStripePayment({
+        phase: opts.phase,
+        outcome: 'currency_mismatch',
+        paymentId: payment.id,
+        paymentIntentId: opts.paymentIntentId ?? null,
+        error: `event currency ${eventCurrency} != payment ${storedCurrency}`,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private isTerminalPaidStatus(status: FunnelPaymentStatus): boolean {
+    return (
+      status === FunnelPaymentStatus.PAID ||
+      status === FunnelPaymentStatus.REFUNDED ||
+      status === FunnelPaymentStatus.PARTIALLY_REFUNDED ||
+      status === FunnelPaymentStatus.DISPUTED
+    );
   }
 
   private async handleCheckoutSessionCompleted(
@@ -231,6 +299,16 @@ export class PaymentWebhookHandler {
       return;
     }
 
+    if (
+      !this.assertPaymentMatchesStripeEvent(payment, {
+        connectedAccountId,
+        paymentIntentId: paymentIntentId ?? undefined,
+        phase: 'checkout_session_completed',
+      })
+    ) {
+      return;
+    }
+
     await this.paymentFinalizeService.finalizeSuccessfulPayment({
       paymentId: payment.id,
       source: 'webhook',
@@ -279,6 +357,18 @@ export class PaymentWebhookHandler {
       return;
     }
 
+    if (
+      !this.assertPaymentMatchesStripeEvent(payment, {
+        connectedAccountId,
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency,
+        paymentIntentId: paymentIntent.id,
+        phase: 'payment_intent_succeeded',
+      })
+    ) {
+      return;
+    }
+
     const paymentMethodId = this.paymentMethodIdFromIntent(paymentIntent);
     const receiptUrl = await this.resolveReceiptUrl(
       paymentIntent,
@@ -313,6 +403,17 @@ export class PaymentWebhookHandler {
 
     this.logPaymentContext('payment_intent_failed', payment, paymentIntent.id);
 
+    if (this.isTerminalPaidStatus(payment.status)) {
+      warnStripePayment({
+        phase: 'payment_intent_failed',
+        outcome: 'ignored_terminal_status',
+        paymentId: payment.id,
+        paymentIntentId: paymentIntent.id,
+        error: `status=${payment.status}`,
+      });
+      return;
+    }
+
     const failureMessage =
       paymentIntent.last_payment_error?.message ?? 'Payment failed';
 
@@ -323,6 +424,8 @@ export class PaymentWebhookHandler {
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
     });
+
+    await this.couponService.syncCouponsForFunnelPayment(payment.id);
   }
 
   private async handlePaymentIntentCanceled(
@@ -337,12 +440,25 @@ export class PaymentWebhookHandler {
 
     this.logPaymentContext('payment_intent_canceled', payment, paymentIntent.id);
 
+    if (this.isTerminalPaidStatus(payment.status)) {
+      warnStripePayment({
+        phase: 'payment_intent_canceled',
+        outcome: 'ignored_terminal_status',
+        paymentId: payment.id,
+        paymentIntentId: paymentIntent.id,
+        error: `status=${payment.status}`,
+      });
+      return;
+    }
+
     await this.funnelPaymentRepository.update(payment.id, {
       status: FunnelPaymentStatus.CANCELLED,
       cancelledAt: new Date(),
       stripeConnectedAccountId:
         connectedAccountId ?? payment.stripeConnectedAccountId,
     });
+
+    await this.couponService.syncCouponsForFunnelPayment(payment.id);
   }
 
   private async handleChargeRefunded(

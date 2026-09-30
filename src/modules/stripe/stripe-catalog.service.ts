@@ -78,6 +78,13 @@ export class StripeCatalogService {
       stripePriceId,
     );
 
+    const priceCurrency = (price.currency || currency).trim().toLowerCase();
+    if (opts.currency?.trim() && priceCurrency !== currency) {
+      throw new BadRequestException(
+        'Campaign Stripe price currency does not match the business currency. Rebuild the catalog price.',
+      );
+    }
+
     if (price.active === false) {
       throw new BadRequestException(
         'This campaign’s Stripe price is inactive. Update the campaign product in Stripe.',
@@ -121,7 +128,7 @@ export class StripeCatalogService {
       stripeProductId: productIdFromPrice,
       stripePriceId,
       amount,
-      currency: (price.currency || currency).trim().toLowerCase(),
+      currency: priceCurrency,
       productName,
       description,
     };
@@ -130,6 +137,7 @@ export class StripeCatalogService {
   async createCatalogForNewCampaign(opts: {
     campaign: Campaign;
     stripeAccountId?: string | null;
+    currency?: string | null;
   }): Promise<void> {
     if (opts.campaign.campaignType === CampaignType.POSTPAID) {
       return;
@@ -142,7 +150,7 @@ export class StripeCatalogService {
       const catalog = await this.ensureCampaignCatalogOnConnectedAccount({
         campaign: opts.campaign,
         stripeAccountId,
-        currency: 'usd',
+        currency: (opts.currency?.trim() || 'usd').toLowerCase(),
       });
       opts.campaign.stripeProductId = catalog.stripeProductId;
       opts.campaign.stripePriceId = catalog.stripePriceId;

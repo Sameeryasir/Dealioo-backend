@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { campaignOrdersPermissionKeys } from '../member/member.constants';
@@ -28,7 +28,6 @@ type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
 };
 
-@SkipThrottle()
 @Controller('payment')
 export class PaymentController {
   private readonly logger = new Logger(PaymentController.name);
@@ -39,18 +38,21 @@ export class PaymentController {
     private readonly businessAccessService: BusinessAccessService,
   ) {}
 
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('session')
   @HttpCode(200)
   createPaymentSession(@Body() dto: CreatePaymentIntentDto) {
     return this.paymentService.createPaymentSession(dto);
   }
 
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('intent')
   @HttpCode(200)
   createPaymentIntent(@Body() dto: CreatePaymentIntentDto) {
     return this.paymentService.createPaymentIntent(dto);
   }
 
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('checkout/session')
   @HttpCode(200)
   createCheckoutSession(@Body() dto: CreateCheckoutSessionDto) {
@@ -62,11 +64,13 @@ export class PaymentController {
     });
   }
 
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Get('checkout/resume')
   resumeCheckout(@Query('token') token: string) {
     return this.checkoutResumeService.resolveSession(token);
   }
 
+  @SkipThrottle()
   @Post('webhook')
   @HttpCode(200)
   handleStripeWebhook(
@@ -115,8 +119,12 @@ export class PaymentController {
     return this.paymentService.getPaidFunnelPayments(funnelId);
   }
 
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Get(':paymentId/status')
-  getPaymentStatus(@Param('paymentId', ParseIntPipe) paymentId: number) {
-    return this.paymentService.getPaymentStatus(paymentId);
+  getPaymentStatus(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Query('checkoutToken') checkoutToken?: string,
+  ) {
+    return this.paymentService.getPaymentStatus(paymentId, checkoutToken);
   }
 }

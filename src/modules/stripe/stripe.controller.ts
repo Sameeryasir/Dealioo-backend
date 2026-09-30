@@ -14,6 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
+import { requireAdminRole } from '../../utils/require-admin-role';
 import { BusinessService } from '../business/business.service';
 import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import { StripeService } from './stripe.service';
@@ -34,9 +35,12 @@ export class StripeController {
     @Res() res: Response,
   ) {
     const frontend = getFrontendBaseUrl().replace(/\/$/, '');
-    const businessQuery = state?.trim()
-      ? `businessId=${encodeURIComponent(state.trim())}`
-      : '';
+    const resolvedBusinessId =
+      this.stripeService.resolveOAuthStateBusinessId(state);
+    const businessQuery =
+      resolvedBusinessId != null
+        ? `businessId=${encodeURIComponent(String(resolvedBusinessId))}`
+        : '';
 
     if (error?.trim()) {
       const reason = errorDescription?.trim() || error.trim() || 'access_denied';
@@ -112,6 +116,11 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
+    requireAdminRole(
+      req.user,
+      'You do not have permission to open the Stripe dashboard for this account.',
+    );
+
     const business = await this.businessService.findBusinessForUser(
       req.user,
       businessId,
@@ -158,6 +167,11 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ) {
+    requireAdminRole(
+      req.user,
+      'You do not have permission to connect Stripe for this account.',
+    );
+
     const business = await this.businessService.findBusinessForUser(
       req.user,
       businessId,

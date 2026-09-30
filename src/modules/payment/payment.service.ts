@@ -7,7 +7,6 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { DataSource, MoreThan, Repository } from 'typeorm';
 import {
@@ -18,7 +17,6 @@ import {
 import { Order } from '../../db/entities/order.entity';
 import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
-import { Customer } from '../../db/entities/customer.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { CouponService } from '../redemption/coupon.service';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
@@ -70,8 +68,6 @@ export class PaymentService implements OnModuleInit {
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
-    @InjectRepository(Customer)
-    private readonly customerRepository: Repository<Customer>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly stripeService: StripeService,
@@ -162,18 +158,23 @@ export class PaymentService implements OnModuleInit {
     return { received: true };
   }
 
-  async getPaymentStatus(paymentId: number): Promise<{
+  async getPaymentStatus(
+    paymentId: number,
+    checkoutToken?: string,
+  ): Promise<{
     paymentId: number;
     status: FunnelPaymentStatus;
-    stripePaymentIntentId: string | null;
     paidAt: Date | null;
-    failureReason: string | null;
-    refundedAmount: number;
-    disputeStatus: string | null;
     syncedFromStripe?: boolean;
     syncSource?: 'status_sync';
     stripeLifecycle?: 'processing' | null;
   }> {
+    const token = checkoutToken?.trim();
+    if (!token) {
+      throw new BadRequestException('Checkout token is required.');
+    }
+    await this.checkoutResumeService.assertTokenOwnsPayment(token, paymentId);
+
     let payment = await this.funnelPaymentRepository.findOne({
       where: { id: paymentId },
     });
@@ -215,11 +216,7 @@ export class PaymentService implements OnModuleInit {
     return {
       paymentId: payment.id,
       status: payment.status,
-      stripePaymentIntentId: payment.stripePaymentIntentId,
       paidAt: payment.paidAt,
-      failureReason: payment.failureReason,
-      refundedAmount: payment.refundedAmount,
-      disputeStatus: payment.disputeStatus,
       ...(syncedFromStripe
         ? { syncedFromStripe: true, syncSource: 'status_sync' as const }
         : {}),
@@ -463,11 +460,14 @@ export class PaymentService implements OnModuleInit {
     const stripeAccountId = business.stripeAccountId.trim();
     await this.stripeService.validateConnectedAccount(stripeAccountId);
 
+    const serverCurrency =
+      (business.currency?.trim() || 'usd').toLowerCase();
+
     const catalog =
       await this.stripeCatalogService.ensureCampaignCatalogOnConnectedAccount({
         campaign: funnel.campaign,
         stripeAccountId,
-        currency: checkoutIdentity.currency,
+        currency: serverCurrency,
       });
 
     const { applicationFeeAmount } = this.feeService.calculatePlatformFee({
@@ -585,7 +585,7 @@ export class PaymentService implements OnModuleInit {
         currency: opts.currency,
         description: opts.productName,
         metadata,
-        idempotencyKey: `checkout-session-${payment.id}-pm-v6-${randomUUID()}`,
+        idempotencyKey: `checkout-session-${payment.id}-pm-v7`,
         paymentId: payment.id,
         funnelId: payment.funnelId,
         businessId: payment.businessId,
@@ -1001,74 +1001,36 @@ export class PaymentService implements OnModuleInit {
   private async resolveCheckoutIdentity(dto: CreatePaymentIntentDto): Promise<{
     funnelId: number;
     businessId: number;
-    currency: string;
     customerEmail: string;
     customerId: number | null;
-    checkoutSessionToken?: string;
+    checkoutSessionToken: string;
   }> {
     const token = dto.checkoutSessionToken?.trim();
-    if (token) {
-      const session = await this.checkoutResumeService.resolveSession(token);
-      if (session.funnelId !== dto.funnelId) {
-        throw new BadRequestException(
-          'Checkout token does not match this funnel.',
-        );
-      }
-      if (session.businessId !== dto.businessId) {
-        throw new BadRequestException(
-          'Checkout token does not match this business.',
-        );
-      }
-
-      return {
-        funnelId: session.funnelId,
-        businessId: session.businessId,
-        currency: dto.currency.toLowerCase().trim(),
-        customerEmail: session.customerEmail.trim().toLowerCase(),
-        customerId: session.customerId,
-        checkoutSessionToken: token,
-      };
+    if (!token) {
+      throw new BadRequestException(
+        'Checkout token is required. Complete signup to get a checkout link.',
+      );
     }
 
-    const customerEmail = dto.customerEmail.trim().toLowerCase();
-    if (!customerEmail) {
-      throw new BadRequestException('Customer email is required for checkout.');
+    const session = await this.checkoutResumeService.resolveSession(token);
+    if (session.funnelId !== dto.funnelId) {
+      throw new BadRequestException(
+        'Checkout token does not match this funnel.',
+      );
     }
-
-    const customerByEmail = await this.findCustomerByEmail(customerEmail);
-
-    if (dto.customerId != null) {
-      if (!customerByEmail || customerByEmail.id !== dto.customerId) {
-        throw new BadRequestException(
-          'customerId does not match the customer email on file.',
-        );
-      }
-      return {
-        funnelId: dto.funnelId,
-        businessId: dto.businessId,
-        currency: dto.currency.toLowerCase().trim(),
-        customerEmail,
-        customerId: customerByEmail.id,
-        checkoutSessionToken: undefined,
-      };
+    if (session.businessId !== dto.businessId) {
+      throw new BadRequestException(
+        'Checkout token does not match this business.',
+      );
     }
 
     return {
-      funnelId: dto.funnelId,
-      businessId: dto.businessId,
-      currency: dto.currency.toLowerCase().trim(),
-      customerEmail,
-      customerId: customerByEmail?.id ?? null,
-      checkoutSessionToken: undefined,
+      funnelId: session.funnelId,
+      businessId: session.businessId,
+      customerEmail: session.customerEmail.trim().toLowerCase(),
+      customerId: session.customerId,
+      checkoutSessionToken: token,
     };
-  }
-
-  private async findCustomerByEmail(email: string): Promise<Customer | null> {
-    return this.customerRepository
-      .createQueryBuilder('customer')
-      .where('LOWER(customer.email) = :email', { email })
-      .andWhere('customer.deleted_at IS NULL')
-      .getOne();
   }
 
   private async attachCheckoutSessionPayment(

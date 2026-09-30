@@ -1,13 +1,16 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { In, Repository } from 'typeorm';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { Funnel } from '../../db/entities/funnel.entity';
 import {
   FunnelPayment,
   FunnelPaymentStatus,
@@ -43,6 +46,10 @@ export class CheckoutResumeService {
     private readonly customerRepository: Repository<Customer>,
     @InjectRepository(FunnelPayment)
     private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(Funnel)
+    private readonly funnelRepository: Repository<Funnel>,
+    @InjectRepository(BusinessCustomer)
+    private readonly businessCustomerRepository: Repository<BusinessCustomer>,
   ) {}
 
   async createSession(input: {
@@ -51,6 +58,41 @@ export class CheckoutResumeService {
     businessId: number;
     campaignId: number | null;
   }): Promise<IssuedCheckoutLink> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { id: input.funnelId },
+      relations: ['campaign'],
+    });
+    if (!funnel) {
+      throw new NotFoundException('Funnel not found.');
+    }
+    const campaignBusinessId = funnel.campaign?.businessId ?? funnel.businessId;
+    if (campaignBusinessId !== input.businessId) {
+      throw new BadRequestException(
+        'This funnel does not belong to the given business.',
+      );
+    }
+    if (
+      input.campaignId != null &&
+      funnel.campaign &&
+      funnel.campaign.id !== input.campaignId
+    ) {
+      throw new BadRequestException(
+        'Campaign does not match this funnel.',
+      );
+    }
+
+    const membership = await this.businessCustomerRepository.findOne({
+      where: {
+        customerId: input.customerId,
+        businessId: input.businessId,
+      },
+    });
+    if (!membership) {
+      throw new ForbiddenException(
+        'Customer is not linked to this business.',
+      );
+    }
+
     const customer = await this.customerRepository.findOne({
       where: { id: input.customerId },
     });
@@ -120,7 +162,6 @@ export class CheckoutResumeService {
       const payment = await this.funnelPaymentRepository.findOne({
         where: { id: funnelPaymentId },
       });
-      // Keep paid IDs so confirmation can verify status — only drop missing rows.
       if (!payment) {
         funnelPaymentId = null;
       }
@@ -163,6 +204,46 @@ export class CheckoutResumeService {
       funnelPaymentId,
       paymentStatus,
     });
+  }
+
+  async assertTokenOwnsPayment(
+    token: string,
+    paymentId: number,
+  ): Promise<void> {
+    const row = await this.loadActiveToken(token);
+    const payment = await this.funnelPaymentRepository.findOne({
+      where: { id: paymentId },
+    });
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+
+    if (
+      payment.funnelId !== row.funnelId ||
+      payment.businessId !== row.businessId
+    ) {
+      throw new ForbiddenException(
+        'Checkout token does not authorize this payment.',
+      );
+    }
+
+    if (row.funnelPaymentId != null && row.funnelPaymentId !== paymentId) {
+      throw new ForbiddenException(
+        'Checkout token does not authorize this payment.',
+      );
+    }
+
+    const tokenCustomer = row.customer;
+    if (tokenCustomer?.email?.trim() && payment.customerEmail?.trim()) {
+      if (
+        tokenCustomer.email.trim().toLowerCase() !==
+        payment.customerEmail.trim().toLowerCase()
+      ) {
+        throw new ForbiddenException(
+          'Checkout token does not authorize this payment.',
+        );
+      }
+    }
   }
 
   async attachPaymentToSession(
@@ -230,7 +311,7 @@ export class CheckoutResumeService {
       customerId: customer.id,
       customerEmail: customer.email.trim(),
       customerName: customer.name?.trim() || customer.email.trim(),
-      customerPhone: customer.phone?.trim() ?? null,
+      customerPhone: null,
       funnelId: scope.funnelId,
       businessId: scope.businessId,
       campaignId: scope.campaignId,

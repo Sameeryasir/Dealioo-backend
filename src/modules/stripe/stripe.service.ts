@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
@@ -22,6 +21,11 @@ import {
   logStripePayment,
   warnStripePayment,
 } from '../payment/payment-logger';
+import {
+  createStripeOAuthState,
+  parseStripeOAuthState,
+  peekStripeOAuthStateBusinessId,
+} from './stripe-oauth-state';
 
 const STRIPE_TIMEOUT_MS = 30_000;
 const STRIPE_MAX_NETWORK_RETRIES = 2;
@@ -682,7 +686,7 @@ export class StripeService {
       stripeCustomerId = customer.id;
     }
 
-    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}:${randomUUID()}`;
+    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}:${opts.priceId}`;
 
     const session = await this.stripe.checkout.sessions.create(
       {
@@ -1375,7 +1379,7 @@ export class StripeService {
       );
     }
 
-    const state = String(businessId);
+    const state = createStripeOAuthState(businessId, this.oauthStateSecret());
 
     await this.auditService.log(businessId, 'oauth_started', {
       status: 'initiated',
@@ -1398,10 +1402,13 @@ export class StripeService {
     code: string,
     state: string,
   ): Promise<{ connected: boolean; stripeAccountId: string }> {
-    const businessId = Number.parseInt(state, 10);
-
-    if (!Number.isFinite(businessId) || businessId < 1) {
-      throw new BadRequestException('Invalid Stripe OAuth state.');
+    let businessId: number;
+    try {
+      businessId = parseStripeOAuthState(state, this.oauthStateSecret());
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Invalid Stripe OAuth state.',
+      );
     }
 
     const business = await this.businessRepository.findOne({
@@ -1458,12 +1465,42 @@ export class StripeService {
     };
   }
 
+  resolveOAuthStateBusinessId(state: string | undefined): number | null {
+    try {
+      return peekStripeOAuthStateBusinessId(state, this.oauthStateSecret());
+    } catch {
+      return null;
+    }
+  }
+
+  private oauthStateSecret(): string {
+    const secret =
+      this.config.get<string>('STRIPE_OAUTH_STATE_SECRET')?.trim() ||
+      this.config.get<string>('JWT_SECRET')?.trim() ||
+      this.config.get<string>('SESSION_SECRET')?.trim() ||
+      this.config.get<string>('STRIPE_CONNECT_CLIENT_ID')?.trim() ||
+      this.config.get<string>('STRIPE_CLIENT_ID')?.trim() ||
+      '';
+    if (!secret) {
+      throw new InternalServerErrorException(
+        'Set JWT_SECRET (or STRIPE_OAUTH_STATE_SECRET) for Stripe Connect OAuth.',
+      );
+    }
+    return secret;
+  }
+
   async notifyConnectFailure(
-    businessIdRaw: string | undefined,
+    stateOrBusinessId: string | undefined,
     reason: string,
   ): Promise<void> {
-    const businessId = Number.parseInt(businessIdRaw ?? '', 10);
-    if (!Number.isFinite(businessId) || businessId < 1) return;
+    const peeked = this.resolveOAuthStateBusinessId(stateOrBusinessId);
+    const raw = stateOrBusinessId?.trim() ?? '';
+    const legacy =
+      /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+    const businessId =
+      peeked ??
+      (Number.isFinite(legacy) && legacy > 0 ? legacy : null);
+    if (businessId == null) return;
 
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
