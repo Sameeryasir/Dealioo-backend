@@ -12,7 +12,6 @@ import {
 import * as React from 'react';
 import {
   DEALIOO_EMAIL_BLUE,
-  DEALIOO_EMAIL_BLUE_SOFT,
   DEALIOO_EMAIL_INK,
   DEALIOO_EMAIL_LOGO_HEIGHT,
   DEALIOO_EMAIL_LOGO_URL,
@@ -90,8 +89,8 @@ ${DEALIOO_EMAIL_DARK_MODE_STYLE}
       <Preview>
         {`Your verification code — expires in ${expiresInMinutes} ${minuteLabel}`}
       </Preview>
-      <Body className="email-body" style={main}>
-        <Container className="email-container" style={container}>
+      <Body className="dealioo-email-root email-body" style={main}>
+        <Container className="dealioo-email-card email-container" style={container}>
           <Section style={brandRow}>
             <Img
               src={DEALIOO_EMAIL_LOGO_URL}
@@ -148,7 +147,7 @@ ${DEALIOO_EMAIL_DARK_MODE_STYLE}
 }
 
 const main = {
-  backgroundColor: DEALIOO_EMAIL_BLUE_SOFT,
+  backgroundColor: '#ffffff',
   margin: 0,
   padding: '48px 24px 64px',
   width: '100%',

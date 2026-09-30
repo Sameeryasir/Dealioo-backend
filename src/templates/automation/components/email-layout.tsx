@@ -80,8 +80,8 @@ export function AutomationEmailLayout({
         />
       </Head>
       <Preview>{preview}</Preview>
-      <Body style={automationEmailMain}>
-        <Container style={automationEmailContainer}>
+      <Body className="dealioo-email-root" style={automationEmailMain}>
+        <Container className="dealioo-email-card" style={automationEmailContainer}>
           <Section style={automationBrandRow}>
             <Img
               src={DEALIOO_EMAIL_LOGO_URL}

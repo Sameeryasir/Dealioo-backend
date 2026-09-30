@@ -1,12 +1,11 @@
 import {
   DEALIOO_EMAIL_BLUE,
-  DEALIOO_EMAIL_BLUE_SOFT,
   DEALIOO_EMAIL_INK,
   DEALIOO_EMAIL_MUTED,
 } from '../../dealioo-email-brand';
 
 export const automationEmailMain = {
-  backgroundColor: DEALIOO_EMAIL_BLUE_SOFT,
+  backgroundColor: '#ffffff',
   margin: 0,
   padding: '48px 24px 64px',
   width: '100%',
