@@ -1982,26 +1982,40 @@ export class AutomationService {
       startNodeId,
     );
 
+    const isCronTrigger = automation.trigger === AutomationTrigger.CRON;
+    const isUnpaidReminderPurpose =
+      automation.purpose ===
+        AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
+      automation.purpose ===
+        AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER;
+    const useAllCronGuests = isCronTrigger && !isUnpaidReminderPurpose;
     const usePaidRecipients =
-      automation.trigger === AutomationTrigger.PAYMENT ||
-      automation.purpose === AutomationPurpose.FUNNEL_PAYMENT;
+      !useAllCronGuests &&
+      (automation.trigger === AutomationTrigger.PAYMENT ||
+        automation.purpose === AutomationPurpose.FUNNEL_PAYMENT);
 
-    const recipientCount = usePaidRecipients
-      ? await this.recipientsService.countPaidCustomersForFunnel(
+    const recipientCount = useAllCronGuests
+      ? await this.recipientsService.countAllCustomersForFunnel(
           automation.funnelId,
         )
-      : await this.recipientsService.countUnpaidCustomersForFunnel(
-          automation.funnelId,
-        );
+      : usePaidRecipients
+        ? await this.recipientsService.countPaidCustomersForFunnel(
+            automation.funnelId,
+          )
+        : await this.recipientsService.countUnpaidCustomersForFunnel(
+            automation.funnelId,
+          );
 
     if (recipientCount === 0) {
       if (options.skipIfNoRecipients) {
         return null;
       }
       throw new BadRequestException(
-        usePaidRecipients
-          ? 'No paid customers found for this funnel'
-          : 'No unpaid customers found for this funnel',
+        useAllCronGuests
+          ? 'No customers found for this funnel'
+          : usePaidRecipients
+            ? 'No paid customers found for this funnel'
+            : 'No unpaid customers found for this funnel',
       );
     }
 
@@ -2011,7 +2025,7 @@ export class AutomationService {
     );
 
     this.logger.log(
-      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} predictedChunks=${predictedTotalChunks}`,
+      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} cronAllGuests=${useAllCronGuests} predictedChunks=${predictedTotalChunks}`,
     );
 
     let started = 0;
@@ -2022,15 +2036,20 @@ export class AutomationService {
       pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
       chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
       fetchPage: (afterCustomerId, limit) =>
-        usePaidRecipients
-          ? this.recipientsService.getPaidCustomersForFunnelPage(
+        useAllCronGuests
+          ? this.recipientsService.getAllCustomersForFunnelPage(
               automation.funnelId!,
               { afterCustomerId, limit },
             )
-          : this.recipientsService.getUnpaidCustomersForFunnelPage(
-              automation.funnelId!,
-              { afterCustomerId, limit },
-            ),
+          : usePaidRecipients
+            ? this.recipientsService.getPaidCustomersForFunnelPage(
+                automation.funnelId!,
+                { afterCustomerId, limit },
+              )
+            : this.recipientsService.getUnpaidCustomersForFunnelPage(
+                automation.funnelId!,
+                { afterCustomerId, limit },
+              ),
       onChunk: async (chunk, meta) => {
         this.logger.log(
           `[Graph Driven] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,

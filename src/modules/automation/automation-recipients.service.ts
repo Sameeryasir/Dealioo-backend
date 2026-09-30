@@ -185,6 +185,38 @@ export class AutomationRecipientsService {
     return Number(raw?.count ?? 0);
   }
 
+  async getAllCustomersForFunnelPage(
+    funnelId: number,
+    options: { afterCustomerId?: number; limit: number },
+  ): Promise<EmailRecipient[]> {
+    const afterCustomerId = Math.max(0, options.afterCustomerId ?? 0);
+    const limit = Math.max(1, Math.min(options.limit, 500));
+
+    const customers = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('customer.id > :afterCustomerId', { afterCustomerId })
+      .andWhere(this.allFunnelGuestsWhereSql(), { funnelId })
+      .orderBy('customer.id', 'ASC')
+      .take(limit)
+      .getMany();
+
+    return customers.map((customer) => ({
+      customerId: customer.id,
+      email: customer.email,
+      name: customer.name,
+    }));
+  }
+
+  async countAllCustomersForFunnel(funnelId: number): Promise<number> {
+    const raw = await this.customerRepository
+      .createQueryBuilder('customer')
+      .select('COUNT(customer.id)', 'count')
+      .where(this.allFunnelGuestsWhereSql(), { funnelId })
+      .getRawOne<{ count: string }>();
+
+    return Number(raw?.count ?? 0);
+  }
+
   async getCustomersByIds(customerIds: number[]): Promise<EmailRecipient[]> {
     const uniqueIds = [
       ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
@@ -314,6 +346,28 @@ export class AutomationRecipientsService {
       WHERE payment.funnel_id = :funnelId
         AND LOWER(payment.customer_email) = LOWER(customer.email)
         AND payment.status = :paidStatus
+    )`;
+  }
+
+  private allFunnelGuestsWhereSql(): string {
+    return `(
+      EXISTS (
+        SELECT 1 FROM funnel_event event
+        WHERE event.funnel_id = :funnelId
+          AND event.customer_id = customer.id
+          AND event.deleted_at IS NULL
+      )
+      OR EXISTS (
+        SELECT 1 FROM funnel_payment payment
+        WHERE payment.funnel_id = :funnelId
+          AND LOWER(payment.customer_email) = LOWER(customer.email)
+      )
+      OR EXISTS (
+        SELECT 1 FROM coupons coupon
+        WHERE coupon.funnel_id = :funnelId
+          AND coupon.customer_id = customer.id
+          AND coupon.deleted_at IS NULL
+      )
     )`;
   }
 }

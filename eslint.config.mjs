@@ -4,11 +4,6 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-// --- ESLint config ---
-// What: Nest/TS lint + Prettier; softer rules for TypeORM entity require() cycles
-// Why: Pre-commit was failing on intentional entity require() + legacy style noise
-// Related: .husky/pre-commit, lint-staged in package.json
-
 export default tseslint.config(
   {
     ignores: ['eslint.config.mjs', 'dist/**', 'coverage/**'],
