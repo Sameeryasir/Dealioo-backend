@@ -80,6 +80,13 @@ export class BusinessMember {
     removedPermissions: string[];
   } | null;
 
+  @Column({
+    name: 'guest_notify_dismissed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  guestNotifyDismissedAt!: Date | null;
+
   @OneToMany(
     () =>
       require('./business-member-permission.entity').BusinessMemberPermission,

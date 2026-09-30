@@ -207,6 +207,42 @@ export class SidebarUnreadService {
       .execute();
   }
 
+  async markGuestNotifyRead(
+    businessId: number,
+    userId: number,
+    occurredAt?: string | null,
+  ): Promise<void> {
+    let dismissedAt = new Date();
+    if (typeof occurredAt === 'string' && occurredAt.trim()) {
+      const parsed = new Date(occurredAt);
+      if (Number.isFinite(parsed.getTime())) {
+        dismissedAt = parsed;
+      }
+    }
+
+    const member = await this.businessMemberRepository
+      .createQueryBuilder('member')
+      .where('member.business_id = :businessId', { businessId })
+      .andWhere('member.user_id = :userId', { userId })
+      .getOne();
+
+    if (!member) {
+      return;
+    }
+
+    const previous = member.guestNotifyDismissedAt;
+    if (
+      previous instanceof Date &&
+      Number.isFinite(previous.getTime()) &&
+      previous.getTime() >= dismissedAt.getTime()
+    ) {
+      return;
+    }
+
+    member.guestNotifyDismissedAt = dismissedAt;
+    await this.businessMemberRepository.save(member);
+  }
+
   private async resolveSectionUnread(
     businessId: number,
     userId: number,
@@ -323,12 +359,18 @@ export class SidebarUnreadService {
   }
 
   private async getLatestActivityAt(businessId: number): Promise<Date | null> {
-    const row = await this.activityRepository.findOne({
-      where: { businessId },
-      order: { occurredAt: 'DESC', id: 'DESC' },
-      select: ['occurredAt'],
-    });
-    return row?.occurredAt ?? null;
+    const row = await this.activityRepository
+      .createQueryBuilder('activity')
+      .select('activity.occurredAt', 'occurredAt')
+      .where('activity.businessId = :businessId', { businessId })
+      .andWhere('activity.eventType != :signedUp', {
+        signedUp: ActivityEventType.SIGNED_UP,
+      })
+      .orderBy('activity.occurredAt', 'DESC')
+      .addOrderBy('activity.id', 'DESC')
+      .limit(1)
+      .getRawOne<{ occurredAt: Date | string | null }>();
+    return this.toDate(row?.occurredAt);
   }
 
   private async getLatestHistoryAt(businessId: number): Promise<Date | null> {
@@ -372,6 +414,9 @@ export class SidebarUnreadService {
       .createQueryBuilder('activity')
       .where('activity.businessId = :businessId', { businessId })
       .andWhere('activity.occurredAt > :since', { since })
+      .andWhere('activity.eventType != :signedUp', {
+        signedUp: ActivityEventType.SIGNED_UP,
+      })
       .andWhere(
         `(
           activity.metadata IS NULL
@@ -421,13 +466,31 @@ export class SidebarUnreadService {
     businessId: number,
     userId: number,
   ): Promise<Date> {
-    const readState = await this.readStateRepository.findOne({
-      where: { businessId, userId, section: 'activity' },
-    });
+    const [readState, member] = await Promise.all([
+      this.readStateRepository.findOne({
+        where: { businessId, userId, section: 'activity' },
+      }),
+      this.businessMemberRepository
+        .createQueryBuilder('member')
+        .select(['member.id', 'member.guestNotifyDismissedAt'])
+        .where('member.business_id = :businessId', { businessId })
+        .andWhere('member.user_id = :userId', { userId })
+        .getOne(),
+    ]);
+
+    const candidates: Date[] = [];
     if (readState?.lastViewedAt) {
-      return readState.lastViewedAt;
+      candidates.push(readState.lastViewedAt);
     }
-    return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    if (member?.guestNotifyDismissedAt) {
+      candidates.push(member.guestNotifyDismissedAt);
+    }
+    if (candidates.length === 0) {
+      return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    }
+    return candidates.reduce((latest, current) =>
+      current.getTime() > latest.getTime() ? current : latest,
+    );
   }
 
   private async resolveLatestAccessUpdated(

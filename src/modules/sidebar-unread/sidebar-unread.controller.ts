@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Param,
@@ -96,6 +97,22 @@ export class SidebarUnreadController {
     await this.sidebarUnreadService.markAccessNotifyRead(
       businessId,
       req.user.id,
+    );
+    return { cleared: true };
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/guest-notify/mark-read')
+  async markGuestNotifyRead(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Req() req: AuthRequest,
+    @Body() body?: { occurredAt?: string },
+  ) {
+    await this.sidebarUnreadService.assertBusinessAccess(req.user, businessId);
+    await this.sidebarUnreadService.markGuestNotifyRead(
+      businessId,
+      req.user.id,
+      body?.occurredAt ?? null,
     );
     return { cleared: true };
   }

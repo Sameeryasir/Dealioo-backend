@@ -297,6 +297,11 @@ export class ActivityService {
       );
 
       runAfterTransactionCommit(manager, () => {
+        // Guest signups use the dedicated guest-joined Pusher + bell row.
+        // Skip activity sidebar bumps so one signup does not double-notify.
+        if (params.eventType === ActivityEventType.SIGNED_UP) {
+          return;
+        }
         setTimeout(() => {
           this.sidebarNotify.notifyActivity({
             businessId: params.businessId,
