@@ -76,7 +76,6 @@ const PLANS: PlanSeed[] = [
         'AI Image Generation',
         'AI Copywriting',
         'AI Campaign Builder',
-        'AI Chat Assistant',
         'AI Follow-ups',
         'AI Email, SMS & WhatsApp Automation',
         'Unlimited campaigns',
