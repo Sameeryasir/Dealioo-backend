@@ -32,6 +32,7 @@ import {
   ExecuteAutomationResponseDto,
   StartAutomationExecutionResponseDto,
 } from './automationDto/automation-execution-status.dto';
+import { PaginatedAutomationsResponseDto } from './automationDto/paginated-automations.dto';
 import { PaginatedExecutionsResponseDto } from './automationDto/paginated-executions.dto';
 import { StartAutomationExecutionDto } from './automationDto/start-automation-execution.dto';
 import { UpdateAutomationDto } from './automationDto/update-automation.dto';
@@ -282,8 +283,21 @@ export class AutomationController {
   getAutomations(
     @Query('businessId', new ParseIntPipe({ optional: true }))
     businessId?: number,
-  ): Promise<Automation[]> {
-    return this.automationService.getAutomations(businessId);
+    @Query('campaignId', new ParseIntPipe({ optional: true }))
+    campaignId?: number,
+    @Query('q') q?: string,
+    @Query('status') status?: 'active' | 'draft',
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit?: number,
+  ): Promise<PaginatedAutomationsResponseDto> {
+    return this.automationService.getAutomations({
+      businessId,
+      campaignId,
+      q,
+      status,
+      page,
+      limit,
+    });
   }
 
   @UseGuards(AuthGuard('jwt'))

@@ -6,7 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, In, Repository } from 'typeorm';
+import { Brackets, FindOptionsWhere, In, Repository } from 'typeorm';
+import {
+  buildPaginationMeta,
+  normalizePagination,
+} from '../../common/pagination';
 import {
   Automation,
   AutomationTrigger,
@@ -404,7 +408,23 @@ export class AutomationService {
     );
   }
 
-  async getAutomations(businessId?: number): Promise<Automation[]> {
+  /**
+   * What changed: return offset-paginated automations instead of a full list.
+   * Why: automation list UI needs page/limit so large businesses stay fast.
+   * Related: PaginatedAutomationsResponseDto, AutomationController.getAutomations
+   * MCP Context 7: normalizePagination + buildPaginationMeta (shared pagination helpers).
+   */
+  async getAutomations(filters: {
+    businessId?: number;
+    campaignId?: number;
+    q?: string;
+    status?: 'active' | 'draft';
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Automation[]; meta: ReturnType<typeof buildPaginationMeta> }> {
+    const { businessId, campaignId, q, status } = filters;
+    const pagination = normalizePagination(filters.page, filters.limit);
+
     if (businessId) {
       const business = await this.businessRepository.findOne({
         where: { id: businessId },
@@ -412,15 +432,58 @@ export class AutomationService {
       if (!business) {
         throw new NotFoundException('Business not found');
       }
-      return this.automationRepository.find({
-        where: { businessId },
-        order: { createdAt: 'DESC' },
-      });
     }
 
-    return this.automationRepository.find({
-      order: { createdAt: 'DESC' },
-    });
+    const qb = this.automationRepository.createQueryBuilder('automation');
+
+    if (businessId) {
+      qb.andWhere('automation.businessId = :businessId', { businessId });
+    }
+
+    // Business rule: campaign-scoped lists only show that campaign's automations.
+    if (campaignId != null && campaignId >= 1) {
+      qb.andWhere('automation.campaignId = :campaignId', { campaignId });
+    }
+
+    // Active = isActive true; draft = not active (matches FE listStatusFromApi).
+    if (status === 'active') {
+      qb.andWhere('automation.isActive = true');
+    } else if (status === 'draft') {
+      qb.andWhere('automation.isActive = false');
+    }
+
+    const trimmedSearch = q?.trim();
+    if (trimmedSearch) {
+      const escaped = trimmedSearch.replace(/[%_\\]/g, '\\$&');
+      const containsPattern = `%${escaped}%`;
+      qb.andWhere(
+        new Brackets((sub) => {
+          sub
+            .where('automation.name ILIKE :containsPattern', { containsPattern })
+            .orWhere(
+              "COALESCE(automation.description, '') ILIKE :containsPattern",
+              { containsPattern },
+            )
+            .orWhere('CAST(automation.trigger AS text) ILIKE :containsPattern', {
+              containsPattern,
+            })
+            .orWhere('CAST(automation.purpose AS text) ILIKE :containsPattern', {
+              containsPattern,
+            });
+        }),
+      );
+    }
+
+    qb.orderBy('automation.createdAt', 'DESC')
+      .skip(pagination.skip)
+      .take(pagination.limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+    };
   }
 
   async findAutomationById(id: number): Promise<Automation> {
