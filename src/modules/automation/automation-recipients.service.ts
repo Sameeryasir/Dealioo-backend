@@ -217,6 +217,85 @@ export class AutomationRecipientsService {
     return Number(raw?.count ?? 0);
   }
 
+  async getInactiveCustomersForFunnelPage(
+    funnelId: number,
+    inactiveDays: number,
+    options: { afterCustomerId?: number; limit: number },
+  ): Promise<EmailRecipient[]> {
+    const afterCustomerId = Math.max(0, options.afterCustomerId ?? 0);
+    const limit = Math.max(1, Math.min(options.limit, 500));
+    const days = Math.max(1, Math.min(Math.floor(inactiveDays) || 30, 365));
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const customers = await this.customerRepository
+      .createQueryBuilder('customer')
+      .where('customer.id > :afterCustomerId', { afterCustomerId })
+      .andWhere(this.allFunnelGuestsWhereSql(), { funnelId })
+      .andWhere(this.inactiveGuestWhereSql(), { funnelId, cutoff })
+      .orderBy('customer.id', 'ASC')
+      .take(limit)
+      .getMany();
+
+    return customers.map((customer) => ({
+      customerId: customer.id,
+      email: customer.email,
+      name: customer.name,
+    }));
+  }
+
+  async countInactiveCustomersForFunnel(
+    funnelId: number,
+    inactiveDays: number,
+  ): Promise<number> {
+    const days = Math.max(1, Math.min(Math.floor(inactiveDays) || 30, 365));
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const raw = await this.customerRepository
+      .createQueryBuilder('customer')
+      .select('COUNT(customer.id)', 'count')
+      .where(this.allFunnelGuestsWhereSql(), { funnelId })
+      .andWhere(this.inactiveGuestWhereSql(), { funnelId, cutoff })
+      .getRawOne<{ count: string }>();
+
+    return Number(raw?.count ?? 0);
+  }
+
+  private inactiveGuestWhereSql(): string {
+    return `NOT EXISTS (
+      SELECT 1 FROM customer_visits visit
+      WHERE visit.customer_id = customer.id
+        AND visit.deleted_at IS NULL
+        AND visit.created_at >= :cutoff
+        AND (
+          visit.campaign_id = (
+            SELECT funnel.campaign_id FROM funnels funnel WHERE funnel.id = :funnelId
+          )
+          OR visit.coupon_id IN (
+            SELECT coupon.id FROM coupons coupon
+            WHERE coupon.funnel_id = :funnelId
+              AND coupon.deleted_at IS NULL
+          )
+        )
+    )
+    AND (
+      EXISTS (
+        SELECT 1 FROM funnel_event event
+        WHERE event.funnel_id = :funnelId
+          AND event.customer_id = customer.id
+          AND event.deleted_at IS NULL
+          AND event.created_at <= :cutoff
+      )
+      OR EXISTS (
+        SELECT 1 FROM funnel_payment payment
+        WHERE payment.funnel_id = :funnelId
+          AND LOWER(payment.customer_email) = LOWER(customer.email)
+          AND payment.created_at <= :cutoff
+      )
+    )`;
+  }
+
   async getCustomersByIds(customerIds: number[]): Promise<EmailRecipient[]> {
     const uniqueIds = [
       ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),

@@ -13,6 +13,7 @@ import {
 } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
+import { resolvePurposeFromTrigger } from './automation-purpose-from-trigger';
 import { isBuiltinSignupPassEmailEnabled } from '../redemption/signup-qr-email.constants';
 import {
   AutomationExecution,
@@ -194,15 +195,19 @@ export class AutomationService {
       'You do not have permission to create automations.',
     );
 
-    this.assertCreatablePurpose(dto.purpose);
-    this.validatePurposeAndTrigger(dto.purpose, dto.trigger);
+    const purpose =
+      dto.trigger === AutomationTrigger.CRON
+        ? dto.purpose
+        : resolvePurposeFromTrigger(dto.trigger);
+    this.assertCreatablePurpose(purpose);
+    this.validatePurposeAndTrigger(purpose, dto.trigger);
 
     const automation = this.automationRepository.create({
       businessId,
       name: dto.name,
       description: dto.description?.trim() ?? null,
       trigger: dto.trigger,
-      purpose: dto.purpose,
+      purpose,
       campaignId,
       funnelId,
       createdBy: user.id,
@@ -248,14 +253,18 @@ export class AutomationService {
     }
     if (dto.trigger !== undefined) {
       automation.trigger = dto.trigger;
+      if (
+        dto.purpose === undefined &&
+        dto.trigger !== AutomationTrigger.CRON
+      ) {
+        automation.purpose = resolvePurposeFromTrigger(dto.trigger);
+      }
     }
     if (dto.purpose !== undefined) {
       automation.purpose = dto.purpose;
     }
-    if (dto.purpose !== undefined) {
-      this.assertCreatablePurpose(dto.purpose);
-    }
-    if (dto.trigger !== undefined || dto.purpose !== undefined) {
+    if (dto.purpose !== undefined || dto.trigger !== undefined) {
+      this.assertCreatablePurpose(automation.purpose);
       this.validatePurposeAndTrigger(automation.purpose, automation.trigger);
     }
     if (dto.isActive !== undefined) {
@@ -1539,6 +1548,30 @@ export class AutomationService {
       return;
     }
 
+    if (automation.trigger === AutomationTrigger.NO_VISIT) {
+      try {
+        const result = await this.enqueueGraphDrivenBatch(automation, {
+          skipIfNoRecipients: true,
+        });
+        if (!result) {
+          this.logger.log(
+            `Cron tick for win-back automation ${automationId}: no inactive recipients`,
+          );
+        } else {
+          this.logger.log(
+            `Cron tick started win-back batch for automation ${automationId} (execution=${result.status.executionId}, recipients≈${result.status.totalRecipients ?? '?'})`,
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Win-back batch enqueue failed';
+        this.logger.warn(
+          `Cron tick failed for win-back automation ${automationId}: ${message}`,
+        );
+      }
+      return;
+    }
+
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       try {
         const result = await this.enqueuePrepaidOfferBatch(automation, {
@@ -1983,39 +2016,65 @@ export class AutomationService {
     );
 
     const isCronTrigger = automation.trigger === AutomationTrigger.CRON;
+    const isNoVisitTrigger =
+      automation.trigger === AutomationTrigger.NO_VISIT;
     const isUnpaidReminderPurpose =
       automation.purpose ===
         AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
       automation.purpose ===
         AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER;
-    const useAllCronGuests = isCronTrigger && !isUnpaidReminderPurpose;
+    const useAllCronGuests =
+      isCronTrigger && !isUnpaidReminderPurpose && !isNoVisitTrigger;
     const usePaidRecipients =
       !useAllCronGuests &&
+      !isNoVisitTrigger &&
       (automation.trigger === AutomationTrigger.PAYMENT ||
         automation.purpose === AutomationPurpose.FUNNEL_PAYMENT);
 
-    const recipientCount = useAllCronGuests
-      ? await this.recipientsService.countAllCustomersForFunnel(
+    let inactiveDays = 30;
+    if (isNoVisitTrigger) {
+      const triggerNode = await this.nodeRepository.findOne({
+        where: { automationId: automation.id, type: AutomationNodeType.TRIGGER },
+        order: { order: 'ASC', id: 'ASC' },
+      });
+      const rawDays = Number(
+        (triggerNode?.config as Record<string, unknown> | undefined)
+          ?.inactiveDays ?? 30,
+      );
+      inactiveDays = Number.isFinite(rawDays)
+        ? Math.max(1, Math.min(Math.floor(rawDays), 365))
+        : 30;
+    }
+
+    const recipientCount = isNoVisitTrigger
+      ? await this.recipientsService.countInactiveCustomersForFunnel(
           automation.funnelId,
+          inactiveDays,
         )
-      : usePaidRecipients
-        ? await this.recipientsService.countPaidCustomersForFunnel(
+      : useAllCronGuests
+        ? await this.recipientsService.countAllCustomersForFunnel(
             automation.funnelId,
           )
-        : await this.recipientsService.countUnpaidCustomersForFunnel(
-            automation.funnelId,
-          );
+        : usePaidRecipients
+          ? await this.recipientsService.countPaidCustomersForFunnel(
+              automation.funnelId,
+            )
+          : await this.recipientsService.countUnpaidCustomersForFunnel(
+              automation.funnelId,
+            );
 
     if (recipientCount === 0) {
       if (options.skipIfNoRecipients) {
         return null;
       }
       throw new BadRequestException(
-        useAllCronGuests
-          ? 'No customers found for this funnel'
-          : usePaidRecipients
-            ? 'No paid customers found for this funnel'
-            : 'No unpaid customers found for this funnel',
+        isNoVisitTrigger
+          ? `No inactive guests found (no visit in ${inactiveDays} days)`
+          : useAllCronGuests
+            ? 'No customers found for this funnel'
+            : usePaidRecipients
+              ? 'No paid customers found for this funnel'
+              : 'No unpaid customers found for this funnel',
       );
     }
 
@@ -2025,7 +2084,7 @@ export class AutomationService {
     );
 
     this.logger.log(
-      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} cronAllGuests=${useAllCronGuests} predictedChunks=${predictedTotalChunks}`,
+      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} cronAllGuests=${useAllCronGuests} noVisit=${isNoVisitTrigger} predictedChunks=${predictedTotalChunks}`,
     );
 
     let started = 0;
@@ -2036,20 +2095,26 @@ export class AutomationService {
       pageSize: AUTOMATION_RECIPIENT_PAGE_SIZE,
       chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
       fetchPage: (afterCustomerId, limit) =>
-        useAllCronGuests
-          ? this.recipientsService.getAllCustomersForFunnelPage(
+        isNoVisitTrigger
+          ? this.recipientsService.getInactiveCustomersForFunnelPage(
               automation.funnelId!,
+              inactiveDays,
               { afterCustomerId, limit },
             )
-          : usePaidRecipients
-            ? this.recipientsService.getPaidCustomersForFunnelPage(
+          : useAllCronGuests
+            ? this.recipientsService.getAllCustomersForFunnelPage(
                 automation.funnelId!,
                 { afterCustomerId, limit },
               )
-            : this.recipientsService.getUnpaidCustomersForFunnelPage(
-                automation.funnelId!,
-                { afterCustomerId, limit },
-              ),
+            : usePaidRecipients
+              ? this.recipientsService.getPaidCustomersForFunnelPage(
+                  automation.funnelId!,
+                  { afterCustomerId, limit },
+                )
+              : this.recipientsService.getUnpaidCustomersForFunnelPage(
+                  automation.funnelId!,
+                  { afterCustomerId, limit },
+                ),
       onChunk: async (chunk, meta) => {
         this.logger.log(
           `[Graph Driven] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,
@@ -4773,7 +4838,7 @@ export class AutomationService {
       trigger !== AutomationTrigger.NO_VISIT
     ) {
       throw new BadRequestException(
-        'Signup payment reminder automations require trigger "signup", "cron", "funnel_completed", or "no_visit".',
+        'Signup / scheduled automations require trigger "signup", "cron", "funnel_completed", or "no_visit".',
       );
     }
 
@@ -4794,6 +4859,16 @@ export class AutomationService {
     ) {
       throw new BadRequestException(
         'Abandoned checkout automations require trigger "abandoned_checkout".',
+      );
+    }
+
+    if (
+      trigger === AutomationTrigger.CRON &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP
+    ) {
+      throw new BadRequestException(
+        'Cron automations require a scheduled signup or payment-reminder purpose.',
       );
     }
 

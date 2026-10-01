@@ -19,7 +19,7 @@ export function parseCronTriggerConfig(
     .trim()
     .toLowerCase();
 
-  if (trigger !== 'cron') {
+  if (trigger !== 'cron' && trigger !== 'no_visit') {
     return null;
   }
 

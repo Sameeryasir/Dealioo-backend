@@ -29,6 +29,12 @@ import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { GoogleWalletStatus } from '../google-wallet/google-wallet-status';
 import { CheckoutResumeService } from '../payment/checkout-resume.service';
+import {
+  resolveTagActionMode,
+  sanitizeAutomationTagName,
+  sanitizeHttpsUrl,
+} from './automation-action-sanitize';
+import { CustomerTagService } from './customer-tag.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import {
   isCompletePaymentCtaLabel,
@@ -113,6 +119,7 @@ export class AutomationEngineService {
     @InjectRepository(AutomationNode)
     private readonly nodeRepository: Repository<AutomationNode>,
     private readonly couponService: CouponService,
+    private readonly customerTagService: CustomerTagService,
     private readonly googleWalletService: GoogleWalletService,
     private readonly checkoutResumeService: CheckoutResumeService,
     private readonly activityService: ActivityService,
@@ -884,21 +891,17 @@ export class AutomationEngineService {
         return this.runRewardCouponNode(execution, node, config);
 
       case AutomationNodeType.TAG: {
-        if (String(config.workflowKind ?? '') === 'prepaid_payment_actions') {
+        const mode = resolveTagActionMode(config);
+        if (mode === 'prepaid') {
           return this.runPrepaidPaymentActionsNode(execution, node, config);
         }
-
-        if (String(config.workflowKind ?? '') === 'actions') {
+        if (mode === 'bundled') {
           return this.runBundledActionsNode(execution, node, config);
         }
-
-        await this.logService.createLog({
-          executionId: execution.id,
-          nodeId: node.id,
-          customerId: execution.customerId,
-          message: `Tag skipped (${String(config.tag ?? 'default')}; tagging not configured)`,
-        });
-        return 'advance';
+        if (mode === 'ask_review') {
+          return this.runAskReviewNode(execution, node, config);
+        }
+        return this.runTagGuestNode(execution, node, config);
       }
 
       default:
@@ -1283,6 +1286,177 @@ export class AutomationEngineService {
     return 'advance';
   }
 
+  private async runTagGuestNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    config: Record<string, unknown>,
+  ): Promise<LegacyNodeRunResult> {
+    const businessId = execution.automation?.businessId;
+    const customerId = execution.customerId;
+    const tag = sanitizeAutomationTagName(config.tag ?? config.tagName);
+    if (!businessId || !customerId || !tag) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Tag skipped (missing business, customer, or tag name)',
+      });
+      return 'advance';
+    }
+
+    const result = await this.customerTagService.applyTag({
+      businessId,
+      customerId,
+      tag,
+      source: 'automation',
+    });
+
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: node.id,
+      customerId: execution.customerId,
+      message: result.created
+        ? `Tagged guest "${result.tag}"`
+        : `Guest already tagged "${result.tag}"`,
+    });
+    return 'advance';
+  }
+
+  private async runAskReviewNode(
+    execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
+    node: NonNullable<
+      Awaited<ReturnType<AutomationExecutionService['findById']>>['currentNode']
+    >,
+    config: Record<string, unknown>,
+  ): Promise<LegacyNodeRunResult> {
+    const reviewUrl = sanitizeHttpsUrl(config.reviewUrl);
+    const channel = String(config.channel ?? 'email').trim().toLowerCase();
+    const campaignName =
+      execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
+    const ctaLabel =
+      String(config.ctaLabel ?? '').trim() || 'Leave a review';
+    const subject =
+      String(config.subject ?? '').trim() || `How was your visit?`;
+    const message =
+      String(config.message ?? '').trim() ||
+      `Hi [First Name] — thanks for choosing ${campaignName}. We'd love a quick review.`;
+
+    if (!reviewUrl) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Ask-for-review skipped (review URL must be HTTPS)',
+        error: 'Missing reviewUrl',
+      });
+      return 'advance';
+    }
+
+    if (channel === 'sms') {
+      const phone = execution.customer?.phone?.trim() ?? '';
+      if (!phone) {
+        await this.logService.createLog({
+          executionId: execution.id,
+          nodeId: node.id,
+          customerId: execution.customerId,
+          message: 'Ask-for-review SMS skipped (missing phone)',
+        });
+        return 'advance';
+      }
+      const body = `${message}\n\n${ctaLabel}: ${reviewUrl}`;
+      const sendResult = await this.chatMessageService.sendAutomationSms({
+        businessId: execution.automation.businessId,
+        customerId: execution.customerId,
+        phone,
+        body,
+        automationId: execution.automationId,
+        executionId: execution.id,
+        nodeId: node.id,
+        idempotencyKey: `ask-review-sms:${execution.id}:${node.id}`,
+        metadata: { action: 'ask_review' },
+      });
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: sendResult.sent
+          ? 'Ask-for-review SMS sent'
+          : `Ask-for-review SMS failed: ${sendResult.error ?? 'unknown error'}`,
+        error: sendResult.error,
+      });
+      if (!sendResult.sent) {
+        throw new AutomationRetryableError(
+          sendResult.error || 'Ask-for-review SMS failed',
+        );
+      }
+      return 'advance';
+    }
+
+    const to = execution.customer?.email?.trim() ?? '';
+    if (!to) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message: 'Ask-for-review email skipped (missing email)',
+      });
+      return 'advance';
+    }
+
+    const purpose = execution.automation.purpose;
+    const emailConfig = await this.enrichPaymentEmailConfig(
+      purpose,
+      execution,
+      {
+        subject,
+        message: `${message}\n\n${ctaLabel}: ${reviewUrl}`,
+        ctaLabel,
+        ctaUrl: reviewUrl,
+      },
+      node.id,
+    );
+    const prepared = this.automationEmailService.prepareFromEmailNode(
+      emailConfig,
+      purpose,
+      { campaignName },
+    );
+    const sendResult = await this.automationEmailService.sendToCustomer(
+      purpose,
+      {
+        customerId: execution.customerId,
+        email: to,
+        name: execution.customer?.name ?? '',
+      },
+      emailConfig,
+      campaignName,
+    );
+    await this.logService.createLog({
+      executionId: execution.id,
+      nodeId: node.id,
+      customerId: execution.customerId,
+      message: sendResult.sent
+        ? 'Ask-for-review email sent'
+        : `Ask-for-review email failed: ${sendResult.error ?? 'unknown error'}`,
+      error: sendResult.error,
+    });
+    if (sendResult.sent) {
+      await this.executionService.incrementEmailsSent(execution.id);
+      await this.recordAutomationEmailInChat(
+        execution,
+        node.id,
+        purpose,
+        prepared,
+        to,
+      );
+      return 'advance';
+    }
+    throw new AutomationRetryableError(
+      sendResult.error || 'Ask-for-review email failed',
+    );
+  }
+
   private async runRewardCouponNode(
     execution: Awaited<ReturnType<AutomationExecutionService['findById']>>,
     node: NonNullable<
@@ -1321,6 +1495,34 @@ export class AutomationEngineService {
       customerId: execution.customerId,
       message: `Reward offer prepared (${rewardName})`,
     });
+
+    const funnelId = execution.automation?.funnelId ?? null;
+    if (funnelId && execution.customerId) {
+      try {
+        const coupon = await this.couponService.ensurePendingCouponForUnpaidFunnel(
+          funnelId,
+          execution.customerId,
+        );
+        await this.logService.createLog({
+          executionId: execution.id,
+          nodeId: node.id,
+          customerId: execution.customerId,
+          message: coupon
+            ? `Coupon ready (#${coupon.id}) for reward offer`
+            : 'Coupon create skipped (no open checkout / eligible pass)',
+        });
+      } catch (error) {
+        const detail =
+          error instanceof Error ? error.message : 'Coupon create failed';
+        await this.logService.createLog({
+          executionId: execution.id,
+          nodeId: node.id,
+          customerId: execution.customerId,
+          message: `Coupon create failed: ${detail}`,
+          error: detail,
+        });
+      }
+    }
 
     if (!to) {
       await this.logService.createLog({

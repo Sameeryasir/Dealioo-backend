@@ -245,6 +245,13 @@ export class AutomationGraphValidatorService {
       signup: ['signup', 'user_signup', 'customer_signup'],
       payment: ['payment', 'payment_completed'],
       abandoned_checkout: ['abandoned_checkout', 'abandoned checkout'],
+      first_purchase: ['first_purchase', 'first purchase'],
+      funnel_completed: [
+        'funnel_completed',
+        'funnel_complete',
+        'funnel complete',
+      ],
+      no_visit: ['no_visit', 'no visit', 'win_back', 'win-back', 'winback'],
       cron: ['cron', 'cron_job', 'cron job'],
     };
 

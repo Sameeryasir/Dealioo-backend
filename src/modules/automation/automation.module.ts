@@ -15,6 +15,7 @@ import { AutomationSendAttempt } from '../../db/entities/automation-send-attempt
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { Customer } from '../../db/entities/customer.entity';
+import { CustomerTag } from '../../db/entities/customer-tag.entity';
 import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
@@ -46,6 +47,7 @@ import { AutomationQueueService } from './automation-queue.service';
 import { AutomationSendAttemptService } from './automation-send-attempt.service';
 import { AutomationWaitSchedulerService } from './automation-wait-scheduler.service';
 import { AutomationService } from './automation.service';
+import { CustomerTagService } from './customer-tag.service';
 import { AutomationNodeRegistry } from './engine/automation-node-registry.service';
 import { AutomationGraphValidatorService } from './engine/automation-graph-validator.service';
 import { AutomationNodeRegistryBootstrap } from './engine/automation-node-registry.bootstrap';
@@ -85,6 +87,7 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
       FunnelEvent,
       FunnelPayment,
       Customer,
+      CustomerTag,
       CustomerVisit,
     ]),
     // --- SWC circular import fix ---
@@ -100,6 +103,7 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
   controllers: [AutomationController],
   providers: [
     AutomationService,
+    CustomerTagService,
     AutomationEmailService,
     AutomationEmailRendererService,
     AutomationRecipientsService,
