@@ -17,6 +17,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { AutomationQueueService } from '../automation/automation-queue.service';
+import { resolveGuestAdAttributions } from '../funnel-event/guest-ad-attribution.util';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
 
 export type BusinessCustomerListItem = {
@@ -26,6 +27,9 @@ export type BusinessCustomerListItem = {
   phone: string | null;
   joiningDate: string;
   visitCount: number;
+  adSource: 'meta' | 'google' | 'utm' | null;
+  adSourceLabel: string | null;
+  adSourceDetail: string | null;
 };
 
 @Injectable()
@@ -90,18 +94,33 @@ export class CustomerService {
         visitCount: string | number;
       }>();
 
+    const customerIds = rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    const attributionByCustomerId = await resolveGuestAdAttributions(
+      this.dataSource.manager,
+      { businessId, customerIds },
+    );
+
     return {
-      data: rows.map((row) => ({
-        id: Number(row.id),
-        name: row.name?.trim() || 'Guest',
-        email: row.email,
-        phone: row.phone,
-        joiningDate:
-          row.joiningDate instanceof Date
-            ? row.joiningDate.toISOString()
-            : new Date(row.joiningDate).toISOString(),
-        visitCount: Number(row.visitCount) || 0,
-      })),
+      data: rows.map((row) => {
+        const id = Number(row.id);
+        const attribution = attributionByCustomerId.get(id) ?? null;
+        return {
+          id,
+          name: row.name?.trim() || 'Guest',
+          email: row.email,
+          phone: row.phone,
+          joiningDate:
+            row.joiningDate instanceof Date
+              ? row.joiningDate.toISOString()
+              : new Date(row.joiningDate).toISOString(),
+          visitCount: Number(row.visitCount) || 0,
+          adSource: attribution?.source ?? null,
+          adSourceLabel: attribution?.label ?? null,
+          adSourceDetail: attribution?.detail ?? null,
+        };
+      }),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }

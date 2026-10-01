@@ -110,6 +110,7 @@ import {
   type BusinessFunnelEventStatusFilter,
 } from './funnelEventDto/get-business-funnel-events-query.dto';
 import { ScannerPurchaseMeans } from './funnelEventDto/scanner-purchase-deals.dto';
+import { resolveGuestAdAttributions } from './guest-ad-attribution.util';
 import {
   applyPerformanceCampaignEarningsFilters,
   PERFORMANCE_NET_EARNINGS_CENTS_SQL,
@@ -2678,8 +2679,30 @@ export class FunnelEventService {
       ),
     );
 
+    const attributionByCustomerId = await resolveGuestAdAttributions(
+      this.dataSource.manager,
+      {
+        businessId,
+        customerIds: data
+          .map((row) => row.customer?.id)
+          .filter((id): id is number => id != null && id > 0),
+      },
+    );
+    const dataWithAds = data.map((row) => {
+      const attribution =
+        row.customer?.id != null
+          ? attributionByCustomerId.get(row.customer.id) ?? null
+          : null;
+      return {
+        ...row,
+        adSource: attribution?.source ?? null,
+        adSourceLabel: attribution?.label ?? null,
+        adSourceDetail: attribution?.detail ?? null,
+      };
+    });
+
     return {
-      data,
+      data: dataWithAds,
       meta: {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         campaignCount,
@@ -3477,6 +3500,9 @@ export class FunnelEventService {
       tags: Array<'signup' | 'prepaid' | 'postpaid'>;
       hasPayment: boolean;
       eventCount: number;
+      adSource: 'meta' | 'google' | 'utm' | 'in_store' | null;
+      adSourceLabel: string | null;
+      adSourceDetail: string | null;
     }>;
     meta: PaginationMeta;
   }> {
@@ -3489,6 +3515,7 @@ export class FunnelEventService {
     }
 
     const campaignType = funnel.campaign?.campaignType ?? null;
+    const businessId = funnel.campaign?.businessId ?? null;
     const pagination = normalizePagination(page, limit);
 
     const countRow = await this.funnelEventRepository
@@ -3547,6 +3574,16 @@ export class FunnelEventService {
         signupCount: string;
       }>();
 
+    const customerIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
+    const attributionByCustomerId =
+      businessId != null && businessId > 0
+        ? await resolveGuestAdAttributions(this.dataSource.manager, {
+            businessId,
+            customerIds,
+            funnelId,
+          })
+        : new Map();
+
     return {
       data: rows.map((row) => {
         const eventCount = Number(row.eventCount ?? 0);
@@ -3564,8 +3601,13 @@ export class FunnelEventService {
         } else if (campaignType === 'postpaid') {
           tags.push('postpaid');
         }
+        const customerId = Number(row.id);
+        const attribution = attributionByCustomerId.get(customerId) ?? null;
+        // Campaign guests: Facebook/Google when ad-matched, otherwise In store.
+        const isPaidAd =
+          attribution?.source === 'meta' || attribution?.source === 'google';
         return {
-          id: Number(row.id),
+          id: customerId,
           name: row.name,
           email: row.email,
           phone: row.phone,
@@ -3575,6 +3617,9 @@ export class FunnelEventService {
           tags,
           hasPayment,
           eventCount,
+          adSource: isPaidAd ? attribution!.source : 'in_store',
+          adSourceLabel: isPaidAd ? attribution!.label : 'In store',
+          adSourceDetail: isPaidAd ? attribution!.detail : null,
         };
       }),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
