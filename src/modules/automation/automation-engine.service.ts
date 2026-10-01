@@ -1778,7 +1778,19 @@ export class AutomationEngineService {
     const passLink = isPassLinkStep
       ? (await this.resolvePassUrlForExecution(execution)) ?? ''
       : '';
-    const body = interpolateAutomationEmailMessage(rawMessage, {
+
+    // Multi-select labels (checkboxes) are appended into the SMS body only.
+    const multiLabels = this.normalizeBodyLinkLabels(config);
+    const messageWithLinks =
+      multiLabels != null
+        ? await this.appendBodyLinkLabelsToMessage(
+            execution,
+            rawMessage,
+            multiLabels,
+          )
+        : rawMessage;
+
+    const body = interpolateAutomationEmailMessage(messageWithLinks, {
       customerName: execution.customer?.name ?? '',
       passLink,
       paymentLink: passLink,
@@ -1940,6 +1952,56 @@ export class AutomationEngineService {
     });
   }
 
+  private normalizeBodyLinkLabels(
+    config: Record<string, unknown>,
+  ): string[] | null {
+    // New multi-select mode: always treat as body links (even when empty).
+    if (Array.isArray(config.ctaLabels)) {
+      return [
+        ...new Set(
+          config.ctaLabels
+            .map((value) => String(value ?? '').trim())
+            .filter((value) => value.length > 0),
+        ),
+      ];
+    }
+    return null;
+  }
+
+  private async appendBodyLinkLabelsToMessage(
+    execution: AutomationExecution,
+    baseMessage: string,
+    labels: string[],
+  ): Promise<string> {
+    if (labels.length === 0) {
+      return baseMessage;
+    }
+
+    const lines: string[] = [];
+    for (const label of labels) {
+      const link = await this.resolveCustomerCtaLinkForLabel(execution, label);
+      const url = String(link?.ctaUrl ?? '').trim();
+      if (!url) {
+        continue;
+      }
+      const line = `${label}: ${url}`;
+      if (
+        baseMessage.includes(url) ||
+        lines.some((existing) => existing.includes(url))
+      ) {
+        continue;
+      }
+      lines.push(line);
+    }
+
+    if (lines.length === 0) {
+      return baseMessage;
+    }
+
+    const trimmed = baseMessage.trim();
+    return trimmed ? `${trimmed}\n\n${lines.join('\n')}` : lines.join('\n');
+  }
+
   private async enrichPaymentEmailConfig(
     purpose: AutomationPurpose,
     execution: AutomationExecution,
@@ -1950,6 +2012,25 @@ export class AutomationEngineService {
       qrImageDataUrl: _qrImageDataUrl,
       ...withoutQr
     } = config;
+
+    const multiLabels = this.normalizeBodyLinkLabels(withoutQr);
+    if (multiLabels != null) {
+      // Checkbox selections go into the message body only — no HTML button CTA.
+      const message = await this.appendBodyLinkLabelsToMessage(
+        execution,
+        String(withoutQr.message ?? '').trim(),
+        multiLabels,
+      );
+      const next: Record<string, unknown> = {
+        ...withoutQr,
+        message,
+        ctaLabels: multiLabels,
+      };
+      delete next.ctaLabel;
+      delete next.linkLabel;
+      delete next.ctaUrl;
+      return next;
+    }
 
     const ctaLabel = String(
       withoutQr.ctaLabel ?? withoutQr.linkLabel ?? '',
