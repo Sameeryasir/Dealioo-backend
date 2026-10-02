@@ -20,6 +20,8 @@ export enum AutomationJobName {
   RESUME_EXECUTION = 'resume-execution',
   CRON_TICK = 'cron-tick',
   HANDLE_FUNNEL_EVENT = 'handle-funnel-event',
+  // Background Redis cleanup so campaign/automation delete APIs stay fast
+  PURGE_AUTOMATION_JOBS = 'purge-automation-jobs',
 }
 
 export function resolveAutomationQueueLimiter():

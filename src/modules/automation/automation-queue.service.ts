@@ -17,6 +17,7 @@ import type {
   CronTickJob,
   HandleFunnelEventJob,
   ProcessExecutionJob,
+  PurgeAutomationJobsJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
   UnpaidReminderBatchPhase,
@@ -478,6 +479,39 @@ export class AutomationQueueService {
     }
   }
 
+  /**
+   * Fast path for delete APIs: stop cron immediately, then enqueue Redis job
+   * cleanup so the HTTP request does not wait on thousands of BullMQ removals.
+   * Falls back to sync purge if enqueue fails so cleanup always runs.
+   * MCP Context 7: prefer async cleanup for durability without blocking clients.
+   */
+  async enqueuePurgeAutomationJobs(
+    automationId: number,
+    executionIds: number[],
+  ): Promise<void> {
+    // --- Stop new cron ticks right away (security) ---
+    await this.removeCronSchedule(automationId);
+
+    const payload: PurgeAutomationJobsJob = {
+      automationId,
+      executionIds,
+    };
+
+    try {
+      await this.queue.add(AutomationJobName.PURGE_AUTOMATION_JOBS, payload, {
+        // Unique id so every delete always gets a cleanup job
+        jobId: `purge-automation-jobs-${automationId}-${Date.now()}`,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      });
+    } catch {
+      // NOTE: enqueue failed — still purge inline so leftover jobs cannot keep firing
+      await this.purgeAutomationJobs(automationId, executionIds);
+    }
+  }
+
   async purgeAutomationJobs(
     automationId: number,
     executionIds: number[],
@@ -502,6 +536,10 @@ export class AutomationQueueService {
         }
 
         for (const job of jobs) {
+          // Never remove the background purge job itself while it is scanning
+          if (job.name === AutomationJobName.PURGE_AUTOMATION_JOBS) {
+            continue;
+          }
           if (this.jobBelongsToAutomation(job, automationId, executionIdSet)) {
             await this.safeRemoveJob(job);
           }

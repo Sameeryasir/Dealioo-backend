@@ -13,6 +13,7 @@ import type {
   CronTickJob,
   HandleFunnelEventJob,
   ProcessExecutionJob,
+  PurgeAutomationJobsJob,
   ResumeExecutionJob,
   UnpaidReminderBatchJob,
 } from './automation-queue.types';
@@ -55,6 +56,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ResumeExecutionJob
       | CronTickJob
       | HandleFunnelEventJob
+      | PurgeAutomationJobsJob
     >,
   ): number | null {
     const data = job.data;
@@ -71,6 +73,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ResumeExecutionJob
       | CronTickJob
       | HandleFunnelEventJob
+      | PurgeAutomationJobsJob
     >,
   ): Promise<void> {
     const executionId = this.resolveExecutionId(job);
@@ -130,6 +133,19 @@ export class AutomationQueueProcessor extends WorkerHost {
           break;
         }
 
+        // --- Background Redis cleanup after automation hard-delete ---
+        case AutomationJobName.PURGE_AUTOMATION_JOBS: {
+          const payload = job.data as PurgeAutomationJobsJob;
+          await this.queueService.purgeAutomationJobs(
+            payload.automationId,
+            payload.executionIds ?? [],
+          );
+          this.logger.log(
+            `Purged Redis jobs for deleted automation ${payload.automationId} (${payload.executionIds?.length ?? 0} execution id(s))`,
+          );
+          break;
+        }
+
         default:
           this.logger.warn(`Unknown automation job: ${job.name}`);
       }
@@ -141,10 +157,11 @@ export class AutomationQueueProcessor extends WorkerHost {
 
       if (
         error instanceof NotFoundException &&
-        message.includes('Automation execution not found')
+        (message.includes('Automation execution not found') ||
+          message.includes('Automation not found'))
       ) {
         this.logger.warn(
-          `Skipping stale job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}: execution was removed`,
+          `Skipping stale job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}: ${message}`,
         );
         return;
       }
@@ -238,6 +255,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ResumeExecutionJob
       | CronTickJob
       | HandleFunnelEventJob
+      | PurgeAutomationJobsJob
     >,
   ): number {
     if (job.name === AutomationJobName.PROCESS_EXECUTION) {
@@ -253,6 +271,10 @@ export class AutomationQueueProcessor extends WorkerHost {
     if (job.name === AutomationJobName.HANDLE_FUNNEL_EVENT) {
       return 5;
     }
+    // Cleanup must keep retrying until Redis jobs are gone
+    if (job.name === AutomationJobName.PURGE_AUTOMATION_JOBS) {
+      return job.opts.attempts ?? 5;
+    }
     return job.opts.attempts ?? 1;
   }
 
@@ -263,6 +285,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       | ResumeExecutionJob
       | CronTickJob
       | HandleFunnelEventJob
+      | PurgeAutomationJobsJob
     >,
     executionId: number,
     message: string,

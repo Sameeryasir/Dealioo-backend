@@ -79,3 +79,9 @@ export type HandleFunnelEventJob = {
   skipCancelPendingOnPayment?: boolean;
   onlyIfNoExecutionForPayment?: boolean;
 };
+
+// Snapshot of execution IDs taken before hard-deleting the automation (cascade removes rows)
+export type PurgeAutomationJobsJob = {
+  automationId: number;
+  executionIds: number[];
+};

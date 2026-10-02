@@ -497,6 +497,11 @@ export class AutomationService {
     return automation;
   }
 
+  /**
+   * Change: hard-delete automation immediately; Redis job purge runs in BullMQ background.
+   * Why: sync purge of thousands of jobs was timing out campaign/automation delete APIs.
+   * Soft-delete of campaign/guest data is unchanged (handled by campaign.service).
+   */
   async deleteAutomation(id: number, user: User): Promise<void> {
     const automation = await this.findAutomationById(id);
     await this.assertAutomationPermission(
@@ -507,7 +512,6 @@ export class AutomationService {
     );
     const executionIds =
       await this.executionService.findExecutionIdsByAutomationId(id);
-    await this.queueService.purgeAutomationJobs(id, executionIds);
 
     await this.businessHistoryService.logAutomationDeleted({
       businessId: automation.businessId,
@@ -516,7 +520,10 @@ export class AutomationService {
       actorUserId: user.id,
     });
 
+    // Snapshot execution IDs first, then hard-delete (cascade removes execution rows)
     await this.automationRepository.remove(automation);
+    // Cron stopped + Redis cleanup enqueued (always runs; sync fallback if enqueue fails)
+    await this.queueService.enqueuePurgeAutomationJobs(id, executionIds);
   }
 
   async assertNoActiveAutomationsForCampaign(
@@ -537,6 +544,11 @@ export class AutomationService {
     }
   }
 
+  /**
+   * Change: hard-delete campaign automations without waiting on Redis scan.
+   * Why: campaign delete was timing out while purging ~1000+ BullMQ jobs inline.
+   * Business rule: automation runtime data may be hard-deleted; campaign/guest data stays soft-deleted.
+   */
   async deleteAutomationsForCampaign(
     campaignId: number,
     funnelId?: number | null,
@@ -556,13 +568,17 @@ export class AutomationService {
         await this.executionService.findExecutionIdsByAutomationId(
           automation.id,
         );
-      await this.queueService.purgeAutomationJobs(
-        automation.id,
+      const automationId = automation.id;
+      const automationName = automation.name;
+      // Hard-delete automation (+ cascaded executions/nodes) — allowed for automation data
+      await this.automationRepository.remove(automation);
+      // Background BullMQ purge so delete API returns quickly; cleanup still always runs
+      await this.queueService.enqueuePurgeAutomationJobs(
+        automationId,
         executionIds,
       );
-      await this.automationRepository.remove(automation);
       this.logger.log(
-        `Deleted automation ${automation.id} "${automation.name}" with campaign ${campaignId} (purged ${executionIds.length} execution job(s))`,
+        `Deleted automation ${automationId} "${automationName}" with campaign ${campaignId} (queued purge for ${executionIds.length} execution job(s))`,
       );
     }
 
