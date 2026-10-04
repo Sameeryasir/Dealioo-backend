@@ -653,6 +653,15 @@ export async function deleteMetaObject(
   });
 }
 
+export async function updateMetaObject(
+  objectId: string,
+  accessToken: string,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const normalized = objectId.startsWith('/') ? objectId : `/${objectId}`;
+  await graphPostMeta<{ success?: boolean }>(normalized, accessToken, body);
+}
+
 export async function graphGetWithToken<T>(
   path: string,
   accessToken: string,

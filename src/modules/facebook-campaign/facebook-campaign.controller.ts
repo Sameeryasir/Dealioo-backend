@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -36,6 +37,10 @@ import {
 import { SaveAdCreativeStepDto } from './dto/save-ad-creative-step.dto';
 import { SaveAdSetStepDto } from './dto/save-adset-step.dto';
 import { SaveCampaignStepDto } from './dto/save-campaign-step.dto';
+import {
+  UpdateFacebookAdsCampaignDto,
+  UpdateFacebookAdsCampaignStatusDto,
+} from './dto/update-facebook-ads-campaign.dto';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
 import { MediaService } from './media.service';
@@ -279,6 +284,53 @@ export class FacebookCampaignController {
       businessId,
       metaCampaignId,
       campaignName,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('business/:businessId/meta/:metaCampaignId')
+  async updatePublishedCampaign(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('metaCampaignId') metaCampaignId: string,
+    @Body() body: UpdateFacebookAdsCampaignDto,
+  ): Promise<{
+    updated: true;
+    metaCampaignId: string;
+    name: string | null;
+    status: string | null;
+    dailyBudget: string | null;
+  }> {
+    return this.facebookCampaignService.updatePublishedCampaignForBusiness(
+      req.user,
+      businessId,
+      metaCampaignId,
+      {
+        name: body?.name,
+        status: body?.status,
+        dailyBudget:
+          body?.dailyBudget != null ? Number(body.dailyBudget) : undefined,
+      },
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('business/:businessId/meta/:metaCampaignId/status')
+  async updateCampaignStatus(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('metaCampaignId') metaCampaignId: string,
+    @Body() body: UpdateFacebookAdsCampaignStatusDto,
+  ): Promise<{
+    updated: true;
+    metaCampaignId: string;
+    status: 'ACTIVE' | 'PAUSED';
+  }> {
+    return this.facebookCampaignService.updateCampaignStatusForBusiness(
+      req.user,
+      businessId,
+      metaCampaignId,
+      body?.status,
     );
   }
 

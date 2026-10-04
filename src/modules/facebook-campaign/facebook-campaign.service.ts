@@ -49,6 +49,7 @@ import {
   resolveCityTargetingKey,
   stepFailureUserMessage,
   toMetaUnixTime,
+  updateMetaObject,
 } from './facebook-campaign-meta';
 import {
   sdkCreateAd,
@@ -456,6 +457,145 @@ export class FacebookCampaignService {
     return { deleted: true, metaCampaignId: campaignId };
   }
 
+  async updatePublishedCampaignForBusiness(
+    user: User,
+    businessId: number,
+    metaCampaignId: string,
+    input: {
+      name?: string;
+      status?: 'ACTIVE' | 'PAUSED';
+      dailyBudget?: number;
+    },
+  ): Promise<{
+    updated: true;
+    metaCampaignId: string;
+    name: string | null;
+    status: string | null;
+    dailyBudget: string | null;
+  }> {
+    const campaignId = metaCampaignId.trim();
+    if (!campaignId) {
+      throw new BadRequestException('Meta campaign id is required.');
+    }
+    if (!input.name && !input.status && input.dailyBudget == null) {
+      throw new BadRequestException('Provide a name, status, or daily budget.');
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId, 'create');
+    const { accessToken } =
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
+
+    const current = await graphGetWithToken<{
+      name?: string;
+      status?: string;
+      daily_budget?: string;
+    }>(campaignId, accessToken, {
+      fields: 'name,status,effective_status,daily_budget',
+    });
+
+    const fields: Record<string, unknown> = {};
+    const nextName = input.name?.trim();
+    if (nextName) fields.name = nextName;
+    if (input.status === 'ACTIVE' || input.status === 'PAUSED') {
+      fields.status = input.status;
+    }
+
+    try {
+      if (Object.keys(fields).length > 0) {
+        await updateMetaObject(campaignId, accessToken, fields);
+      }
+      if (input.dailyBudget != null) {
+        await this.updateMetaDailyBudget(
+          campaignId,
+          accessToken,
+          input.dailyBudget,
+          current.daily_budget,
+        );
+      }
+    } catch (err) {
+      if (err instanceof MetaApiStepError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
+
+    const refreshed = await graphGetWithToken<{
+      name?: string;
+      status?: string;
+      daily_budget?: string;
+    }>(campaignId, accessToken, {
+      fields: 'name,status,daily_budget',
+    });
+
+    let dailyBudget = refreshed.daily_budget ?? null;
+    if (!dailyBudget && input.dailyBudget != null) {
+      dailyBudget = dailyBudgetToMetaMinorUnits(input.dailyBudget);
+    }
+
+    await this.syncLocalPublishedCampaign(businessId, campaignId, {
+      name: refreshed.name ?? nextName ?? null,
+      status: refreshed.status ?? input.status ?? null,
+      dailyBudgetDollars: input.dailyBudget ?? null,
+    });
+
+    this.facebookService.invalidateCampaignStatsCache(businessId);
+
+    this.logger.log(
+      `Meta campaign ${campaignId} updated for business ${businessId}`,
+    );
+
+    return {
+      updated: true,
+      metaCampaignId: campaignId,
+      name: refreshed.name?.trim() || nextName || null,
+      status: refreshed.status ?? input.status ?? null,
+      dailyBudget,
+    };
+  }
+
+  async updateCampaignStatusForBusiness(
+    user: User,
+    businessId: number,
+    metaCampaignId: string,
+    status: 'ACTIVE' | 'PAUSED',
+  ): Promise<{
+    updated: true;
+    metaCampaignId: string;
+    status: 'ACTIVE' | 'PAUSED';
+  }> {
+    const campaignId = metaCampaignId.trim();
+    if (!campaignId) {
+      throw new BadRequestException('Meta campaign id is required.');
+    }
+    if (status !== 'ACTIVE' && status !== 'PAUSED') {
+      throw new BadRequestException(
+        'Campaign status must be ACTIVE or PAUSED.',
+      );
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId, 'create');
+    const { accessToken } =
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
+
+    try {
+      await updateMetaObject(campaignId, accessToken, { status });
+    } catch (err) {
+      if (err instanceof MetaApiStepError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
+
+    await this.syncLocalPublishedCampaign(businessId, campaignId, { status });
+    this.facebookService.invalidateCampaignStatsCache(businessId);
+
+    this.logger.log(
+      `Meta campaign ${campaignId} set to ${status} for business ${businessId}`,
+    );
+
+    return { updated: true, metaCampaignId: campaignId, status };
+  }
+
   async listForBusiness(
     user: User,
     businessId: number,
@@ -496,6 +636,63 @@ export class FacebookCampaignService {
     }
 
     return business;
+  }
+
+  private async updateMetaDailyBudget(
+    campaignId: string,
+    accessToken: string,
+    dailyBudgetDollars: number,
+    campaignDailyBudget?: string,
+  ): Promise<void> {
+    const minor = dailyBudgetToMetaMinorUnits(dailyBudgetDollars);
+    const campaignHasBudget = Number(campaignDailyBudget ?? '') > 0;
+    if (campaignHasBudget) {
+      await updateMetaObject(campaignId, accessToken, {
+        daily_budget: minor,
+      });
+      return;
+    }
+
+    const adSets = await graphGetWithToken<{
+      data?: Array<{ id?: string; daily_budget?: string }>;
+    }>(`${campaignId}/adsets`, accessToken, {
+      fields: 'id,daily_budget',
+      limit: '50',
+    });
+    const budgetAdSet =
+      adSets.data?.find((row) => Number(row.daily_budget ?? '') > 0) ??
+      adSets.data?.find((row) => row.id?.trim());
+    if (!budgetAdSet?.id) {
+      throw new BadRequestException(
+        'This campaign has no daily budget in Meta to update. Set budget in Ads Manager, then try again.',
+      );
+    }
+    await updateMetaObject(budgetAdSet.id, accessToken, {
+      daily_budget: minor,
+    });
+  }
+
+  private async syncLocalPublishedCampaign(
+    businessId: number,
+    metaCampaignId: string,
+    input: {
+      name?: string | null;
+      status?: string | null;
+      dailyBudgetDollars?: number | null;
+    },
+  ): Promise<void> {
+    const patch: Partial<FacebookCampaign> = {};
+    if (input.name?.trim()) patch.campaignName = input.name.trim();
+    if (input.status?.trim()) patch.status = input.status.trim();
+    if (input.dailyBudgetDollars != null) {
+      patch.budget = String(input.dailyBudgetDollars);
+    }
+    if (Object.keys(patch).length === 0) return;
+
+    await this.facebookCampaignRepository.update(
+      { businessId, metaCampaignId },
+      patch,
+    );
   }
 
 
