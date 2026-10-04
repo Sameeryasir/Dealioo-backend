@@ -41,6 +41,10 @@ import {
   BUSINESSES_UPLOAD_SUBDIR,
 } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
+import {
+  clearLogoPalette,
+  extractLogoPaletteFromUpload,
+} from '../../utils/extract-logo-palette';
 import { SpacesService } from '../spaces/spaces.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessHistoryService } from '../business-history/business-history.service';
@@ -231,6 +235,9 @@ export class BusinessService {
           BUSINESSES_UPLOAD_SUBDIR,
         )
       : (dtoLogoUrl ?? null);
+    const logoPalette = file
+      ? await extractLogoPaletteFromUpload(file)
+      : clearLogoPalette();
 
     const slug = await this.resolveUniqueBusinessSlug(
       slugInput?.trim() || name,
@@ -248,6 +255,9 @@ export class BusinessService {
       slug,
       description,
       logoUrl,
+      logoPrimaryColor: logoPalette.logoPrimaryColor,
+      logoSecondaryColor: logoPalette.logoSecondaryColor,
+      logoAccentColor: logoPalette.logoAccentColor,
       businessType: businessType.trim(),
       currency: currency.trim().toUpperCase(),
       websiteUrl,
@@ -524,8 +534,18 @@ export class BusinessService {
         file,
         BUSINESSES_UPLOAD_SUBDIR,
       );
+      const logoPalette = await extractLogoPaletteFromUpload(file);
+      business.logoPrimaryColor = logoPalette.logoPrimaryColor;
+      business.logoSecondaryColor = logoPalette.logoSecondaryColor;
+      business.logoAccentColor = logoPalette.logoAccentColor;
     } else if (logoUrl !== undefined) {
       business.logoUrl = logoUrl;
+      if (!logoUrl?.trim()) {
+        const cleared = clearLogoPalette();
+        business.logoPrimaryColor = cleared.logoPrimaryColor;
+        business.logoSecondaryColor = cleared.logoSecondaryColor;
+        business.logoAccentColor = cleared.logoAccentColor;
+      }
     }
     if (businessType !== undefined) {
       business.businessType = businessType.trim();
