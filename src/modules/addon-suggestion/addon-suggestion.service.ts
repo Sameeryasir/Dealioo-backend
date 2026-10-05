@@ -878,7 +878,7 @@ export class AddonSuggestionService {
     const shareLabel = `${params.sharePercent}% of add-ons with this deal`;
 
     if (params.isClearTop) {
-      return `Best match: offer ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}).`;
+      return `What else to add: offer ${params.addonName} with ${params.campaignName}. Guests chose it in ${visitLabel} (${shareLabel}).`;
     }
 
     if (params.isTiedForTop) {
@@ -886,17 +886,17 @@ export class AddonSuggestionService {
     }
 
     if (params.topStatus === 'emerging' && params.rank === 1) {
-      return `Early lead: ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Check again as more orders come in.`;
+      return `Early hint: consider adding ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Check again as more orders come in.`;
     }
 
     if (params.lift >= MIN_LIFT_FOR_STRONG) {
-      return `Good pairing: ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Stronger with this deal than usual.`;
+      return `Good pairing to offer: ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Stronger with this deal than usual.`;
     }
 
     if (params.lift >= 1.1) {
-      return `Worth trying: ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Slightly stronger with this deal.`;
+      return `Worth trying: add ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}). Slightly stronger with this deal.`;
     }
 
-    return `Also consider ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}).`;
+    return `Also consider adding ${params.addonName} with ${params.campaignName}. Seen in ${visitLabel} (${shareLabel}).`;
   }
 }
