@@ -22,4 +22,7 @@ export class GoogleAdsCampaignStatsDto {
   currency: string | null;
   datePreset: string;
   campaigns: GoogleAdsCampaignDto[];
+  fetchedAt: string | null;
+  fromCache: boolean;
+  isStale: boolean;
 }

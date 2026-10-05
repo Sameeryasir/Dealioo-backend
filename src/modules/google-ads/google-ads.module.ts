@@ -5,6 +5,7 @@ import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.ent
 import { Business } from '../../db/entities/business.entity';
 import { GoogleCampaign } from '../../db/entities/google-campaign.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
+import { GoogleAdCampaignStatsSnapshot } from '../../db/entities/google-ad-campaign-stats-snapshot.entity';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { BusinessModule } from '../business/business.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
@@ -26,6 +27,7 @@ import { GooglePublishService } from './google-publish.service';
       IntegrationAuditLog,
       GoogleCampaign,
       GoogleCampaignDraft,
+      GoogleAdCampaignStatsSnapshot,
     ]),
     BullModule.registerQueue({ name: GOOGLE_PUBLISH_QUEUE }),
     BusinessModule,

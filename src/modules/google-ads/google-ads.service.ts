@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { google } from 'googleapis';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { GoogleAdCampaignStatsSnapshot } from '../../db/entities/google-ad-campaign-stats-snapshot.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
 import { encryptSecret } from '../../utils/token-encryption.util';
@@ -55,7 +56,8 @@ import {
 import { enums } from 'google-ads-api';
 
 const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
-const GOOGLE_ADS_SDK_TIMEOUT_MS = 12_000;
+const GOOGLE_ADS_SDK_TIMEOUT_MS = 25_000;
+const GOOGLE_ADS_STATS_DB_TTL_MS = 10 * 60_000;
 
 function buildEnumNameByNumber(enumObject: Record<string, string | number>) {
   const byNumber = new Map<number, string>();
@@ -230,11 +232,18 @@ export class GoogleAdsService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(GoogleCampaignDraft)
     private readonly googleCampaignDraftRepository: Repository<GoogleCampaignDraft>,
+    @InjectRepository(GoogleAdCampaignStatsSnapshot)
+    private readonly campaignStatsSnapshotRepository: Repository<GoogleAdCampaignStatsSnapshot>,
     private readonly auditService: GoogleAdsIntegrationAuditService,
     private readonly tokenService: GoogleAdsTokenService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     private readonly businessHistoryService: BusinessHistoryService,
   ) {}
+
+  private readonly campaignStatsRefreshInFlight = new Map<
+    string,
+    Promise<GoogleAdsCampaignStatsDto>
+  >();
 
   async connect(user: User, businessId: number): Promise<{ url: string }> {
     requireAdminRole(
@@ -732,6 +741,7 @@ export class GoogleAdsService {
       metadata: { connectedAccount: 'Google Ads was removed' },
     });
 
+    this.invalidateCampaignStatsCache(businessId);
     this.logger.log(`Google Ads disconnected for business ${businessId}`);
 
     return { disconnected: true };
@@ -739,22 +749,254 @@ export class GoogleAdsService {
 
   async getAdCampaignStats(
     business: Business,
+    options?: { bypassCache?: boolean },
   ): Promise<GoogleAdsCampaignStatsDto> {
     const { refreshToken, customerId, loginCustomerId } =
       await this.tokenService.assertBusinessGoogleCredentials(business);
+    const normalizedCustomerId = this.normalizeCustomerId(customerId!);
+    const cacheKey = `${business.id}:${normalizedCustomerId}`;
+    const bypassCache = options?.bypassCache === true;
 
+    if (!bypassCache) {
+      const snapshot = await this.findCampaignStatsSnapshot(
+        business.id,
+        normalizedCustomerId,
+      );
+      if (snapshot) {
+        const ageMs = Date.now() - snapshot.fetchedAt.getTime();
+        const isStale = ageMs >= GOOGLE_ADS_STATS_DB_TTL_MS;
+        if (isStale) {
+          this.scheduleCampaignStatsRefresh(
+            cacheKey,
+            business,
+            refreshToken,
+            normalizedCustomerId,
+            loginCustomerId,
+          );
+        }
+        return this.statsDtoFromSnapshot(snapshot, {
+          fromCache: true,
+          isStale,
+        });
+      }
+    }
+
+    if (bypassCache) {
+      const inFlight = this.campaignStatsRefreshInFlight.get(cacheKey);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+
+    try {
+      return await this.refreshCampaignStatsFromGoogle(
+        cacheKey,
+        business,
+        refreshToken,
+        normalizedCustomerId,
+        loginCustomerId,
+      );
+    } catch (err) {
+      const snapshot = await this.findCampaignStatsSnapshot(
+        business.id,
+        normalizedCustomerId,
+      );
+      if (snapshot) {
+        this.logger.warn(
+          `Google Ads live stats failed for business ${business.id}; serving cached snapshot: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return this.statsDtoFromSnapshot(snapshot, {
+          fromCache: true,
+          isStale: true,
+        });
+      }
+      throw err;
+    }
+  }
+
+  invalidateCampaignStatsCache(businessId: number): void {
+    const prefix = `${businessId}:`;
+    for (const key of this.campaignStatsRefreshInFlight.keys()) {
+      if (key.startsWith(prefix)) {
+        this.campaignStatsRefreshInFlight.delete(key);
+      }
+    }
+    void this.campaignStatsSnapshotRepository
+      .delete({ businessId })
+      .catch((err) => {
+        this.logger.warn(
+          `Failed to clear Google Ads campaign stats snapshots for business ${businessId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+  }
+
+  private scheduleCampaignStatsRefresh(
+    cacheKey: string,
+    business: Business,
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string | null | undefined,
+  ): void {
+    if (this.campaignStatsRefreshInFlight.has(cacheKey)) return;
+    void this.refreshCampaignStatsFromGoogle(
+      cacheKey,
+      business,
+      refreshToken,
+      customerId,
+      loginCustomerId,
+    ).catch((err) => {
+      this.logger.warn(
+        `Background Google Ads campaign stats refresh failed for ${cacheKey}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
+
+  private async refreshCampaignStatsFromGoogle(
+    cacheKey: string,
+    business: Business,
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string | null | undefined,
+  ): Promise<GoogleAdsCampaignStatsDto> {
+    const existing = this.campaignStatsRefreshInFlight.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const promise = this.fetchAndPersistCampaignStats(
+      business,
+      refreshToken,
+      customerId,
+      loginCustomerId,
+    ).finally(() => {
+      if (this.campaignStatsRefreshInFlight.get(cacheKey) === promise) {
+        this.campaignStatsRefreshInFlight.delete(cacheKey);
+      }
+    });
+    this.campaignStatsRefreshInFlight.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async fetchAndPersistCampaignStats(
+    business: Business,
+    refreshToken: string,
+    customerId: string,
+    loginCustomerId: string | null | undefined,
+  ): Promise<GoogleAdsCampaignStatsDto> {
     const [customerMeta, campaigns] = await Promise.all([
-      this.fetchCustomerMeta(refreshToken, customerId!, loginCustomerId),
-      this.fetchCampaignStats(refreshToken, customerId!, loginCustomerId),
+      this.fetchCustomerMeta(refreshToken, customerId, loginCustomerId),
+      this.fetchCampaignStats(refreshToken, customerId, loginCustomerId),
     ]);
 
-    return {
+    const fetchedAt = new Date();
+    const result: GoogleAdsCampaignStatsDto = {
       customerId,
       customerName: customerMeta.name,
       currency: customerMeta.currency,
       datePreset: GOOGLE_AD_STATS_DATE_PRESET,
       campaigns,
+      fetchedAt: fetchedAt.toISOString(),
+      fromCache: false,
+      isStale: false,
     };
+
+    await this.upsertCampaignStatsSnapshot(
+      business.id,
+      customerId,
+      result,
+      fetchedAt,
+    );
+
+    return result;
+  }
+
+  private async findCampaignStatsSnapshot(
+    businessId: number,
+    customerId: string,
+  ): Promise<GoogleAdCampaignStatsSnapshot | null> {
+    try {
+      return await this.campaignStatsSnapshotRepository.findOne({
+        where: {
+          businessId,
+          customerId,
+          datePreset: GOOGLE_AD_STATS_DATE_PRESET,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Google Ads campaign stats snapshot read failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
+  }
+
+  private statsDtoFromSnapshot(
+    snapshot: GoogleAdCampaignStatsSnapshot,
+    flags: { fromCache: boolean; isStale: boolean },
+  ): GoogleAdsCampaignStatsDto {
+    const payload = snapshot.payload as unknown as GoogleAdsCampaignStatsDto;
+    return {
+      customerId: payload.customerId ?? snapshot.customerId,
+      customerName: payload.customerName ?? null,
+      currency: payload.currency ?? null,
+      datePreset: payload.datePreset ?? snapshot.datePreset,
+      campaigns: Array.isArray(payload.campaigns) ? payload.campaigns : [],
+      fetchedAt: snapshot.fetchedAt.toISOString(),
+      fromCache: flags.fromCache,
+      isStale: flags.isStale,
+    };
+  }
+
+  private async upsertCampaignStatsSnapshot(
+    businessId: number,
+    customerId: string,
+    result: GoogleAdsCampaignStatsDto,
+    fetchedAt: Date,
+  ): Promise<void> {
+    try {
+      const existing = await this.findCampaignStatsSnapshot(
+        businessId,
+        customerId,
+      );
+      const payload = {
+        customerId: result.customerId,
+        customerName: result.customerName,
+        currency: result.currency,
+        datePreset: result.datePreset,
+        campaigns: result.campaigns,
+      } as unknown as Record<string, unknown>;
+
+      if (existing) {
+        existing.payload = payload;
+        existing.fetchedAt = fetchedAt;
+        await this.campaignStatsSnapshotRepository.save(existing);
+        return;
+      }
+
+      await this.campaignStatsSnapshotRepository.save(
+        this.campaignStatsSnapshotRepository.create({
+          businessId,
+          customerId,
+          datePreset: GOOGLE_AD_STATS_DATE_PRESET,
+          payload,
+          fetchedAt,
+        }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Google Ads campaign stats snapshot save failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   async getConversionGoals(
@@ -1375,6 +1617,8 @@ export class GoogleAdsService {
       })
       .catch(() => undefined);
 
+    this.invalidateCampaignStatsCache(businessId);
+
     return { deleted: true, googleCampaignId: campaignId };
   }
 
@@ -1459,6 +1703,8 @@ export class GoogleAdsService {
       );
       updatedBudget = budgetResult.dailyBudget;
     }
+
+    this.invalidateCampaignStatsCache(businessId);
 
     return {
       updated: true,
@@ -2250,14 +2496,33 @@ export class GoogleAdsService {
       loginCustomerId: normalizedLoginCustomerId,
     });
 
-    try {
+    const runSearch = async () => {
       const rows = await this.withSdkTimeout(
         customer.query(query),
         'googleAds:search',
       );
-      // SDK returns IGoogleAdsRow[]; callers provide T via generic.
       return (Array.isArray(rows) ? rows : []) as T[];
+    };
+
+    try {
+      return await runSearch();
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/timed out/i.test(message)) {
+        this.logger.warn(
+          `Google Ads search timed out for customer ${normalizedCustomerId}; retrying once.`,
+        );
+        try {
+          return await runSearch();
+        } catch (retryErr) {
+          throw new BadRequestException(
+            formatGoogleAdsSdkError(
+              retryErr,
+              'Google Ads API request failed. Please try again in a moment.',
+            ),
+          );
+        }
+      }
       throw new BadRequestException(
         formatGoogleAdsSdkError(
           err,
