@@ -304,6 +304,20 @@ export class GoogleAdsController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/import-live/:googleCampaignId')
+  async importLiveCampaignForBuilder(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('googleCampaignId') googleCampaignId: string,
+  ): Promise<GoogleCampaignDraftResumeResponseDto> {
+    return this.googleCampaignDraftService.importLiveCampaignForBuilder(
+      req.user,
+      businessId,
+      googleCampaignId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/drafts')
   async listDrafts(
     @Req() req,

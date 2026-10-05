@@ -655,6 +655,427 @@ export class GoogleCampaignDraftService {
     return live;
   }
 
+  async importLiveCampaignForBuilder(
+    user: User,
+    businessId: number,
+    googleCampaignId: string,
+  ): Promise<GoogleCampaignDraftResumeResponseDto> {
+    const campaignId = String(googleCampaignId ?? '').replace(/\D/g, '');
+    if (!campaignId) {
+      throw new BadRequestException('Google campaign id is required.');
+    }
+
+    await this.assertBusinessAccess(user, businessId, 'create');
+
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+    if (!business) {
+      throw new NotFoundException('Business not found.');
+    }
+
+    const credentials =
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+    const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
+    const loginCustomerId = normalizeGoogleCustomerId(
+      credentials.loginCustomerId || customerId,
+    );
+    if (!customerId) {
+      throw new BadRequestException(
+        'No Google Ads account selected. Choose a customer in Settings → Integrations.',
+      );
+    }
+
+    const client = createGoogleAdsApiClient({
+      clientId: this.googleAdsTokenService.getClientId(),
+      clientSecret: this.googleAdsTokenService.getClientSecret(),
+      developerToken: this.googleAdsTokenService.getDeveloperToken(),
+    });
+    const customer = createGoogleAdsCustomer(client, {
+      customerId,
+      refreshToken: credentials.refreshToken,
+      loginCustomerId,
+    });
+
+    type CampaignRow = {
+      campaign?: {
+        id?: string | number;
+        name?: string;
+        status?: string | number;
+        advertising_channel_type?: string | number;
+        advertisingChannelType?: string | number;
+      };
+      campaign_budget?: {
+        id?: string | number;
+        amount_micros?: string | number;
+      };
+      campaignBudget?: {
+        id?: string | number;
+        amount_micros?: string | number;
+      };
+    };
+
+    const campaignRows = (await customer.query(`
+      SELECT
+        campaign.id,
+        campaign.name,
+        campaign.status,
+        campaign.advertising_channel_type,
+        campaign_budget.id,
+        campaign_budget.amount_micros
+      FROM campaign
+      WHERE campaign.id = ${campaignId}
+        AND campaign.status != 'REMOVED'
+      LIMIT 1
+    `)) as CampaignRow[];
+
+    const campaignRow = campaignRows[0];
+    if (!campaignRow?.campaign?.id) {
+      throw new BadRequestException(
+        'Google campaign was not found in the linked Ads account.',
+      );
+    }
+
+    const budget =
+      campaignRow.campaign_budget ?? campaignRow.campaignBudget ?? null;
+    const budgetId = String(budget?.id ?? '').replace(/\D/g, '') || null;
+    const amountMicros = Number(budget?.amount_micros ?? 0);
+    const dailyBudget =
+      Number.isFinite(amountMicros) && amountMicros > 0
+        ? Math.round((amountMicros / 1_000_000) * 100) / 100
+        : 40;
+
+    type AdGroupRow = {
+      ad_group?: { id?: string | number; name?: string };
+      adGroup?: { id?: string | number; name?: string };
+    };
+    const adGroupRows = (await customer.query(`
+      SELECT ad_group.id, ad_group.name
+      FROM ad_group
+      WHERE campaign.id = ${campaignId}
+        AND ad_group.status != 'REMOVED'
+      LIMIT 1
+    `)) as AdGroupRow[];
+    const adGroup = adGroupRows[0]?.ad_group ?? adGroupRows[0]?.adGroup;
+    const adGroupId = String(adGroup?.id ?? '').replace(/\D/g, '') || null;
+
+    type AdRow = {
+      ad_group_ad?: {
+        ad?: {
+          id?: string | number;
+          final_urls?: string[];
+          finalUrls?: string[];
+          responsive_search_ad?: {
+            headlines?: Array<{ text?: string }>;
+            descriptions?: Array<{ text?: string }>;
+            path1?: string;
+            path2?: string;
+          };
+          responsiveSearchAd?: {
+            headlines?: Array<{ text?: string }>;
+            descriptions?: Array<{ text?: string }>;
+            path1?: string;
+            path2?: string;
+          };
+        };
+      };
+      adGroupAd?: {
+        ad?: {
+          id?: string | number;
+          final_urls?: string[];
+          finalUrls?: string[];
+          responsive_search_ad?: {
+            headlines?: Array<{ text?: string }>;
+            descriptions?: Array<{ text?: string }>;
+            path1?: string;
+            path2?: string;
+          };
+          responsiveSearchAd?: {
+            headlines?: Array<{ text?: string }>;
+            descriptions?: Array<{ text?: string }>;
+            path1?: string;
+            path2?: string;
+          };
+        };
+      };
+    };
+
+    let adId: string | null = null;
+    let headlines: string[] = ['', '', ''];
+    let descriptions: string[] = ['', ''];
+    let path1 = '';
+    let path2 = '';
+    let finalUrl = '';
+
+    if (adGroupId) {
+      const adRows = (await customer.query(`
+        SELECT
+          ad_group_ad.ad.id,
+          ad_group_ad.ad.final_urls,
+          ad_group_ad.ad.responsive_search_ad.headlines,
+          ad_group_ad.ad.responsive_search_ad.descriptions,
+          ad_group_ad.ad.responsive_search_ad.path1,
+          ad_group_ad.ad.responsive_search_ad.path2
+        FROM ad_group_ad
+        WHERE ad_group.id = ${adGroupId}
+          AND ad_group_ad.status != 'REMOVED'
+          AND ad_group_ad.ad.type = 'RESPONSIVE_SEARCH_AD'
+        LIMIT 1
+      `)) as AdRow[];
+
+      const ad =
+        adRows[0]?.ad_group_ad?.ad ?? adRows[0]?.adGroupAd?.ad ?? null;
+      if (ad?.id) {
+        adId = String(ad.id).replace(/\D/g, '') || null;
+        const rsa = ad.responsive_search_ad ?? ad.responsiveSearchAd;
+        const h = (rsa?.headlines ?? [])
+          .map((row) => row.text?.trim() || '')
+          .filter(Boolean);
+        const d = (rsa?.descriptions ?? [])
+          .map((row) => row.text?.trim() || '')
+          .filter(Boolean);
+        headlines = h.length >= 3 ? h.slice(0, 15) : [...h, '', '', ''].slice(0, 3);
+        descriptions =
+          d.length >= 2 ? d.slice(0, 4) : [...d, '', ''].slice(0, 2);
+        path1 = rsa?.path1?.trim() || '';
+        path2 = rsa?.path2?.trim() || '';
+        const urls = ad.final_urls ?? ad.finalUrls ?? [];
+        finalUrl = urls[0]?.trim() || '';
+      }
+    }
+
+    type KeywordRow = {
+      ad_group_criterion?: {
+        criterion_id?: string | number;
+        keyword?: { text?: string; match_type?: string | number };
+        negative?: boolean;
+      };
+      adGroupCriterion?: {
+        criterion_id?: string | number;
+        keyword?: { text?: string; match_type?: string | number };
+        negative?: boolean;
+      };
+    };
+
+    const keywordIds: string[] = [];
+    const suggestedKeywords: Array<{
+      id: string;
+      text: string;
+      enabled: boolean;
+    }> = [];
+    const negativeKeywords: string[] = [];
+    let keywordMatchType: 'BROAD' | 'PHRASE' | 'EXACT' = 'BROAD';
+
+    if (adGroupId) {
+      const keywordRows = (await customer.query(`
+        SELECT
+          ad_group_criterion.criterion_id,
+          ad_group_criterion.keyword.text,
+          ad_group_criterion.keyword.match_type,
+          ad_group_criterion.negative
+        FROM ad_group_criterion
+        WHERE ad_group.id = ${adGroupId}
+          AND ad_group_criterion.type = 'KEYWORD'
+          AND ad_group_criterion.status != 'REMOVED'
+        LIMIT 100
+      `)) as KeywordRow[];
+
+      for (const row of keywordRows) {
+        const criterion = row.ad_group_criterion ?? row.adGroupCriterion;
+        const text = criterion?.keyword?.text?.trim();
+        if (!text) continue;
+        const criterionId = String(criterion?.criterion_id ?? '').replace(
+          /\D/g,
+          '',
+        );
+        if (criterionId) keywordIds.push(criterionId);
+        if (criterion?.negative) {
+          negativeKeywords.push(text);
+          continue;
+        }
+        const matchRaw = String(criterion?.keyword?.match_type ?? 'BROAD')
+          .toUpperCase()
+          .replace(/\W/g, '');
+        const matchType =
+          matchRaw.includes('EXACT') || matchRaw === '4'
+            ? ('EXACT' as const)
+            : matchRaw.includes('PHRASE') || matchRaw === '3'
+              ? ('PHRASE' as const)
+              : ('BROAD' as const);
+        if (suggestedKeywords.length === 0) {
+          keywordMatchType = matchType;
+        }
+        suggestedKeywords.push({
+          id: criterionId || `kw_${suggestedKeywords.length + 1}`,
+          text,
+          enabled: true,
+        });
+      }
+    }
+
+    const channelRaw = String(
+      campaignRow.campaign.advertising_channel_type ??
+        campaignRow.campaign.advertisingChannelType ??
+        'SEARCH',
+    ).toUpperCase();
+    const campaignType =
+      channelRaw.includes('DISPLAY') || channelRaw === '2'
+        ? ('DISPLAY' as const)
+        : channelRaw.includes('PERFORMANCE') || channelRaw === '10'
+          ? ('PERFORMANCE_MAX' as const)
+          : ('SEARCH' as const);
+
+    const campaignName =
+      campaignRow.campaign.name?.trim() || `Imported Google campaign ${campaignId}`;
+
+    const draftData: GoogleCampaignBuilderDraftData = {
+      ...createDefaultGoogleCampaignDraftData(),
+      goal: 'WEBSITE_TRAFFIC',
+      destinationType: 'external_website',
+      landingPageUrl: finalUrl,
+      campaignName,
+      businessName: business.name?.trim() || '',
+      websiteUrl: finalUrl,
+      dailyBudget,
+      campaignType,
+      suggestedKeywords,
+      negativeKeywords,
+      keywordMatchType,
+      ads: [
+        {
+          id: `ad_${Date.now()}`,
+          finalUrl: finalUrl || '',
+          headlines,
+          descriptions,
+          path1,
+          path2,
+          callToAction: 'LEARN_MORE',
+        },
+      ],
+      adsGenerated: headlines.some((h) => h.trim().length > 0),
+      currentStep: 8,
+      onboardingDone: true,
+    };
+
+    const completedSteps = [1, 2, 3, 4, 5, 6, 7];
+    const now = new Date();
+
+    const existing = await this.draftRepository.findOne({
+      where: {
+        businessId,
+        userId: user.id,
+        googleCampaignId: campaignId,
+      },
+    });
+
+    let saved: GoogleCampaignDraft;
+    if (existing) {
+      existing.draftData = draftData;
+      existing.campaignName = campaignName;
+      existing.goal = 'WEBSITE_TRAFFIC';
+      existing.campaignType = campaignType;
+      existing.businessName = business.name?.trim() || existing.businessName;
+      existing.dailyBudget = String(dailyBudget);
+      existing.googleCampaignId = campaignId;
+      existing.googleBudgetId = budgetId;
+      existing.googleAdGroupId = adGroupId;
+      existing.googleAdId = adId;
+      existing.googleKeywordIds = keywordIds.length > 0 ? keywordIds : null;
+      existing.currentStep = 8;
+      existing.completedSteps = completedSteps;
+      existing.status = GoogleCampaignDraftStatus.DRAFT;
+      existing.errorMessage = null;
+      existing.publishStatus = null;
+      existing.publishJobId = null;
+      existing.publishStep = null;
+      existing.publishProgress = 0;
+      existing.lastSavedAt = now;
+      existing.updatedBy = user.id;
+      existing.version = (existing.version ?? 1) + 1;
+      saved = await this.draftRepository.save(existing);
+    } else {
+      saved = await this.draftRepository.save({
+        userId: user.id,
+        businessId,
+        createdBy: user.id,
+        updatedBy: user.id,
+        currentStep: 8,
+        status: GoogleCampaignDraftStatus.DRAFT,
+        draftData,
+        campaignName,
+        goal: 'WEBSITE_TRAFFIC',
+        campaignType,
+        businessName: business.name?.trim() || null,
+        dailyBudget: String(dailyBudget),
+        googleCampaignId: campaignId,
+        googleBudgetId: budgetId,
+        googleAdGroupId: adGroupId,
+        googleAdId: adId,
+        googleKeywordIds: keywordIds.length > 0 ? keywordIds : null,
+        completedSteps,
+        lastSavedAt: now,
+        version: 1,
+      });
+    }
+
+    const [tracking] = await this.googleCampaignRepository.find({
+      where: { businessId, googleCampaignId: campaignId },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    if (tracking) {
+      await this.googleCampaignRepository.update(tracking.id, {
+        draftId: saved.id,
+        googleBudgetId: budgetId ?? tracking.googleBudgetId,
+        googleAdGroupId: adGroupId ?? tracking.googleAdGroupId,
+        googleAdId: adId ?? tracking.googleAdId,
+        googleKeywordIds:
+          keywordIds.length > 0 ? keywordIds : tracking.googleKeywordIds,
+        campaignName,
+        budget: String(dailyBudget),
+      });
+    } else {
+      await this.googleCampaignRepository.save({
+        userId: user.id,
+        businessId,
+        draftId: saved.id,
+        customerId,
+        googleCampaignId: campaignId,
+        googleBudgetId: budgetId,
+        googleAdGroupId: adGroupId,
+        googleAdId: adId,
+        googleKeywordIds: keywordIds.length > 0 ? keywordIds : null,
+        campaignName,
+        goal: 'WEBSITE_TRAFFIC',
+        campaignType,
+        budget: String(dailyBudget),
+        status: 'PAUSED',
+      });
+    }
+
+    this.logger.log(
+      `Imported Google campaign ${campaignId} into draft ${saved.id} for business ${businessId}`,
+    );
+
+    return {
+      id: saved.id,
+      businessId: saved.businessId,
+      status: saved.status,
+      currentStep: saved.currentStep,
+      completedSteps: saved.completedSteps ?? [],
+      version: saved.version ?? 1,
+      lastSavedAt: saved.lastSavedAt,
+      campaignName: saved.campaignName,
+      goal: saved.goal,
+      draftData: saved.draftData,
+      publishStatus: saved.publishStatus ?? null,
+      publishStep: saved.publishStep ?? null,
+      publishProgress: saved.publishProgress ?? null,
+      errorMessage: saved.errorMessage ?? null,
+      updatedAt: saved.updatedAt ?? null,
+    };
+  }
+
   async getDraft(
     user: User,
     businessId: number,

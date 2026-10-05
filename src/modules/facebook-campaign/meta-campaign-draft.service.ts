@@ -35,7 +35,11 @@ import { SaveAdSetStepDto } from './dto/save-adset-step.dto';
 import { SaveCampaignStepDto, MetaBudgetStrategy } from './dto/save-campaign-step.dto';
 import {
   MetaAdSetBudgetType,
+  MetaBidStrategy,
   MetaCampaignObjective,
+  MetaCampaignStatus,
+  MetaCreativeFormat,
+  MetaGender,
 } from './meta-campaign.constants';
 import {
   assertAtLeastOnePlacement,
@@ -51,7 +55,6 @@ import {
   assertAdCreativeDestinationUrl,
   buildDestinationUrlWithParams,
 } from './meta-ad-creative-draft-validation';
-import { MetaCreativeFormat } from './meta-campaign.constants';
 
 @Injectable()
 export class MetaCampaignDraftService {
@@ -709,6 +712,498 @@ export class MetaCampaignDraftService {
     }
   }
 
+  async importLiveCampaignForBuilder(
+    user: User,
+    businessId: number,
+    metaCampaignId: string,
+  ): Promise<MetaCampaignDraftResponseDto> {
+    const campaignId = metaCampaignId.trim();
+    if (!campaignId) {
+      throw new BadRequestException('Meta campaign id is required.');
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId, 'create');
+    const { accessToken, adAccountId: storedAdAccountId } =
+      await this.metaTokenService.assertBusinessMetaCredentials(business);
+    const adAccountId = normalizeAdAccountId(storedAdAccountId ?? '');
+
+    const liveCampaign = await graphGetWithToken<{
+      id?: string;
+      name?: string;
+      objective?: string;
+      status?: string;
+      buying_type?: string;
+      special_ad_categories?: string[];
+      daily_budget?: string;
+      lifetime_budget?: string;
+    }>(campaignId, accessToken, {
+      fields:
+        'id,name,objective,status,buying_type,special_ad_categories,daily_budget,lifetime_budget',
+    });
+
+    const adSetsResponse = await graphGetWithToken<{
+      data?: Array<{
+        id?: string;
+        name?: string;
+        status?: string;
+        daily_budget?: string;
+        lifetime_budget?: string;
+        optimization_goal?: string;
+        billing_event?: string;
+        bid_strategy?: string;
+        start_time?: string;
+        end_time?: string;
+        destination_type?: string;
+        targeting?: Record<string, unknown>;
+        promoted_object?: {
+          page_id?: string;
+          pixel_id?: string;
+          custom_event_type?: string;
+        };
+      }>;
+    }>(`${campaignId}/adsets`, accessToken, {
+      fields:
+        'id,name,status,daily_budget,lifetime_budget,optimization_goal,billing_event,bid_strategy,start_time,end_time,destination_type,targeting,promoted_object',
+      limit: '1',
+    });
+
+    const liveAdSet = adSetsResponse.data?.[0];
+    if (!liveAdSet?.id) {
+      throw new BadRequestException(
+        'This Meta campaign has no ad set to import into the builder.',
+      );
+    }
+
+    const adsResponse = await graphGetWithToken<{
+      data?: Array<{
+        id?: string;
+        name?: string;
+        status?: string;
+        creative?: {
+          id?: string;
+          name?: string;
+          thumbnail_url?: string;
+          image_url?: string;
+          object_story_spec?: {
+            page_id?: string;
+            instagram_actor_id?: string;
+            link_data?: {
+              message?: string;
+              name?: string;
+              description?: string;
+              link?: string;
+              image_hash?: string;
+              call_to_action?: { type?: string; value?: { link?: string } };
+              picture?: string;
+            };
+            video_data?: {
+              video_id?: string;
+              image_url?: string;
+              message?: string;
+              title?: string;
+              call_to_action?: { type?: string; value?: { link?: string } };
+            };
+          };
+        };
+      }>;
+    }>(`${liveAdSet.id}/ads`, accessToken, {
+      fields:
+        'id,name,status,creative{id,name,thumbnail_url,image_url,object_story_spec}',
+      limit: '1',
+    });
+
+    const liveAd = adsResponse.data?.[0];
+    if (!liveAd?.id) {
+      throw new BadRequestException(
+        'This Meta campaign has no ad to import into the builder.',
+      );
+    }
+
+    const mapped = this.mapLiveMetaToDraftData({
+      campaign: liveCampaign,
+      adSet: liveAdSet,
+      ad: liveAd,
+      draftIdPlaceholder: 'pending',
+    });
+
+    const now = new Date();
+    const existing = await this.draftRepository.findOne({
+      where: {
+        businessId,
+        userId: user.id,
+        metaCampaignId: campaignId,
+      },
+    });
+
+    const draftPayload: Partial<MetaCampaignDraft> = {
+      userId: user.id,
+      businessId,
+      currentStep: 4,
+      status: 'draft',
+      campaignData: mapped.campaignData as unknown as Record<string, unknown>,
+      adSetData: mapped.adSetData as unknown as Record<string, unknown>,
+      adCreativeData: mapped.adCreativeData as unknown as Record<
+        string,
+        unknown
+      >,
+      metaCampaignId: campaignId,
+      metaAdsetId: liveAdSet.id,
+      metaCreativeId: liveAd.creative?.id?.trim() || null,
+      metaAdId: liveAd.id,
+      completedSteps: [1, 2, 3],
+      lastSavedAt: now,
+      errorMessage: null,
+      publishStatus: null,
+      publishJobId: null,
+      publishStep: null,
+      publishProgress: 0,
+      publishedAt: null,
+    };
+
+    let saved: MetaCampaignDraft;
+    if (existing) {
+      Object.assign(existing, draftPayload);
+      existing.version = (existing.version ?? 1) + 1;
+      const adSet = existing.adSetData as AdSetStepDataDto | null;
+      const creative = existing.adCreativeData as AdCreativeStepDataDto | null;
+      if (adSet) adSet.draftId = existing.id;
+      if (creative) creative.draftId = existing.id;
+      existing.adSetData = adSet as unknown as Record<string, unknown>;
+      existing.adCreativeData = creative as unknown as Record<string, unknown>;
+      saved = await this.draftRepository.save(existing);
+    } else {
+      saved = await this.draftRepository.save({
+        ...draftPayload,
+        version: 1,
+      } as MetaCampaignDraft);
+      const adSet = saved.adSetData as AdSetStepDataDto | null;
+      const creative = saved.adCreativeData as AdCreativeStepDataDto | null;
+      if (adSet) adSet.draftId = saved.id;
+      if (creative) creative.draftId = saved.id;
+      saved.adSetData = adSet as unknown as Record<string, unknown>;
+      saved.adCreativeData = creative as unknown as Record<string, unknown>;
+      saved = await this.draftRepository.save(saved);
+    }
+
+    const [tracking] = await this.facebookCampaignRepository.find({
+      where: { businessId, metaCampaignId: campaignId },
+      order: { createdAt: 'DESC' },
+      take: 1,
+    });
+    if (tracking) {
+      await this.facebookCampaignRepository.update(tracking.id, {
+        draftId: saved.id,
+        metaAdsetId: liveAdSet.id,
+        metaCreativeId: liveAd.creative?.id?.trim() || tracking.metaCreativeId,
+        metaAdId: liveAd.id,
+        campaignName: liveCampaign.name?.trim() || tracking.campaignName,
+        status: liveCampaign.status?.trim() || tracking.status,
+      });
+    } else if (adAccountId) {
+      await this.facebookCampaignRepository.save({
+        userId: user.id,
+        businessId,
+        draftId: saved.id,
+        adAccountId,
+        metaCampaignId: campaignId,
+        metaAdsetId: liveAdSet.id,
+        metaCreativeId: liveAd.creative?.id?.trim() || null,
+        metaAdId: liveAd.id,
+        campaignName: liveCampaign.name?.trim() || null,
+        objective: liveCampaign.objective?.trim() || null,
+        status: liveCampaign.status?.trim() || 'PAUSED',
+      });
+    }
+
+    this.logger.log(
+      `Imported Meta campaign ${campaignId} into draft ${saved.id} for business ${businessId}`,
+    );
+
+    return this.toResponse(saved);
+  }
+
+  private mapLiveMetaToDraftData(input: {
+    campaign: {
+      name?: string;
+      objective?: string;
+      status?: string;
+      buying_type?: string;
+      special_ad_categories?: string[];
+      daily_budget?: string;
+      lifetime_budget?: string;
+    };
+    adSet: {
+      id?: string;
+      name?: string;
+      status?: string;
+      daily_budget?: string;
+      lifetime_budget?: string;
+      optimization_goal?: string;
+      billing_event?: string;
+      bid_strategy?: string;
+      start_time?: string;
+      end_time?: string;
+      destination_type?: string;
+      targeting?: Record<string, unknown>;
+      promoted_object?: {
+        page_id?: string;
+        pixel_id?: string;
+        custom_event_type?: string;
+      };
+    };
+    ad: {
+      id?: string;
+      name?: string;
+      status?: string;
+      creative?: {
+        id?: string;
+        name?: string;
+        thumbnail_url?: string;
+        image_url?: string;
+        object_story_spec?: {
+          page_id?: string;
+          instagram_actor_id?: string;
+          link_data?: {
+            message?: string;
+            name?: string;
+            description?: string;
+            link?: string;
+            call_to_action?: { type?: string; value?: { link?: string } };
+            picture?: string;
+          };
+          video_data?: {
+            video_id?: string;
+            image_url?: string;
+            message?: string;
+            title?: string;
+            call_to_action?: { type?: string; value?: { link?: string } };
+          };
+        };
+      };
+    };
+    draftIdPlaceholder: string;
+  }): {
+    campaignData: CampaignStepDataDto;
+    adSetData: AdSetStepDataDto;
+    adCreativeData: AdCreativeStepDataDto;
+  } {
+    const objective = this.normalizeMetaObjective(input.campaign.objective);
+    const campaignDaily =
+      this.metaMinorToDollars(input.campaign.daily_budget) ?? undefined;
+    const campaignLifetime =
+      this.metaMinorToDollars(input.campaign.lifetime_budget) ?? undefined;
+    const cbo = campaignDaily != null || campaignLifetime != null;
+
+    const campaignData: CampaignStepDataDto = {
+      name: input.campaign.name?.trim() || 'Imported Meta campaign',
+      buyingType: input.campaign.buying_type?.trim() || 'AUCTION',
+      objective,
+      specialAdCategories: Array.isArray(input.campaign.special_ad_categories)
+        ? input.campaign.special_ad_categories
+        : [],
+      campaignBudgetOptimization: cbo,
+      budgetStrategy: cbo ? MetaBudgetStrategy.CAMPAIGN : MetaBudgetStrategy.ADSET,
+      campaignBudgetType: campaignLifetime != null ? 'lifetime' : 'daily',
+      campaignDailyBudget: campaignDaily,
+      campaignLifetimeBudget: campaignLifetime,
+      campaignBidStrategy: MetaBidStrategy.LOWEST_COST_WITHOUT_CAP,
+      budgetScheduling: 'none',
+      status:
+        input.campaign.status === 'ACTIVE'
+          ? MetaCampaignStatus.ACTIVE
+          : MetaCampaignStatus.PAUSED,
+    };
+
+    const targeting = input.adSet.targeting ?? {};
+    const geo =
+      (targeting.geo_locations as Record<string, unknown> | undefined) ?? {};
+    const countries = Array.isArray(geo.countries)
+      ? (geo.countries as string[])
+      : [];
+    const ageMin =
+      typeof targeting.age_min === 'number' ? targeting.age_min : 18;
+    const ageMax =
+      typeof targeting.age_max === 'number' ? targeting.age_max : 65;
+    const genders = Array.isArray(targeting.genders)
+      ? (targeting.genders as number[])
+      : [];
+    const gender =
+      genders.length === 1 && genders[0] === 1
+        ? MetaGender.MALE
+        : genders.length === 1 && genders[0] === 2
+          ? MetaGender.FEMALE
+          : MetaGender.ALL;
+
+    const startIso = input.adSet.start_time?.trim() || new Date().toISOString();
+    const startDate = startIso.slice(0, 10);
+    const startTime = startIso.includes('T')
+      ? startIso.slice(11, 16) || '00:00'
+      : '00:00';
+    const endIso = input.adSet.end_time?.trim() || undefined;
+    const endDate = endIso ? endIso.slice(0, 10) : undefined;
+    const endTime =
+      endIso && endIso.includes('T') ? endIso.slice(11, 16) || undefined : undefined;
+
+    const adSetDaily =
+      this.metaMinorToDollars(input.adSet.daily_budget) ?? undefined;
+    const adSetLifetime =
+      this.metaMinorToDollars(input.adSet.lifetime_budget) ?? undefined;
+
+    const adSetData: AdSetStepDataDto = {
+      name: input.adSet.name?.trim() || `${campaignData.name} — Ad set`,
+      draftId: input.draftIdPlaceholder,
+      status:
+        input.adSet.status === 'ACTIVE'
+          ? MetaCampaignStatus.ACTIVE
+          : MetaCampaignStatus.PAUSED,
+      budgetType:
+        adSetLifetime != null
+          ? MetaAdSetBudgetType.LIFETIME
+          : MetaAdSetBudgetType.DAILY,
+      dailyBudget: adSetDaily ?? (cbo ? undefined : 20),
+      lifetimeBudget: adSetLifetime,
+      bidStrategy:
+        (input.adSet.bid_strategy as MetaBidStrategy) ||
+        MetaBidStrategy.LOWEST_COST_WITHOUT_CAP,
+      billingEvent: input.adSet.billing_event?.trim() || 'IMPRESSIONS',
+      startDate,
+      startTime,
+      endDate,
+      endTime,
+      timezone: 'UTC',
+      startDateTime: `${startDate}T${startTime}:00`,
+      endDateTime:
+        endDate && endTime ? `${endDate}T${endTime}:00` : undefined,
+      optimizationGoal:
+        input.adSet.optimization_goal?.trim() || 'LINK_CLICKS',
+      destinationType: input.adSet.destination_type?.trim() || 'WEBSITE',
+      promotedObject: {
+        pageId: input.adSet.promoted_object?.page_id,
+        pixelId: input.adSet.promoted_object?.pixel_id,
+        customEventType: input.adSet.promoted_object?.custom_event_type,
+      },
+      audience: {
+        country: countries[0] || 'US',
+        locations: countries.map((code) => ({
+          mode: 'include',
+          type: 'country',
+          countryCode: code,
+          label: code,
+          metaKey: code,
+          metaType: 'country',
+        })),
+        ageMin,
+        ageMax,
+        gender,
+        languages: [],
+        interests: [],
+        behaviors: [],
+        demographics: [],
+      },
+      placements: {
+        advantagePlusPlacements: true,
+        devicePlatforms: { mobile: true, desktop: true },
+        publisherPlatforms: {
+          facebook: true,
+          instagram: true,
+          audienceNetwork: false,
+          messenger: false,
+        },
+        facebookPositions: {
+          feed: true,
+          story: true,
+          reels: true,
+          marketplace: true,
+          videoFeeds: true,
+        },
+        instagramPositions: {
+          stream: true,
+          story: true,
+          reels: true,
+          explore: true,
+        },
+      },
+    };
+
+    const story = input.ad.creative?.object_story_spec;
+    const linkData = story?.link_data;
+    const videoData = story?.video_data;
+    const isVideo = Boolean(videoData?.video_id);
+    const pageId =
+      story?.page_id?.trim() ||
+      input.adSet.promoted_object?.page_id?.trim() ||
+      '';
+    const imageUrl =
+      input.ad.creative?.image_url?.trim() ||
+      linkData?.picture?.trim() ||
+      input.ad.creative?.thumbnail_url?.trim() ||
+      videoData?.image_url?.trim() ||
+      undefined;
+    const destinationUrl =
+      linkData?.link?.trim() ||
+      linkData?.call_to_action?.value?.link?.trim() ||
+      videoData?.call_to_action?.value?.link?.trim() ||
+      'https://example.com';
+    const cta =
+      linkData?.call_to_action?.type?.trim() ||
+      videoData?.call_to_action?.type?.trim() ||
+      'LEARN_MORE';
+
+    const adCreativeData: AdCreativeStepDataDto = {
+      name: input.ad.name?.trim() || input.ad.creative?.name?.trim() || 'Ad',
+      draftId: input.draftIdPlaceholder,
+      facebookPageId: pageId || '0',
+      instagramActorId: story?.instagram_actor_id?.trim() || undefined,
+      status:
+        input.ad.status === 'ACTIVE'
+          ? MetaCampaignStatus.ACTIVE
+          : MetaCampaignStatus.PAUSED,
+      creativeFormat: isVideo
+        ? MetaCreativeFormat.SINGLE_VIDEO
+        : MetaCreativeFormat.SINGLE_IMAGE,
+      imageUrl: isVideo ? undefined : imageUrl,
+      videoUrl: isVideo ? undefined : undefined,
+      thumbnailUrl: isVideo ? imageUrl : undefined,
+      primaryText:
+        linkData?.message?.trim() ||
+        videoData?.message?.trim() ||
+        'Learn more',
+      headline: linkData?.name?.trim() || videoData?.title?.trim() || undefined,
+      description: linkData?.description?.trim() || undefined,
+      destinationUrl,
+      callToAction: cta,
+    };
+
+    return { campaignData, adSetData, adCreativeData };
+  }
+
+  private normalizeMetaObjective(raw?: string): string {
+    const value = (raw ?? '').trim().toUpperCase();
+    const allowed = new Set(Object.values(MetaCampaignObjective));
+    if (allowed.has(value as MetaCampaignObjective)) return value;
+    if (value.includes('TRAFFIC') || value === 'LINK_CLICKS') {
+      return MetaCampaignObjective.OUTCOME_TRAFFIC;
+    }
+    if (value.includes('LEAD')) return MetaCampaignObjective.OUTCOME_LEADS;
+    if (value.includes('SALES') || value.includes('CONVERSION')) {
+      return MetaCampaignObjective.OUTCOME_SALES;
+    }
+    if (value.includes('ENGAGEMENT') || value.includes('POST')) {
+      return MetaCampaignObjective.OUTCOME_ENGAGEMENT;
+    }
+    if (value.includes('AWARENESS') || value.includes('REACH')) {
+      return MetaCampaignObjective.OUTCOME_AWARENESS;
+    }
+    return MetaCampaignObjective.OUTCOME_TRAFFIC;
+  }
+
+  private metaMinorToDollars(minor?: string | null): number | null {
+    if (minor == null || String(minor).trim() === '') return null;
+    const n = Number(minor);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round((n / 100) * 100) / 100;
+  }
+
   private async findEditableDraft(
     userId: number,
     businessId: number,
@@ -726,7 +1221,7 @@ export class MetaCampaignDraftService {
       throw new NotFoundException('Campaign draft not found.');
     }
 
-    if (draft.status === 'published' && draft.metaAdId) {
+    if (draft.status === 'published' && draft.metaAdId && !draft.metaCampaignId) {
       throw new BadRequestException(
         'This campaign was already published. Create a new campaign to make changes.',
       );

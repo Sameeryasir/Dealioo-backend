@@ -423,8 +423,13 @@ export function assertDirectMetaImageUrl(imageUrl: string): void {
     );
   }
 
+  const host = parsedUrl.hostname.toLowerCase();
+  const isMetaCdn =
+    host.includes('fbcdn.net') ||
+    host.includes('facebook.com') ||
+    host.endsWith('fbsbx.com');
   const path = parsedUrl.pathname.replace(/\/+$/, '');
-  if (isFolderUploadPath(path) || !META_IMAGE_EXT.test(path)) {
+  if (!isMetaCdn && (isFolderUploadPath(path) || !META_IMAGE_EXT.test(path))) {
     throw new BadRequestException(
       'Upload an ad image or use a direct HTTPS link to a .jpg/.png file (not a folder).',
     );

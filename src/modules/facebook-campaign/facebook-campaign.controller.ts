@@ -114,6 +114,20 @@ export class FacebookCampaignController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Post('business/:businessId/drafts/import-live/:metaCampaignId')
+  async importLiveCampaignForBuilder(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('metaCampaignId') metaCampaignId: string,
+  ): Promise<MetaCampaignDraftResponseDto> {
+    return this.metaCampaignDraftService.importLiveCampaignForBuilder(
+      req.user,
+      businessId,
+      metaCampaignId,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('business/:businessId/drafts')
   async listDrafts(
     @Req() req,

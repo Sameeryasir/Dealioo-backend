@@ -44,6 +44,7 @@ import {
   MetaApiStepError,
   normalizeAdAccountId,
   stepFailureUserMessage,
+  updateMetaObject,
 } from './facebook-campaign-meta';
 import {
   sdkCreateAd,
@@ -58,6 +59,7 @@ import {
   buildCampaignPayloadFromDraft,
   buildCreativePayloadFromDraft,
 } from './meta-draft-payload-builders';
+import { budgetToMetaMinorUnits } from './meta-adset-draft-validation';
 import { isTransientMetaPublishError } from './meta-publish-errors.util';
 import {
   META_PUBLISH_QUEUE,
@@ -149,7 +151,15 @@ export class MetaPublishService {
         draft.adCreativeData as AdCreativeStepDataDto,
       );
 
-      if (draft.status === 'published' && draft.metaAdId) {
+      const isLiveLinkedUpdate = Boolean(
+        draft.metaCampaignId?.trim() && draft.metaAdId?.trim(),
+      );
+
+      if (
+        draft.status === 'published' &&
+        draft.metaAdId &&
+        !isLiveLinkedUpdate
+      ) {
         throw new BadRequestException(
           'This draft was already published. Create a new campaign to publish again.',
         );
@@ -192,7 +202,11 @@ export class MetaPublishService {
           'Previous publish did not finish. Retry to continue from saved Meta IDs.';
       }
 
-      if (draft.status !== 'draft' && draft.status !== 'failed') {
+      if (
+        draft.status !== 'draft' &&
+        draft.status !== 'failed' &&
+        !(draft.status === 'published' && isLiveLinkedUpdate)
+      ) {
         throw new BadRequestException(
           'This campaign cannot be published right now. It may already be publishing or published.',
         );
@@ -451,6 +465,10 @@ export class MetaPublishService {
       metaAdId = null;
     }
 
+    const isLiveLinkedUpdate = Boolean(
+      metaCampaignId && metaAdsetId && metaAdId,
+    );
+
     const tracking = await this.findOrCreateTrackingRow(
       userId,
       businessId,
@@ -524,6 +542,32 @@ export class MetaPublishService {
         });
         draft.metaAdId = metaAdId;
         await this.completeStep(draft, jobId, 'ad', metaAdId);
+      }
+
+      if (
+        isLiveLinkedUpdate &&
+        metaCampaignId &&
+        metaAdsetId &&
+        metaAdId
+      ) {
+        await this.beginStep(draft, jobId, 'campaign', userId, businessId);
+        const updatedCreativeId = await this.updateLiveLinkedMetaObjects(ctx, {
+          metaCampaignId,
+          metaAdsetId,
+          metaCreativeId,
+          metaAdId,
+        });
+        if (updatedCreativeId && updatedCreativeId !== metaCreativeId) {
+          metaCreativeId = updatedCreativeId;
+          draft.metaCreativeId = updatedCreativeId;
+          await this.updatePartialState(draft.id, tracking.id, {
+            metaCampaignId,
+            metaAdsetId,
+            metaCreativeId,
+            metaAdId,
+          });
+        }
+        await this.completeStep(draft, jobId, 'campaign', metaCampaignId);
       }
 
       if (!metaCampaignId || !metaAdsetId || !metaCreativeId || !metaAdId) {
@@ -625,6 +669,115 @@ export class MetaPublishService {
       ctx.adAccountId,
       buildCampaignPayloadFromDraft(ctx.campaign),
     );
+  }
+
+  private async updateLiveLinkedMetaObjects(
+    ctx: PublishContext,
+    ids: {
+      metaCampaignId: string;
+      metaAdsetId: string;
+      metaCreativeId: string | null;
+      metaAdId: string;
+    },
+  ): Promise<string | null> {
+    const campaignStatus =
+      ctx.campaign.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+    const adSetStatus = ctx.adSet.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED';
+
+    try {
+      await updateMetaObject(ids.metaCampaignId, ctx.accessToken, {
+        name: ctx.campaign.name.trim(),
+        status: campaignStatus,
+      });
+
+      if (
+        ctx.campaign.campaignBudgetOptimization &&
+        ctx.campaign.campaignDailyBudget != null
+      ) {
+        await updateMetaObject(ids.metaCampaignId, ctx.accessToken, {
+          daily_budget: budgetToMetaMinorUnits(ctx.campaign.campaignDailyBudget),
+        });
+      }
+
+      const adSetFields: Record<string, unknown> = {
+        name: ctx.adSet.name.trim(),
+        status: adSetStatus,
+      };
+      if (
+        !ctx.campaign.campaignBudgetOptimization &&
+        ctx.adSet.dailyBudget != null
+      ) {
+        adSetFields.daily_budget = budgetToMetaMinorUnits(ctx.adSet.dailyBudget);
+      }
+      await updateMetaObject(ids.metaAdsetId, ctx.accessToken, adSetFields);
+    } catch (err) {
+      if (err instanceof MetaApiStepError) {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
+
+    let newCreativeId: string | null = null;
+    try {
+      let mediaRefs: {
+        imageHash?: string;
+        videoId?: string;
+        videoThumbnailHash?: string;
+        carouselHashes?: string[];
+      };
+
+      try {
+        mediaRefs = await this.uploadCreativeMedia(ctx);
+      } catch {
+        const existingCreativeId = ids.metaCreativeId?.trim();
+        if (!existingCreativeId) throw new Error('missing creative');
+        const existing = await graphGetWithToken<{
+          image_hash?: string;
+          object_story_spec?: {
+            link_data?: { image_hash?: string };
+            video_data?: { video_id?: string; image_hash?: string };
+          };
+        }>(existingCreativeId, ctx.accessToken, {
+          fields: 'image_hash,object_story_spec',
+        });
+        const imageHash =
+          existing.image_hash?.trim() ||
+          existing.object_story_spec?.link_data?.image_hash?.trim() ||
+          existing.object_story_spec?.video_data?.image_hash?.trim();
+        const videoId =
+          existing.object_story_spec?.video_data?.video_id?.trim();
+        if (!imageHash && !videoId) {
+          this.logger.warn(
+            'Live creative update skipped — could not resolve media hash.',
+          );
+          return null;
+        }
+        mediaRefs = { imageHash: imageHash || undefined, videoId };
+      }
+
+      newCreativeId = await this.createCreative(ctx, mediaRefs);
+      await updateMetaObject(ids.metaAdId, ctx.accessToken, {
+        name: ctx.creative.name.trim(),
+        status: ctx.creative.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+        creative: { creative_id: newCreativeId },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Live creative update skipped: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      try {
+        await updateMetaObject(ids.metaAdId, ctx.accessToken, {
+          name: ctx.creative.name.trim(),
+          status: ctx.creative.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+        });
+      } catch {
+      }
+      return null;
+    }
+
+    return newCreativeId;
   }
 
   async createAdSet(
