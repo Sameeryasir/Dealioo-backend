@@ -9,10 +9,6 @@ export type UpgradeSubscriptionResponse = {
   paymentIntentClientSecret: string | null;
 };
 
-export type BillingPortalResponse = {
-  url: string;
-};
-
 export type BillingPaymentMethod = {
   brand: string;
   last4: string;
@@ -64,6 +60,15 @@ export type BillingSubscriptionSummary = {
   cancelAtPeriodEnd: boolean;
   cancellationDate: string | null;
   startedAt: string | null;
+  planHighlights: string[];
+};
+
+export type BillingUpcomingInvoice = {
+  amountDueCents: number;
+  amountDueFormatted: string;
+  currency: string;
+  nextPaymentAttemptAt: string | null;
+  periodEndAt: string | null;
 };
 
 export type BillingOverviewResponse = {
@@ -71,6 +76,23 @@ export type BillingOverviewResponse = {
   paymentMethod: BillingPaymentMethod | null;
   billingDetails: BillingDetails;
   invoices: BillingInvoice[];
+  upcomingInvoice: BillingUpcomingInvoice | null;
+};
+
+export type UpgradePreviewResponse = {
+  currentPlanName: string;
+  currentPlanSlug: string;
+  currentBillingCycle: 'monthly' | 'annual';
+  targetPlanName: string;
+  targetPlanSlug: string;
+  targetBillingCycle: 'monthly' | 'annual';
+  oldPriceId: string;
+  newPriceId: string;
+  amountDueCents: number;
+  amountDueFormatted: string;
+  currency: string;
+  prorationDate: number;
+  summary: string;
 };
 
 export type BillingSetupIntentResponse = {

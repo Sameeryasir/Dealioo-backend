@@ -741,51 +741,6 @@ export class StripeService {
     });
   }
 
-  async createPlatformBillingPortalSession(opts: {
-    stripeCustomerId: string;
-  }): Promise<{ url: string }> {
-    const stripeCustomerId = opts.stripeCustomerId.trim();
-    if (!stripeCustomerId) {
-      throw new BadRequestException('No billing customer found');
-    }
-
-    const returnUrl = `${getFrontendBaseUrl()}/dashboard/settings/billing`;
-
-    try {
-      const session = await this.stripe.billingPortal.sessions.create({
-        customer: stripeCustomerId,
-        return_url: returnUrl,
-      });
-
-      if (!session.url) {
-        throw new InternalServerErrorException(
-          'Stripe did not return a billing portal URL.',
-        );
-      }
-
-      return { url: session.url };
-    } catch (err) {
-      if (
-        err instanceof BadRequestException ||
-        err instanceof InternalServerErrorException
-      ) {
-        throw err;
-      }
-      if (
-        err &&
-        typeof err === 'object' &&
-        'type' in err &&
-        (err as { type?: string }).type === 'StripeInvalidRequestError'
-      ) {
-        throw new BadRequestException(
-          (err as { message?: string }).message ||
-            'Unable to open billing portal.',
-        );
-      }
-      throw err;
-    }
-  }
-
   async retrievePlatformPrice(
     priceId: string,
   ): Promise<
@@ -803,6 +758,121 @@ export class StripeService {
         throw new NotFoundException('Stripe price not found.');
       }
       throw err;
+    }
+  }
+
+  async previewPlatformSubscriptionPriceChange(opts: {
+    stripeCustomerId: string;
+    stripeSubscriptionId: string;
+    newPriceId: string;
+  }): Promise<{
+    amountDueCents: number;
+    currency: string;
+    oldPriceId: string;
+    newPriceId: string;
+    prorationDate: number;
+    periodEndUnix: number | null;
+  }> {
+    const stripeCustomerId = opts.stripeCustomerId.trim();
+    const subscriptionId = opts.stripeSubscriptionId.trim();
+    const newPriceId = opts.newPriceId.trim();
+
+    const subscription = await this.stripe.subscriptions.retrieve(
+      subscriptionId,
+      { expand: ['items.data.price'] },
+    );
+    const item = subscription.items.data[0];
+    if (!item?.id) {
+      throw new BadRequestException(
+        'Stripe subscription has no billable items to preview.',
+      );
+    }
+
+    const oldPrice =
+      typeof item.price === 'string' ? item.price : item.price?.id;
+    if (!oldPrice) {
+      throw new BadRequestException(
+        'Could not resolve the current Stripe price on this subscription.',
+      );
+    }
+    if (oldPrice === newPriceId) {
+      throw new BadRequestException('You are already on the requested plan.');
+    }
+
+    const prorationDate = Math.floor(Date.now() / 1000);
+    try {
+      const preview = await this.stripe.invoices.createPreview({
+        customer: stripeCustomerId,
+        subscription: subscriptionId,
+        subscription_details: {
+          items: [
+            {
+              id: item.id,
+              price: newPriceId,
+              quantity: item.quantity ?? 1,
+            },
+          ],
+          proration_behavior: 'always_invoice',
+          proration_date: prorationDate,
+        },
+      });
+
+      return {
+        amountDueCents: preview.amount_due ?? 0,
+        currency: (preview.currency || 'usd').toLowerCase(),
+        oldPriceId: oldPrice,
+        newPriceId,
+        prorationDate,
+        periodEndUnix: item.current_period_end ?? null,
+      };
+    } catch (err) {
+      this.rethrowStripeApiError(
+        err,
+        'Unable to preview this plan change.',
+      );
+    }
+  }
+
+  async previewPlatformUpcomingInvoice(opts: {
+    stripeCustomerId: string;
+    stripeSubscriptionId: string;
+  }): Promise<{
+    amountDueCents: number;
+    currency: string;
+    nextPaymentAttemptUnix: number | null;
+    periodEndUnix: number | null;
+  } | null> {
+    const stripeCustomerId = opts.stripeCustomerId.trim();
+    const subscriptionId = opts.stripeSubscriptionId.trim();
+    if (!stripeCustomerId || !subscriptionId) return null;
+
+    try {
+      const preview = await this.stripe.invoices.createPreview({
+        customer: stripeCustomerId,
+        subscription: subscriptionId,
+      });
+      const periodEnd =
+        preview.period_end && preview.period_end > 0
+          ? preview.period_end
+          : null;
+      const nextAttempt =
+        preview.next_payment_attempt && preview.next_payment_attempt > 0
+          ? preview.next_payment_attempt
+          : periodEnd;
+
+      return {
+        amountDueCents: preview.amount_due ?? 0,
+        currency: (preview.currency || 'usd').toLowerCase(),
+        nextPaymentAttemptUnix: nextAttempt,
+        periodEndUnix: periodEnd,
+      };
+    } catch (err) {
+      warnStripePayment({
+        phase: 'upcoming_invoice_preview',
+        outcome: 'preview_failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
     }
   }
 

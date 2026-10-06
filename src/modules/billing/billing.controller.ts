@@ -19,9 +19,9 @@ import type {
   BillingInvoiceLinksResponse,
   BillingOverviewResponse,
   BillingPaymentMethodUpdateResponse,
-  BillingPortalResponse,
   BillingSetupIntentResponse,
   ResumeSubscriptionResponse,
+  UpgradePreviewResponse,
   UpgradeSubscriptionResponse,
 } from './billing.types';
 import { ConfirmPaymentMethodDto } from './dto/confirm-payment-method.dto';
@@ -102,11 +102,13 @@ export class BillingController {
     return this.billingService.resumeSubscription(req.user.id);
   }
 
-  @Post('portal')
-  createPortal(
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('upgrade-preview')
+  previewUpgrade(
     @Req() req: { user: { id: number } },
-  ): Promise<BillingPortalResponse> {
-    return this.billingService.createBillingPortalSession(req.user.id);
+    @Body() dto: UpgradeSubscriptionDto,
+  ): Promise<UpgradePreviewResponse> {
+    return this.billingService.previewUpgradeSubscription(req.user.id, dto);
   }
 
   @Post('upgrade')

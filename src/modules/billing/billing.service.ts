@@ -29,10 +29,11 @@ import type {
   BillingOverviewResponse,
   BillingPaymentMethod,
   BillingPaymentMethodUpdateResponse,
-  BillingPortalResponse,
   BillingSetupIntentResponse,
   BillingSubscriptionSummary,
+  BillingUpcomingInvoice,
   ResumeSubscriptionResponse,
+  UpgradePreviewResponse,
   UpgradeSubscriptionResponse,
 } from './billing.types';
 
@@ -166,16 +167,24 @@ export class BillingService {
         paymentMethod: null,
         billingDetails: fallbackDetails,
         invoices: [],
+        upcomingInvoice: null,
       };
       await this.saveOverviewCache(userId, payload);
       return payload;
     }
 
-    const [customer, invoicesList, paymentMethods] = await Promise.all([
-      this.stripeService.retrievePlatformCustomer(stripeCustomerId),
-      this.stripeService.listPlatformInvoices(stripeCustomerId),
-      this.stripeService.listPlatformCardPaymentMethods(stripeCustomerId),
-    ]);
+    const [customer, invoicesList, paymentMethods, upcomingPreview] =
+      await Promise.all([
+        this.stripeService.retrievePlatformCustomer(stripeCustomerId),
+        this.stripeService.listPlatformInvoices(stripeCustomerId),
+        this.stripeService.listPlatformCardPaymentMethods(stripeCustomerId),
+        localSub?.stripeSubscriptionId?.trim()
+          ? this.stripeService.previewPlatformUpcomingInvoice({
+              stripeCustomerId,
+              stripeSubscriptionId: localSub.stripeSubscriptionId,
+            })
+          : Promise.resolve(null),
+      ]);
 
     if ('deleted' in customer && customer.deleted) {
       throw new BadRequestException('Billing customer is no longer available.');
@@ -224,6 +233,7 @@ export class BillingService {
       paymentMethod,
       billingDetails,
       invoices: invoicesList.data.map((invoice) => this.mapInvoice(invoice)),
+      upcomingInvoice: this.mapUpcomingInvoice(upcomingPreview),
     };
     await this.saveOverviewCache(userId, payload);
     return payload;
@@ -408,15 +418,6 @@ export class BillingService {
     };
   }
 
-  async createBillingPortalSession(
-    userId: number,
-  ): Promise<BillingPortalResponse> {
-    const { stripeCustomerId } = await this.requireStripeCustomer(userId);
-    return this.stripeService.createPlatformBillingPortalSession({
-      stripeCustomerId,
-    });
-  }
-
   async getInvoiceLinks(
     userId: number,
     invoiceId: string,
@@ -566,6 +567,83 @@ export class BillingService {
     }
 
     return { stripeCustomerId, localSub };
+  }
+
+  async previewUpgradeSubscription(
+    userId: number,
+    dto: UpgradeSubscriptionDto,
+  ): Promise<UpgradePreviewResponse> {
+    const { targetPlan, newPriceId, billingCycle } =
+      await this.resolveUpgradeTarget(dto);
+
+    const localSub = await this.subscriptionRepository.findOne({
+      where: {
+        userId,
+        status: In(['active', 'trialing', 'past_due']),
+      },
+      relations: ['plan'],
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!localSub?.stripeSubscriptionId?.trim()) {
+      throw new NotFoundException(
+        'No active Stripe subscription found for this account.',
+      );
+    }
+
+    const stripeCustomerId =
+      localSub.stripeCustomerId?.trim() ||
+      (
+        await this.userRepository.findOne({
+          where: { id: userId },
+          select: { id: true, stripeCustomerId: true },
+        })
+      )?.stripeCustomerId?.trim() ||
+      '';
+
+    if (!stripeCustomerId) {
+      throw new BadRequestException(
+        'No Stripe billing customer found for this account.',
+      );
+    }
+
+    await this.stripeService.retrievePlatformPrice(newPriceId);
+
+    const preview =
+      await this.stripeService.previewPlatformSubscriptionPriceChange({
+        stripeCustomerId,
+        stripeSubscriptionId: localSub.stripeSubscriptionId,
+        newPriceId,
+      });
+
+    const amountDueFormatted = this.formatMoney(
+      preview.amountDueCents,
+      preview.currency,
+      true,
+    );
+    const summary = this.buildUpgradePreviewSummary({
+      amountDueCents: preview.amountDueCents,
+      amountDueFormatted,
+      currency: preview.currency,
+      targetPlanName: targetPlan.name,
+      targetBillingCycle: billingCycle,
+    });
+
+    return {
+      currentPlanName: localSub.plan?.name || 'Current plan',
+      currentPlanSlug: localSub.plan?.slug || '',
+      currentBillingCycle: localSub.billingCycle,
+      targetPlanName: targetPlan.name,
+      targetPlanSlug: targetPlan.slug,
+      targetBillingCycle: billingCycle,
+      oldPriceId: preview.oldPriceId,
+      newPriceId: preview.newPriceId,
+      amountDueCents: preview.amountDueCents,
+      amountDueFormatted,
+      currency: preview.currency,
+      prorationDate: preview.prorationDate,
+      summary,
+    };
   }
 
   async upgradeSubscription(
@@ -771,6 +849,7 @@ export class BillingService {
       cancelAtPeriodEnd: Boolean(localSub.cancelAtPeriodEnd),
       cancellationDate: localSub.cancelsAt?.toISOString() ?? null,
       startedAt: localSub.startedAt?.toISOString() ?? null,
+      planHighlights: this.planHighlightsFromPlan(localSub.plan),
     };
   }
 
@@ -808,7 +887,82 @@ export class BillingService {
         localSub?.cancelsAt?.toISOString() ??
         null,
       startedAt: localSub?.startedAt?.toISOString() ?? null,
+      planHighlights: this.planHighlightsFromPlan(localSub?.plan ?? null),
     };
+  }
+
+  private planHighlightsFromPlan(
+    plan: SubscriptionPlan | null | undefined,
+  ): string[] {
+    const description = plan?.description;
+    if (!description) return [];
+
+    const fromFeatures = Array.isArray(description.features)
+      ? description.features
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter(Boolean)
+      : [];
+    if (fromFeatures.length > 0) {
+      return fromFeatures.slice(0, 8);
+    }
+
+    const fromGroups = Array.isArray(description.featureGroups)
+      ? description.featureGroups.flatMap((group) =>
+          Array.isArray(group?.items)
+            ? group.items
+                .map((item) => (typeof item === 'string' ? item.trim() : ''))
+                .filter(Boolean)
+            : [],
+        )
+      : [];
+    return fromGroups.slice(0, 8);
+  }
+
+  private mapUpcomingInvoice(
+    preview: {
+      amountDueCents: number;
+      currency: string;
+      nextPaymentAttemptUnix: number | null;
+      periodEndUnix: number | null;
+    } | null,
+  ): BillingUpcomingInvoice | null {
+    if (!preview) return null;
+    return {
+      amountDueCents: preview.amountDueCents,
+      amountDueFormatted: this.formatMoney(
+        preview.amountDueCents,
+        preview.currency,
+        true,
+      ),
+      currency: preview.currency,
+      nextPaymentAttemptAt: this.toIsoFromUnixSeconds(
+        preview.nextPaymentAttemptUnix,
+      ),
+      periodEndAt: this.toIsoFromUnixSeconds(preview.periodEndUnix),
+    };
+  }
+
+  private buildUpgradePreviewSummary(opts: {
+    amountDueCents: number;
+    amountDueFormatted: string;
+    currency: string;
+    targetPlanName: string;
+    targetBillingCycle: 'monthly' | 'annual';
+  }): string {
+    const cycleLabel =
+      opts.targetBillingCycle === 'annual' ? 'annual' : 'monthly';
+    if (opts.amountDueCents > 0) {
+      return `You’ll pay about ${opts.amountDueFormatted} today for the rest of this billing period, then continue on ${opts.targetPlanName} (${cycleLabel}).`;
+    }
+    if (opts.amountDueCents < 0) {
+      const creditFormatted = this.formatMoney(
+        Math.abs(opts.amountDueCents),
+        opts.currency,
+        true,
+      );
+      return `You’ll get about ${creditFormatted} credit toward future invoices when switching to ${opts.targetPlanName} (${cycleLabel}).`;
+    }
+    return `No charge today. You’ll switch to ${opts.targetPlanName} (${cycleLabel}) and keep your current billing period.`;
   }
 
   private formatLocalPlanPrice(
