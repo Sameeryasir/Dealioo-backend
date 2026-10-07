@@ -62,6 +62,8 @@ import {
 import { PusherService } from '../pusher/pusher.service';
 import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
 
+const ACTIVITY_RANGE_CACHE_TTL_MS = 45_000;
+
 function withActivityActorMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): { metadata: Record<string, unknown> | null; actorUserId: number | null } {
@@ -106,6 +108,8 @@ export type ActivityMonthlyPoint = {
   totalEvents: number;
   checkIns: number;
   visited: number;
+  scannedVisits: number;
+  inStoreVisits: number;
   redeemedReward: number;
   prepaidForOffer: number;
   messageSent: number;
@@ -113,8 +117,26 @@ export type ActivityMonthlyPoint = {
   extraItemsRevenueCents: number;
   orders: number;
   members: number;
+  funnelMembers: number;
+  restaurantMembers: number;
   paidRevenueCents?: number;
 };
+
+const SCANNED_VISIT_SQL = `(
+  activity.event_type = :visited
+  AND (
+    COALESCE(activity.metadata->>'visitSource', '') = :qrVisitSource
+    OR LOWER(TRIM(activity.description)) LIKE 'scanned%'
+  )
+)`;
+
+const IN_STORE_VISIT_SQL = `(
+  activity.event_type = :visited
+  AND (
+    COALESCE(activity.metadata->>'visitSource', '') = :staffVisitSource
+    OR LOWER(TRIM(activity.description)) LIKE 'checked in%'
+  )
+)`;
 
 function startOfTodayUtc(): Date {
   const now = new Date();
@@ -162,6 +184,7 @@ export class ActivityService {
    * Customers table has no businessId, so membership is inferred from relations.
    */
   private businessCustomersBaseQuery(businessId: number) {
+    // Prefer payment.customer_id (indexed). Email LOWER join only for legacy rows.
     return this.customerRepository.createQueryBuilder('customer').where(
       `customer.id IN (
           SELECT activity.customer_id
@@ -178,15 +201,172 @@ export class ActivityService {
           FROM customer_visits visit
           WHERE visit.business_id = :businessId
           UNION
+          SELECT payment.customer_id
+          FROM funnel_payment payment
+          WHERE payment.business_id = :businessId
+            AND payment.status = :paid
+            AND payment.customer_id IS NOT NULL
+          UNION
           SELECT paid_customer.id
           FROM customers paid_customer
           INNER JOIN funnel_payment payment
             ON LOWER(payment.customer_email) = LOWER(paid_customer.email)
           WHERE payment.business_id = :businessId
             AND payment.status = :paid
+            AND payment.customer_id IS NULL
         )`,
       { businessId, paid: FunnelPaymentStatus.PAID },
     );
+  }
+
+  /**
+   * Distinct guests active in [from, to]:
+   * - new: first business touch is inside the window
+   * - returning: touched the business before `from`, then again in the window
+   * Uses one indexed query (business_id, customer_id, occurred_at).
+   */
+  private async countNewVsReturningGuests(
+    businessId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{ newGuests: number; returningGuests: number }> {
+    const guestTouchTypes = [
+      ActivityEventType.VISITED,
+      ActivityEventType.REDEEMED_REWARD,
+      ActivityEventType.SIGNED_UP,
+      ActivityEventType.PREPAID_FOR_OFFER,
+    ];
+
+    const rows = await this.activityRepository.query(
+      `
+      SELECT
+        COUNT(*) FILTER (WHERE prior.customer_id IS NULL)::int AS "newGuests",
+        COUNT(*) FILTER (WHERE prior.customer_id IS NOT NULL)::int AS "returningGuests"
+      FROM (
+        SELECT DISTINCT activity.customer_id
+        FROM activity_event activity
+        WHERE activity.business_id = $1
+          AND activity.customer_id IS NOT NULL
+          AND activity.event_type = ANY($2::varchar[])
+          AND activity.occurred_at >= $3
+          AND activity.occurred_at <= $4
+      ) engaged
+      LEFT JOIN LATERAL (
+        SELECT activity.customer_id
+        FROM activity_event activity
+        WHERE activity.business_id = $1
+          AND activity.customer_id = engaged.customer_id
+          AND activity.event_type = ANY($2::varchar[])
+          AND activity.occurred_at < $3
+        LIMIT 1
+      ) prior ON true
+      `,
+      [businessId, guestTouchTypes, from, to],
+    );
+
+    const row = Array.isArray(rows) ? rows[0] : null;
+    return {
+      newGuests: Math.max(0, Number(row?.newGuests ?? 0)),
+      returningGuests: Math.max(0, Number(row?.returningGuests ?? 0)),
+    };
+  }
+
+  /**
+   * Distinct guests who contributed to dashboard revenue in [from, to]:
+   * paid funnel payments and prepaid extras (same sources as period revenue).
+   * Used as avg-spend denominator so check-ins without payment do not dilute it.
+   */
+  private async countPayingGuests(
+    businessId: number,
+    from: Date,
+    to: Date,
+  ): Promise<number> {
+    const rows = await this.activityRepository.query(
+      `
+      SELECT COUNT(*)::int AS "payingGuests"
+      FROM (
+        SELECT payment.customer_id AS customer_id
+        FROM funnel_payment payment
+        WHERE payment.business_id = $1
+          AND payment.status = $2
+          AND payment.customer_id IS NOT NULL
+          AND COALESCE(payment.paid_at, payment.created_at) >= $3
+          AND COALESCE(payment.paid_at, payment.created_at) <= $4
+        UNION
+        SELECT activity.customer_id
+        FROM activity_event activity
+        WHERE activity.business_id = $1
+          AND activity.customer_id IS NOT NULL
+          AND activity.event_type = $5
+          AND activity.occurred_at >= $3
+          AND activity.occurred_at <= $4
+          AND COALESCE(
+            NULLIF(activity.metadata->>'extraItemsCents', '')::int,
+            0
+          ) > 0
+      ) paying
+      `,
+      [
+        businessId,
+        FunnelPaymentStatus.PAID,
+        from,
+        to,
+        ActivityEventType.PREPAID_FOR_OFFER,
+      ],
+    );
+
+    const row = Array.isArray(rows) ? rows[0] : null;
+    return Math.max(0, Number(row?.payingGuests ?? 0));
+  }
+
+  private membersSummaryQuery(
+    businessId: number,
+    bucketSql: string,
+    bounds: { from?: Date; to?: Date; rangeStart?: Date },
+  ) {
+    const qb = this.businessCustomersBaseQuery(businessId)
+      .select(bucketSql, 'month')
+      .leftJoin(
+        `(
+          SELECT DISTINCT signup.customer_id AS customer_id
+          FROM activity_event signup
+          WHERE signup.business_id = :businessId
+            AND signup.event_type = :signedUp
+            AND signup.customer_id IS NOT NULL
+        )`,
+        'funnel_guest',
+        'funnel_guest.customer_id = customer.id',
+      )
+      .addSelect('COUNT(*)', 'members')
+      .addSelect(
+        'COUNT(*) FILTER (WHERE funnel_guest.customer_id IS NOT NULL)',
+        'funnelMembers',
+      )
+      .addSelect(
+        'COUNT(*) FILTER (WHERE funnel_guest.customer_id IS NULL)',
+        'restaurantMembers',
+      )
+      .groupBy(bucketSql)
+      .setParameter('signedUp', ActivityEventType.SIGNED_UP);
+
+    if (bounds.rangeStart) {
+      qb.andWhere('customer.createdAt >= :rangeStart', {
+        rangeStart: bounds.rangeStart,
+      });
+    }
+    if (bounds.from) {
+      qb.andWhere('customer.createdAt >= :from', { from: bounds.from });
+    }
+    if (bounds.to) {
+      qb.andWhere('customer.createdAt <= :to', { to: bounds.to });
+    }
+
+    return qb.getRawMany<{
+      month: string;
+      members: string;
+      funnelMembers: string;
+      restaurantMembers: string;
+    }>();
   }
 
   /**
@@ -1200,6 +1380,14 @@ export class ActivityService {
           'visited',
         )
         .addSelect(
+          `COUNT(*) FILTER (WHERE ${SCANNED_VISIT_SQL})`,
+          'scannedVisits',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${IN_STORE_VISIT_SQL})`,
+          'inStoreVisits',
+        )
+        .addSelect(
           `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
           'redeemedReward',
         )
@@ -1230,10 +1418,14 @@ export class ActivityService {
           redeemed: ActivityEventType.REDEEMED_REWARD,
           prepaid: ActivityEventType.PREPAID_FOR_OFFER,
           message: ActivityEventType.MESSAGE_SENT,
+          qrVisitSource: CustomerVisitSource.QR_REDEMPTION,
+          staffVisitSource: CustomerVisitSource.STAFF_LOOKUP,
         })
         .getRawMany<{
           month: string;
           visited: string;
+          scannedVisits: string;
+          inStoreVisits: string;
           redeemedReward: string;
           prepaidForOffer: string;
           messageSent: string;
@@ -1263,15 +1455,11 @@ export class ActivityService {
           paidRevenueCents?: string;
           paidrevenuecents?: string;
         }>(),
-      this.businessCustomersBaseQuery(businessId)
-        .select(
-          `TO_CHAR(DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
-          'month',
-        )
-        .addSelect('COUNT(*)', 'members')
-        .andWhere('customer.createdAt >= :rangeStart', { rangeStart })
-        .groupBy(`DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC')`)
-        .getRawMany<{ month: string; members: string }>(),
+      this.membersSummaryQuery(
+        businessId,
+        `TO_CHAR(DATE_TRUNC('month', customer.created_at AT TIME ZONE 'UTC'), 'YYYY-MM')`,
+        { rangeStart },
+      ),
     ]);
 
     const byMonth = monthKeyToMap(rows);
@@ -1283,6 +1471,8 @@ export class ActivityService {
       const orderRow = ordersByMonth.get(bucket.month);
       const memberRow = membersByMonth.get(bucket.month);
       const visited = Number(row?.visited ?? 0);
+      const scannedVisits = Number(row?.scannedVisits ?? 0);
+      const inStoreVisits = Number(row?.inStoreVisits ?? 0);
       const redeemedReward = Number(row?.redeemedReward ?? 0);
       const prepaidForOffer = Number(row?.prepaidForOffer ?? 0);
       const messageSent = Number(row?.messageSent ?? 0);
@@ -1294,6 +1484,8 @@ export class ActivityService {
         totalEvents: checkIns + prepaidForOffer + messageSent,
         checkIns,
         visited,
+        scannedVisits,
+        inStoreVisits,
         redeemedReward,
         prepaidForOffer,
         messageSent,
@@ -1301,6 +1493,8 @@ export class ActivityService {
         extraItemsRevenueCents: Number(row?.extraItemsRevenueCents ?? 0),
         orders: Number(orderRow?.orders ?? 0),
         members: Number(memberRow?.members ?? 0),
+        funnelMembers: Number(memberRow?.funnelMembers ?? 0),
+        restaurantMembers: Number(memberRow?.restaurantMembers ?? 0),
         paidRevenueCents: Number(
           orderRow?.paidRevenueCents ?? orderRow?.paidrevenuecents ?? 0,
         ),
@@ -1320,6 +1514,8 @@ export class ActivityService {
     from: Date,
     to: Date,
     timeZone?: string,
+    previousFrom?: Date | null,
+    previousTo?: Date | null,
   ): Promise<{
     businessId: number;
     months: number;
@@ -1327,14 +1523,63 @@ export class ActivityService {
     totalOrders: number;
     totalMembers: number;
     todayRevenueCents: number;
+    newGuests: number;
+    returningGuests: number;
+    payingGuests: number;
     data: ActivityMonthlyPoint[];
+    previous?: {
+      from: string;
+      to: string;
+      data: ActivityMonthlyPoint[];
+      newGuests: number;
+      returningGuests: number;
+      payingGuests: number;
+    } | null;
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
-    // Cache key includes zone so UTC+5 “today” and UTC “today” never collide.
-    const cacheKey = `activity-range-v8:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
+    const cacheKey = `activity-range-v14:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
+    const currentPromise = dashboardTtlCache.getOrSet(
+      cacheKey,
+      ACTIVITY_RANGE_CACHE_TTL_MS,
+      () => this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
     );
+
+    const hasPrevious =
+      previousFrom != null &&
+      previousTo != null &&
+      previousFrom.getTime() <= previousTo.getTime();
+
+    if (!hasPrevious) {
+      return currentPromise;
+    }
+
+    const previousCacheKey = `activity-range-v14:${businessId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`;
+    const [current, previous] = await Promise.all([
+      currentPromise,
+      dashboardTtlCache.getOrSet(
+        previousCacheKey,
+        ACTIVITY_RANGE_CACHE_TTL_MS,
+        () =>
+          this.computeBusinessSummaryForRange(
+            businessId,
+            previousFrom!,
+            previousTo!,
+            chartTz,
+          ),
+      ),
+    ]);
+
+    return {
+      ...current,
+      previous: {
+        from: previousFrom!.toISOString(),
+        to: previousTo!.toISOString(),
+        data: previous.data,
+        newGuests: previous.newGuests,
+        returningGuests: previous.returningGuests,
+        payingGuests: previous.payingGuests,
+      },
+    };
   }
 
   private async computeBusinessSummaryForRange(
@@ -1349,6 +1594,9 @@ export class ActivityService {
     totalOrders: number;
     totalMembers: number;
     todayRevenueCents: number;
+    newGuests: number;
+    returningGuests: number;
+    payingGuests: number;
     data: ActivityMonthlyPoint[];
   }> {
     // Bucket by the viewer's local calendar so month charts include “today”
@@ -1375,7 +1623,8 @@ export class ActivityService {
       chartTz,
     );
 
-    const [kpi, activityRows, orderRows, memberRows] = await Promise.all([
+    const [kpi, activityRows, orderRows, memberRows, guestMix, payingGuests] =
+      await Promise.all([
       this.getDashboardKpiSnapshot(businessId),
       this.activityRepository
         .createQueryBuilder('activity')
@@ -1383,6 +1632,14 @@ export class ActivityService {
         .addSelect(
           `COUNT(*) FILTER (WHERE activity.event_type = :visited)`,
           'visited',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${SCANNED_VISIT_SQL})`,
+          'scannedVisits',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${IN_STORE_VISIT_SQL})`,
+          'inStoreVisits',
         )
         .addSelect(
           `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
@@ -1416,10 +1673,14 @@ export class ActivityService {
           redeemed: ActivityEventType.REDEEMED_REWARD,
           prepaid: ActivityEventType.PREPAID_FOR_OFFER,
           message: ActivityEventType.MESSAGE_SENT,
+          qrVisitSource: CustomerVisitSource.QR_REDEMPTION,
+          staffVisitSource: CustomerVisitSource.STAFF_LOOKUP,
         })
         .getRawMany<{
           month: string;
           visited: string;
+          scannedVisits: string;
+          inStoreVisits: string;
           redeemedReward: string;
           prepaidForOffer: string;
           messageSent: string;
@@ -1444,13 +1705,9 @@ export class ActivityService {
           paidRevenueCents?: string;
           paidrevenuecents?: string;
         }>(),
-      this.businessCustomersBaseQuery(businessId)
-        .select(memberBucket, 'month')
-        .addSelect('COUNT(*)', 'members')
-        .andWhere('customer.createdAt >= :from', { from })
-        .andWhere('customer.createdAt <= :to', { to })
-        .groupBy(memberBucket)
-        .getRawMany<{ month: string; members: string }>(),
+      this.membersSummaryQuery(businessId, memberBucket, { from, to }),
+      this.countNewVsReturningGuests(businessId, from, to),
+      this.countPayingGuests(businessId, from, to),
     ]);
 
     const activityByBucket = monthKeyToMap(activityRows);
@@ -1461,6 +1718,8 @@ export class ActivityService {
       const orderRow = ordersByBucket.get(bucket);
       const memberRow = membersByBucket.get(bucket);
       const visited = Number(activityRow?.visited ?? 0);
+      const scannedVisits = Number(activityRow?.scannedVisits ?? 0);
+      const inStoreVisits = Number(activityRow?.inStoreVisits ?? 0);
       const redeemedReward = Number(activityRow?.redeemedReward ?? 0);
       const prepaidForOffer = Number(activityRow?.prepaidForOffer ?? 0);
       const messageSent = Number(activityRow?.messageSent ?? 0);
@@ -1470,6 +1729,8 @@ export class ActivityService {
         totalEvents: checkIns + prepaidForOffer + messageSent,
         checkIns,
         visited,
+        scannedVisits,
+        inStoreVisits,
         redeemedReward,
         prepaidForOffer,
         messageSent,
@@ -1479,6 +1740,8 @@ export class ActivityService {
         ),
         orders: Number(orderRow?.orders ?? 0),
         members: Number(memberRow?.members ?? 0),
+        funnelMembers: Number(memberRow?.funnelMembers ?? 0),
+        restaurantMembers: Number(memberRow?.restaurantMembers ?? 0),
         paidRevenueCents: Number(
           orderRow?.paidRevenueCents ?? orderRow?.paidrevenuecents ?? 0,
         ),
@@ -1492,6 +1755,9 @@ export class ActivityService {
       totalOrders: data.reduce((sum, row) => sum + (row.orders ?? 0), 0),
       totalMembers: data.reduce((sum, row) => sum + (row.members ?? 0), 0),
       todayRevenueCents: kpi.todayRevenueCents,
+      newGuests: guestMix.newGuests,
+      returningGuests: guestMix.returningGuests,
+      payingGuests,
       data,
     };
   }

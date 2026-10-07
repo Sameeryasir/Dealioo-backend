@@ -22,6 +22,21 @@ export enum ActivityEventType {
 
 @Entity('activity_event')
 @Index('IDX_activity_event_restaurant_occurred', ['businessId', 'occurredAt'])
+@Index('IDX_activity_event_business_type_occurred', [
+  'businessId',
+  'eventType',
+  'occurredAt',
+])
+@Index(
+  'IDX_activity_event_business_type_customer',
+  ['businessId', 'eventType', 'customerId'],
+  { where: '"customer_id" IS NOT NULL' },
+)
+@Index(
+  'IDX_activity_event_business_customer_occurred',
+  ['businessId', 'customerId', 'occurredAt'],
+  { where: '"customer_id" IS NOT NULL' },
+)
 @Index('IDX_activity_event_idempotency', ['idempotencyKey'], { unique: true })
 export class ActivityEvent {
   @PrimaryGeneratedColumn()

@@ -114,6 +114,8 @@ export class ActivityController {
     @Query('months', new DefaultValuePipe(6), ParseIntPipe) months: number,
     @Query('from') fromRaw: string | undefined,
     @Query('to') toRaw: string | undefined,
+    @Query('previousFrom') previousFromRaw: string | undefined,
+    @Query('previousTo') previousToRaw: string | undefined,
     @Query('timezone') timeZoneRaw: string | undefined,
     @Req() req?: AuthRequest,
   ) {
@@ -126,11 +128,15 @@ export class ActivityController {
     const from = parseDate(fromRaw);
     const to = parseDate(toRaw);
     if (from && to && from.getTime() <= to.getTime()) {
+      const previousFrom = parseDate(previousFromRaw);
+      const previousTo = parseDate(previousToRaw);
       return this.activityService.getBusinessSummaryForRange(
         businessId,
         from,
         to,
         timeZoneRaw,
+        previousFrom,
+        previousTo,
       );
     }
 
