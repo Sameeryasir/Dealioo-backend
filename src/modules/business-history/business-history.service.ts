@@ -612,10 +612,19 @@ function parseDayEdge(
   edge: 'start' | 'end',
 ): Date | undefined {
   const trimmed = value?.trim();
-  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return undefined;
-  const [year, month, day] = trimmed.split('-').map(Number);
-  if (edge === 'start') {
-    return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+  if (!trimmed) return undefined;
+
+  // YYYY-MM-DD (local calendar day bounds)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split('-').map(Number);
+    if (edge === 'start') {
+      return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+    }
+    return new Date(year, (month ?? 1) - 1, day ?? 1, 23, 59, 59, 999);
   }
-  return new Date(year, (month ?? 1) - 1, day ?? 1, 23, 59, 59, 999);
+
+  // ISO timestamps from dashboard month/day calendar
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed;
 }

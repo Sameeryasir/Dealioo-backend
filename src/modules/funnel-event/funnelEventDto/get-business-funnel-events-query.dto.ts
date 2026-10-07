@@ -52,6 +52,16 @@ export class GetBusinessFunnelEventsQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
+  from?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  to?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(120)
   search?: string;
 }

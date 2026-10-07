@@ -46,4 +46,14 @@ export class GetBusinessHistoryQueryDto {
   @IsString()
   @MaxLength(120)
   q?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  from?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  to?: string;
 }

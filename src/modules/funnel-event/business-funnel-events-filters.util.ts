@@ -83,6 +83,23 @@ export function getBusinessFunnelEventDateFrom(
   return new Date(now.getFullYear(), now.getMonth(), 1);
 }
 
+/** Parse dashboard calendar bounds (YYYY-MM-DD or ISO timestamp). */
+export function parseBusinessOrdersRangeEdge(
+  value?: string | null,
+): Date | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split('-').map(Number);
+    return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
 export function matchesBusinessFunnelEventDateFilter(
   event: {
     createdAt: Date | string;

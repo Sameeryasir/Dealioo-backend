@@ -68,6 +68,8 @@ export class CustomerController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('from') fromRaw: string | undefined,
+    @Query('to') toRaw: string | undefined,
     @Req() req: AuthRequest,
   ) {
     const context = await this.businessAccessService.getAccessContext(
@@ -85,7 +87,10 @@ export class CustomerController {
       );
     }
 
-    return this.customerService.listForBusiness(businessId, page, limit);
+    return this.customerService.listForBusiness(businessId, page, limit, {
+      from: fromRaw,
+      to: toRaw,
+    });
   }
 
   @UseGuards(AuthGuard('jwt'))

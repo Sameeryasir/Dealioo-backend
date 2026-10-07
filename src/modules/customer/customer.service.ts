@@ -50,12 +50,22 @@ export class CustomerService {
     businessId: number,
     page?: number,
     limit?: number,
+    range?: { from?: string; to?: string },
   ): Promise<{ data: BusinessCustomerListItem[]; meta: PaginationMeta }> {
     const pagination = normalizePagination(page, limit);
+    const fromDate = parseCustomerRangeEdge(range?.from);
+    const toDate = parseCustomerRangeEdge(range?.to);
 
-    const total = await this.businessCustomerRepository.count({
-      where: { businessId },
-    });
+    const countQb = this.businessCustomerRepository
+      .createQueryBuilder('link')
+      .where('link.businessId = :businessId', { businessId });
+    if (fromDate) {
+      countQb.andWhere('link.joinedAt >= :fromDate', { fromDate });
+    }
+    if (toDate) {
+      countQb.andWhere('link.joinedAt <= :toDate', { toDate });
+    }
+    const total = await countQb.getCount();
 
     if (total === 0) {
       return {
@@ -64,7 +74,7 @@ export class CustomerService {
       };
     }
 
-    const rows = await this.businessCustomerRepository
+    const rowsQb = this.businessCustomerRepository
       .createQueryBuilder('link')
       .innerJoin('link.customer', 'customer')
       .where('link.businessId = :businessId', { businessId })
@@ -81,7 +91,14 @@ export class CustomerService {
             AND visit.business_id = "link"."business_id"
         ), 0)`,
         'visitCount',
-      )
+      );
+    if (fromDate) {
+      rowsQb.andWhere('link.joinedAt >= :fromDate', { fromDate });
+    }
+    if (toDate) {
+      rowsQb.andWhere('link.joinedAt <= :toDate', { toDate });
+    }
+    const rows = await rowsQb
       .orderBy('link.joinedAt', 'DESC')
       .offset(pagination.skip)
       .limit(pagination.limit)
@@ -412,4 +429,18 @@ export class CustomerService {
       await manager.delete(Customer, { id });
     });
   }
+}
+
+function parseCustomerRangeEdge(value?: string | null): Date | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [year, month, day] = trimmed.split('-').map(Number);
+    return new Date(year, (month ?? 1) - 1, day ?? 1, 0, 0, 0, 0);
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }

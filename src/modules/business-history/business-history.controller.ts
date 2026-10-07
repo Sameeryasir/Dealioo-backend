@@ -68,6 +68,8 @@ export class BusinessHistoryController {
       eventType: query.eventType,
       actorUserId: query.actorUserId,
       q: query.q,
+      from: query.from,
+      to: query.to,
     });
   }
 }

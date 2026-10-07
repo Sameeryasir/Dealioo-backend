@@ -103,6 +103,7 @@ import {
 import {
   getBusinessFunnelEventDateFrom,
   normalizeBusinessFunnelEventSearch,
+  parseBusinessOrdersRangeEdge,
 } from './business-funnel-events-filters.util';
 import {
   GetBusinessFunnelEventsQueryDto,
@@ -2621,6 +2622,8 @@ export class FunnelEventService {
       filters.status ?? 'all';
     const dateFilter: BusinessFunnelEventDateFilter = filters.date ?? 'all';
     const search = normalizeBusinessFunnelEventSearch(filters.search);
+    const rangeFrom = parseBusinessOrdersRangeEdge(filters.from);
+    const rangeTo = parseBusinessOrdersRangeEdge(filters.to);
 
     const [campaignCount, funnelCount, allEventsTotal] = await Promise.all([
       this.campaignRepository.count({
@@ -2642,6 +2645,8 @@ export class FunnelEventService {
       businessId,
       statusFilter,
       dateFilter,
+      rangeFrom,
+      rangeTo,
       search,
     });
 
@@ -2763,6 +2768,8 @@ export class FunnelEventService {
     businessId: number;
     statusFilter: BusinessFunnelEventStatusFilter;
     dateFilter: BusinessFunnelEventDateFilter;
+    rangeFrom?: Date | null;
+    rangeTo?: Date | null;
     search?: string;
   }): ReturnType<Repository<Order>['createQueryBuilder']> {
     const qb = this.orderRepository
@@ -2784,11 +2791,25 @@ export class FunnelEventService {
       });
     }
 
-    const dateFrom = getBusinessFunnelEventDateFrom(params.dateFilter);
-    if (dateFrom) {
-      qb.andWhere(`${this.businessOrdersListSortSql()} >= :dateFrom`, {
-        dateFrom,
-      });
+    // Explicit calendar range wins over today/week/month presets.
+    if (params.rangeFrom || params.rangeTo) {
+      if (params.rangeFrom) {
+        qb.andWhere(`${this.businessOrdersListSortSql()} >= :rangeFrom`, {
+          rangeFrom: params.rangeFrom,
+        });
+      }
+      if (params.rangeTo) {
+        qb.andWhere(`${this.businessOrdersListSortSql()} <= :rangeTo`, {
+          rangeTo: params.rangeTo,
+        });
+      }
+    } else {
+      const dateFrom = getBusinessFunnelEventDateFrom(params.dateFilter);
+      if (dateFrom) {
+        qb.andWhere(`${this.businessOrdersListSortSql()} >= :dateFrom`, {
+          dateFrom,
+        });
+      }
     }
 
     if (params.search) {
