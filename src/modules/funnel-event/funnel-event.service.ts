@@ -93,7 +93,10 @@ import {
   overviewRangeBucketSql,
   resolveSafeTimeZone,
 } from './overview-monthly.util';
-import { isOnlineFunnelPayment } from '../../common/payment-provenance.util';
+import {
+  applyCampaignFunnelPaymentOriginFilter,
+  isOnlineFunnelPayment,
+} from '../../common/payment-provenance.util';
 import {
   customerCampaignVisitKey,
   isCounterExtrasOnlyScannerPayment,
@@ -3509,6 +3512,7 @@ export class FunnelEventService {
     funnelId: number,
     page?: number,
     limit?: number,
+    range?: { from?: string; to?: string; q?: string },
   ): Promise<{
     data: Array<{
       id: number;
@@ -3521,7 +3525,7 @@ export class FunnelEventService {
       tags: Array<'signup' | 'prepaid' | 'postpaid'>;
       hasPayment: boolean;
       eventCount: number;
-      adSource: 'meta' | 'google' | 'utm' | 'in_store' | null;
+      adSource: 'meta' | 'google' | 'utm' | null;
       adSourceLabel: string | null;
       adSourceDetail: string | null;
     }>;
@@ -3538,13 +3542,34 @@ export class FunnelEventService {
     const campaignType = funnel.campaign?.campaignType ?? null;
     const businessId = funnel.campaign?.businessId ?? null;
     const pagination = normalizePagination(page, limit);
+    const rangeFrom = parseBusinessOrdersRangeEdge(range?.from);
+    const rangeTo = parseBusinessOrdersRangeEdge(range?.to);
+    const search = range?.q?.trim().toLowerCase() || null;
 
-    const countRow = await this.funnelEventRepository
+    const countQb = this.funnelEventRepository
       .createQueryBuilder('event')
+      .innerJoin('event.customer', 'customer')
       .select('COUNT(DISTINCT event.customer_id)', 'total')
       .where('event.funnel_id = :funnelId', { funnelId })
       .andWhere('event.customer_id IS NOT NULL')
-      .getRawOne<{ total: string }>();
+      .andWhere('event.event_type = :signupType', {
+        signupType: FunnelEventType.SIGNUP,
+      });
+    if (rangeFrom) {
+      countQb.andWhere('event.created_at >= :rangeFrom', { rangeFrom });
+    }
+    if (rangeTo) {
+      countQb.andWhere('event.created_at <= :rangeTo', { rangeTo });
+    }
+    if (search) {
+      countQb.andWhere(
+        `(LOWER(customer.name) LIKE :search
+          OR LOWER(customer.email) LIKE :search
+          OR LOWER(COALESCE(customer.phone, '')) LIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+    const countRow = await countQb.getRawOne<{ total: string }>();
 
     const total = Number(countRow?.total ?? 0);
 
@@ -3555,7 +3580,7 @@ export class FunnelEventService {
       };
     }
 
-    const rows = await this.funnelEventRepository
+    const rowsQb = this.funnelEventRepository
       .createQueryBuilder('event')
       .innerJoin('event.customer', 'customer')
       .select('customer.id', 'id')
@@ -3565,16 +3590,26 @@ export class FunnelEventService {
       .addSelect('customer.updated_at', 'updatedAt')
       .addSelect('MIN(event.created_at)', 'createdAt')
       .addSelect('COUNT(event.id)', 'eventCount')
-      .addSelect(
-        `SUM(CASE WHEN event.event_type = 'payment' THEN 1 ELSE 0 END)`,
-        'paymentCount',
-      )
-      .addSelect(
-        `SUM(CASE WHEN event.event_type = 'signup' THEN 1 ELSE 0 END)`,
-        'signupCount',
-      )
       .where('event.funnel_id = :funnelId', { funnelId })
       .andWhere('event.customer_id IS NOT NULL')
+      .andWhere('event.event_type = :signupType', {
+        signupType: FunnelEventType.SIGNUP,
+      });
+    if (rangeFrom) {
+      rowsQb.andWhere('event.created_at >= :rangeFrom', { rangeFrom });
+    }
+    if (rangeTo) {
+      rowsQb.andWhere('event.created_at <= :rangeTo', { rangeTo });
+    }
+    if (search) {
+      rowsQb.andWhere(
+        `(LOWER(customer.name) LIKE :search
+          OR LOWER(customer.email) LIKE :search
+          OR LOWER(COALESCE(customer.phone, '')) LIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+    const rows = await rowsQb
       .groupBy('customer.id')
       .addGroupBy('customer.name')
       .addGroupBy('customer.email')
@@ -3591,8 +3626,6 @@ export class FunnelEventService {
         updatedAt: Date;
         createdAt: Date;
         eventCount: string;
-        paymentCount: string;
-        signupCount: string;
       }>();
 
     const customerIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
@@ -3605,28 +3638,49 @@ export class FunnelEventService {
           })
         : new Map();
 
+    const paidCustomerIds = new Set<number>();
+    if (customerIds.length > 0) {
+      const paymentQb = this.funnelPaymentRepository
+        .createQueryBuilder('payment')
+        .select('DISTINCT payment.customer_id', 'customerId')
+        .where('payment.funnel_id = :funnelId', { funnelId })
+        .andWhere('payment.customer_id IN (:...customerIds)', { customerIds })
+        .andWhere('payment.status IN (:...paidStatuses)', {
+          paidStatuses: [
+            FunnelPaymentStatus.PAID,
+            FunnelPaymentStatus.PENDING,
+            FunnelPaymentStatus.PARTIALLY_REFUNDED,
+            FunnelPaymentStatus.REFUNDED,
+          ],
+        });
+      applyCampaignFunnelPaymentOriginFilter(paymentQb, 'payment');
+      const paymentRows = await paymentQb.getRawMany<{ customerId: string }>();
+      for (const row of paymentRows) {
+        const id = Number(row.customerId);
+        if (id > 0) paidCustomerIds.add(id);
+      }
+    }
+
     return {
       data: rows.map((row) => {
         const eventCount = Number(row.eventCount ?? 0);
-        const paymentCount = Number(row.paymentCount ?? 0);
-        const signupCount = Number(row.signupCount ?? 0);
-        const hasPayment = paymentCount > 0;
+        const customerId = Number(row.id);
+        const hasPayment = paidCustomerIds.has(customerId);
         const status: 'new' | 'returning' =
           eventCount > 1 || hasPayment ? 'returning' : 'new';
-        const tags: Array<'signup' | 'prepaid' | 'postpaid'> = [];
-        if (signupCount > 0 || eventCount > 0) {
-          tags.push('signup');
-        }
+        const tags: Array<'signup' | 'prepaid' | 'postpaid'> = ['signup'];
         if (campaignType === 'prepaid') {
           tags.push('prepaid');
         } else if (campaignType === 'postpaid') {
           tags.push('postpaid');
         }
-        const customerId = Number(row.id);
         const attribution = attributionByCustomerId.get(customerId) ?? null;
-        // Campaign guests: Facebook/Google when ad-matched, otherwise In store.
-        const isPaidAd =
-          attribution?.source === 'meta' || attribution?.source === 'google';
+        const adSource =
+          attribution?.source === 'meta' ||
+          attribution?.source === 'google' ||
+          attribution?.source === 'utm'
+            ? attribution.source
+            : null;
         return {
           id: customerId,
           name: row.name,
@@ -3638,9 +3692,9 @@ export class FunnelEventService {
           tags,
           hasPayment,
           eventCount,
-          adSource: isPaidAd ? attribution!.source : 'in_store',
-          adSourceLabel: isPaidAd ? attribution!.label : 'In store',
-          adSourceDetail: isPaidAd ? attribution!.detail : null,
+          adSource,
+          adSourceLabel: adSource ? attribution?.label ?? null : null,
+          adSourceDetail: adSource ? attribution?.detail ?? null : null,
         };
       }),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),

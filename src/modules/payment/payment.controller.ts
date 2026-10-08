@@ -99,6 +99,7 @@ export class PaymentController {
       funnelId,
       query.page ?? 1,
       query.limit ?? 10,
+      { from: query.from, to: query.to, q: query.q },
     );
   }
 

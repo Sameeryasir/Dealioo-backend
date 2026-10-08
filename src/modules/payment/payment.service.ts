@@ -19,6 +19,7 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Business } from '../../db/entities/business.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { CouponService } from '../redemption/coupon.service';
+import { parseBusinessOrdersRangeEdge } from '../funnel-event/business-funnel-events-filters.util';
 import { StripeCatalogService } from '../stripe/stripe-catalog.service';
 import { StripeService } from '../stripe/stripe.service';
 import { CreatePaymentIntentDto } from './paymentDto/create-payment-intent.dto';
@@ -38,6 +39,7 @@ import {
   normalizePagination,
   type PaginationMeta,
 } from '../../common/pagination';
+import { applyCampaignFunnelPaymentOriginFilter } from '../../common/payment-provenance.util';
 import { UserSubscriptionsService } from '../user-subscriptions/user-subscriptions.service';
 import {
   PAYMENT_RECOVERY_BATCH_LIMIT,
@@ -900,6 +902,7 @@ export class PaymentService implements OnModuleInit {
     funnelId: number,
     page?: number,
     limit?: number,
+    range?: { from?: string; to?: string; q?: string },
   ): Promise<{
     funnelId: number;
     data: Array<ReturnType<PaymentService['toPublicFunnelPayment']>>;
@@ -913,10 +916,13 @@ export class PaymentService implements OnModuleInit {
     }
 
     const pagination = normalizePagination(page, limit);
+    const rangeFrom = parseBusinessOrdersRangeEdge(range?.from);
+    const rangeTo = parseBusinessOrdersRangeEdge(range?.to);
+    const search = range?.q?.trim().toLowerCase() || null;
 
-
-    const [rows, total] = await this.funnelPaymentRepository
+    const qb = this.funnelPaymentRepository
       .createQueryBuilder('payment')
+      .leftJoin('payment.customer', 'customer')
       .where('payment.funnel_id = :funnelId', { funnelId })
       .andWhere('payment.status IN (:...statuses)', {
         statuses: [
@@ -925,9 +931,32 @@ export class PaymentService implements OnModuleInit {
           FunnelPaymentStatus.FAILED,
           FunnelPaymentStatus.CANCELLED,
         ],
-      })
-      .orderBy('payment.paid_at', 'DESC', 'NULLS LAST')
-      .addOrderBy('payment.created_at', 'DESC')
+      });
+    applyCampaignFunnelPaymentOriginFilter(qb, 'payment');
+    if (rangeFrom) {
+      qb.andWhere(
+        'COALESCE(payment.paid_at, payment.created_at) >= :rangeFrom',
+        { rangeFrom },
+      );
+    }
+    if (rangeTo) {
+      qb.andWhere(
+        'COALESCE(payment.paid_at, payment.created_at) <= :rangeTo',
+        { rangeTo },
+      );
+    }
+    if (search) {
+      qb.andWhere(
+        `(LOWER(payment.customer_email) LIKE :search
+          OR LOWER(COALESCE(customer.name, '')) LIKE :search
+          OR LOWER(COALESCE(customer.phone, '')) LIKE :search)`,
+        { search: `%${search}%` },
+      );
+    }
+
+    const [rows, total] = await qb
+      .orderBy('payment.paidAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('payment.createdAt', 'DESC')
       .skip(pagination.skip)
       .take(pagination.limit)
       .getManyAndCount();
@@ -958,8 +987,8 @@ export class PaymentService implements OnModuleInit {
       .andWhere('payment.status = :status', {
         status: FunnelPaymentStatus.PAID,
       })
-      .orderBy('payment.paid_at', 'DESC', 'NULLS LAST')
-      .addOrderBy('payment.created_at', 'DESC')
+      .orderBy('payment.paidAt', 'DESC', 'NULLS LAST')
+      .addOrderBy('payment.createdAt', 'DESC')
       .getMany();
 
     return {

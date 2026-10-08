@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class GetFunnelGuestsQueryDto {
   @IsOptional()
@@ -14,4 +14,19 @@ export class GetFunnelGuestsQueryDto {
   @Min(1)
   @Max(100)
   limit?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  from?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  to?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
 }

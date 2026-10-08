@@ -1,7 +1,7 @@
 import type { EntityManager } from 'typeorm';
 import { hashExternalIdForMeta } from '../product-meta-tracking/product-meta-hash.util';
 
-export type GuestAdAttributionSource = 'meta' | 'google' | 'utm' | 'in_store';
+export type GuestAdAttributionSource = 'meta' | 'google' | 'utm';
 
 export type GuestAdAttribution = {
   source: GuestAdAttributionSource;
