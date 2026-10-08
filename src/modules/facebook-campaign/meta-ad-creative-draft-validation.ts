@@ -95,3 +95,27 @@ export function buildDestinationUrlWithParams(
   const separator = trimmed.includes('?') ? '&' : '?';
   return `${trimmed}${separator}${params}`;
 }
+
+export function parseCampaignIdFromDestinationUrl(
+  url?: string | null,
+): number | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    const raw =
+      parsed.searchParams.get('campaignId') ??
+      parsed.searchParams.get('campaign_id');
+    if (!raw?.trim()) return null;
+    const id = Number.parseInt(raw.trim(), 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  } catch {
+    const match =
+      trimmed.match(/[?&]campaignId=(\d+)/i) ??
+      trimmed.match(/[?&]campaign_id=(\d+)/i);
+    if (!match?.[1]) return null;
+    const id = Number.parseInt(match[1], 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+}

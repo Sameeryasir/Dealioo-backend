@@ -135,6 +135,7 @@ export class FacebookController {
     @Query('page') pageRaw?: string,
     @Query('pageSize') pageSizeRaw?: string,
     @Query('q') queryRaw?: string,
+    @Query('campaignIds') campaignIdsRaw?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -157,6 +158,10 @@ export class FacebookController {
       refreshRaw?.trim().toLowerCase() === 'true';
     const page = Number.parseInt(pageRaw ?? '', 10);
     const pageSize = Number.parseInt(pageSizeRaw ?? '', 10);
+    const campaignIds = (campaignIdsRaw ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
 
     return this.facebookService.getAdCampaignStats(business, {
       includeInsights,
@@ -164,6 +169,7 @@ export class FacebookController {
       page: Number.isFinite(page) && page > 0 ? page : 1,
       pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 4,
       query: queryRaw?.trim() || undefined,
+      campaignIds: campaignIds.length > 0 ? campaignIds : undefined,
     });
   }
 

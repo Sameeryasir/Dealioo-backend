@@ -491,6 +491,7 @@ export class FacebookService {
       page?: number;
       pageSize?: number;
       query?: string;
+      campaignIds?: string[];
     },
   ): Promise<FacebookAdCampaignStatsDto> {
     assertBusinessCanReadMetaAds(business.metaOauthScopes);
@@ -679,7 +680,12 @@ export class FacebookService {
 
   private withCampaignListView(
     stats: FacebookAdCampaignStatsDto,
-    options?: { page?: number; pageSize?: number; query?: string },
+    options?: {
+      page?: number;
+      pageSize?: number;
+      query?: string;
+      campaignIds?: string[];
+    },
   ): FacebookAdCampaignStatsDto {
     const pageSize = Math.min(
       MAX_CAMPAIGN_PAGE_SIZE,
@@ -687,14 +693,22 @@ export class FacebookService {
     );
     const query = options?.query?.trim() || null;
     const q = query?.toLowerCase() ?? '';
+    const campaignIdSet = new Set(
+      (options?.campaignIds ?? [])
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    );
 
-    const filtered = q
-      ? stats.campaigns.filter(
-          (c) =>
-            c.name.toLowerCase().includes(q) ||
-            c.id.toLowerCase().includes(q),
-        )
-      : stats.campaigns;
+    let filtered = stats.campaigns;
+    if (campaignIdSet.size > 0) {
+      filtered = filtered.filter((c) => campaignIdSet.has(c.id));
+    }
+    if (q) {
+      filtered = filtered.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q),
+      );
+    }
 
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));

@@ -54,6 +54,7 @@ import {
   assertAdCreativeMedia,
   assertAdCreativeDestinationUrl,
   buildDestinationUrlWithParams,
+  parseCampaignIdFromDestinationUrl,
 } from './meta-ad-creative-draft-validation';
 
 @Injectable()
@@ -323,6 +324,7 @@ export class MetaCampaignDraftService {
     };
 
     draft.adCreativeData = adCreativeData;
+    draft.campaignId = this.resolveCampaignIdFromCreative(adCreativeData);
     draft.currentStep = Math.max(draft.currentStep, 4);
     draft.completedSteps = this.mergeCompletedSteps(draft.completedSteps, [
       1, 2, 3,
@@ -372,6 +374,9 @@ export class MetaCampaignDraftService {
         ...((draft.adCreativeData as Record<string, unknown>) ?? {}),
         ...dto.adCreativeData,
       };
+      draft.campaignId = this.resolveCampaignIdFromCreative(
+        draft.adCreativeData as AdCreativeStepDataDto,
+      );
     }
 
     if (dto.currentStep != null) {
@@ -401,7 +406,7 @@ export class MetaCampaignDraftService {
     await this.loadOwnedBusiness(user, businessId, 'view');
 
     const draft = await this.draftRepository.findOne({
-      where: { id: draftId.trim(), businessId, userId: user.id },
+      where: { id: draftId.trim(), businessId },
     });
 
     if (!draft) {
@@ -420,7 +425,6 @@ export class MetaCampaignDraftService {
     const drafts = await this.draftRepository.find({
       where: {
         businessId,
-        userId: user.id,
       },
       order: { updatedAt: 'DESC' },
     });
@@ -549,7 +553,6 @@ export class MetaCampaignDraftService {
       where: {
         id: draftId.trim(),
         businessId,
-        userId: user.id,
       },
     });
 
@@ -564,20 +567,9 @@ export class MetaCampaignDraftService {
       publishStatus === 'QUEUED' ||
       publishStatus === 'PUBLISHING' ||
       publishStatus === 'RUNNING';
-    const isPublished =
-      status === 'published' ||
-      publishStatus === 'PUBLISHED' ||
-      Boolean(draft.metaAdId);
-
     if (isPublishing) {
       throw new BadRequestException(
         'This campaign is publishing. Wait for it to finish before deleting.',
-      );
-    }
-
-    if (isPublished) {
-      throw new BadRequestException(
-        'Published campaigns cannot be deleted here. Delete them from Meta Ads instead.',
       );
     }
 
@@ -846,6 +838,7 @@ export class MetaCampaignDraftService {
         string,
         unknown
       >,
+      campaignId: this.resolveCampaignIdFromCreative(mapped.adCreativeData),
       metaCampaignId: campaignId,
       metaAdsetId: liveAdSet.id,
       metaCreativeId: liveAd.creative?.id?.trim() || null,
@@ -1085,12 +1078,14 @@ export class MetaCampaignDraftService {
       audience: {
         country: countries[0] || 'US',
         locations: countries.map((code) => ({
-          mode: 'include',
-          type: 'country',
+          id: `loc-${code}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          mode: 'include' as const,
+          type: 'country' as const,
           countryCode: code,
+          countryName: code,
           label: code,
           metaKey: code,
-          metaType: 'country',
+          metaType: 'country' as const,
         })),
         ageMin,
         ageMax,
@@ -1209,11 +1204,11 @@ export class MetaCampaignDraftService {
     businessId: number,
     draftId: string,
   ): Promise<MetaCampaignDraft> {
+    void userId;
     const draft = await this.draftRepository.findOne({
       where: {
         id: draftId.trim(),
         businessId,
-        userId,
       },
     });
 
@@ -1276,10 +1271,21 @@ export class MetaCampaignDraftService {
     return business;
   }
 
+  private resolveCampaignIdFromCreative(
+    creative: AdCreativeStepDataDto | null | undefined,
+  ): number | null {
+    const destinationUrl =
+      creative?.destinationUrl?.trim() ||
+      creative?.carouselCards?.[0]?.destinationUrl?.trim() ||
+      null;
+    return parseCampaignIdFromDestinationUrl(destinationUrl);
+  }
+
   private toResponse(draft: MetaCampaignDraft): MetaCampaignDraftResponseDto {
     return {
       id: draft.id,
       businessId: draft.businessId,
+      campaignId: draft.campaignId ?? null,
       currentStep: draft.currentStep,
       status: draft.status,
       campaignData: (draft.campaignData as CampaignStepDataDto | null) ?? null,

@@ -20,6 +20,7 @@ export type CampaignStepDataDto = {
 export class MetaCampaignDraftResponseDto {
   id: string;
   businessId: number;
+  campaignId: number | null;
   currentStep: number;
   status: string;
   campaignData: CampaignStepDataDto | null;

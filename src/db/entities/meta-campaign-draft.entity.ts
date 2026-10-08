@@ -17,6 +17,9 @@ export class MetaCampaignDraft {
   @Column({ name: 'business_id', type: 'int' })
   businessId: number;
 
+  @Column({ name: 'campaign_id', type: 'int', nullable: true })
+  campaignId: number | null;
+
   @Column({ name: 'current_step', type: 'int', default: 1 })
   currentStep: number;
 
