@@ -17,6 +17,10 @@ import { Funnel } from '../../db/entities/funnel.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { TrackFunnelAnalyticsDto } from './funnelEventDto/track-funnel-analytics.dto';
 import {
+  attributionFromUtm,
+  normalizeGuestAdSource,
+} from './guest-ad-attribution.util';
+import {
   buildRecentMonthBuckets,
   buildZonedRangeBucketKeys,
   overviewRangeBucketSql,
@@ -82,6 +86,30 @@ export class FunnelAnalyticsService {
       );
     }
 
+    const utmSource = this.normalizeOptionalString(dto.utmSource);
+    const utmMedium = this.normalizeOptionalString(dto.utmMedium);
+    const utmCampaign = this.normalizeOptionalString(dto.utmCampaign);
+    // Prefer client ad_source; else classify from UTM (same rules as signup attribution)
+    const fromDto = normalizeGuestAdSource(dto.adSource);
+    const fromUtm = attributionFromUtm({
+      utmSource,
+      utmMedium,
+      utmCampaign,
+    });
+    const adSource = fromDto ?? fromUtm?.source ?? null;
+    const adSourceLabel = adSource
+      ? dto.adSourceLabel?.trim() ||
+        fromUtm?.label ||
+        (adSource === 'meta'
+          ? 'Facebook'
+          : adSource === 'google'
+            ? 'Google'
+            : 'Ad')
+      : null;
+    const adSourceDetail = adSource
+      ? dto.adSourceDetail?.trim() || fromUtm?.detail || null
+      : null;
+
     const record = this.analyticsRepository.create({
       funnelId: dto.funnelId,
       eventType: dto.eventType,
@@ -91,10 +119,13 @@ export class FunnelAnalyticsService {
       pagePath: this.normalizeOptionalString(dto.pagePath),
       stepName: this.normalizeOptionalString(dto.stepName),
       stepOrder: dto.stepOrder ?? null,
-      utmSource: this.normalizeOptionalString(dto.utmSource),
-      utmMedium: this.normalizeOptionalString(dto.utmMedium),
-      utmCampaign: this.normalizeOptionalString(dto.utmCampaign),
+      utmSource,
+      utmMedium,
+      utmCampaign,
       referrer: this.normalizeOptionalString(dto.referrer),
+      adSource,
+      adSourceLabel,
+      adSourceDetail,
       metadata: dto.metadata ?? null,
     });
 

@@ -13,7 +13,16 @@ function normalizeUtm(value: string | null | undefined): string {
   return (value ?? '').trim().toLowerCase();
 }
 
-function attributionFromUtm(params: {
+export function normalizeGuestAdSource(
+  value: string | null | undefined,
+): GuestAdAttributionSource | null {
+  if (value === 'meta' || value === 'google' || value === 'utm') {
+    return value;
+  }
+  return null;
+}
+
+export function attributionFromUtm(params: {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
@@ -111,15 +120,17 @@ export async function resolveGuestAdAttributions(
 
   const googleRows: Array<{ customerId: string }> = await manager.query(
     `
-      SELECT DISTINCT fe.customer_id AS "customerId"
-      FROM funnel_event fe
-      INNER JOIN google_funnel_events g
-        ON g.business_id = $1
-       AND g.gclid IS NOT NULL
-       AND (g.funnel_id IS NULL OR g.funnel_id = fe.funnel_id)
-      WHERE fe.customer_id = ANY($2::int[])
-        AND fe.customer_id IS NOT NULL
-        ${params.funnelId != null && params.funnelId > 0 ? 'AND fe.funnel_id = $3' : ''}
+      SELECT DISTINCT linked.customer_id AS "customerId"
+      FROM google_funnel_events g
+      CROSS JOIN LATERAL (
+        SELECT NULLIF(g.custom_data->>'dealioCustomerId', '')::int AS customer_id
+        UNION ALL
+        SELECT NULLIF(g.custom_data->>'customerId', '')::int
+      ) linked
+      WHERE g.business_id = $1
+        AND g.gclid IS NOT NULL
+        AND linked.customer_id = ANY($2::int[])
+        ${params.funnelId != null && params.funnelId > 0 ? 'AND (g.funnel_id IS NULL OR g.funnel_id = $3)' : ''}
     `,
     params.funnelId != null && params.funnelId > 0
       ? [params.businessId, remainingAfterMeta, params.funnelId]

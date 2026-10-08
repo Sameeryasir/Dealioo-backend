@@ -223,6 +223,29 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/guest-ad-sources')
+  async getFunnelGuestAdSources(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query() query: GetFunnelGuestsQueryDto,
+    @Req() req: AuthRequest,
+  ) {
+    const businessId =
+      await this.funnelEventService.getFunnelBusinessId(funnelId);
+    await this.businessAccessService.assertAnyPermission(
+      req.user,
+      businessId,
+      campaignGuestsPermissionKeys(),
+      'You do not have permission to view campaign guests.',
+    );
+    // Counts Meta/Google from funnel_event.ad_source on signup rows
+    return this.funnelEventService.getFunnelGuestAdSourceCounts(funnelId, {
+      from: query.from,
+      to: query.to,
+      timezone: query.timezone,
+    });
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('funnel/:funnelId/stats')
   getStats(@Param('funnelId', ParseIntPipe) funnelId: number) {
     return this.funnelEventService.getStats(funnelId);

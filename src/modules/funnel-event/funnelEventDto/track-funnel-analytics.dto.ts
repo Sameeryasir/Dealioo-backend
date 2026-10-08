@@ -72,6 +72,21 @@ export class TrackFunnelAnalyticsDto {
   referrer?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  adSource?: 'meta' | 'google' | 'utm';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  adSourceLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  adSourceDetail?: string;
+
+  @IsOptional()
   @IsObject()
   metadata?: Record<string, unknown>;
 }

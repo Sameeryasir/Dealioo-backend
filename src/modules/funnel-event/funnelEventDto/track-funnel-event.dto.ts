@@ -2,9 +2,11 @@ import { Type } from 'class-transformer';
 import {
   IsEmail,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateIf,
 } from 'class-validator';
@@ -65,4 +67,18 @@ export class TrackFunnelEventDto {
   @IsOptional()
   @IsString()
   receiptUrl?: string;
+
+  @IsOptional()
+  @IsIn(['meta', 'google', 'utm'])
+  adSource?: 'meta' | 'google' | 'utm';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  adSourceLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  adSourceDetail?: string;
 }

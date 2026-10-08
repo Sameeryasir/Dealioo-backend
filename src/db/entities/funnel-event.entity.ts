@@ -19,6 +19,8 @@ export enum FunnelEventType {
   PAYMENT = 'payment',
 }
 
+export type FunnelEventAdSource = 'meta' | 'google' | 'utm';
+
 @Entity('funnel_event')
 export class FunnelEvent {
   @PrimaryGeneratedColumn()
@@ -96,6 +98,25 @@ export class FunnelEvent {
 
   @Column({ name: 'receipt_url', type: 'text', nullable: true })
   receiptUrl: string | null;
+
+  @Column({ name: 'ad_source', type: 'varchar', length: 16, nullable: true })
+  adSource: FunnelEventAdSource | null;
+
+  @Column({
+    name: 'ad_source_label',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  adSourceLabel: string | null;
+
+  @Column({
+    name: 'ad_source_detail',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  adSourceDetail: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

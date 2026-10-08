@@ -11,6 +11,25 @@ export type GuestDealPaymentBadge =
   | 'PAID_AT_COUNTER'
   | 'PENDING';
 
+/** SQL predicate: payment came from the campaign funnel (online/Stripe), not business counter/scanner. */
+export function campaignFunnelPaymentOriginSql(alias = 'payment'): string {
+  return `(
+      ${alias}.payment_source IN ('${FunnelPaymentSource.STRIPE}', '${FunnelPaymentSource.MANUAL}')
+      OR ${alias}.collection_channel = '${FunnelCollectionChannel.ONLINE}'
+      OR ${alias}.stripe_payment_intent_id IS NOT NULL
+      OR ${alias}.stripe_checkout_session_id IS NOT NULL
+      OR EXISTS (
+        SELECT 1
+        FROM funnel_event fe_campaign_signup
+        WHERE fe_campaign_signup.funnel_id = ${alias}.funnel_id
+          AND fe_campaign_signup.customer_id IS NOT NULL
+          AND fe_campaign_signup.customer_id = ${alias}.customer_id
+          AND fe_campaign_signup.event_type = '${FunnelEventType.SIGNUP}'
+          AND fe_campaign_signup.deleted_at IS NULL
+      )
+    )`;
+}
+
 export function applyCampaignFunnelPaymentOriginFilter<
   T extends ObjectLiteral,
 >(qb: SelectQueryBuilder<T>, alias = 'payment'): SelectQueryBuilder<T> {

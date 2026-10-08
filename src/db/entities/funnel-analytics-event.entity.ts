@@ -86,6 +86,26 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'referrer', type: 'varchar', length: 512, nullable: true })
   referrer: string | null;
 
+  // Stored at track time (same pattern as funnel_event.ad_source) for fast Meta/Google KPIs
+  @Column({ name: 'ad_source', type: 'varchar', length: 16, nullable: true })
+  adSource: 'meta' | 'google' | 'utm' | null;
+
+  @Column({
+    name: 'ad_source_label',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  adSourceLabel: string | null;
+
+  @Column({
+    name: 'ad_source_detail',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  adSourceDetail: string | null;
+
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown> | null;
 
