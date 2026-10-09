@@ -55,7 +55,7 @@ import {
 } from './google-ads-sdk.client';
 import { enums } from 'google-ads-api';
 
-const GOOGLE_AD_STATS_DATE_PRESET = 'LAST_30_DAYS';
+const GOOGLE_AD_STATS_DATE_PRESET = 'ALL_TIME';
 const GOOGLE_ADS_SDK_TIMEOUT_MS = 25_000;
 const GOOGLE_ADS_STATS_DB_TTL_MS = 10 * 60_000;
 
@@ -1951,11 +1951,23 @@ export class GoogleAdsService {
     return id || null;
   }
 
+  private googleAdsAllHistoryDateBounds(): { start: string; end: string } {
+    const end = new Date();
+    const start = new Date(
+      Date.UTC(end.getUTCFullYear() - 11, end.getUTCMonth(), 1),
+    );
+    return {
+      start: start.toISOString().slice(0, 10),
+      end: end.toISOString().slice(0, 10),
+    };
+  }
+
   private async fetchCampaignStats(
     refreshToken: string,
     customerId: string,
     loginCustomerId: string = customerId,
   ): Promise<GoogleAdsCampaignStatsDto['campaigns']> {
+    const { start, end } = this.googleAdsAllHistoryDateBounds();
     const query = `
       SELECT
         campaign.id,
@@ -1969,7 +1981,7 @@ export class GoogleAdsService {
         metrics.conversions,
         metrics.conversions_value
       FROM campaign
-      WHERE segments.date DURING LAST_30_DAYS
+      WHERE segments.date BETWEEN '${start}' AND '${end}'
         AND campaign.status != 'REMOVED'
     `.trim();
 
