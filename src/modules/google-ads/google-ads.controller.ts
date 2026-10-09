@@ -472,6 +472,7 @@ export class GoogleAdsController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
     @Query('refresh') refresh?: string,
+    @Query('period') periodRaw?: string,
   ): Promise<GoogleAdsCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -487,7 +488,10 @@ export class GoogleAdsController {
     const bypassCache =
       refresh === '1' || refresh === 'true' || refresh === 'yes';
 
-    return this.googleAdsService.getAdCampaignStats(business, { bypassCache });
+    return this.googleAdsService.getAdCampaignStats(business, {
+      bypassCache,
+      period: periodRaw?.trim() || undefined,
+    });
   }
 
   @UseGuards(AuthGuard('jwt'))

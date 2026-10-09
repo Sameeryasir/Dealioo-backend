@@ -39,6 +39,10 @@ import { FacebookPageEngagementPreviewDto } from './dto/facebook-page-engagement
 import { FacebookOAuthCallbackResultDto } from './dto/facebook-oauth-callback-result.dto';
 import { DEFAULT_META_AD_STATS_DATE_PRESET } from './meta-ad-stats-date-preset';
 import {
+  resolveMetaInsightsPeriod,
+  type ResolvedMetaInsightsPeriod,
+} from './meta-insights-period';
+import {
   FacebookConnectionStatus,
   type FacebookConnectionStatusValue,
 } from './facebook-connection-status';
@@ -124,6 +128,13 @@ type FacebookCampaignsResponse = {
 };
 
 const META_AD_STATS_DATE_PRESET = DEFAULT_META_AD_STATS_DATE_PRESET;
+
+function withMetaInsightsPeriodParams(
+  base: Record<string, string>,
+  period: ResolvedMetaInsightsPeriod,
+): Record<string, string> {
+  return { ...base, ...period.graphParams };
+}
 const META_CAMPAIGN_FIELDS =
   'id,name,status,effective_status,daily_budget';
 const META_CAMPAIGN_INSIGHT_FIELDS =
@@ -492,17 +503,19 @@ export class FacebookService {
       pageSize?: number;
       query?: string;
       campaignIds?: string[];
+      period?: string;
     },
   ): Promise<FacebookAdCampaignStatsDto> {
     assertBusinessCanReadMetaAds(business.metaOauthScopes);
 
     const includeInsights = options?.includeInsights !== false;
     const bypassCache = options?.bypassCache === true;
+    const period = resolveMetaInsightsPeriod(options?.period);
     const { accessToken } =
       await this.metaTokenService.assertBusinessMetaCredentials(business);
 
     const adAccount = this.requireBusinessAdAccount(business);
-    const cacheKey = `${business.id}:${adAccount.id}`;
+    const cacheKey = `${business.id}:${adAccount.id}:${period.snapshotKey}`;
 
     let full: FacebookAdCampaignStatsDto;
 
@@ -510,6 +523,7 @@ export class FacebookService {
       const snapshot = await this.findCampaignStatsSnapshot(
         business.id,
         adAccount.id,
+        period.snapshotKey,
       );
       if (snapshot && (!includeInsights || snapshot.includeInsights)) {
         const payload = snapshot.payload as unknown as FacebookAdCampaignStatsDto;
@@ -534,6 +548,7 @@ export class FacebookService {
               adAccount.id,
               accessToken,
               true,
+              period,
             );
           }
           full = this.statsDtoFromSnapshot(snapshot, includeInsights, {
@@ -559,6 +574,7 @@ export class FacebookService {
       adAccount.id,
       accessToken,
       includeInsights,
+      period,
     );
     return this.withCampaignListView(full, options);
   }
@@ -587,6 +603,7 @@ export class FacebookService {
     adAccountId: string,
     accessToken: string,
     includeInsights: boolean,
+    period: ResolvedMetaInsightsPeriod,
   ): void {
     if (this.campaignStatsRefreshInFlight.has(cacheKey)) return;
     void this.refreshCampaignStatsFromMeta(
@@ -595,6 +612,7 @@ export class FacebookService {
       adAccountId,
       accessToken,
       includeInsights,
+      period,
     ).catch((err) => {
       this.logger.warn(
         `Background Meta campaign stats refresh failed for ${cacheKey}: ${
@@ -610,6 +628,7 @@ export class FacebookService {
     adAccountId: string,
     accessToken: string,
     includeInsights: boolean,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<FacebookAdCampaignStatsDto> {
     const existing = this.campaignStatsRefreshInFlight.get(cacheKey);
     if (existing) {
@@ -622,6 +641,7 @@ export class FacebookService {
       adAccountId,
       accessToken,
       includeInsights,
+      period,
     ).finally(() => {
       if (this.campaignStatsRefreshInFlight.get(cacheKey) === promise) {
         this.campaignStatsRefreshInFlight.delete(cacheKey);
@@ -634,13 +654,14 @@ export class FacebookService {
   private async findCampaignStatsSnapshot(
     businessId: number,
     adAccountId: string,
+    datePreset: string = META_AD_STATS_DATE_PRESET,
   ): Promise<MetaAdCampaignStatsSnapshot | null> {
     try {
       return await this.campaignStatsSnapshotRepository.findOne({
         where: {
           businessId,
           adAccountId,
-          datePreset: META_AD_STATS_DATE_PRESET,
+          datePreset,
         },
       });
     } catch (err) {
@@ -865,6 +886,7 @@ export class FacebookService {
     adAccountId: string,
     accessToken: string,
     includeInsights: boolean,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<FacebookAdCampaignStatsDto> {
     const accountMeta = await this.fetchAdAccountMeta(adAccountId, accessToken);
 
@@ -929,6 +951,7 @@ export class FacebookService {
       const insightsByCampaignId = await this.fetchAccountCampaignInsights(
         adAccountId,
         accessToken,
+        period,
       );
 
       campaigns = campaigns.map((c) => ({
@@ -945,6 +968,7 @@ export class FacebookService {
             const insights = await this.fetchCampaignInsights(
               campaign.id,
               accessToken,
+              period,
             );
             return { id: campaign.id, insights };
           },
@@ -963,20 +987,31 @@ export class FacebookService {
     if (includeInsights) {
       const [daily, age, device, placement, country, dailyByCampaign] =
         await Promise.all([
-          this.fetchAccountDailyInsights(adAccountId, accessToken),
-          this.fetchAccountBreakdown(adAccountId, accessToken, 'age'),
+          this.fetchAccountDailyInsights(adAccountId, accessToken, period),
+          this.fetchAccountBreakdown(adAccountId, accessToken, 'age', period),
           this.fetchAccountBreakdown(
             adAccountId,
             accessToken,
             'impression_device',
+            period,
           ),
           this.fetchAccountBreakdown(
             adAccountId,
             accessToken,
             'publisher_platform',
+            period,
           ),
-          this.fetchAccountBreakdown(adAccountId, accessToken, 'country'),
-          this.fetchAccountCampaignDailyInsights(adAccountId, accessToken),
+          this.fetchAccountBreakdown(
+            adAccountId,
+            accessToken,
+            'country',
+            period,
+          ),
+          this.fetchAccountCampaignDailyInsights(
+            adAccountId,
+            accessToken,
+            period,
+          ),
         ]);
       dailyInsights = daily;
       breakdowns = { age, device, placement, country };
@@ -991,7 +1026,7 @@ export class FacebookService {
       adAccountId,
       adAccountName: accountMeta.name,
       currency: accountMeta.currency,
-      datePreset: META_AD_STATS_DATE_PRESET,
+      datePreset: period.displayKey,
       campaigns,
       dailyInsights,
       breakdowns,
@@ -1008,6 +1043,7 @@ export class FacebookService {
       includeInsights,
       result,
       fetchedAt,
+      period.snapshotKey,
     );
 
     return result;
@@ -1057,11 +1093,13 @@ export class FacebookService {
     includeInsights: boolean,
     result: FacebookAdCampaignStatsDto,
     fetchedAt: Date,
+    snapshotKey: string = META_AD_STATS_DATE_PRESET,
   ): Promise<void> {
     try {
       const existing = await this.findCampaignStatsSnapshot(
         businessId,
         adAccountId,
+        snapshotKey,
       );
       const payload = {
         adAccountId: result.adAccountId,
@@ -1085,7 +1123,7 @@ export class FacebookService {
         this.campaignStatsSnapshotRepository.create({
           businessId,
           adAccountId,
-          datePreset: META_AD_STATS_DATE_PRESET,
+          datePreset: snapshotKey,
           includeInsights,
           payload,
           fetchedAt,
@@ -1103,6 +1141,7 @@ export class FacebookService {
   private async fetchAccountDailyInsights(
     adAccountId: string,
     accessToken: string,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<FacebookAdDailyInsightDto[]> {
     try {
       const response = await this.graphGetWithToken<{
@@ -1112,12 +1151,18 @@ export class FacebookService {
           impressions?: string;
           clicks?: string;
         }>;
-      }>(`/${adAccountId}/insights`, accessToken, {
-        date_preset: META_AD_STATS_DATE_PRESET,
-        time_increment: '1',
-        fields: 'spend,impressions,clicks,date_start',
-        limit: '50',
-      });
+      }>(
+        `/${adAccountId}/insights`,
+        accessToken,
+        withMetaInsightsPeriodParams(
+          {
+            time_increment: '1',
+            fields: 'spend,impressions,clicks,date_start',
+            limit: '50',
+          },
+          period,
+        ),
+      );
 
       return (response.data ?? [])
         .map((row) => {
@@ -1144,6 +1189,7 @@ export class FacebookService {
   private async fetchAccountCampaignDailyInsights(
     adAccountId: string,
     accessToken: string,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<Map<string, FacebookAdDailyInsightDto[]>> {
     const out = new Map<string, FacebookAdDailyInsightDto[]>();
 
@@ -1156,13 +1202,19 @@ export class FacebookService {
           impressions?: string;
           clicks?: string;
         }>;
-      }>(`/${adAccountId}/insights`, accessToken, {
-        level: 'campaign',
-        date_preset: META_AD_STATS_DATE_PRESET,
-        time_increment: '1',
-        fields: 'campaign_id,spend,impressions,clicks,date_start',
-        limit: '500',
-      });
+      }>(
+        `/${adAccountId}/insights`,
+        accessToken,
+        withMetaInsightsPeriodParams(
+          {
+            level: 'campaign',
+            time_increment: '1',
+            fields: 'campaign_id,spend,impressions,clicks,date_start',
+            limit: '500',
+          },
+          period,
+        ),
+      );
 
       for (const row of response.data ?? []) {
         const campaignId = row.campaign_id?.trim();
@@ -1198,6 +1250,7 @@ export class FacebookService {
     adAccountId: string,
     accessToken: string,
     breakdown: 'age' | 'impression_device' | 'publisher_platform' | 'country',
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<FacebookAdBreakdownRowDto[]> {
     try {
       const response = await this.graphGetWithToken<{
@@ -1207,12 +1260,18 @@ export class FacebookService {
             spend?: string;
           }
         >;
-      }>(`/${adAccountId}/insights`, accessToken, {
-        date_preset: META_AD_STATS_DATE_PRESET,
-        breakdowns: breakdown,
-        fields: 'impressions,spend',
-        limit: '50',
-      });
+      }>(
+        `/${adAccountId}/insights`,
+        accessToken,
+        withMetaInsightsPeriodParams(
+          {
+            breakdowns: breakdown,
+            fields: 'impressions,spend',
+            limit: '50',
+          },
+          period,
+        ),
+      );
 
       return (response.data ?? [])
         .map((row) => {
@@ -1310,18 +1369,25 @@ export class FacebookService {
   private async fetchAccountCampaignInsights(
     adAccountId: string,
     accessToken: string,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<Map<string, FacebookAdCampaignInsightDto>> {
     const out = new Map<string, FacebookAdCampaignInsightDto>();
 
     try {
       const response = await this.graphGetWithToken<{
         data?: MetaCampaignInsightRow[];
-      }>(`/${adAccountId}/insights`, accessToken, {
-        level: 'campaign',
-        date_preset: META_AD_STATS_DATE_PRESET,
-        fields: META_CAMPAIGN_INSIGHT_FIELDS,
-        limit: '50',
-      });
+      }>(
+        `/${adAccountId}/insights`,
+        accessToken,
+        withMetaInsightsPeriodParams(
+          {
+            level: 'campaign',
+            fields: META_CAMPAIGN_INSIGHT_FIELDS,
+            limit: '50',
+          },
+          period,
+        ),
+      );
 
       for (const row of response.data ?? []) {
         const id = row.campaign_id?.trim();
@@ -2059,14 +2125,21 @@ export class FacebookService {
   private async fetchCampaignInsights(
     campaignId: string,
     accessToken: string,
+    period: ResolvedMetaInsightsPeriod,
   ): Promise<FacebookAdCampaignInsightDto | null> {
     try {
       const response = await this.graphGetWithToken<{
         data?: MetaCampaignInsightRow[];
-      }>(`/${campaignId}/insights`, accessToken, {
-        date_preset: META_AD_STATS_DATE_PRESET,
-        fields: META_SINGLE_CAMPAIGN_INSIGHT_FIELDS,
-      });
+      }>(
+        `/${campaignId}/insights`,
+        accessToken,
+        withMetaInsightsPeriodParams(
+          {
+            fields: META_SINGLE_CAMPAIGN_INSIGHT_FIELDS,
+          },
+          period,
+        ),
+      );
       const row = response.data?.[0];
       if (!row) {
         return null;

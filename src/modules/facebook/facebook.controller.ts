@@ -136,6 +136,7 @@ export class FacebookController {
     @Query('pageSize') pageSizeRaw?: string,
     @Query('q') queryRaw?: string,
     @Query('campaignIds') campaignIdsRaw?: string,
+    @Query('period') periodRaw?: string,
   ): Promise<FacebookAdCampaignStatsDto> {
     const business = await this.businessService.findBusinessForUser(
       req.user,
@@ -170,6 +171,7 @@ export class FacebookController {
       pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 4,
       query: queryRaw?.trim() || undefined,
       campaignIds: campaignIds.length > 0 ? campaignIds : undefined,
+      period: periodRaw?.trim() || undefined,
     });
   }
 

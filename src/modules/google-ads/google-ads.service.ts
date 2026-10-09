@@ -54,8 +54,11 @@ import {
   toMicros,
 } from './google-ads-sdk.client';
 import { enums } from 'google-ads-api';
+import {
+  resolveGoogleInsightsPeriod,
+  type ResolvedGoogleInsightsPeriod,
+} from './google-insights-period';
 
-const GOOGLE_AD_STATS_DATE_PRESET = 'ALL_TIME';
 const GOOGLE_ADS_SDK_TIMEOUT_MS = 25_000;
 const GOOGLE_ADS_STATS_DB_TTL_MS = 10 * 60_000;
 
@@ -749,18 +752,20 @@ export class GoogleAdsService {
 
   async getAdCampaignStats(
     business: Business,
-    options?: { bypassCache?: boolean },
+    options?: { bypassCache?: boolean; period?: string },
   ): Promise<GoogleAdsCampaignStatsDto> {
     const { refreshToken, customerId, loginCustomerId } =
       await this.tokenService.assertBusinessGoogleCredentials(business);
     const normalizedCustomerId = this.normalizeCustomerId(customerId!);
-    const cacheKey = `${business.id}:${normalizedCustomerId}`;
+    const period = resolveGoogleInsightsPeriod(options?.period);
+    const cacheKey = `${business.id}:${normalizedCustomerId}:${period.snapshotKey}`;
     const bypassCache = options?.bypassCache === true;
 
     if (!bypassCache) {
       const snapshot = await this.findCampaignStatsSnapshot(
         business.id,
         normalizedCustomerId,
+        period.snapshotKey,
       );
       if (snapshot) {
         const ageMs = Date.now() - snapshot.fetchedAt.getTime();
@@ -772,6 +777,7 @@ export class GoogleAdsService {
             refreshToken,
             normalizedCustomerId,
             loginCustomerId,
+            period,
           );
         }
         return this.statsDtoFromSnapshot(snapshot, {
@@ -795,11 +801,13 @@ export class GoogleAdsService {
         refreshToken,
         normalizedCustomerId,
         loginCustomerId,
+        period,
       );
     } catch (err) {
       const snapshot = await this.findCampaignStatsSnapshot(
         business.id,
         normalizedCustomerId,
+        period.snapshotKey,
       );
       if (snapshot) {
         this.logger.warn(
@@ -840,6 +848,7 @@ export class GoogleAdsService {
     refreshToken: string,
     customerId: string,
     loginCustomerId: string | null | undefined,
+    period: ResolvedGoogleInsightsPeriod,
   ): void {
     if (this.campaignStatsRefreshInFlight.has(cacheKey)) return;
     void this.refreshCampaignStatsFromGoogle(
@@ -848,6 +857,7 @@ export class GoogleAdsService {
       refreshToken,
       customerId,
       loginCustomerId,
+      period,
     ).catch((err) => {
       this.logger.warn(
         `Background Google Ads campaign stats refresh failed for ${cacheKey}: ${
@@ -863,6 +873,7 @@ export class GoogleAdsService {
     refreshToken: string,
     customerId: string,
     loginCustomerId: string | null | undefined,
+    period: ResolvedGoogleInsightsPeriod,
   ): Promise<GoogleAdsCampaignStatsDto> {
     const existing = this.campaignStatsRefreshInFlight.get(cacheKey);
     if (existing) {
@@ -874,6 +885,7 @@ export class GoogleAdsService {
       refreshToken,
       customerId,
       loginCustomerId,
+      period,
     ).finally(() => {
       if (this.campaignStatsRefreshInFlight.get(cacheKey) === promise) {
         this.campaignStatsRefreshInFlight.delete(cacheKey);
@@ -888,10 +900,12 @@ export class GoogleAdsService {
     refreshToken: string,
     customerId: string,
     loginCustomerId: string | null | undefined,
+    period: ResolvedGoogleInsightsPeriod,
   ): Promise<GoogleAdsCampaignStatsDto> {
+    const loginId = loginCustomerId ?? customerId;
     const [customerMeta, campaigns] = await Promise.all([
-      this.fetchCustomerMeta(refreshToken, customerId, loginCustomerId),
-      this.fetchCampaignStats(refreshToken, customerId, loginCustomerId),
+      this.fetchCustomerMeta(refreshToken, customerId, loginId),
+      this.fetchCampaignStats(refreshToken, customerId, loginId, period),
     ]);
 
     const fetchedAt = new Date();
@@ -899,7 +913,7 @@ export class GoogleAdsService {
       customerId,
       customerName: customerMeta.name,
       currency: customerMeta.currency,
-      datePreset: GOOGLE_AD_STATS_DATE_PRESET,
+      datePreset: period.displayKey,
       campaigns,
       fetchedAt: fetchedAt.toISOString(),
       fromCache: false,
@@ -911,6 +925,7 @@ export class GoogleAdsService {
       customerId,
       result,
       fetchedAt,
+      period.snapshotKey,
     );
 
     return result;
@@ -919,13 +934,14 @@ export class GoogleAdsService {
   private async findCampaignStatsSnapshot(
     businessId: number,
     customerId: string,
+    snapshotKey: string,
   ): Promise<GoogleAdCampaignStatsSnapshot | null> {
     try {
       return await this.campaignStatsSnapshotRepository.findOne({
         where: {
           businessId,
           customerId,
-          datePreset: GOOGLE_AD_STATS_DATE_PRESET,
+          datePreset: snapshotKey,
         },
       });
     } catch (err) {
@@ -960,11 +976,13 @@ export class GoogleAdsService {
     customerId: string,
     result: GoogleAdsCampaignStatsDto,
     fetchedAt: Date,
+    snapshotKey: string,
   ): Promise<void> {
     try {
       const existing = await this.findCampaignStatsSnapshot(
         businessId,
         customerId,
+        snapshotKey,
       );
       const payload = {
         customerId: result.customerId,
@@ -985,7 +1003,7 @@ export class GoogleAdsService {
         this.campaignStatsSnapshotRepository.create({
           businessId,
           customerId,
-          datePreset: GOOGLE_AD_STATS_DATE_PRESET,
+          datePreset: snapshotKey,
           payload,
           fetchedAt,
         }),
@@ -1951,23 +1969,12 @@ export class GoogleAdsService {
     return id || null;
   }
 
-  private googleAdsAllHistoryDateBounds(): { start: string; end: string } {
-    const end = new Date();
-    const start = new Date(
-      Date.UTC(end.getUTCFullYear() - 11, end.getUTCMonth(), 1),
-    );
-    return {
-      start: start.toISOString().slice(0, 10),
-      end: end.toISOString().slice(0, 10),
-    };
-  }
-
   private async fetchCampaignStats(
     refreshToken: string,
     customerId: string,
     loginCustomerId: string = customerId,
+    period: ResolvedGoogleInsightsPeriod = resolveGoogleInsightsPeriod(),
   ): Promise<GoogleAdsCampaignStatsDto['campaigns']> {
-    const { start, end } = this.googleAdsAllHistoryDateBounds();
     const query = `
       SELECT
         campaign.id,
@@ -1981,7 +1988,7 @@ export class GoogleAdsService {
         metrics.conversions,
         metrics.conversions_value
       FROM campaign
-      WHERE segments.date BETWEEN '${start}' AND '${end}'
+      WHERE ${period.dateWhere}
         AND campaign.status != 'REMOVED'
     `.trim();
 

@@ -1,9 +1,25 @@
-export const DEFAULT_META_AD_STATS_DATE_PRESET = 'maximum' as const;
+import { DEFAULT_ADS_INSIGHTS_PERIOD } from '../../utils/ads-insights-period';
+
+export const DEFAULT_META_AD_STATS_DATE_PRESET = DEFAULT_ADS_INSIGHTS_PERIOD;
 
 export function formatMetaAdStatsDatePresetLabel(
   preset: string | null | undefined,
 ): string {
-  switch ((preset ?? '').trim()) {
+  const value = (preset ?? '').trim();
+  const monthMatch = /^m?:?(\d{4})-(\d{2})$/.exec(value);
+  if (monthMatch) {
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (month >= 1 && month <= 12) {
+      return new Intl.DateTimeFormat(undefined, {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }).format(new Date(Date.UTC(year, month - 1, 1)));
+    }
+  }
+
+  switch (value.toLowerCase()) {
     case 'today':
       return 'Today';
     case 'yesterday':
@@ -34,8 +50,9 @@ export function formatMetaAdStatsDatePresetLabel(
       return 'Last year';
     case 'maximum':
     case 'data_maximum':
+    case 'all_time':
       return 'All available history';
     default:
-      return 'All available history';
+      return 'This month';
   }
 }
