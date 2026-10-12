@@ -277,6 +277,33 @@ export class FunnelEventController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/dashboard-overview')
+  getDashboardOverview(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+    @Query('previousFrom') previousFromRaw?: string,
+    @Query('previousTo') previousToRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
+  ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (!from || !to || from.getTime() > to.getTime()) {
+      throw new BadRequestException(
+        'Valid from and to query params are required.',
+      );
+    }
+    return this.funnelEventService.getDashboardOverviewForRange(
+      funnelId,
+      from,
+      to,
+      timeZoneRaw,
+      parseOverviewDate(previousFromRaw),
+      parseOverviewDate(previousToRaw),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Get('funnel/:funnelId/analytics-overview')
   getAnalyticsOverview(@Param('funnelId', ParseIntPipe) funnelId: number) {
     return this.funnelAnalyticsService.getAnalyticsOverview(funnelId);

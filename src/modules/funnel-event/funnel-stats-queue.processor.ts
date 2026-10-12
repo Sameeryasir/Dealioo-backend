@@ -9,7 +9,7 @@ import {
   type FunnelStatsJobPayload,
 } from './funnel-stats-queue.constants';
 
-@Processor(FUNNEL_STATS_QUEUE, { concurrency: 2 })
+@Processor(FUNNEL_STATS_QUEUE, { concurrency: 4 })
 export class FunnelStatsQueueProcessor extends WorkerHost {
   private readonly logger = new Logger(FunnelStatsQueueProcessor.name);
 

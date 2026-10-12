@@ -61,8 +61,8 @@ import {
 } from '../sidebar-unread/sidebar-section-notify.service';
 import { PusherService } from '../pusher/pusher.service';
 import { runAfterTransactionCommit } from '../../common/run-after-transaction-commit.util';
-
-const ACTIVITY_RANGE_CACHE_TTL_MS = 45_000;
+import { ActivityStatsJobName } from './activity-stats-queue.constants';
+import { ActivityStatsQueueService } from './activity-stats-queue.service';
 
 function withActivityActorMetadata(
   metadata: Record<string, unknown> | null | undefined,
@@ -116,8 +116,6 @@ export type ActivityMonthlyPoint = {
   prepaidRevenueCents: number;
   extraItemsRevenueCents: number;
   orders: number;
-  // --- Orders channel split (business KPI tags) ---
-  // Funnel = online/campaign checkout; In-store = scanner/counter (MCP context 7).
   funnelOrders: number;
   inStoreOrders: number;
   members: number;
@@ -126,7 +124,6 @@ export type ActivityMonthlyPoint = {
   paidRevenueCents?: number;
 };
 
-/** Paid at counter / scanner — matches isScannerFunnelPayment. */
 const IN_STORE_ORDER_SQL = `(
   payment.payment_source = 'SCANNER'
   OR payment.collection_channel = 'IN_STORE'
@@ -187,6 +184,7 @@ export class ActivityService {
     private readonly campaignRepository: Repository<Campaign>,
     private readonly sidebarNotify: SidebarSectionNotifyService,
     private readonly pusherService: PusherService,
+    private readonly activityStatsQueueService: ActivityStatsQueueService,
   ) {}
 
   /**
@@ -1346,12 +1344,18 @@ export class ActivityService {
     const monthCount = clampOverviewMonths(rawMonthCount);
     const cacheKey = `activity-monthly-v5:${businessId}:${monthCount}`;
 
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeBusinessSummaryMonthly(businessId, monthCount),
+    return this.activityStatsQueueService.getOrCompute(
+      {
+        kind: ActivityStatsJobName.SUMMARY_MONTHLY,
+        cacheKey,
+        businessId,
+        monthCount,
+      },
+      () => this.computeBusinessSummaryMonthly(businessId, monthCount),
     );
   }
 
-  private async computeBusinessSummaryMonthly(
+  async computeBusinessSummaryMonthly(
     businessId: number,
     monthCount: number,
   ): Promise<{
@@ -1449,7 +1453,6 @@ export class ActivityService {
           'month',
         )
         .addSelect('COUNT(*)', 'orders')
-        // Funnel vs in-store tags for the Orders KPI card.
         .addSelect(
           `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
           'funnelOrders',
@@ -1561,9 +1564,15 @@ export class ActivityService {
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
     const cacheKey = `activity-range-v15:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
-    const currentPromise = dashboardTtlCache.getOrSet(
-      cacheKey,
-      ACTIVITY_RANGE_CACHE_TTL_MS,
+    const currentPromise = this.activityStatsQueueService.getOrCompute(
+      {
+        kind: ActivityStatsJobName.SUMMARY_RANGE,
+        cacheKey,
+        businessId,
+        fromIso: from.toISOString(),
+        toIso: to.toISOString(),
+        timeZone: chartTz,
+      },
       () => this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
     );
 
@@ -1579,9 +1588,15 @@ export class ActivityService {
     const previousCacheKey = `activity-range-v15:${businessId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`;
     const [current, previous] = await Promise.all([
       currentPromise,
-      dashboardTtlCache.getOrSet(
-        previousCacheKey,
-        ACTIVITY_RANGE_CACHE_TTL_MS,
+      this.activityStatsQueueService.getOrCompute(
+        {
+          kind: ActivityStatsJobName.SUMMARY_RANGE,
+          cacheKey: previousCacheKey,
+          businessId,
+          fromIso: previousFrom!.toISOString(),
+          toIso: previousTo!.toISOString(),
+          timeZone: chartTz,
+        },
         () =>
           this.computeBusinessSummaryForRange(
             businessId,
@@ -1605,7 +1620,7 @@ export class ActivityService {
     };
   }
 
-  private async computeBusinessSummaryForRange(
+  async computeBusinessSummaryForRange(
     businessId: number,
     from: Date,
     to: Date,
@@ -1714,7 +1729,6 @@ export class ActivityService {
         .createQueryBuilder('payment')
         .select(paymentBucket, 'month')
         .addSelect('COUNT(*)', 'orders')
-        // Funnel vs in-store tags for the Orders KPI card.
         .addSelect(
           `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
           'funnelOrders',

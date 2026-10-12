@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ActivityEvent } from '../../db/entities/activity-event.entity';
@@ -12,6 +13,10 @@ import { SidebarUnreadModule } from '../sidebar-unread/sidebar-unread.module';
 // Lazy-resolve RedemptionModule so Activity ↔ Redemption does not TDZ under SWC.
 import { ActivityController } from './activity.controller';
 import { ActivityService } from './activity.service';
+import { ActivityStatsCacheService } from './activity-stats-cache.service';
+import { ACTIVITY_STATS_QUEUE } from './activity-stats-queue.constants';
+import { ActivityStatsQueueProcessor } from './activity-stats-queue.processor';
+import { ActivityStatsQueueService } from './activity-stats-queue.service';
 
 @Module({
   imports: [
@@ -22,13 +27,19 @@ import { ActivityService } from './activity.service';
       Customer,
       FunnelPayment,
     ]),
+    BullModule.registerQueue({ name: ACTIVITY_STATS_QUEUE }),
     AuthModule,
     CustomerActivityModule,
     SidebarUnreadModule,
     forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
   ],
   controllers: [ActivityController],
-  providers: [ActivityService],
+  providers: [
+    ActivityService,
+    ActivityStatsCacheService,
+    ActivityStatsQueueService,
+    ActivityStatsQueueProcessor,
+  ],
   exports: [ActivityService],
 })
 export class ActivityModule {}

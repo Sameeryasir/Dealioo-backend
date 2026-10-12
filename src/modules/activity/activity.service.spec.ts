@@ -8,6 +8,7 @@ import { Campaign } from '../../db/entities/campaign.entity';
 import { SidebarSectionNotifyService } from '../sidebar-unread/sidebar-section-notify.service';
 import { PusherService } from '../pusher/pusher.service';
 import { ActivityService } from './activity.service';
+import { ActivityStatsQueueService } from './activity-stats-queue.service';
 
 describe('ActivityService', () => {
   let service: ActivityService;
@@ -23,6 +24,10 @@ describe('ActivityService', () => {
         { provide: getRepositoryToken(Campaign), useValue: {} },
         { provide: SidebarSectionNotifyService, useValue: {} },
         { provide: PusherService, useValue: {} },
+        {
+          provide: ActivityStatsQueueService,
+          useValue: { getOrCompute: async (_p: unknown, fb: () => unknown) => fb() },
+        },
       ],
     }).compile();
 

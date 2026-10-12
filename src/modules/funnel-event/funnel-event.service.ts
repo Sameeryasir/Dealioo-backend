@@ -126,6 +126,7 @@ import {
   resolvePerformancePreviousWindow,
   stabilizePerformanceCacheInstant,
 } from './business-performance.util';
+import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { FunnelStatsJobName } from './funnel-stats-queue.constants';
 import { FunnelStatsQueueService } from './funnel-stats-queue.service';
 
@@ -176,6 +177,7 @@ export class FunnelEventService {
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly pendingFunnelPaymentService: PendingFunnelPaymentService,
     private readonly funnelStatsQueueService: FunnelStatsQueueService,
+    private readonly funnelAnalyticsService: FunnelAnalyticsService,
   ) {}
 
   async track(
@@ -1447,6 +1449,86 @@ export class FunnelEventService {
       },
       () => this.computeStatsForRange(funnelId, from, to, chartTz),
     );
+  }
+
+  async getDashboardOverviewForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+    timeZone?: string,
+    previousFrom?: Date | null,
+    previousTo?: Date | null,
+  ): Promise<{
+    funnelId: number;
+    stats: Awaited<ReturnType<FunnelEventService['getStatsForRange']>>;
+    analytics: Awaited<
+      ReturnType<FunnelAnalyticsService['getAnalyticsOverviewForRange']>
+    >;
+    adSources: Awaited<
+      ReturnType<FunnelEventService['getFunnelGuestAdSourceCounts']>
+    >;
+    previous: {
+      from: string;
+      to: string;
+      stats: Awaited<ReturnType<FunnelEventService['getStatsForRange']>>;
+      analytics: Awaited<
+        ReturnType<FunnelAnalyticsService['getAnalyticsOverviewForRange']>
+      >;
+    } | null;
+  }> {
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const hasPrevious =
+      previousFrom != null &&
+      previousTo != null &&
+      previousFrom.getTime() <= previousTo.getTime();
+
+    const [stats, analytics, adSources, previousStats, previousAnalytics] =
+      await Promise.all([
+        this.getStatsForRange(funnelId, from, to, chartTz),
+        this.funnelAnalyticsService.getAnalyticsOverviewForRange(
+          funnelId,
+          from,
+          to,
+          chartTz,
+        ),
+        this.getFunnelGuestAdSourceCounts(funnelId, {
+          from: from.toISOString(),
+          to: to.toISOString(),
+          timezone: chartTz,
+        }),
+        hasPrevious
+          ? this.getStatsForRange(
+              funnelId,
+              previousFrom!,
+              previousTo!,
+              chartTz,
+            )
+          : Promise.resolve(null),
+        hasPrevious
+          ? this.funnelAnalyticsService.getAnalyticsOverviewForRange(
+              funnelId,
+              previousFrom!,
+              previousTo!,
+              chartTz,
+            )
+          : Promise.resolve(null),
+      ]);
+
+    return {
+      funnelId,
+      stats,
+      analytics,
+      adSources,
+      previous:
+        hasPrevious && previousStats != null && previousAnalytics != null
+          ? {
+              from: previousFrom!.toISOString(),
+              to: previousTo!.toISOString(),
+              stats: previousStats,
+              analytics: previousAnalytics,
+            }
+          : null,
+    };
   }
 
   async computeStatsForRange(
