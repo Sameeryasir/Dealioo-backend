@@ -1587,6 +1587,7 @@ export class FunnelEventService {
     adSources: {
       meta: number;
       google: number;
+      uniqueVisitors: { meta: number; google: number };
       payments: { meta: number; google: number };
       revenue: { meta: number; google: number };
     };
@@ -1599,6 +1600,11 @@ export class FunnelEventService {
       uniqueVisitors: number;
     } | null;
     charts: {
+      uniqueVisitors: {
+        meta: number;
+        google: number;
+        data: Array<{ month: string; meta: number; google: number }>;
+      };
       signups: {
         meta: number;
         google: number;
@@ -1633,46 +1639,61 @@ export class FunnelEventService {
       (month) => ({ month, meta: 0, google: 0 }),
     );
 
-    const [current, previousCore, signupSeries, paymentSeries, revenueSeries] =
-      await Promise.all([
-        this.computeDashboardCoreTotals(funnelId, from, to),
-        hasPrevious
-          ? this.computeDashboardCoreTotals(
-              funnelId,
-              previousFrom!,
-              previousTo!,
-            )
-          : Promise.resolve(null),
-        this.countFunnelEventAdSources({
-          funnelId,
-          eventType: FunnelEventType.SIGNUP,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          paidOnly: false,
-          seriesOnly: true,
-        }),
-        this.countFunnelEventAdSources({
-          funnelId,
-          eventType: FunnelEventType.PAYMENT,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          paidOnly: false,
-          paymentStatusPaid: true,
-          seriesOnly: true,
-        }),
-        this.countRevenueAdSources({
-          funnelId,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          seriesOnly: true,
-        }),
-      ]);
+    const [
+      current,
+      previousCore,
+      uniqueVisitorSeries,
+      signupSeries,
+      paymentSeries,
+      revenueSeries,
+    ] = await Promise.all([
+      this.computeDashboardCoreTotals(funnelId, from, to),
+      hasPrevious
+        ? this.computeDashboardCoreTotals(
+            funnelId,
+            previousFrom!,
+            previousTo!,
+          )
+        : Promise.resolve(null),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.SIGNUP,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        distinctCustomers: true,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.SIGNUP,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        distinctCustomers: false,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.PAYMENT,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        paymentStatusPaid: true,
+        distinctCustomers: false,
+      }),
+      this.countRevenueAdSources({
+        funnelId,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+      }),
+    ]);
 
     return {
       funnelId,
@@ -1684,6 +1705,10 @@ export class FunnelEventService {
       adSources: {
         meta: signupSeries.meta,
         google: signupSeries.google,
+        uniqueVisitors: {
+          meta: uniqueVisitorSeries.meta,
+          google: uniqueVisitorSeries.google,
+        },
         payments: {
           meta: paymentSeries.meta,
           google: paymentSeries.google,
@@ -1705,6 +1730,11 @@ export class FunnelEventService {
             }
           : null,
       charts: {
+        uniqueVisitors: {
+          meta: uniqueVisitorSeries.meta,
+          google: uniqueVisitorSeries.google,
+          data: uniqueVisitorSeries.data,
+        },
         signups: {
           meta: signupSeries.meta,
           google: signupSeries.google,
@@ -4695,6 +4725,7 @@ export class FunnelEventService {
     paymentStatusPaid?: boolean;
     totalsOnly?: boolean;
     seriesOnly?: boolean;
+    distinctCustomers?: boolean;
   }): Promise<{
     meta: number;
     google: number;
@@ -4717,6 +4748,10 @@ export class FunnelEventService {
         LIMIT 1
       )
     )`;
+    const countExpr =
+      params.distinctCustomers === false
+        ? 'COUNT(*)'
+        : 'COUNT(DISTINCT event.customer_id)';
 
     let totalsRow: {
       meta: string;
@@ -4730,22 +4765,22 @@ export class FunnelEventService {
       const totalsQb = this.funnelEventRepository
         .createQueryBuilder('event')
         .select(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} = 'meta')`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} = 'meta')`,
           'meta',
         )
         .addSelect(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} = 'google')`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} = 'google')`,
           'google',
         )
         .addSelect(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} = 'utm')`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} = 'utm')`,
           'other',
         )
         .addSelect(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} IS NULL)`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} IS NULL)`,
           'unknown',
         )
-        .addSelect('COUNT(DISTINCT event.customer_id)', 'total')
+        .addSelect(countExpr, 'total')
         .where('event.funnel_id = :funnelId', { funnelId: params.funnelId })
         .andWhere('event.customer_id IS NOT NULL');
       if (params.eventType) {
@@ -4799,11 +4834,11 @@ export class FunnelEventService {
         .createQueryBuilder('event')
         .select(bucketSql, 'month')
         .addSelect(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} = 'meta')`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} = 'meta')`,
           'meta',
         )
         .addSelect(
-          `COUNT(DISTINCT event.customer_id) FILTER (WHERE ${resolvedSourceSql} = 'google')`,
+          `${countExpr} FILTER (WHERE ${resolvedSourceSql} = 'google')`,
           'google',
         )
         .where('event.funnel_id = :funnelId', { funnelId: params.funnelId })
