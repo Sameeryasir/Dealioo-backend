@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
@@ -24,6 +25,10 @@ import { RedemptionModule } from '../redemption/redemption.module';
 import { FunnelAnalyticsService } from './funnel-analytics.service';
 import { FunnelEventController } from './funnel-event.controller';
 import { FunnelEventService } from './funnel-event.service';
+import { FunnelStatsCacheService } from './funnel-stats-cache.service';
+import { FUNNEL_STATS_QUEUE } from './funnel-stats-queue.constants';
+import { FunnelStatsQueueProcessor } from './funnel-stats-queue.processor';
+import { FunnelStatsQueueService } from './funnel-stats-queue.service';
 
 @Module({
   imports: [
@@ -42,6 +47,7 @@ import { FunnelEventService } from './funnel-event.service';
       Business,
       ScannerPurchaseRequest,
     ]),
+    BullModule.registerQueue({ name: FUNNEL_STATS_QUEUE }),
     forwardRef(() => AutomationModule),
     forwardRef(() => RedemptionModule),
     forwardRef(() => PaymentModule),
@@ -52,7 +58,13 @@ import { FunnelEventService } from './funnel-event.service';
     CustomerModule,
   ],
   controllers: [FunnelEventController],
-  providers: [FunnelEventService, FunnelAnalyticsService],
+  providers: [
+    FunnelEventService,
+    FunnelAnalyticsService,
+    FunnelStatsCacheService,
+    FunnelStatsQueueService,
+    FunnelStatsQueueProcessor,
+  ],
   exports: [FunnelEventService, FunnelAnalyticsService],
 })
 export class FunnelEventModule {}

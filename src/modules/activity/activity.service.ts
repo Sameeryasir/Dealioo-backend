@@ -116,11 +116,21 @@ export type ActivityMonthlyPoint = {
   prepaidRevenueCents: number;
   extraItemsRevenueCents: number;
   orders: number;
+  // --- Orders channel split (business KPI tags) ---
+  // Funnel = online/campaign checkout; In-store = scanner/counter (MCP context 7).
+  funnelOrders: number;
+  inStoreOrders: number;
   members: number;
   funnelMembers: number;
   restaurantMembers: number;
   paidRevenueCents?: number;
 };
+
+/** Paid at counter / scanner — matches isScannerFunnelPayment. */
+const IN_STORE_ORDER_SQL = `(
+  payment.payment_source = 'SCANNER'
+  OR payment.collection_channel = 'IN_STORE'
+)`;
 
 const SCANNED_VISIT_SQL = `(
   activity.event_type = :visited
@@ -1334,7 +1344,7 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const monthCount = clampOverviewMonths(rawMonthCount);
-    const cacheKey = `activity-monthly-v4:${businessId}:${monthCount}`;
+    const cacheKey = `activity-monthly-v5:${businessId}:${monthCount}`;
 
     return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
       this.computeBusinessSummaryMonthly(businessId, monthCount),
@@ -1439,6 +1449,15 @@ export class ActivityService {
           'month',
         )
         .addSelect('COUNT(*)', 'orders')
+        // Funnel vs in-store tags for the Orders KPI card.
+        .addSelect(
+          `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
+          'funnelOrders',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${IN_STORE_ORDER_SQL})`,
+          'inStoreOrders',
+        )
         .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
         .where('payment.businessId = :businessId', { businessId })
         .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
@@ -1452,6 +1471,8 @@ export class ActivityService {
         .getRawMany<{
           month: string;
           orders: string;
+          funnelOrders: string;
+          inStoreOrders: string;
           paidRevenueCents?: string;
           paidrevenuecents?: string;
         }>(),
@@ -1492,6 +1513,8 @@ export class ActivityService {
         prepaidRevenueCents: Number(row?.prepaidRevenueCents ?? 0),
         extraItemsRevenueCents: Number(row?.extraItemsRevenueCents ?? 0),
         orders: Number(orderRow?.orders ?? 0),
+        funnelOrders: Number(orderRow?.funnelOrders ?? 0),
+        inStoreOrders: Number(orderRow?.inStoreOrders ?? 0),
         members: Number(memberRow?.members ?? 0),
         funnelMembers: Number(memberRow?.funnelMembers ?? 0),
         restaurantMembers: Number(memberRow?.restaurantMembers ?? 0),
@@ -1537,7 +1560,7 @@ export class ActivityService {
     } | null;
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
-    const cacheKey = `activity-range-v14:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
+    const cacheKey = `activity-range-v15:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
     const currentPromise = dashboardTtlCache.getOrSet(
       cacheKey,
       ACTIVITY_RANGE_CACHE_TTL_MS,
@@ -1553,7 +1576,7 @@ export class ActivityService {
       return currentPromise;
     }
 
-    const previousCacheKey = `activity-range-v14:${businessId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`;
+    const previousCacheKey = `activity-range-v15:${businessId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`;
     const [current, previous] = await Promise.all([
       currentPromise,
       dashboardTtlCache.getOrSet(
@@ -1691,6 +1714,15 @@ export class ActivityService {
         .createQueryBuilder('payment')
         .select(paymentBucket, 'month')
         .addSelect('COUNT(*)', 'orders')
+        // Funnel vs in-store tags for the Orders KPI card.
+        .addSelect(
+          `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
+          'funnelOrders',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE ${IN_STORE_ORDER_SQL})`,
+          'inStoreOrders',
+        )
         .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
         .where('payment.businessId = :businessId', { businessId })
         .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
@@ -1702,6 +1734,8 @@ export class ActivityService {
         .getRawMany<{
           month: string;
           orders: string;
+          funnelOrders: string;
+          inStoreOrders: string;
           paidRevenueCents?: string;
           paidrevenuecents?: string;
         }>(),
@@ -1739,6 +1773,8 @@ export class ActivityService {
           activityRow?.extraItemsRevenueCents ?? 0,
         ),
         orders: Number(orderRow?.orders ?? 0),
+        funnelOrders: Number(orderRow?.funnelOrders ?? 0),
+        inStoreOrders: Number(orderRow?.inStoreOrders ?? 0),
         members: Number(memberRow?.members ?? 0),
         funnelMembers: Number(memberRow?.funnelMembers ?? 0),
         restaurantMembers: Number(memberRow?.restaurantMembers ?? 0),

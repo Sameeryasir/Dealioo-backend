@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, In, Repository, type SelectQueryBuilder, type ObjectLiteral } from 'typeorm';
 import {
   Campaign,
   CampaignPublicationStatus,
@@ -126,6 +126,8 @@ import {
   resolvePerformancePreviousWindow,
   stabilizePerformanceCacheInstant,
 } from './business-performance.util';
+import { FunnelStatsJobName } from './funnel-stats-queue.constants';
+import { FunnelStatsQueueService } from './funnel-stats-queue.service';
 
 // --- Scanner purchase response ---
 // purchaseMeans echoes what the caller sent (IN_PERSON | REDEEMED | SCANNED).
@@ -173,6 +175,7 @@ export class FunnelEventService {
     private readonly customerService: CustomerService,
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly pendingFunnelPaymentService: PendingFunnelPaymentService,
+    private readonly funnelStatsQueueService: FunnelStatsQueueService,
   ) {}
 
   async track(
@@ -1104,6 +1107,26 @@ export class FunnelEventService {
     revenue: number;
     currency: string | null;
   }> {
+    const cacheKey = `funnel-stats-total-v1:${funnelId}`;
+    return this.funnelStatsQueueService.getOrCompute(
+      {
+        kind: FunnelStatsJobName.STATS_TOTAL,
+        cacheKey,
+        funnelId,
+      },
+      () => this.computeStats(funnelId),
+    );
+  }
+
+  async computeStats(funnelId: number): Promise<{
+    funnelId: number;
+    signups: number;
+    payments: number;
+    signupOnly: number;
+    paidAfterSignup: number;
+    revenue: number;
+    currency: string | null;
+  }> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
     });
@@ -1114,6 +1137,7 @@ export class FunnelEventService {
     const [rows, paidPayments] = await Promise.all([
       this.funnelEventRepository.find({
         where: { funnelId },
+        select: ['customerId', 'funnelPaymentId'],
       }),
       this.funnelPaymentRepository.find({
         where: { funnelId, status: FunnelPaymentStatus.PAID },
@@ -1185,10 +1209,15 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    // v4: campaign-funnel origin only (excludes business scanner/counter payments)
-    const cacheKey = `funnel-stats-monthly-v4:${funnelId}:${monthCount}`;
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeStatsMonthly(funnelId, monthCount),
+    const cacheKey = `funnel-stats-monthly-v5:${funnelId}:${monthCount}`;
+    return this.funnelStatsQueueService.getOrCompute(
+      {
+        kind: FunnelStatsJobName.STATS_MONTHLY,
+        cacheKey,
+        funnelId,
+        monthCount,
+      },
+      () => this.computeStatsMonthly(funnelId, monthCount),
     );
   }
 
@@ -1232,7 +1261,42 @@ export class FunnelEventService {
     )`;
   }
 
-  private async computeStatsMonthly(
+  private eventHasJoinedCampaignPaidSql(): string {
+    return `(
+      paid_by_event.id IS NOT NULL
+      OR paid_by_customer.customer_id IS NOT NULL
+    )`;
+  }
+
+  private applyCampaignPaidJoins<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    eventAlias = 'e',
+  ): SelectQueryBuilder<T> {
+    return qb
+      .leftJoin(
+        FunnelPayment,
+        'paid_by_event',
+        `paid_by_event.id = ${eventAlias}.funnel_payment_id
+          AND paid_by_event.funnel_id = ${eventAlias}.funnel_id
+          AND paid_by_event.status = :campaignPaidStatus
+          AND ${campaignFunnelPaymentOriginSql('paid_by_event')}`,
+      )
+      .leftJoin(
+        `(
+          SELECT DISTINCT p.customer_id AS customer_id, p.funnel_id AS funnel_id
+          FROM funnel_payment p
+          WHERE p.status = '${FunnelPaymentStatus.PAID}'
+            AND p.customer_id IS NOT NULL
+            AND ${campaignFunnelPaymentOriginSql('p')}
+        )`,
+        'paid_by_customer',
+        `paid_by_customer.funnel_id = ${eventAlias}.funnel_id
+          AND paid_by_customer.customer_id = ${eventAlias}.customer_id`,
+      )
+      .setParameter('campaignPaidStatus', FunnelPaymentStatus.PAID);
+  }
+
+  async computeStatsMonthly(
     funnelId: number,
     monthCount: number,
   ): Promise<{
@@ -1262,11 +1326,7 @@ export class FunnelEventService {
 
     const rangeStart = buckets[0].start;
 
-    const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
-      this.funnelRepository.findOne({
-        where: { id: funnelId },
-        select: ['id'],
-      }),
+    const eventQb = this.applyCampaignPaidJoins(
       this.funnelEventRepository
         .createQueryBuilder('e')
         .select(
@@ -1274,21 +1334,28 @@ export class FunnelEventService {
           'month',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasCampaignFunnelPaidPaymentSql('e')})`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasJoinedCampaignPaidSql()})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasCampaignFunnelPaidPaymentSql('e')})`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasJoinedCampaignPaidSql()})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
         .andWhere('e.created_at >= :rangeStart', { rangeStart })
-        .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`)
-        .getRawMany<{
-          month: string;
-          signupOnly: string;
-          paidAfterSignup: string;
-        }>(),
+        .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`),
+    );
+
+    const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
+      this.funnelRepository.findOne({
+        where: { id: funnelId },
+        select: ['id'],
+      }),
+      eventQb.getRawMany<{
+        month: string;
+        signupOnly: string;
+        paidAfterSignup: string;
+      }>(),
       applyCampaignFunnelPaymentOriginFilter(
         this.funnelPaymentRepository
           .createQueryBuilder('p')
@@ -1368,14 +1435,21 @@ export class FunnelEventService {
     }[];
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
-    // v5: campaign-funnel origin only (excludes business scanner/counter payments)
-    const cacheKey = `funnel-stats-range-v5:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
-    return dashboardTtlCache.getOrSet(cacheKey, DASHBOARD_CACHE_TTL_MS, () =>
-      this.computeStatsForRange(funnelId, from, to, chartTz),
+    const cacheKey = `funnel-stats-range-v6:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
+    return this.funnelStatsQueueService.getOrCompute(
+      {
+        kind: FunnelStatsJobName.STATS_RANGE,
+        cacheKey,
+        funnelId,
+        fromIso: from.toISOString(),
+        toIso: to.toISOString(),
+        timeZone: chartTz,
+      },
+      () => this.computeStatsForRange(funnelId, from, to, chartTz),
     );
   }
 
-  private async computeStatsForRange(
+  async computeStatsForRange(
     funnelId: number,
     from: Date,
     to: Date,
@@ -1406,31 +1480,34 @@ export class FunnelEventService {
       chartTz,
     );
 
-    const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
-      this.funnelRepository.findOne({
-        where: { id: funnelId },
-        select: ['id'],
-      }),
+    const eventQb = this.applyCampaignPaidJoins(
       this.funnelEventRepository
         .createQueryBuilder('e')
         .select(eventBucket, 'month')
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasCampaignFunnelPaidPaymentSql('e')})`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasJoinedCampaignPaidSql()})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasCampaignFunnelPaidPaymentSql('e')})`,
+          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasJoinedCampaignPaidSql()})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
         .andWhere('e.created_at >= :from', { from })
         .andWhere('e.created_at <= :to', { to })
-        .groupBy(eventBucket)
-        .getRawMany<{
-          month: string;
-          signupOnly: string;
-          paidAfterSignup: string;
-        }>(),
+        .groupBy(eventBucket),
+    );
+
+    const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
+      this.funnelRepository.findOne({
+        where: { id: funnelId },
+        select: ['id'],
+      }),
+      eventQb.getRawMany<{
+        month: string;
+        signupOnly: string;
+        paidAfterSignup: string;
+      }>(),
       applyCampaignFunnelPaymentOriginFilter(
         this.funnelPaymentRepository
           .createQueryBuilder('p')
@@ -3889,6 +3966,57 @@ export class FunnelEventService {
       data: Array<{ month: string; meta: number; google: number }>;
     };
   }> {
+    const chartTz = resolveSafeTimeZone(range?.timezone);
+    const cacheKey = `funnel-guest-ad-sources-v1:${funnelId}:${range?.from ?? ''}:${range?.to ?? ''}:${chartTz}`;
+    return this.funnelStatsQueueService.getOrCompute(
+      {
+        kind: FunnelStatsJobName.GUEST_AD_SOURCES,
+        cacheKey,
+        funnelId,
+        from: range?.from,
+        to: range?.to,
+        timezone: range?.timezone,
+      },
+      () => this.computeFunnelGuestAdSourceCounts(funnelId, range),
+    );
+  }
+
+  async computeFunnelGuestAdSourceCounts(
+    funnelId: number,
+    range?: { from?: string; to?: string; timezone?: string },
+  ): Promise<{
+    funnelId: number;
+    meta: number;
+    google: number;
+    other: number;
+    unknown: number;
+    total: number;
+    data: Array<{ month: string; meta: number; google: number }>;
+    payments: {
+      meta: number;
+      google: number;
+      other: number;
+      unknown: number;
+      total: number;
+      data: Array<{ month: string; meta: number; google: number }>;
+    };
+    pageViews: {
+      meta: number;
+      google: number;
+      other: number;
+      unknown: number;
+      total: number;
+      data: Array<{ month: string; meta: number; google: number }>;
+    };
+    revenue: {
+      meta: number;
+      google: number;
+      other: number;
+      unknown: number;
+      total: number;
+      data: Array<{ month: string; meta: number; google: number }>;
+    };
+  }> {
     const funnelExists = await this.funnelRepository.exist({
       where: { id: funnelId },
     });
@@ -3916,7 +4044,6 @@ export class FunnelEventService {
         emptySeries,
         paidOnly: false,
       }),
-      // Payment funnel_event rows with stored ad_source (status paid on the event)
       this.countFunnelEventAdSources({
         funnelId,
         eventType: FunnelEventType.PAYMENT,
@@ -3934,7 +4061,6 @@ export class FunnelEventService {
         chartTz,
         emptySeries,
       }),
-      // Paid funnel_payment amounts attributed via guest ad_source (cents)
       this.countRevenueAdSources({
         funnelId,
         rangeFrom,
@@ -3944,7 +4070,6 @@ export class FunnelEventService {
       }),
     ]);
 
-    // Top-level fields stay signup-based for existing Unique visitors / Signups UI
     return {
       funnelId,
       ...signups,
