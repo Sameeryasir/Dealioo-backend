@@ -146,9 +146,7 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
       if (state === 'completed' || state === 'failed') {
         try {
           await existing.remove();
-        } catch {
-          // ignore remove races
-        }
+        } catch {}
       }
     }
 

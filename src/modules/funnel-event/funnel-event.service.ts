@@ -1482,26 +1482,66 @@ export class FunnelEventService {
       previousTo != null &&
       previousFrom.getTime() <= previousTo.getTime();
 
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const currentStatsKey = `funnel-stats-range-v6:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const adSourcesKey = `funnel-guest-ad-sources-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const previousStatsKey = hasPrevious
+      ? `funnel-stats-range-v6:${funnelId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`
+      : null;
+
     const [stats, analytics, adSources, previousStats, previousAnalytics] =
       await Promise.all([
-        this.getStatsForRange(funnelId, from, to, chartTz),
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.STATS_RANGE,
+            cacheKey: currentStatsKey,
+            funnelId,
+            fromIso,
+            toIso,
+            timeZone: chartTz,
+          },
+          () => this.computeStatsForRange(funnelId, from, to, chartTz),
+        ),
         this.funnelAnalyticsService.getAnalyticsOverviewForRange(
           funnelId,
           from,
           to,
           chartTz,
         ),
-        this.getFunnelGuestAdSourceCounts(funnelId, {
-          from: from.toISOString(),
-          to: to.toISOString(),
-          timezone: chartTz,
-        }),
-        hasPrevious
-          ? this.getStatsForRange(
-              funnelId,
-              previousFrom!,
-              previousTo!,
-              chartTz,
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.GUEST_AD_SOURCES,
+            cacheKey: adSourcesKey,
+            funnelId,
+            from: fromIso,
+            to: toIso,
+            timezone: chartTz,
+          },
+          () =>
+            this.computeFunnelGuestAdSourceCounts(funnelId, {
+              from: fromIso,
+              to: toIso,
+              timezone: chartTz,
+            }),
+        ),
+        hasPrevious && previousStatsKey
+          ? this.funnelStatsQueueService.getCachedOrComputeInline(
+              {
+                kind: FunnelStatsJobName.STATS_RANGE,
+                cacheKey: previousStatsKey,
+                funnelId,
+                fromIso: previousFrom!.toISOString(),
+                toIso: previousTo!.toISOString(),
+                timeZone: chartTz,
+              },
+              () =>
+                this.computeStatsForRange(
+                  funnelId,
+                  previousFrom!,
+                  previousTo!,
+                  chartTz,
+                ),
             )
           : Promise.resolve(null),
         hasPrevious

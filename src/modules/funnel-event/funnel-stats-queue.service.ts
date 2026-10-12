@@ -94,6 +94,24 @@ export class FunnelStatsQueueService implements OnModuleDestroy {
     }
   }
 
+  async getCachedOrComputeInline<T>(
+    payload: FunnelStatsJobPayload,
+    compute: () => Promise<T>,
+  ): Promise<T> {
+    const envelope = await this.cache.getEnvelope<T>(payload.cacheKey);
+    if (envelope) {
+      const ageMs = Date.now() - envelope.computedAt;
+      if (ageMs > this.freshMs) {
+        void this.enqueueRefresh(payload);
+      }
+      return envelope.value;
+    }
+
+    const value = await compute();
+    await this.persistResult(payload.cacheKey, value);
+    return value;
+  }
+
   async enqueueRefresh(payload: FunnelStatsJobPayload): Promise<void> {
     try {
       await this.addJob(payload);
@@ -146,9 +164,7 @@ export class FunnelStatsQueueService implements OnModuleDestroy {
       if (state === 'completed' || state === 'failed') {
         try {
           await existing.remove();
-        } catch {
-          // ignore remove races
-        }
+        } catch {}
       }
     }
 
