@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -41,6 +42,11 @@ export enum FunnelPaymentMethod {
 }
 
 @Entity('funnel_payment')
+@Index('IDX_funnel_payment_funnel_status_customer', [
+  'funnelId',
+  'status',
+  'customerId',
+])
 export class FunnelPayment {
   @PrimaryGeneratedColumn()
   id!: number;

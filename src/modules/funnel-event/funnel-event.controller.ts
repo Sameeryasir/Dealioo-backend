@@ -237,7 +237,6 @@ export class FunnelEventController {
       campaignGuestsPermissionKeys(),
       'You do not have permission to view campaign guests.',
     );
-    // Counts Meta/Google from funnel_event.ad_source on signup rows
     return this.funnelEventService.getFunnelGuestAdSourceCounts(funnelId, {
       from: query.from,
       to: query.to,
@@ -293,13 +292,63 @@ export class FunnelEventController {
         'Valid from and to query params are required.',
       );
     }
-    return this.funnelEventService.getDashboardOverviewForRange(
+    return this.funnelEventService.getDashboardSummaryForRange(
       funnelId,
       from,
       to,
       timeZoneRaw,
       parseOverviewDate(previousFromRaw),
       parseOverviewDate(previousToRaw),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/dashboard-kpis')
+  getDashboardKpis(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+    @Query('previousFrom') previousFromRaw?: string,
+    @Query('previousTo') previousToRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
+  ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (!from || !to || from.getTime() > to.getTime()) {
+      throw new BadRequestException(
+        'Valid from and to query params are required.',
+      );
+    }
+    return this.funnelEventService.getDashboardKpisForRange(
+      funnelId,
+      from,
+      to,
+      timeZoneRaw,
+      parseOverviewDate(previousFromRaw),
+      parseOverviewDate(previousToRaw),
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/dashboard-charts')
+  getDashboardCharts(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
+  ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (!from || !to || from.getTime() > to.getTime()) {
+      throw new BadRequestException(
+        'Valid from and to query params are required.',
+      );
+    }
+    return this.funnelEventService.getDashboardChartsForRange(
+      funnelId,
+      from,
+      to,
+      timeZoneRaw,
     );
   }
 
@@ -336,7 +385,30 @@ export class FunnelEventController {
 
   @UseGuards(AuthGuard('jwt'))
   @Get('funnel/:funnelId/dropoff')
-  getDropoff(@Param('funnelId', ParseIntPipe) funnelId: number) {
+  getDropoff(
+    @Param('funnelId', ParseIntPipe) funnelId: number,
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+    @Query('timezone') timeZoneRaw?: string,
+  ) {
+    const from = parseOverviewDate(fromRaw);
+    const to = parseOverviewDate(toRaw);
+    if (!from || !to || from.getTime() > to.getTime()) {
+      throw new BadRequestException(
+        'Valid from and to query params are required.',
+      );
+    }
+    return this.funnelEventService.getDropoffCountsForRange(
+      funnelId,
+      from,
+      to,
+      timeZoneRaw,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('funnel/:funnelId/dropoff/steps')
+  getDropoffSteps(@Param('funnelId', ParseIntPipe) funnelId: number) {
     return this.funnelAnalyticsService.getFunnelDropoff(funnelId);
   }
 

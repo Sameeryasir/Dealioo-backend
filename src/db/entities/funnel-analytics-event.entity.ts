@@ -23,6 +23,11 @@ export enum FunnelAnalyticsEventType {
 @Entity('funnel_analytics_event')
 @Index('IDX_funnel_analytics_funnel_created', ['funnelId', 'createdAt'])
 @Index('IDX_funnel_analytics_funnel_event_type', ['funnelId', 'eventType'])
+@Index('IDX_funnel_analytics_funnel_type_created', [
+  'funnelId',
+  'eventType',
+  'createdAt',
+])
 export class FunnelAnalyticsEvent {
   @PrimaryGeneratedColumn()
   id: number;
@@ -86,7 +91,6 @@ export class FunnelAnalyticsEvent {
   @Column({ name: 'referrer', type: 'varchar', length: 512, nullable: true })
   referrer: string | null;
 
-  // Stored at track time (same pattern as funnel_event.ad_source) for fast Meta/Google KPIs
   @Column({ name: 'ad_source', type: 'varchar', length: 16, nullable: true })
   adSource: 'meta' | 'google' | 'utm' | null;
 

@@ -3,6 +3,7 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -22,6 +23,12 @@ export enum FunnelEventType {
 export type FunnelEventAdSource = 'meta' | 'google' | 'utm';
 
 @Entity('funnel_event')
+@Index('IDX_funnel_event_funnel_created', ['funnelId', 'createdAt'])
+@Index('IDX_funnel_event_funnel_type_created', [
+  'funnelId',
+  'eventType',
+  'createdAt',
+])
 export class FunnelEvent {
   @PrimaryGeneratedColumn()
   id: number;
