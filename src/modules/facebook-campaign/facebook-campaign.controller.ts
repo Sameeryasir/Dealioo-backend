@@ -41,6 +41,7 @@ import {
   UpdateFacebookAdsCampaignDto,
   UpdateFacebookAdsCampaignStatusDto,
 } from './dto/update-facebook-ads-campaign.dto';
+import { DealioCampaignMetaSpendDto } from './dto/dealio-campaign-meta-spend.dto';
 import { FacebookCampaignService } from './facebook-campaign.service';
 import { MetaCampaignDraftService } from './meta-campaign-draft.service';
 import { MediaService } from './media.service';
@@ -134,6 +135,36 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<MetaCampaignDraftResponseDto[]> {
     return this.metaCampaignDraftService.listDrafts(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/meta-spend')
+  async getBusinessMetaSpend(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('period') periodRaw?: string,
+  ): Promise<DealioCampaignMetaSpendDto> {
+    return this.metaCampaignDraftService.getMetaSpendForBusiness(
+      req.user,
+      businessId,
+      periodRaw?.trim() || undefined,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/dealio-campaign/:campaignId/meta-spend')
+  async getDealioCampaignMetaSpend(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('campaignId', ParseIntPipe) campaignId: number,
+    @Query('period') periodRaw?: string,
+  ): Promise<DealioCampaignMetaSpendDto> {
+    return this.metaCampaignDraftService.getMetaSpendForDealioCampaign(
+      req.user,
+      businessId,
+      campaignId,
+      periodRaw?.trim() || undefined,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

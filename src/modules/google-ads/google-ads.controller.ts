@@ -21,6 +21,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { BusinessService } from '../business/business.service';
+import { DealioCampaignGoogleSpendDto } from './dto/dealio-campaign-google-spend.dto';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import { GoogleAdsConversionGoalsResponseDto } from './dto/google-ads-conversion-goals.dto';
 import { GoogleAdsBusinessProfileDto } from './dto/google-ads-business-profile.dto';
@@ -324,6 +325,36 @@ export class GoogleAdsController {
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleCampaignDraftListItemDto[]> {
     return this.googleCampaignDraftService.listDrafts(req.user, businessId);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/google-spend')
+  async getBusinessGoogleSpend(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('period') periodRaw?: string,
+  ): Promise<DealioCampaignGoogleSpendDto> {
+    return this.googleAdsService.getGoogleSpendForBusiness(
+      req.user,
+      businessId,
+      periodRaw?.trim() || undefined,
+    );
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('business/:businessId/dealio-campaign/:campaignId/google-spend')
+  async getDealioCampaignGoogleSpend(
+    @Req() req,
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Param('campaignId', ParseIntPipe) campaignId: number,
+    @Query('period') periodRaw?: string,
+  ): Promise<DealioCampaignGoogleSpendDto> {
+    return this.googleAdsService.getGoogleSpendForDealioCampaign(
+      req.user,
+      businessId,
+      campaignId,
+      periodRaw?.trim() || undefined,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

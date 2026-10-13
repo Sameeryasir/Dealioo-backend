@@ -5,6 +5,7 @@ type CacheEntry = {
 
 export class TtlCache {
   private readonly store = new Map<string, CacheEntry>();
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   get<T>(key: string): T | undefined {
     const hit = this.store.get(key);
@@ -31,12 +32,32 @@ export class TtlCache {
   ): Promise<T> {
     const cached = this.get<T>(key);
     if (cached !== undefined) return cached;
-    const value = await compute();
-    this.set(key, value, ttlMs);
-    return value;
+
+    const existing = this.inFlight.get(key);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+
+    let promise!: Promise<T>;
+    promise = (async () => {
+      try {
+        const value = await compute();
+        this.set(key, value, ttlMs);
+        return value;
+      } finally {
+        if (this.inFlight.get(key) === promise) {
+          this.inFlight.delete(key);
+        }
+      }
+    })();
+
+    this.inFlight.set(key, promise);
+    return promise;
   }
 }
 
 export const dashboardTtlCache = new TtlCache();
 
 export const DASHBOARD_CACHE_TTL_MS = 10_000;
+
+export const AD_SPEND_CACHE_TTL_MS = 60_000;

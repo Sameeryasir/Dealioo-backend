@@ -33,6 +33,7 @@ import {
 } from './dto/meta-publish-status.dto';
 import {
   buildDestinationUrlWithParams,
+  parseCampaignIdFromDestinationUrl,
 } from './meta-ad-creative-draft-validation';
 import {
   assertPublishReady,
@@ -588,11 +589,21 @@ export class MetaPublishService {
       });
 
       const publishedAt = new Date();
+      const linkedDealioCampaignId =
+        draft.campaignId ??
+        parseCampaignIdFromDestinationUrl(
+          (draft.adCreativeData as { destinationUrl?: string } | null)
+            ?.destinationUrl,
+        );
+
       await this.draftRepository.update(draft.id, {
         metaCampaignId,
         metaAdsetId,
         metaCreativeId,
         metaAdId,
+        ...(linkedDealioCampaignId != null
+          ? { campaignId: linkedDealioCampaignId }
+          : {}),
         status: 'published',
         publishStatus: 'PUBLISHED',
         publishStep: 'done',
@@ -601,6 +612,9 @@ export class MetaPublishService {
         errorMessage: null,
         currentStep: 4,
       });
+      if (linkedDealioCampaignId != null) {
+        draft.campaignId = linkedDealioCampaignId;
+      }
 
       draft.status = 'published';
       draft.publishStatus = 'PUBLISHED';

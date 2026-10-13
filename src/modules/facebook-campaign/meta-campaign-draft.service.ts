@@ -18,7 +18,9 @@ import {
 } from '../member/member.constants';
 import { assertBusinessCanManageMetaAds } from '../facebook/facebook-oauth-scopes.util';
 import { FacebookMetaTokenService } from '../facebook/facebook-meta-token.service';
+import { FacebookService } from '../facebook/facebook.service';
 import { normalizeCampaignImageUrlForMeta } from '../../utils/disk-file-upload-multer';
+import { DealioCampaignMetaSpendDto } from './dto/dealio-campaign-meta-spend.dto';
 import {
   graphGetWithToken,
   normalizeAdAccountId,
@@ -56,6 +58,10 @@ import {
   buildDestinationUrlWithParams,
   parseCampaignIdFromDestinationUrl,
 } from './meta-ad-creative-draft-validation';
+import {
+  AD_SPEND_CACHE_TTL_MS,
+  dashboardTtlCache,
+} from '../../common/ttl-cache';
 
 @Injectable()
 export class MetaCampaignDraftService {
@@ -68,6 +74,7 @@ export class MetaCampaignDraftService {
     private readonly facebookCampaignRepository: Repository<FacebookCampaign>,
     private readonly businessAccessService: BusinessAccessService,
     private readonly metaTokenService: FacebookMetaTokenService,
+    private readonly facebookService: FacebookService,
   ) {}
 
   async saveCampaignStep(
@@ -1269,6 +1276,278 @@ export class MetaCampaignDraftService {
     }
 
     return business;
+  }
+
+  async getMetaSpendForBusiness(
+    user: User,
+    businessId: number,
+    period?: string,
+  ): Promise<DealioCampaignMetaSpendDto> {
+    const business = await this.loadOwnedBusiness(user, businessId, 'view');
+    const periodKey = period?.trim() || 'this_month';
+    const cacheKey = `ad-spend-meta-business-v1:${businessId}:${periodKey}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      AD_SPEND_CACHE_TTL_MS,
+      async () => {
+        const metaCampaignIds =
+          await this.resolvePublishedMetaCampaignIdsForBusiness(businessId);
+        return this.buildPublicMetaSpend(
+          business,
+          metaCampaignIds,
+          periodKey,
+          `business ${businessId}`,
+        );
+      },
+    );
+  }
+
+  async getMetaSpendForDealioCampaign(
+    user: User,
+    businessId: number,
+    dealioCampaignId: number,
+    period?: string,
+  ): Promise<DealioCampaignMetaSpendDto> {
+    if (!Number.isFinite(dealioCampaignId) || dealioCampaignId < 1) {
+      throw new BadRequestException('Valid Dealio campaign id is required.');
+    }
+
+    const business = await this.loadOwnedBusiness(user, businessId, 'view');
+    const periodKey = period?.trim() || 'this_month';
+    const cacheKey = `ad-spend-meta-campaign-v1:${businessId}:${dealioCampaignId}:${periodKey}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      AD_SPEND_CACHE_TTL_MS,
+      async () => {
+        const metaCampaignIds =
+          await this.resolvePublishedMetaCampaignIdsForDealioCampaign(
+            businessId,
+            dealioCampaignId,
+          );
+        return this.buildPublicMetaSpend(
+          business,
+          metaCampaignIds,
+          periodKey,
+          `dealio campaign ${dealioCampaignId} business ${businessId}`,
+        );
+      },
+    );
+  }
+
+  private async buildPublicMetaSpend(
+    business: Business,
+    metaCampaignIds: string[],
+    period: string | undefined,
+    logContext: string,
+  ): Promise<DealioCampaignMetaSpendDto> {
+    if (metaCampaignIds.length === 0) {
+      return this.toPublicMetaSpendDto({
+        period: period?.trim() || 'this_month',
+        spend: 0,
+        currency: null,
+        linkedMetaCampaignCount: 0,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        ctr: null,
+      });
+    }
+
+    try {
+      const stats = await this.facebookService.getAdCampaignStats(business, {
+        includeInsights: true,
+        campaignIds: metaCampaignIds,
+        page: 1,
+        pageSize: Math.max(metaCampaignIds.length, 1),
+        period: period?.trim() || undefined,
+      });
+
+      const summed = stats.campaigns.reduce(
+        (acc, campaign) => {
+          acc.spend += this.parseInsightNumber(campaign.insights?.spend);
+          acc.impressions += this.parseInsightNumber(
+            campaign.insights?.impressions,
+          );
+          acc.reach += this.parseInsightNumber(campaign.insights?.reach);
+          acc.clicks += this.parseInsightNumber(campaign.insights?.clicks);
+          return acc;
+        },
+        { spend: 0, impressions: 0, reach: 0, clicks: 0 },
+      );
+
+      const spend =
+        typeof stats.summary?.spend === 'number' &&
+        Number.isFinite(stats.summary.spend)
+          ? stats.summary.spend
+          : summed.spend;
+      const impressions =
+        typeof stats.summary?.impressions === 'number' &&
+        Number.isFinite(stats.summary.impressions)
+          ? stats.summary.impressions
+          : summed.impressions;
+      const reach =
+        typeof stats.summary?.reach === 'number' &&
+        Number.isFinite(stats.summary.reach)
+          ? stats.summary.reach
+          : summed.reach;
+      const clicks =
+        typeof stats.summary?.clicks === 'number' &&
+        Number.isFinite(stats.summary.clicks)
+          ? stats.summary.clicks
+          : summed.clicks;
+      const ctr =
+        typeof stats.summary?.ctr === 'number' &&
+        Number.isFinite(stats.summary.ctr)
+          ? stats.summary.ctr
+          : impressions > 0
+            ? (clicks / impressions) * 100
+            : null;
+
+      return this.toPublicMetaSpendDto({
+        period: stats.datePreset || period?.trim() || 'this_month',
+        spend,
+        currency: stats.currency?.trim() || null,
+        linkedMetaCampaignCount: metaCampaignIds.length,
+        impressions,
+        reach,
+        clicks,
+        ctr,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Meta spend lookup failed for ${logContext}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return this.toPublicMetaSpendDto({
+        period: period?.trim() || 'this_month',
+        spend: 0,
+        currency: null,
+        linkedMetaCampaignCount: metaCampaignIds.length,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        ctr: null,
+      });
+    }
+  }
+
+  private parseInsightNumber(raw: string | null | undefined): number {
+    if (raw == null || String(raw).trim() === '') return 0;
+    const value = Number.parseFloat(String(raw));
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private sanitizePublicSpendPeriod(raw: string | null | undefined): string {
+    const trimmed = raw?.trim() || '';
+    if (/^[a-zA-Z0-9_]{1,40}$/.test(trimmed)) {
+      return trimmed;
+    }
+    return 'this_month';
+  }
+
+  private sanitizePublicCurrency(raw: string | null | undefined): string | null {
+    const trimmed = raw?.trim().toUpperCase() || '';
+    return /^[A-Z]{3}$/.test(trimmed) ? trimmed : null;
+  }
+
+  private toPublicMetaSpendDto(input: {
+    period: string;
+    spend: number;
+    currency: string | null;
+    linkedMetaCampaignCount: number;
+    impressions: number;
+    reach: number;
+    clicks: number;
+    ctr: number | null;
+  }): DealioCampaignMetaSpendDto {
+    return new DealioCampaignMetaSpendDto({
+      period: this.sanitizePublicSpendPeriod(input.period),
+      spend: Number.isFinite(input.spend) ? input.spend : 0,
+      currency: this.sanitizePublicCurrency(input.currency),
+      linkedMetaCampaignCount: Math.max(
+        0,
+        Math.trunc(input.linkedMetaCampaignCount) || 0,
+      ),
+      impressions: Math.max(0, Math.round(input.impressions) || 0),
+      reach: Math.max(0, Math.round(input.reach) || 0),
+      clicks: Math.max(0, Math.round(input.clicks) || 0),
+      ctr:
+        input.ctr != null && Number.isFinite(input.ctr)
+          ? Number(input.ctr.toFixed(2))
+          : null,
+    });
+  }
+
+  private async resolvePublishedMetaCampaignIdsForBusiness(
+    businessId: number,
+  ): Promise<string[]> {
+    return this.resolvePublishedMetaCampaignIds(businessId);
+  }
+
+  private async resolvePublishedMetaCampaignIdsForDealioCampaign(
+    businessId: number,
+    dealioCampaignId: number,
+  ): Promise<string[]> {
+    return this.resolvePublishedMetaCampaignIds(businessId, dealioCampaignId);
+  }
+
+  private async resolvePublishedMetaCampaignIds(
+    businessId: number,
+    dealioCampaignId?: number,
+  ): Promise<string[]> {
+    const drafts = await this.draftRepository
+      .createQueryBuilder('draft')
+      .select([
+        'draft.id',
+        'draft.metaCampaignId',
+        'draft.campaignId',
+        'draft.adCreativeData',
+      ])
+      .where('draft.businessId = :businessId', { businessId })
+      .andWhere('draft.metaCampaignId IS NOT NULL')
+      .andWhere("draft.metaCampaignId <> ''")
+      .orderBy('draft.updatedAt', 'DESC')
+      .getMany();
+
+    const metaIds = new Set<string>();
+    const draftsToBackfill: MetaCampaignDraft[] = [];
+
+    for (const draft of drafts) {
+      const metaId = draft.metaCampaignId?.trim();
+      if (!metaId) continue;
+
+      let linkedDealioCampaignId = draft.campaignId ?? null;
+      if (linkedDealioCampaignId == null && dealioCampaignId != null) {
+        const fromUrl = this.resolveCampaignIdFromCreative(
+          draft.adCreativeData as AdCreativeStepDataDto | null,
+        );
+        if (fromUrl != null) {
+          draft.campaignId = fromUrl;
+          linkedDealioCampaignId = fromUrl;
+          draftsToBackfill.push(draft);
+        }
+      }
+
+      if (
+        dealioCampaignId == null ||
+        linkedDealioCampaignId === dealioCampaignId
+      ) {
+        metaIds.add(metaId);
+      }
+    }
+
+    if (draftsToBackfill.length > 0) {
+      void this.draftRepository.save(draftsToBackfill).catch((err) => {
+        this.logger.warn(
+          `Meta draft campaignId backfill failed for business ${businessId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+    }
+
+    return [...metaIds].sort();
   }
 
   private resolveCampaignIdFromCreative(

@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IntegrationAuditLog } from '../../db/entities/integration-audit-log.entity';
 import { Business } from '../../db/entities/business.entity';
+import { Funnel } from '../../db/entities/funnel.entity';
 import { GoogleCampaign } from '../../db/entities/google-campaign.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { GoogleAdCampaignStatsSnapshot } from '../../db/entities/google-ad-campaign-stats-snapshot.entity';
@@ -24,6 +25,7 @@ import { GooglePublishService } from './google-publish.service';
   imports: [
     TypeOrmModule.forFeature([
       Business,
+      Funnel,
       IntegrationAuditLog,
       GoogleCampaign,
       GoogleCampaignDraft,

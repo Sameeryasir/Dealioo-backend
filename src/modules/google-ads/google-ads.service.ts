@@ -9,9 +9,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { google } from 'googleapis';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { Funnel } from '../../db/entities/funnel.entity';
 import { GoogleAdCampaignStatsSnapshot } from '../../db/entities/google-ad-campaign-stats-snapshot.entity';
 import { GoogleCampaignDraft } from '../../db/entities/google-campaign-draft.entity';
 import { User } from '../../db/entities/user.entity';
+import { DealioCampaignGoogleSpendDto } from './dto/dealio-campaign-google-spend.dto';
 import { encryptSecret } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessHistoryService } from '../business-history/business-history.service';
@@ -58,6 +60,10 @@ import {
   resolveGoogleInsightsPeriod,
   type ResolvedGoogleInsightsPeriod,
 } from './google-insights-period';
+import {
+  AD_SPEND_CACHE_TTL_MS,
+  dashboardTtlCache,
+} from '../../common/ttl-cache';
 
 const GOOGLE_ADS_SDK_TIMEOUT_MS = 25_000;
 const GOOGLE_ADS_STATS_DB_TTL_MS = 10 * 60_000;
@@ -233,6 +239,8 @@ export class GoogleAdsService {
   constructor(
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
+    @InjectRepository(Funnel)
+    private readonly funnelRepository: Repository<Funnel>,
     @InjectRepository(GoogleCampaignDraft)
     private readonly googleCampaignDraftRepository: Repository<GoogleCampaignDraft>,
     @InjectRepository(GoogleAdCampaignStatsSnapshot)
@@ -748,6 +756,262 @@ export class GoogleAdsService {
     this.logger.log(`Google Ads disconnected for business ${businessId}`);
 
     return { disconnected: true };
+  }
+
+  async getGoogleSpendForBusiness(
+    user: User,
+    businessId: number,
+    period?: string,
+  ): Promise<DealioCampaignGoogleSpendDto> {
+    const business = await this.businessRepository.findOne({
+      where: businessAccessWhere(user, businessId),
+    });
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const periodKey = period?.trim() || 'this_month';
+    const cacheKey = `ad-spend-google-business-v1:${businessId}:${periodKey}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      AD_SPEND_CACHE_TTL_MS,
+      async () => {
+        const googleCampaignIds =
+          await this.resolvePublishedGoogleCampaignIdsForBusiness(businessId);
+        return this.buildPublicGoogleSpend(
+          business,
+          googleCampaignIds,
+          periodKey,
+          `business ${businessId}`,
+        );
+      },
+    );
+  }
+
+  async getGoogleSpendForDealioCampaign(
+    user: User,
+    businessId: number,
+    dealioCampaignId: number,
+    period?: string,
+  ): Promise<DealioCampaignGoogleSpendDto> {
+    if (!Number.isFinite(dealioCampaignId) || dealioCampaignId < 1) {
+      throw new BadRequestException('Valid Dealio campaign id is required.');
+    }
+
+    const business = await this.businessRepository.findOne({
+      where: businessAccessWhere(user, businessId),
+    });
+    if (!business) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+
+    const periodKey = period?.trim() || 'this_month';
+    const cacheKey = `ad-spend-google-campaign-v1:${businessId}:${dealioCampaignId}:${periodKey}`;
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      AD_SPEND_CACHE_TTL_MS,
+      async () => {
+        const googleCampaignIds =
+          await this.resolvePublishedGoogleCampaignIdsForDealioCampaign(
+            businessId,
+            dealioCampaignId,
+          );
+        return this.buildPublicGoogleSpend(
+          business,
+          googleCampaignIds,
+          periodKey,
+          `dealio campaign ${dealioCampaignId} business ${businessId}`,
+        );
+      },
+    );
+  }
+
+  private async buildPublicGoogleSpend(
+    business: Business,
+    googleCampaignIds: string[],
+    period: string | undefined,
+    logContext: string,
+  ): Promise<DealioCampaignGoogleSpendDto> {
+    if (googleCampaignIds.length === 0) {
+      return this.toPublicGoogleSpendDto({
+        period: period?.trim() || 'this_month',
+        spend: 0,
+        currency: null,
+        linkedGoogleCampaignCount: 0,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        ctr: null,
+      });
+    }
+
+    try {
+      const stats = await this.getAdCampaignStats(business, {
+        period: period?.trim() || undefined,
+      });
+      const wanted = new Set(googleCampaignIds);
+      const linkedCampaigns = stats.campaigns.filter((campaign) => {
+        const raw = String(campaign.id ?? '').trim();
+        const normalized = raw.replace(/\D/g, '') || raw;
+        return wanted.has(normalized);
+      });
+      const summed = linkedCampaigns.reduce(
+        (acc, campaign) => {
+          acc.spend += this.parseInsightNumber(campaign.insights?.spend);
+          acc.impressions += this.parseInsightNumber(
+            campaign.insights?.impressions,
+          );
+          acc.clicks += this.parseInsightNumber(campaign.insights?.clicks);
+          return acc;
+        },
+        { spend: 0, impressions: 0, clicks: 0 },
+      );
+      const ctr =
+        summed.impressions > 0
+          ? (summed.clicks / summed.impressions) * 100
+          : null;
+
+      return this.toPublicGoogleSpendDto({
+        period: stats.datePreset || period?.trim() || 'this_month',
+        spend: summed.spend,
+        currency: stats.currency?.trim() || null,
+        linkedGoogleCampaignCount: googleCampaignIds.length,
+        impressions: summed.impressions,
+        reach: 0,
+        clicks: summed.clicks,
+        ctr,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Google spend lookup failed for ${logContext}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return this.toPublicGoogleSpendDto({
+        period: period?.trim() || 'this_month',
+        spend: 0,
+        currency: null,
+        linkedGoogleCampaignCount: googleCampaignIds.length,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        ctr: null,
+      });
+    }
+  }
+
+  private parseInsightNumber(raw: string | null | undefined): number {
+    if (raw == null || String(raw).trim() === '') return 0;
+    const value = Number.parseFloat(String(raw));
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private sanitizePublicSpendPeriod(raw: string | null | undefined): string {
+    const trimmed = raw?.trim() || '';
+    if (/^[a-zA-Z0-9_]{1,40}$/.test(trimmed)) {
+      return trimmed;
+    }
+    return 'this_month';
+  }
+
+  private sanitizePublicCurrency(raw: string | null | undefined): string | null {
+    const trimmed = raw?.trim().toUpperCase() || '';
+    return /^[A-Z]{3}$/.test(trimmed) ? trimmed : null;
+  }
+
+  private toPublicGoogleSpendDto(input: {
+    period: string;
+    spend: number;
+    currency: string | null;
+    linkedGoogleCampaignCount: number;
+    impressions: number;
+    reach: number;
+    clicks: number;
+    ctr: number | null;
+  }): DealioCampaignGoogleSpendDto {
+    return new DealioCampaignGoogleSpendDto({
+      period: this.sanitizePublicSpendPeriod(input.period),
+      spend: Number.isFinite(input.spend) ? input.spend : 0,
+      currency: this.sanitizePublicCurrency(input.currency),
+      linkedGoogleCampaignCount: Math.max(
+        0,
+        Math.trunc(input.linkedGoogleCampaignCount) || 0,
+      ),
+      impressions: Math.max(0, Math.round(input.impressions) || 0),
+      reach: Math.max(0, Math.round(input.reach) || 0),
+      clicks: Math.max(0, Math.round(input.clicks) || 0),
+      ctr:
+        input.ctr != null && Number.isFinite(input.ctr)
+          ? Number(input.ctr.toFixed(2))
+          : null,
+    });
+  }
+
+  private async resolvePublishedGoogleCampaignIdsForBusiness(
+    businessId: number,
+  ): Promise<string[]> {
+    const drafts = await this.googleCampaignDraftRepository
+      .createQueryBuilder('draft')
+      .select(['draft.id', 'draft.googleCampaignId'])
+      .where('draft.businessId = :businessId', { businessId })
+      .andWhere('draft.googleCampaignId IS NOT NULL')
+      .andWhere("draft.googleCampaignId <> ''")
+      .orderBy('draft.updatedAt', 'DESC')
+      .getMany();
+
+    const googleIds = new Set<string>();
+    for (const draft of drafts) {
+      const rawGoogleId = draft.googleCampaignId?.trim();
+      if (!rawGoogleId) continue;
+      const normalized = rawGoogleId.replace(/\D/g, '') || rawGoogleId;
+      googleIds.add(normalized);
+    }
+
+    return [...googleIds].sort();
+  }
+
+  private async resolvePublishedGoogleCampaignIdsForDealioCampaign(
+    businessId: number,
+    dealioCampaignId: number,
+  ): Promise<string[]> {
+    const funnel = await this.funnelRepository.findOne({
+      where: { campaignId: dealioCampaignId },
+      select: ['id', 'businessId'],
+    });
+    if (
+      !funnel ||
+      (funnel.businessId != null && funnel.businessId !== businessId)
+    ) {
+      return [];
+    }
+
+    const drafts = await this.googleCampaignDraftRepository
+      .createQueryBuilder('draft')
+      .select(['draft.id', 'draft.googleCampaignId', 'draft.draftData'])
+      .where('draft.businessId = :businessId', { businessId })
+      .andWhere('draft.googleCampaignId IS NOT NULL')
+      .andWhere("draft.googleCampaignId <> ''")
+      .orderBy('draft.updatedAt', 'DESC')
+      .getMany();
+
+    const googleIds = new Set<string>();
+    for (const draft of drafts) {
+      const rawGoogleId = draft.googleCampaignId?.trim();
+      if (!rawGoogleId) continue;
+      const selectedFunnelId =
+        typeof draft.draftData?.selectedFunnelId === 'number'
+          ? draft.draftData.selectedFunnelId
+          : null;
+      if (selectedFunnelId !== funnel.id) continue;
+      const normalized = rawGoogleId.replace(/\D/g, '') || rawGoogleId;
+      googleIds.add(normalized);
+    }
+
+    return [...googleIds].sort();
   }
 
   async getAdCampaignStats(
