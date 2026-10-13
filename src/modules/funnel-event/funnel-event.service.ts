@@ -1109,7 +1109,7 @@ export class FunnelEventService {
     revenue: number;
     currency: string | null;
   }> {
-    const cacheKey = `funnel-stats-total-v1:${funnelId}`;
+    const cacheKey = `funnel-stats-total-v2:${funnelId}`;
     return this.funnelStatsQueueService.getOrCompute(
       {
         kind: FunnelStatsJobName.STATS_TOTAL,
@@ -1139,7 +1139,7 @@ export class FunnelEventService {
     const [rows, paidPayments] = await Promise.all([
       this.funnelEventRepository.find({
         where: { funnelId },
-        select: ['customerId', 'funnelPaymentId'],
+        select: ['customerId', 'funnelPaymentId', 'eventType'],
       }),
       this.funnelPaymentRepository.find({
         where: { funnelId, status: FunnelPaymentStatus.PAID },
@@ -1169,7 +1169,7 @@ export class FunnelEventService {
 
       if (paid) {
         paidAfterSignup += 1;
-      } else {
+      } else if (row.eventType === FunnelEventType.SIGNUP) {
         signupOnly += 1;
       }
     }
@@ -1211,7 +1211,7 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
-    const cacheKey = `funnel-stats-monthly-v5:${funnelId}:${monthCount}`;
+    const cacheKey = `funnel-stats-monthly-v6:${funnelId}:${monthCount}`;
     return this.funnelStatsQueueService.getOrCompute(
       {
         kind: FunnelStatsJobName.STATS_MONTHLY,
@@ -1267,6 +1267,17 @@ export class FunnelEventService {
       paid_by_event.id IS NOT NULL
       OR paid_by_customer.customer_id IS NOT NULL
     )`;
+  }
+
+  private isSignupOnlyEventSql(eventAlias = 'e'): string {
+    return `${eventAlias}.customer_id IS NOT NULL
+      AND ${eventAlias}.event_type = '${FunnelEventType.SIGNUP}'
+      AND NOT ${this.eventHasJoinedCampaignPaidSql()}`;
+  }
+
+  private isPaidGuestEventSql(eventAlias = 'e'): string {
+    return `${eventAlias}.customer_id IS NOT NULL
+      AND ${this.eventHasJoinedCampaignPaidSql()}`;
   }
 
   private applyCampaignPaidJoins<T extends ObjectLiteral>(
@@ -1335,11 +1346,11 @@ export class FunnelEventService {
           'month',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasJoinedCampaignPaidSql()})`,
+          `COUNT(*) FILTER (WHERE ${this.isSignupOnlyEventSql()})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasJoinedCampaignPaidSql()})`,
+          `COUNT(*) FILTER (WHERE ${this.isPaidGuestEventSql()})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
@@ -1436,7 +1447,7 @@ export class FunnelEventService {
     }[];
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
-    const cacheKey = `funnel-stats-range-v6:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
+    const cacheKey = `funnel-stats-range-v7:${funnelId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
     return this.funnelStatsQueueService.getOrCompute(
       {
         kind: FunnelStatsJobName.STATS_RANGE,
@@ -1483,10 +1494,10 @@ export class FunnelEventService {
 
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const currentStatsKey = `funnel-stats-range-v6:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const currentStatsKey = `funnel-stats-range-v7:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
     const adSourcesKey = `funnel-guest-ad-sources-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
     const previousStatsKey = hasPrevious
-      ? `funnel-stats-range-v6:${funnelId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`
+      ? `funnel-stats-range-v7:${funnelId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`
       : null;
 
     const [stats, analytics, adSources, previousStats, previousAnalytics] =
@@ -1587,7 +1598,7 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
     const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
-    const cacheKey = `funnel-dashboard-summary-v2:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+    const cacheKey = `funnel-dashboard-summary-v3:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return this.funnelStatsQueueService.getCachedOrComputeInline(
       {
@@ -1699,7 +1710,7 @@ export class FunnelEventService {
         : Promise.resolve(null),
       this.countFunnelEventAdSources({
         funnelId,
-        eventType: FunnelEventType.SIGNUP,
+        eventType: null,
         rangeFrom: from,
         rangeTo: to,
         chartTz,
@@ -1717,6 +1728,7 @@ export class FunnelEventService {
         chartTz,
         emptySeries,
         paidOnly: false,
+        unpaidOnly: true,
         distinctCustomers: false,
         useStoredAdSourceOnly: true,
         seriesOnly: true,
@@ -1847,7 +1859,7 @@ export class FunnelEventService {
         : Promise.resolve(null),
       this.countFunnelEventAdSources({
         funnelId,
-        eventType: FunnelEventType.SIGNUP,
+        eventType: null,
         rangeFrom: from,
         rangeTo: to,
         chartTz,
@@ -1865,6 +1877,7 @@ export class FunnelEventService {
         chartTz,
         emptySeries,
         paidOnly: false,
+        unpaidOnly: true,
         distinctCustomers: false,
         useStoredAdSourceOnly: true,
         totalsOnly: true,
@@ -1953,7 +1966,7 @@ export class FunnelEventService {
       await Promise.all([
         this.countFunnelEventAdSources({
           funnelId,
-          eventType: FunnelEventType.SIGNUP,
+          eventType: null,
           rangeFrom: from,
           rangeTo: to,
           chartTz,
@@ -1971,6 +1984,7 @@ export class FunnelEventService {
           chartTz,
           emptySeries,
           paidOnly: false,
+          unpaidOnly: true,
           distinctCustomers: false,
           useStoredAdSourceOnly: true,
           seriesOnly: true,
@@ -2036,17 +2050,16 @@ export class FunnelEventService {
     uniqueVisitors: number;
     currency: string | null;
   }> {
-    const paidSql = this.eventHasJoinedCampaignPaidSql();
     const [eventRow, revenueRow, uniqueRow, currencyRow] = await Promise.all([
       this.applyCampaignPaidJoins(
         this.funnelEventRepository
           .createQueryBuilder('e')
           .select(
-            `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${paidSql})`,
+            `COUNT(*) FILTER (WHERE ${this.isSignupOnlyEventSql()})`,
             'signups',
           )
           .addSelect(
-            `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${paidSql})`,
+            `COUNT(*) FILTER (WHERE ${this.isPaidGuestEventSql()})`,
             'payments',
           )
           .where('e.funnel_id = :funnelId', { funnelId })
@@ -2067,9 +2080,6 @@ export class FunnelEventService {
         .createQueryBuilder('e')
         .select('COUNT(DISTINCT e.customer_id)', 'uniqueVisitors')
         .where('e.funnel_id = :funnelId', { funnelId })
-        .andWhere('e.event_type = :signup', {
-          signup: FunnelEventType.SIGNUP,
-        })
         .andWhere('e.customer_id IS NOT NULL')
         .andWhere('e.created_at >= :from', { from })
         .andWhere('e.created_at <= :to', { to })
@@ -2107,7 +2117,6 @@ export class FunnelEventService {
       throw new NotFoundException('Funnel not found');
     }
 
-    const paidSql = this.eventHasJoinedCampaignPaidSql();
     const [pageViews, signupRow] = await Promise.all([
       this.funnelAnalyticsRepository
         .createQueryBuilder('e')
@@ -2122,11 +2131,11 @@ export class FunnelEventService {
         this.funnelEventRepository
           .createQueryBuilder('e')
           .select(
-            `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${paidSql})`,
+            `COUNT(*) FILTER (WHERE ${this.isSignupOnlyEventSql()})`,
             'signups',
           )
           .addSelect(
-            `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${paidSql})`,
+            `COUNT(*) FILTER (WHERE ${this.isPaidGuestEventSql()})`,
             'payments',
           )
           .where('e.funnel_id = :funnelId', { funnelId })
@@ -2179,11 +2188,11 @@ export class FunnelEventService {
         .createQueryBuilder('e')
         .select(eventBucket, 'month')
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND NOT ${this.eventHasJoinedCampaignPaidSql()})`,
+          `COUNT(*) FILTER (WHERE ${this.isSignupOnlyEventSql()})`,
           'signupOnly',
         )
         .addSelect(
-          `COUNT(*) FILTER (WHERE e.customer_id IS NOT NULL AND ${this.eventHasJoinedCampaignPaidSql()})`,
+          `COUNT(*) FILTER (WHERE ${this.isPaidGuestEventSql()})`,
           'paidAfterSignup',
         )
         .where('e.funnel_id = :funnelId', { funnelId })
@@ -2347,7 +2356,12 @@ export class FunnelEventService {
     );
 
     if (existing) {
-      existing.eventType = FunnelEventType.SIGNUP;
+      if (
+        existing.eventType !== FunnelEventType.PAYMENT &&
+        existing.paymentStatus !== FunnelPaymentStatus.PAID
+      ) {
+        existing.eventType = FunnelEventType.SIGNUP;
+      }
       existing.customerId = customerId;
       if (visitorId) {
         existing.visitorId = visitorId;
@@ -4737,6 +4751,7 @@ export class FunnelEventService {
         chartTz,
         emptySeries,
         paidOnly: false,
+        unpaidOnly: true,
       }),
       this.countFunnelEventAdSources({
         funnelId,
@@ -4967,6 +4982,7 @@ export class FunnelEventService {
     chartTz: string;
     emptySeries: Array<{ month: string; meta: number; google: number }>;
     paidOnly: boolean;
+    unpaidOnly?: boolean;
     paymentStatusPaid?: boolean;
     totalsOnly?: boolean;
     seriesOnly?: boolean;
@@ -5040,6 +5056,9 @@ export class FunnelEventService {
       if (params.paidOnly) {
         totalsQb.andWhere(paidSql);
       }
+      if (params.unpaidOnly) {
+        totalsQb.andWhere(`NOT ${paidSql}`);
+      }
       if (params.paymentStatusPaid) {
         totalsQb.andWhere('event.payment_status = :paidStatus', {
           paidStatus: FunnelPaymentStatus.PAID,
@@ -5106,6 +5125,9 @@ export class FunnelEventService {
       }
       if (params.paidOnly) {
         seriesQb.andWhere(paidSql);
+      }
+      if (params.unpaidOnly) {
+        seriesQb.andWhere(`NOT ${paidSql}`);
       }
       if (params.paymentStatusPaid) {
         seriesQb.andWhere('event.payment_status = :paidStatus', {

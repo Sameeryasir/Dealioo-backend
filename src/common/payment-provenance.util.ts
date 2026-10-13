@@ -24,7 +24,10 @@ export function campaignFunnelPaymentOriginSql(alias = 'payment'): string {
         WHERE fe_campaign_signup.funnel_id = ${alias}.funnel_id
           AND fe_campaign_signup.customer_id IS NOT NULL
           AND fe_campaign_signup.customer_id = ${alias}.customer_id
-          AND fe_campaign_signup.event_type = '${FunnelEventType.SIGNUP}'
+          AND fe_campaign_signup.event_type IN (
+            '${FunnelEventType.SIGNUP}',
+            '${FunnelEventType.PAYMENT}'
+          )
           AND fe_campaign_signup.deleted_at IS NULL
       )
     )`;
@@ -45,7 +48,7 @@ export function applyCampaignFunnelPaymentOriginFilter<
         WHERE fe_campaign_signup.funnel_id = ${alias}.funnel_id
           AND fe_campaign_signup.customer_id IS NOT NULL
           AND fe_campaign_signup.customer_id = ${alias}.customer_id
-          AND fe_campaign_signup.event_type = :campaignFunnelSignupEvent
+          AND fe_campaign_signup.event_type IN (:...campaignFunnelJourneyEvents)
           AND fe_campaign_signup.deleted_at IS NULL
       )
     )`,
@@ -55,7 +58,10 @@ export function applyCampaignFunnelPaymentOriginFilter<
         FunnelPaymentSource.MANUAL,
       ],
       campaignFunnelOnlineChannel: FunnelCollectionChannel.ONLINE,
-      campaignFunnelSignupEvent: FunnelEventType.SIGNUP,
+      campaignFunnelJourneyEvents: [
+        FunnelEventType.SIGNUP,
+        FunnelEventType.PAYMENT,
+      ],
     },
   );
 }
