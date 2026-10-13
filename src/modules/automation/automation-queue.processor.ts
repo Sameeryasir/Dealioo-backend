@@ -2,14 +2,18 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger, NotFoundException } from '@nestjs/common';
 import { Job } from 'bullmq';
 import {
-  AUTOMATION_QUEUE,
+  AUTOMATION_JOURNEY_QUEUE,
+  AUTOMATION_SEND_QUEUE,
   AutomationJobName,
   resolveAutomationQueueConcurrency,
   resolveAutomationQueueLimiter,
+  resolveAutomationSendQueueConcurrency,
+  resolveAutomationSendQueueLimiter,
 } from './automation-queue.constants';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import { AutomationPurpose } from '../../db/entities/automation-purpose.enum';
 import type {
+  ContinueGraphBatchJob,
   CronTickJob,
   HandleFunnelEventJob,
   ProcessExecutionJob,
@@ -29,11 +33,12 @@ import {
   resolveProviderOutageRetryDelayMs,
 } from './automation-node-retry.policy';
 
-const queueLimiter = resolveAutomationQueueLimiter();
+const journeyLimiter = resolveAutomationQueueLimiter();
+const sendLimiter = resolveAutomationSendQueueLimiter();
 
-@Processor(AUTOMATION_QUEUE, {
+@Processor(AUTOMATION_JOURNEY_QUEUE, {
   concurrency: resolveAutomationQueueConcurrency(),
-  ...(queueLimiter ? { limiter: queueLimiter } : {}),
+  ...(journeyLimiter ? { limiter: journeyLimiter } : {}),
 })
 export class AutomationQueueProcessor extends WorkerHost {
   private readonly logger = new Logger(AutomationQueueProcessor.name);
@@ -51,10 +56,10 @@ export class AutomationQueueProcessor extends WorkerHost {
 
   private resolveExecutionId(
     job: Job<
-      | UnpaidReminderBatchJob
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | ContinueGraphBatchJob
       | HandleFunnelEventJob
       | PurgeAutomationJobsJob
     >,
@@ -68,10 +73,10 @@ export class AutomationQueueProcessor extends WorkerHost {
 
   async process(
     job: Job<
-      | UnpaidReminderBatchJob
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | ContinueGraphBatchJob
       | HandleFunnelEventJob
       | PurgeAutomationJobsJob
     >,
@@ -92,15 +97,15 @@ export class AutomationQueueProcessor extends WorkerHost {
           break;
         }
 
-        case AutomationJobName.UNPAID_REMINDER_BATCH:
-          await this.automationService.runUnpaidReminderBatch(
-            job.data as UnpaidReminderBatchJob,
-          );
-          break;
-
         case AutomationJobName.HANDLE_FUNNEL_EVENT: {
           const payload = job.data as HandleFunnelEventJob;
           await this.automationService.handleQueuedFunnelEvent(payload);
+          break;
+        }
+
+        case AutomationJobName.CONTINUE_GRAPH_BATCH: {
+          const payload = job.data as ContinueGraphBatchJob;
+          await this.automationService.continueGraphDrivenBatch(payload);
           break;
         }
 
@@ -280,10 +285,10 @@ export class AutomationQueueProcessor extends WorkerHost {
 
   private async recordDeadLetter(
     job: Job<
-      | UnpaidReminderBatchJob
       | ProcessExecutionJob
       | ResumeExecutionJob
       | CronTickJob
+      | ContinueGraphBatchJob
       | HandleFunnelEventJob
       | PurgeAutomationJobsJob
     >,
@@ -309,6 +314,66 @@ export class AutomationQueueProcessor extends WorkerHost {
       this.metricsService.recordDeadLetter();
       this.metricsService.recordExecutionFailed();
     } catch {
+    }
+  }
+}
+
+@Processor(AUTOMATION_SEND_QUEUE, {
+  concurrency: resolveAutomationSendQueueConcurrency(),
+  ...(sendLimiter ? { limiter: sendLimiter } : {}),
+})
+export class AutomationSendQueueProcessor extends WorkerHost {
+  private readonly logger = new Logger(AutomationSendQueueProcessor.name);
+
+  constructor(
+    private readonly automationService: AutomationService,
+    private readonly deadLetterService: AutomationDeadLetterService,
+    private readonly metricsService: AutomationMetricsService,
+  ) {
+    super();
+  }
+
+  async process(job: Job<UnpaidReminderBatchJob>): Promise<void> {
+    const executionId =
+      typeof job.data?.executionId === 'number' ? job.data.executionId : null;
+    this.logger.log(
+      `Processing send job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}`,
+    );
+
+    try {
+      if (job.name !== AutomationJobName.UNPAID_REMINDER_BATCH) {
+        this.logger.warn(`Unknown send-queue job: ${job.name}`);
+        return;
+      }
+      await this.automationService.runUnpaidReminderBatch(job.data);
+      this.logger.log(`Completed send job ${job.name} (${job.id})`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Send job processing failed';
+      this.logger.error(
+        `Failed send job ${job.name} (${job.id})${executionId ? ` execution=${executionId}` : ''}: ${message}`,
+      );
+
+      const maxAttempts = job.opts.attempts ?? 3;
+      if (executionId && job.attemptsMade >= maxAttempts) {
+        try {
+          await this.deadLetterService.recordFailedJob({
+            jobName: job.name,
+            jobId: String(job.id ?? ''),
+            jobData: job.data as unknown as Record<string, unknown>,
+            error: message,
+            attempts: job.attemptsMade,
+            executionId,
+            automationId: job.data.automationId,
+            customerId: null,
+            nodeId: job.data.emailNodeId ?? null,
+            nodeType: AutomationNodeType.EMAIL,
+          });
+          this.metricsService.recordDeadLetter();
+        } catch {
+        }
+      }
+      throw error;
     }
   }
 }

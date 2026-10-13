@@ -2,7 +2,11 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AUTOMATION_QUEUE, AUTOMATION_JOB_CLEANUP_OPTIONS } from './automation-queue.constants';
+import {
+  AUTOMATION_JOURNEY_QUEUE,
+  AUTOMATION_SEND_QUEUE,
+  AUTOMATION_JOB_CLEANUP_OPTIONS,
+} from './automation-queue.constants';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationConnection } from '../../db/entities/automation-connection.entity';
 import { AutomationDeadLetter } from '../../db/entities/automation-dead-letter.entity';
@@ -42,7 +46,10 @@ import { AutomationFlowService } from './automation-flow.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationLogService } from './automation-log.service';
-import { AutomationQueueProcessor } from './automation-queue.processor';
+import {
+  AutomationQueueProcessor,
+  AutomationSendQueueProcessor,
+} from './automation-queue.processor';
 import { AutomationQueueService } from './automation-queue.service';
 import { AutomationSendAttemptService } from './automation-send-attempt.service';
 import { AutomationWaitSchedulerService } from './automation-wait-scheduler.service';
@@ -67,7 +74,11 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
       }),
     }),
     BullModule.registerQueue({
-      name: AUTOMATION_QUEUE,
+      name: AUTOMATION_JOURNEY_QUEUE,
+      defaultJobOptions: AUTOMATION_JOB_CLEANUP_OPTIONS,
+    }),
+    BullModule.registerQueue({
+      name: AUTOMATION_SEND_QUEUE,
       defaultJobOptions: AUTOMATION_JOB_CLEANUP_OPTIONS,
     }),
     TypeOrmModule.forFeature([
@@ -121,6 +132,7 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
     AutomationSendAttemptService,
     AutomationQueueService,
     AutomationQueueProcessor,
+    AutomationSendQueueProcessor,
     AutomationCronSchedulerService,
     AutomationWaitSchedulerService,
     AutomationNodeRegistry,

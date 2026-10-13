@@ -3,7 +3,8 @@ import { Injectable } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { AutomationNodeType } from '../../db/entities/automation-node.entity';
 import {
-  AUTOMATION_QUEUE,
+  AUTOMATION_JOURNEY_QUEUE,
+  AUTOMATION_SEND_QUEUE,
   AUTOMATION_JOB_CLEANUP_OPTIONS,
   AutomationJobName,
   automationCronSchedulerKey,
@@ -14,6 +15,7 @@ import {
 } from './automation-node-retry.policy';
 import { shouldUseDbWaitScheduler } from './automation-wait-scheduler.constants';
 import type {
+  ContinueGraphBatchJob,
   CronTickJob,
   HandleFunnelEventJob,
   ProcessExecutionJob,
@@ -42,9 +44,15 @@ const UNPAID_SEND_LOCK_TTL_SEC = 7 * 24 * 60 * 60;
 @Injectable()
 export class AutomationQueueService {
   constructor(
-    @InjectQueue(AUTOMATION_QUEUE)
-    private readonly queue: Queue,
+    @InjectQueue(AUTOMATION_JOURNEY_QUEUE)
+    private readonly journeyQueue: Queue,
+    @InjectQueue(AUTOMATION_SEND_QUEUE)
+    private readonly sendQueue: Queue,
   ) {}
+
+  private get queue(): Queue {
+    return this.journeyQueue;
+  }
 
   async addUnpaidReminderBatch(
     data: UnpaidReminderBatchJob,
@@ -53,7 +61,7 @@ export class AutomationQueueService {
     const phase = data.batchPhase ?? 'payment';
     const chunkIndex = data.chunkIndex ?? 0;
     const jobId = unpaidReminderBatchJobId(data.executionId, phase, chunkIndex);
-    const existing = await this.queue.getJob(jobId);
+    const existing = await this.sendQueue.getJob(jobId);
     if (existing) {
       const state = await existing.getState();
       if (
@@ -67,12 +75,13 @@ export class AutomationQueueService {
       await existing.remove();
     }
 
-    const job = await this.queue.add(
+    const job = await this.sendQueue.add(
       AutomationJobName.UNPAID_REMINDER_BATCH,
       data,
       {
         jobId,
-        attempts: 1,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
         ...(delayMs > 0 ? { delay: delayMs } : {}),
         ...AUTOMATION_JOB_CLEANUP_OPTIONS,
       },
@@ -85,7 +94,7 @@ export class AutomationQueueService {
     phase: UnpaidReminderBatchPhase,
     totalChunks: number,
   ): Promise<void> {
-    const client = await this.queue.client;
+    const client = await this.sendQueue.client;
     const key = this.unpaidChunkTotalKey(executionId, phase);
     await client.set(key, String(Math.max(0, totalChunks)), 'EX', UNPAID_CHUNK_COORD_TTL_SEC);
   }
@@ -94,7 +103,7 @@ export class AutomationQueueService {
     executionId: number,
     phase: UnpaidReminderBatchPhase,
   ): Promise<{ done: number; total: number }> {
-    const client = await this.queue.client;
+    const client = await this.sendQueue.client;
     const [doneRaw, totalRaw] = await Promise.all([
       client.get(this.unpaidChunkDoneKey(executionId, phase)),
       client.get(this.unpaidChunkTotalKey(executionId, phase)),
@@ -109,7 +118,7 @@ export class AutomationQueueService {
     executionId: number,
     phase: UnpaidReminderBatchPhase,
   ): Promise<boolean> {
-    const client = await this.queue.client;
+    const client = await this.sendQueue.client;
     const key = `unpaid-reminder-phase-final:${executionId}:${phase}`;
     const result = await client.set(
       key,
@@ -126,7 +135,7 @@ export class AutomationQueueService {
     phase: UnpaidReminderBatchPhase,
     fallbackTotalChunks: number,
   ): Promise<{ done: number; total: number; isLast: boolean }> {
-    const client = await this.queue.client;
+    const client = await this.sendQueue.client;
     const doneKey = this.unpaidChunkDoneKey(executionId, phase);
     const done = await client.incr(doneKey);
     await client.expire(doneKey, UNPAID_CHUNK_COORD_TTL_SEC);
@@ -151,7 +160,7 @@ export class AutomationQueueService {
     executionId: number,
     phase: UnpaidReminderBatchPhase = 'payment',
   ): Promise<boolean> {
-    const client = await this.queue.client;
+    const client = await this.sendQueue.client;
     const key = `unpaid-reminder-send:${funnelId}:${customerId}:${executionId}:${phase}`;
     const result = await client.set(
       key,
@@ -170,31 +179,68 @@ export class AutomationQueueService {
     const prefix = unpaidReminderBatchJobIdPrefix(executionId, phase);
     const legacyId = `unpaid-reminder-batch-${executionId}-${phase}`;
 
-    const legacy = await this.queue.getJob(legacyId);
-    if (legacy) {
-      await this.safeRemoveJob(legacy);
-    }
+    for (const target of [this.sendQueue, this.journeyQueue]) {
+      const legacy = await target.getJob(legacyId);
+      if (legacy) {
+        await this.safeRemoveJob(legacy);
+      }
 
-    for (const state of QUEUE_JOB_SCAN_STATES) {
-      let start = 0;
-      const batchSize = 100;
-      while (true) {
-        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
-        if (jobs.length === 0) {
-          break;
-        }
-        for (const job of jobs) {
-          const jobId = String(job.id ?? '');
-          if (jobId.startsWith(prefix)) {
-            await this.safeRemoveJob(job);
+      for (const state of QUEUE_JOB_SCAN_STATES) {
+        let start = 0;
+        const batchSize = 100;
+        while (true) {
+          const jobs = await target.getJobs(state, start, start + batchSize - 1);
+          if (jobs.length === 0) {
+            break;
           }
+          for (const job of jobs) {
+            const jobId = String(job.id ?? '');
+            if (jobId.startsWith(prefix)) {
+              await this.safeRemoveJob(job);
+            }
+          }
+          if (jobs.length < batchSize) {
+            break;
+          }
+          start += batchSize;
         }
-        if (jobs.length < batchSize) {
-          break;
-        }
-        start += batchSize;
       }
     }
+  }
+
+  async addContinueGraphBatch(
+    data: ContinueGraphBatchJob,
+    delayMs = 5_000,
+  ): Promise<string> {
+    const afterCustomerId = Math.max(0, data.afterCustomerId);
+    const jobId = `continue-graph-batch-${data.automationId}-${afterCustomerId}`;
+    const existing = await this.journeyQueue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (
+        state === 'active' ||
+        state === 'waiting' ||
+        state === 'delayed' ||
+        state === 'prioritized'
+      ) {
+        return jobId;
+      }
+      await this.safeRemoveJob(existing);
+    }
+
+    const safeDelay = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5_000;
+    const job = await this.journeyQueue.add(
+      AutomationJobName.CONTINUE_GRAPH_BATCH,
+      data,
+      {
+        jobId,
+        delay: safeDelay,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 3000 },
+        ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+      },
+    );
+    return job.id ?? jobId;
   }
 
   async addProcessExecution(
@@ -455,28 +501,9 @@ export class AutomationQueueService {
       await this.removeResumeExecutionJob(executionId);
     }
 
-    for (const state of QUEUE_JOB_SCAN_STATES) {
-      let start = 0;
-      const batchSize = 100;
-
-      while (true) {
-        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
-        if (jobs.length === 0) {
-          break;
-        }
-
-        for (const job of jobs) {
-          if (this.jobBelongsToExecution(job, executionIdSet)) {
-            await this.safeRemoveJob(job);
-          }
-        }
-
-        if (jobs.length < batchSize) {
-          break;
-        }
-        start += batchSize;
-      }
-    }
+    await this.scanQueuesAndRemove((job) =>
+      this.jobBelongsToExecution(job, executionIdSet),
+    );
   }
 
   /**
@@ -525,30 +552,36 @@ export class AutomationQueueService {
       await this.removeResumeExecutionJob(executionId);
     }
 
-    for (const state of QUEUE_JOB_SCAN_STATES) {
-      let start = 0;
-      const batchSize = 100;
+    await this.scanQueuesAndRemove((job) => {
+      if (job.name === AutomationJobName.PURGE_AUTOMATION_JOBS) {
+        return false;
+      }
+      return this.jobBelongsToAutomation(job, automationId, executionIdSet);
+    });
+  }
 
-      while (true) {
-        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
-        if (jobs.length === 0) {
-          break;
-        }
-
-        for (const job of jobs) {
-          // Never remove the background purge job itself while it is scanning
-          if (job.name === AutomationJobName.PURGE_AUTOMATION_JOBS) {
-            continue;
+  private async scanQueuesAndRemove(
+    shouldRemove: (job: Job) => boolean,
+  ): Promise<void> {
+    for (const target of [this.journeyQueue, this.sendQueue]) {
+      for (const state of QUEUE_JOB_SCAN_STATES) {
+        let start = 0;
+        const batchSize = 100;
+        while (true) {
+          const jobs = await target.getJobs(state, start, start + batchSize - 1);
+          if (jobs.length === 0) {
+            break;
           }
-          if (this.jobBelongsToAutomation(job, automationId, executionIdSet)) {
-            await this.safeRemoveJob(job);
+          for (const job of jobs) {
+            if (shouldRemove(job)) {
+              await this.safeRemoveJob(job);
+            }
           }
+          if (jobs.length < batchSize) {
+            break;
+          }
+          start += batchSize;
         }
-
-        if (jobs.length < batchSize) {
-          break;
-        }
-        start += batchSize;
       }
     }
   }

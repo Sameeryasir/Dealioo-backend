@@ -74,6 +74,11 @@ export type CronTickJob = {
   automationId: number;
 };
 
+export type ContinueGraphBatchJob = {
+  automationId: number;
+  afterCustomerId: number;
+};
+
 export type HandleFunnelEventJob = {
   funnelEventId: number;
   skipCancelPendingOnPayment?: boolean;

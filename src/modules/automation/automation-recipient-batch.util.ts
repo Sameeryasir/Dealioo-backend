@@ -40,21 +40,27 @@ export function sliceIntoSendChunks<T>(
 
 export async function forEachRecipientPageChunks<T extends RecipientPageItem>(options: {
   fetchPage: (afterCustomerId: number, limit: number) => Promise<T[]>;
-  onChunk: (chunk: T[], meta: RecipientPageChunkMeta) => Promise<void>;
+  onChunk: (
+    chunk: T[],
+    meta: RecipientPageChunkMeta,
+  ) => Promise<void | { stop?: boolean }>;
   pageSize?: number;
   chunkSize?: number;
   seedPage?: T[];
-}): Promise<{ totalChunks: number }> {
+  startAfterCustomerId?: number;
+}): Promise<{ totalChunks: number; stoppedEarly: boolean; lastCustomerId: number }> {
   const pageSize = Math.max(
     1,
     options.pageSize ?? AUTOMATION_RECIPIENT_PAGE_SIZE,
   );
   const chunkSize = Math.max(1, options.chunkSize ?? AUTOMATION_SEND_CHUNK_SIZE);
 
-  let afterCustomerId = 0;
+  let afterCustomerId = Math.max(0, options.startAfterCustomerId ?? 0);
   let chunkIndex = 0;
   let page = options.seedPage;
   let pageNumber = 0;
+  let stoppedEarly = false;
+  let lastCustomerId = afterCustomerId;
 
   while (true) {
     if (!page) {
@@ -79,8 +85,23 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
         (recipient) =>
           recipient.customerId != null && recipient.customerId > 0,
       );
-      await options.onChunk(chunkWithIds, { chunkIndex, pageNumber });
+      const result = await options.onChunk(chunkWithIds, {
+        chunkIndex,
+        pageNumber,
+      });
       chunkIndex += 1;
+      const chunkLast = chunkWithIds[chunkWithIds.length - 1]?.customerId;
+      if (chunkLast != null && chunkLast > 0) {
+        lastCustomerId = chunkLast;
+      }
+      if (result?.stop === true) {
+        stoppedEarly = true;
+        break;
+      }
+    }
+
+    if (stoppedEarly) {
+      break;
     }
 
     const lastId = page[page.length - 1]?.customerId;
@@ -88,6 +109,7 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
       break;
     }
     afterCustomerId = lastId;
+    lastCustomerId = lastId;
     const pageWasFull = page.length >= pageSize;
     page = undefined;
     if (!pageWasFull) {
@@ -95,5 +117,5 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
     }
   }
 
-  return { totalChunks: chunkIndex };
+  return { totalChunks: chunkIndex, stoppedEarly, lastCustomerId };
 }

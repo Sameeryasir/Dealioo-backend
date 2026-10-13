@@ -1,17 +1,70 @@
 export const AUTOMATION_QUEUE = 'automation';
+export const AUTOMATION_JOURNEY_QUEUE = AUTOMATION_QUEUE;
+export const AUTOMATION_SEND_QUEUE = 'automation-send';
 
 export const DEFAULT_AUTOMATION_QUEUE_CONCURRENCY = 100;
+export const DEFAULT_AUTOMATION_SEND_QUEUE_CONCURRENCY = 40;
+export const DEFAULT_AUTOMATION_GRAPH_BATCH_START_CAP = 200;
+export const DEFAULT_AUTOMATION_GRAPH_BATCH_STAGGER_MS = 100;
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = parseInt(raw ?? String(fallback), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return parsed;
+}
 
 export function resolveAutomationQueueConcurrency(): number {
+  return Math.min(
+    parsePositiveInt(
+      process.env.AUTOMATION_JOURNEY_QUEUE_CONCURRENCY ??
+        process.env.AUTOMATION_QUEUE_CONCURRENCY,
+      DEFAULT_AUTOMATION_QUEUE_CONCURRENCY,
+    ),
+    500,
+  );
+}
+
+export function resolveAutomationSendQueueConcurrency(): number {
+  return Math.min(
+    parsePositiveInt(
+      process.env.AUTOMATION_SEND_QUEUE_CONCURRENCY,
+      DEFAULT_AUTOMATION_SEND_QUEUE_CONCURRENCY,
+    ),
+    500,
+  );
+}
+
+export function resolveAutomationGraphBatchStartCap(): number {
+  const raw = process.env.AUTOMATION_GRAPH_BATCH_START_CAP?.trim();
+  if (raw === '0') {
+    return 0;
+  }
+  return parsePositiveInt(raw, DEFAULT_AUTOMATION_GRAPH_BATCH_START_CAP);
+}
+
+export function resolveAutomationGraphBatchStaggerMs(): number {
+  const raw = process.env.AUTOMATION_GRAPH_BATCH_STAGGER_MS?.trim();
+  if (raw === '0') {
+    return 0;
+  }
   const parsed = parseInt(
-    process.env.AUTOMATION_QUEUE_CONCURRENCY ??
-      String(DEFAULT_AUTOMATION_QUEUE_CONCURRENCY),
+    raw ?? String(DEFAULT_AUTOMATION_GRAPH_BATCH_STAGGER_MS),
     10,
   );
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return DEFAULT_AUTOMATION_QUEUE_CONCURRENCY;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_AUTOMATION_GRAPH_BATCH_STAGGER_MS;
   }
-  return Math.min(parsed, 500);
+  return Math.min(parsed, 10_000);
+}
+
+export function resolveAutomationUnifiedGraphExecution(): boolean {
+  const raw = process.env.AUTOMATION_UNIFIED_GRAPH_EXECUTION?.trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
+    return false;
+  }
+  return true;
 }
 
 export enum AutomationJobName {
@@ -20,7 +73,7 @@ export enum AutomationJobName {
   RESUME_EXECUTION = 'resume-execution',
   CRON_TICK = 'cron-tick',
   HANDLE_FUNNEL_EVENT = 'handle-funnel-event',
-  // Background Redis cleanup so campaign/automation delete APIs stay fast
+  CONTINUE_GRAPH_BATCH = 'continue-graph-batch',
   PURGE_AUTOMATION_JOBS = 'purge-automation-jobs',
 }
 
@@ -33,6 +86,25 @@ export function resolveAutomationQueueLimiter():
   const duration = durationRaw ? parseInt(durationRaw, 10) : 1000;
   if (!Number.isFinite(max) || max < 1) {
     return { max: 250, duration: 1000 };
+  }
+  if (!Number.isFinite(duration) || duration < 100) {
+    return { max, duration: 1000 };
+  }
+  return { max, duration };
+}
+
+export function resolveAutomationSendQueueLimiter():
+  | { max: number; duration: number }
+  | undefined {
+  const maxRaw = process.env.AUTOMATION_SEND_QUEUE_RATE_MAX?.trim();
+  const durationRaw = process.env.AUTOMATION_SEND_QUEUE_RATE_DURATION_MS?.trim();
+  if (!maxRaw && !durationRaw) {
+    return { max: 100, duration: 1000 };
+  }
+  const max = maxRaw ? parseInt(maxRaw, 10) : 100;
+  const duration = durationRaw ? parseInt(durationRaw, 10) : 1000;
+  if (!Number.isFinite(max) || max < 1) {
+    return { max: 100, duration: 1000 };
   }
   if (!Number.isFinite(duration) || duration < 100) {
     return { max, duration: 1000 };
