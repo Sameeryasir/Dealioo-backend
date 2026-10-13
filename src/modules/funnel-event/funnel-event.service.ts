@@ -1577,6 +1577,48 @@ export class FunnelEventService {
     timeZone?: string,
     previousFrom?: Date | null,
     previousTo?: Date | null,
+  ) {
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const hasPrevious =
+      previousFrom != null &&
+      previousTo != null &&
+      previousFrom.getTime() <= previousTo.getTime();
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
+    const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
+    const cacheKey = `funnel-dashboard-summary-v2:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+
+    return this.funnelStatsQueueService.getCachedOrComputeInline(
+      {
+        kind: FunnelStatsJobName.DASHBOARD_SUMMARY,
+        cacheKey,
+        funnelId,
+        fromIso,
+        toIso,
+        timeZone: chartTz,
+        previousFromIso: hasPrevious ? previousFromIso : undefined,
+        previousToIso: hasPrevious ? previousToIso : undefined,
+      },
+      () =>
+        this.computeDashboardSummaryForRange(
+          funnelId,
+          from,
+          to,
+          chartTz,
+          previousFrom,
+          previousTo,
+        ),
+    );
+  }
+
+  async computeDashboardSummaryForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+    timeZone?: string,
+    previousFrom?: Date | null,
+    previousTo?: Date | null,
   ): Promise<{
     funnelId: number;
     currency: string | null;
@@ -1664,6 +1706,8 @@ export class FunnelEventService {
         emptySeries,
         paidOnly: false,
         distinctCustomers: true,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
       }),
       this.countFunnelEventAdSources({
         funnelId,
@@ -1674,6 +1718,8 @@ export class FunnelEventService {
         emptySeries,
         paidOnly: false,
         distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
       }),
       this.countFunnelEventAdSources({
         funnelId,
@@ -1685,6 +1731,9 @@ export class FunnelEventService {
         paidOnly: false,
         paymentStatusPaid: true,
         distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        skipPaymentOriginCheck: true,
+        seriesOnly: true,
       }),
       this.countRevenueAdSources({
         funnelId,
@@ -1692,6 +1741,8 @@ export class FunnelEventService {
         rangeTo: to,
         chartTz,
         emptySeries,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
       }),
     ]);
 
@@ -1762,16 +1813,122 @@ export class FunnelEventService {
     previousFrom?: Date | null,
     previousTo?: Date | null,
   ) {
-    const summary = await this.getDashboardSummaryForRange(
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const hasPrevious =
+      previousFrom != null &&
+      previousTo != null &&
+      previousFrom.getTime() <= previousTo.getTime();
+
+    const exists = await this.funnelRepository.exist({
+      where: { id: funnelId },
+    });
+    if (!exists) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const emptySeries: Array<{ month: string; meta: number; google: number }> =
+      [];
+
+    const [
+      current,
+      previousCore,
+      uniqueVisitorTotals,
+      signupTotals,
+      paymentTotals,
+      revenueTotals,
+    ] = await Promise.all([
+      this.computeDashboardCoreTotals(funnelId, from, to),
+      hasPrevious
+        ? this.computeDashboardCoreTotals(
+            funnelId,
+            previousFrom!,
+            previousTo!,
+          )
+        : Promise.resolve(null),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.SIGNUP,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        distinctCustomers: true,
+        useStoredAdSourceOnly: true,
+        totalsOnly: true,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.SIGNUP,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        totalsOnly: true,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.PAYMENT,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        paymentStatusPaid: true,
+        distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        skipPaymentOriginCheck: true,
+        totalsOnly: true,
+      }),
+      this.countRevenueAdSources({
+        funnelId,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        useStoredAdSourceOnly: true,
+        totalsOnly: true,
+      }),
+    ]);
+
+    return {
       funnelId,
-      from,
-      to,
-      timeZone,
-      previousFrom,
-      previousTo,
-    );
-    const { charts: _charts, ...kpis } = summary;
-    return kpis;
+      currency: current.currency,
+      signups: current.signups,
+      payments: current.payments,
+      revenue: current.revenue,
+      uniqueVisitors: current.uniqueVisitors,
+      adSources: {
+        meta: signupTotals.meta,
+        google: signupTotals.google,
+        uniqueVisitors: {
+          meta: uniqueVisitorTotals.meta,
+          google: uniqueVisitorTotals.google,
+        },
+        payments: {
+          meta: paymentTotals.meta,
+          google: paymentTotals.google,
+        },
+        revenue: {
+          meta: revenueTotals.meta,
+          google: revenueTotals.google,
+        },
+      },
+      previous:
+        previousCore != null
+          ? {
+              from: previousFrom!.toISOString(),
+              to: previousTo!.toISOString(),
+              signups: previousCore.signups,
+              payments: previousCore.payments,
+              revenue: previousCore.revenue,
+              uniqueVisitors: previousCore.uniqueVisitors,
+            }
+          : null,
+    };
   }
 
   async getDashboardChartsForRange(
@@ -1780,15 +1937,91 @@ export class FunnelEventService {
     to: Date,
     timeZone?: string,
   ) {
-    const summary = await this.getDashboardSummaryForRange(
-      funnelId,
-      from,
-      to,
-      timeZone,
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const exists = await this.funnelRepository.exist({
+      where: { id: funnelId },
+    });
+    if (!exists) {
+      throw new NotFoundException('Funnel not found');
+    }
+
+    const emptySeries = buildZonedRangeBucketKeys(from, to, chartTz).keys.map(
+      (month) => ({ month, meta: 0, google: 0 }),
     );
+
+    const [uniqueVisitorSeries, signupSeries, paymentSeries, revenueSeries] =
+      await Promise.all([
+        this.countFunnelEventAdSources({
+          funnelId,
+          eventType: FunnelEventType.SIGNUP,
+          rangeFrom: from,
+          rangeTo: to,
+          chartTz,
+          emptySeries,
+          paidOnly: false,
+          distinctCustomers: true,
+          useStoredAdSourceOnly: true,
+          seriesOnly: true,
+        }),
+        this.countFunnelEventAdSources({
+          funnelId,
+          eventType: FunnelEventType.SIGNUP,
+          rangeFrom: from,
+          rangeTo: to,
+          chartTz,
+          emptySeries,
+          paidOnly: false,
+          distinctCustomers: false,
+          useStoredAdSourceOnly: true,
+          seriesOnly: true,
+        }),
+        this.countFunnelEventAdSources({
+          funnelId,
+          eventType: FunnelEventType.PAYMENT,
+          rangeFrom: from,
+          rangeTo: to,
+          chartTz,
+          emptySeries,
+          paidOnly: false,
+          paymentStatusPaid: true,
+          distinctCustomers: false,
+          useStoredAdSourceOnly: true,
+          skipPaymentOriginCheck: true,
+          seriesOnly: true,
+        }),
+        this.countRevenueAdSources({
+          funnelId,
+          rangeFrom: from,
+          rangeTo: to,
+          chartTz,
+          emptySeries,
+          useStoredAdSourceOnly: true,
+          seriesOnly: true,
+        }),
+      ]);
+
     return {
-      funnelId: summary.funnelId,
-      ...summary.charts,
+      funnelId,
+      uniqueVisitors: {
+        meta: uniqueVisitorSeries.meta,
+        google: uniqueVisitorSeries.google,
+        data: uniqueVisitorSeries.data,
+      },
+      signups: {
+        meta: signupSeries.meta,
+        google: signupSeries.google,
+        data: signupSeries.data,
+      },
+      payments: {
+        meta: paymentSeries.meta,
+        google: paymentSeries.google,
+        data: paymentSeries.data,
+      },
+      revenue: {
+        meta: revenueSeries.meta,
+        google: revenueSeries.google,
+        data: revenueSeries.data,
+      },
     };
   }
 
@@ -4548,6 +4781,7 @@ export class FunnelEventService {
     emptySeries: Array<{ month: string; meta: number; google: number }>;
     totalsOnly?: boolean;
     seriesOnly?: boolean;
+    useStoredAdSourceOnly?: boolean;
   }): Promise<{
     meta: number;
     google: number;
@@ -4556,7 +4790,17 @@ export class FunnelEventService {
     total: number;
     data: Array<{ month: string; meta: number; google: number }>;
   }> {
-    const resolvedSourceSql = `COALESCE(
+    const resolvedSourceSql = params.useStoredAdSourceOnly
+      ? `(
+          SELECT e.ad_source
+          FROM funnel_event e
+          WHERE e.funnel_payment_id = payment.id
+            AND e.deleted_at IS NULL
+            AND e.ad_source IS NOT NULL
+          ORDER BY e.created_at ASC
+          LIMIT 1
+        )`
+      : `COALESCE(
       (
         SELECT e.ad_source
         FROM funnel_event e
@@ -4621,13 +4865,14 @@ export class FunnelEventService {
         );
       }
 
-      totalsRow = await totalsQb.getRawOne<{
-        meta: string;
-        google: string;
-        other: string;
-        unknown: string;
-        total: string;
-      }>();
+      totalsRow =
+        (await totalsQb.getRawOne<{
+          meta: string;
+          google: string;
+          other: string;
+          unknown: string;
+          total: string;
+        }>()) ?? null;
     }
 
     let data = params.emptySeries;
@@ -4726,6 +4971,8 @@ export class FunnelEventService {
     totalsOnly?: boolean;
     seriesOnly?: boolean;
     distinctCustomers?: boolean;
+    useStoredAdSourceOnly?: boolean;
+    skipPaymentOriginCheck?: boolean;
   }): Promise<{
     meta: number;
     google: number;
@@ -4735,7 +4982,9 @@ export class FunnelEventService {
     data: Array<{ month: string; meta: number; google: number }>;
   }> {
     const paidSql = this.eventHasActualPaidPaymentSql('event');
-    const resolvedSourceSql = `COALESCE(
+    const resolvedSourceSql = params.useStoredAdSourceOnly
+      ? 'event.ad_source'
+      : `COALESCE(
       event.ad_source,
       (
         SELECT s.ad_source
@@ -4792,11 +5041,12 @@ export class FunnelEventService {
         totalsQb.andWhere(paidSql);
       }
       if (params.paymentStatusPaid) {
-        totalsQb
-          .andWhere('event.payment_status = :paidStatus', {
-            paidStatus: FunnelPaymentStatus.PAID,
-          })
-          .andWhere(this.eventHasCampaignFunnelPaidPaymentSql('event'));
+        totalsQb.andWhere('event.payment_status = :paidStatus', {
+          paidStatus: FunnelPaymentStatus.PAID,
+        });
+        if (!params.skipPaymentOriginCheck) {
+          totalsQb.andWhere(this.eventHasCampaignFunnelPaidPaymentSql('event'));
+        }
       }
       if (params.rangeFrom) {
         totalsQb.andWhere('event.created_at >= :rangeFrom', {
@@ -4809,13 +5059,14 @@ export class FunnelEventService {
         });
       }
 
-      totalsRow = await totalsQb.getRawOne<{
-        meta: string;
-        google: string;
-        other: string;
-        unknown: string;
-        total: string;
-      }>();
+      totalsRow =
+        (await totalsQb.getRawOne<{
+          meta: string;
+          google: string;
+          other: string;
+          unknown: string;
+          total: string;
+        }>()) ?? null;
     }
 
     let data = params.emptySeries;
@@ -4857,11 +5108,12 @@ export class FunnelEventService {
         seriesQb.andWhere(paidSql);
       }
       if (params.paymentStatusPaid) {
-        seriesQb
-          .andWhere('event.payment_status = :paidStatus', {
-            paidStatus: FunnelPaymentStatus.PAID,
-          })
-          .andWhere(this.eventHasCampaignFunnelPaidPaymentSql('event'));
+        seriesQb.andWhere('event.payment_status = :paidStatus', {
+          paidStatus: FunnelPaymentStatus.PAID,
+        });
+        if (!params.skipPaymentOriginCheck) {
+          seriesQb.andWhere(this.eventHasCampaignFunnelPaidPaymentSql('event'));
+        }
       }
 
       const seriesRows = await seriesQb.getRawMany<{

@@ -55,6 +55,16 @@ export class FunnelStatsQueueProcessor extends WorkerHost {
       case FunnelStatsJobName.STATS_TOTAL:
         result = await this.funnelEventService.computeStats(payload.funnelId);
         break;
+      case FunnelStatsJobName.DASHBOARD_SUMMARY:
+        result = await this.funnelEventService.computeDashboardSummaryForRange(
+          payload.funnelId,
+          new Date(payload.fromIso),
+          new Date(payload.toIso),
+          payload.timeZone,
+          payload.previousFromIso ? new Date(payload.previousFromIso) : null,
+          payload.previousToIso ? new Date(payload.previousToIso) : null,
+        );
+        break;
       default:
         this.logger.warn(`Ignoring unknown funnel stats job name=${job.name}`);
         return null;
