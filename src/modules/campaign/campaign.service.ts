@@ -317,11 +317,73 @@ export class CampaignService {
       .take(pagination.limit);
 
     const [data, total] = await qb.getManyAndCount();
+    const withRatings = await this.attachCampaignReviewRatings(data);
 
     return {
-      data,
+      data: withRatings,
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
+  }
+
+  private async attachCampaignReviewRatings(
+    campaigns: Campaign[],
+  ): Promise<
+    Array<
+      Campaign & {
+        averageRating: number | null;
+        totalReviews: number;
+      }
+    >
+  > {
+    if (campaigns.length === 0) {
+      return [];
+    }
+
+    const campaignIds = campaigns.map((campaign) => campaign.id);
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          campaign_id AS "campaignId",
+          COUNT(*)::int AS "totalReviews",
+          AVG(rating)::float AS "averageRating"
+        FROM campaign_review
+        WHERE campaign_id = ANY($1)
+          AND status = 'submitted'
+          AND rating IS NOT NULL
+        GROUP BY campaign_id
+      `,
+      [campaignIds],
+    )) as Array<{
+      campaignId: number;
+      totalReviews: number;
+      averageRating: number | null;
+    }>;
+
+    const byCampaignId = new Map(
+      rows.map((row) => {
+        const totalReviews = Number(row.totalReviews) || 0;
+        const averageRaw =
+          row.averageRating == null ? null : Number(row.averageRating);
+        const averageRating =
+          totalReviews > 0 &&
+          averageRaw != null &&
+          Number.isFinite(averageRaw)
+            ? Math.round(averageRaw * 10) / 10
+            : null;
+        return [
+          Number(row.campaignId),
+          { totalReviews, averageRating },
+        ] as const;
+      }),
+    );
+
+    return campaigns.map((campaign) => {
+      const summary = byCampaignId.get(campaign.id);
+      return Object.assign(campaign, {
+        averageRating: summary?.averageRating ?? null,
+        totalReviews: summary?.totalReviews ?? 0,
+      });
+    });
   }
 
   async getCampaignById(

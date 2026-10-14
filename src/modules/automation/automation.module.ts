@@ -30,6 +30,7 @@ import { ChatModule } from '../chat/chat.module';
 import { AuthModule } from '../auth/auth.module';
 import { PaymentModule } from '../payment/payment.module';
 import { GoogleWalletModule } from '../google-wallet/google-wallet.module';
+import { CampaignReviewModule } from '../campaign-review/campaign-review.module';
 import { AutomationConditionRegistry } from './automation-condition.registry';
 import { CustomerVisitedConditionEvaluator } from './conditions/customer-visited.condition';
 import { AutomationController } from './automation.controller';
@@ -108,6 +109,7 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
     ChatModule,
     AuthModule,
     GoogleWalletModule,
+    CampaignReviewModule,
     forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
     forwardRef(() => PaymentModule),
   ],

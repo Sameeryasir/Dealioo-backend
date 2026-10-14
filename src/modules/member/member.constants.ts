@@ -29,6 +29,7 @@ export const CAMPAIGN_ACTION_PERMISSIONS = [
 export const CAMPAIGN_WORKSPACE_PERMISSIONS = [
   'campaigns_guests',
   'campaigns_orders',
+  'campaigns_reviews',
 ] as const;
 
 export type CampaignWorkspacePermission =
@@ -105,6 +106,7 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
     'campaigns_delete',
     'campaigns_guests',
     'campaigns_orders',
+    'campaigns_reviews',
     'meta_campaigns_create',
     'meta_campaigns_delete',
     'google_campaigns_create',
@@ -194,6 +196,10 @@ export function campaignGuestsPermissionKeys(): BusinessMemberPermission[] {
 
 export function campaignOrdersPermissionKeys(): BusinessMemberPermission[] {
   return ['campaigns_orders', 'campaigns', 'orders'];
+}
+
+export function campaignReviewsPermissionKeys(): BusinessMemberPermission[] {
+  return ['campaigns_reviews', 'campaigns', 'campaigns_view'];
 }
 
 export function metaCampaignPermissionKeysFor(

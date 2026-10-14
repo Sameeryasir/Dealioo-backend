@@ -29,6 +29,7 @@ import { CouponService } from '../redemption/coupon.service';
 import { GoogleWalletService } from '../google-wallet/google-wallet.service';
 import { GoogleWalletStatus } from '../google-wallet/google-wallet-status';
 import { CheckoutResumeService } from '../payment/checkout-resume.service';
+import { CampaignReviewService } from '../campaign-review/campaign-review.service';
 import {
   resolveTagActionMode,
   sanitizeAutomationTagName,
@@ -122,6 +123,7 @@ export class AutomationEngineService {
     private readonly customerTagService: CustomerTagService,
     private readonly googleWalletService: GoogleWalletService,
     private readonly checkoutResumeService: CheckoutResumeService,
+    private readonly campaignReviewService: CampaignReviewService,
     private readonly activityService: ActivityService,
     private readonly chatMessageService: ChatMessageService,
     private readonly nodeRegistry: AutomationNodeRegistry,
@@ -1331,28 +1333,58 @@ export class AutomationEngineService {
     >,
     config: Record<string, unknown>,
   ): Promise<LegacyNodeRunResult> {
-    const reviewUrl = sanitizeHttpsUrl(config.reviewUrl);
     const channel = String(config.channel ?? 'email').trim().toLowerCase();
+    const campaignId = execution.automation?.campaignId ?? null;
     const campaignName =
       execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
     const ctaLabel =
-      String(config.ctaLabel ?? '').trim() || 'Leave a review';
+      String(config.ctaLabel ?? '').trim() || 'Give Feedback';
     const subject =
       String(config.subject ?? '').trim() || `How was your visit?`;
     const message =
       String(config.message ?? '').trim() ||
-      `Hi [First Name] — thanks for choosing ${campaignName}. We'd love a quick review.`;
+      `Hi [First Name] — thanks for choosing ${campaignName}. Tap the button below to share quick feedback.`;
+    const externalReviewUrl = sanitizeHttpsUrl(config.reviewUrl);
 
-    if (!reviewUrl) {
+    if (!campaignId || campaignId < 1) {
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
-        message: 'Ask-for-review skipped (review URL must be HTTPS)',
-        error: 'Missing reviewUrl',
+        message: 'Ask-for-review skipped (automation has no campaign)',
+        error: 'Missing campaignId',
       });
       return 'advance';
     }
+
+    if (
+      await this.campaignReviewService.hasSubmittedReviewForCampaign(
+        campaignId,
+        execution.customerId,
+      )
+    ) {
+      await this.logService.createLog({
+        executionId: execution.id,
+        nodeId: node.id,
+        customerId: execution.customerId,
+        message:
+          'Ask-for-review skipped — guest already submitted a review for this paid deal',
+      });
+      return 'advance';
+    }
+
+    const feedback = await this.campaignReviewService.createFeedbackRequest({
+      businessId: execution.automation.businessId,
+      campaignId,
+      funnelId: execution.automation.funnelId ?? null,
+      customerId: execution.customerId,
+      automationId: execution.automationId,
+      executionId: execution.id,
+      nodeId: node.id,
+      guestName: execution.customer?.name ?? null,
+      guestEmail: execution.customer?.email ?? null,
+    });
+    const feedbackUrl = feedback.feedbackUrl;
 
     if (channel === 'sms') {
       const phone = execution.customer?.phone?.trim() ?? '';
@@ -1365,7 +1397,10 @@ export class AutomationEngineService {
         });
         return 'advance';
       }
-      const body = `${message}\n\n${ctaLabel}: ${reviewUrl}`;
+      const externalLine = externalReviewUrl
+        ? `\n\nOr leave a public review: ${externalReviewUrl}`
+        : '';
+      const body = `${message}\n\n${ctaLabel}: ${feedbackUrl}${externalLine}`;
       const sendResult = await this.chatMessageService.sendAutomationSms({
         businessId: execution.automation.businessId,
         customerId: execution.customerId,
@@ -1375,14 +1410,17 @@ export class AutomationEngineService {
         executionId: execution.id,
         nodeId: node.id,
         idempotencyKey: `ask-review-sms:${execution.id}:${node.id}`,
-        metadata: { action: 'ask_review' },
+        metadata: {
+          action: 'ask_review',
+          campaignReviewId: feedback.reviewId,
+        },
       });
       await this.logService.createLog({
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
         message: sendResult.sent
-          ? 'Ask-for-review SMS sent'
+          ? 'Ask-for-review SMS sent with Give Feedback link'
           : `Ask-for-review SMS failed: ${sendResult.error ?? 'unknown error'}`,
         error: sendResult.error,
       });
@@ -1411,9 +1449,9 @@ export class AutomationEngineService {
       execution,
       {
         subject,
-        message: `${message}\n\n${ctaLabel}: ${reviewUrl}`,
+        message,
         ctaLabel,
-        ctaUrl: reviewUrl,
+        ctaUrl: feedbackUrl,
       },
       node.id,
     );
@@ -1437,7 +1475,7 @@ export class AutomationEngineService {
       nodeId: node.id,
       customerId: execution.customerId,
       message: sendResult.sent
-        ? 'Ask-for-review email sent'
+        ? 'Ask-for-review email sent with Give Feedback button'
         : `Ask-for-review email failed: ${sendResult.error ?? 'unknown error'}`,
       error: sendResult.error,
     });

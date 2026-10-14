@@ -25,6 +25,7 @@ export enum AutomationTrigger {
   FIRST_PURCHASE = 'first_purchase',
   NO_VISIT = 'no_visit',
   CRON = 'cron',
+  ASK_REVIEW = 'ask_review',
 }
 
 @Entity('automation')

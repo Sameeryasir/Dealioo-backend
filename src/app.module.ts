@@ -10,6 +10,7 @@ import { UserModule } from './modules/user/user.module';
 import { BusinessModule } from './modules/business/business.module';
 import { LocationModule } from './modules/location/location.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
+import { CampaignReviewModule } from './modules/campaign-review/campaign-review.module';
 import { CustomerModule } from './modules/customer/customer.module';
 import { FunnelModule } from './modules/funnel/funnel.module';
 import { StripeModule } from './modules/stripe/stripe.module';
@@ -86,6 +87,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     BusinessModule,
     LocationModule,
     CampaignModule,
+    CampaignReviewModule,
     FunnelModule,
     CustomerModule,
     StripeModule,

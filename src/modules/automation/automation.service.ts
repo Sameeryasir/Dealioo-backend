@@ -59,6 +59,7 @@ import { BusinessHistoryService } from '../business-history/business-history.ser
 import { ChatMessageService } from '../chat/chat-message.service';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { CheckoutResumeService } from '../payment/checkout-resume.service';
+import { CampaignReviewService } from '../campaign-review/campaign-review.service';
 import { AutomationExecutionService } from './automation-execution.service';
 import { AutomationEngineService } from './automation-engine.service';
 import { AutomationLogService } from './automation-log.service';
@@ -177,6 +178,7 @@ export class AutomationService {
     private readonly sendAttemptService: AutomationSendAttemptService,
     private readonly graphValidator: AutomationGraphValidatorService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly campaignReviewService: CampaignReviewService,
   ) {}
 
   private async assertAutomationPermission(
@@ -342,6 +344,9 @@ export class AutomationService {
       ) {
         await this.startSignupPaymentReminderForEligibleCustomers(saved);
       }
+      if (saved.trigger === AutomationTrigger.ASK_REVIEW) {
+        await this.startAskReviewBatchForEligibleCustomers(saved);
+      }
       await this.resumePausedExecutionsForAutomation(saved.id);
     }
 
@@ -351,6 +356,10 @@ export class AutomationService {
       saved.purpose === AutomationPurpose.FUNNEL_PAYMENT
     ) {
       this.logPrepaidOfferActivated(saved, 'updated');
+    }
+
+    if (becomingActive && saved.trigger === AutomationTrigger.ASK_REVIEW) {
+      this.logAskReviewActivated(saved, 'updated');
     }
 
     if (becomingActive) {
@@ -414,6 +423,15 @@ export class AutomationService {
   ): void {
     this.logger.log(
       `[Prepaid Offer] Automation ${source}: id=${automation.id} name="${automation.name}" businessId=${automation.businessId} funnelId=${automation.funnelId ?? 'all'} campaignId=${automation.campaignId ?? 'none'}`,
+    );
+  }
+
+  private logAskReviewActivated(
+    automation: Automation,
+    source: 'activated' | 'updated',
+  ): void {
+    this.logger.log(
+      `[Ask Review] Ask Review is activated (${source}): id=${automation.id} name="${automation.name}" businessId=${automation.businessId} funnelId=${automation.funnelId ?? 'none'} campaignId=${automation.campaignId ?? 'none'}`,
     );
   }
 
@@ -650,11 +668,18 @@ export class AutomationService {
       ) {
         await this.startSignupPaymentReminderForEligibleCustomers(saved);
       }
+      if (saved.trigger === AutomationTrigger.ASK_REVIEW) {
+        await this.startAskReviewBatchForEligibleCustomers(saved);
+      }
       await this.resumePausedExecutionsForAutomation(saved.id);
     }
 
     if (saved.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       this.logPrepaidOfferActivated(saved, 'activated');
+    }
+
+    if (becomingActive && saved.trigger === AutomationTrigger.ASK_REVIEW) {
+      this.logAskReviewActivated(saved, 'activated');
     }
 
     if (becomingActive) {
@@ -1655,30 +1680,6 @@ export class AutomationService {
       return;
     }
 
-    if (automation.trigger === AutomationTrigger.NO_VISIT) {
-      try {
-        const result = await this.enqueueGraphDrivenBatch(automation, {
-          skipIfNoRecipients: true,
-        });
-        if (!result) {
-          this.logger.log(
-            `Cron tick for win-back automation ${automationId}: no inactive recipients`,
-          );
-        } else {
-          this.logger.log(
-            `Cron tick started win-back batch for automation ${automationId} (execution=${result.status.executionId}, recipients≈${result.status.totalRecipients ?? '?'})`,
-          );
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'Win-back batch enqueue failed';
-        this.logger.warn(
-          `Cron tick failed for win-back automation ${automationId}: ${message}`,
-        );
-      }
-      return;
-    }
-
     if (automation.purpose === AutomationPurpose.FUNNEL_PAYMENT) {
       try {
         const result = await this.enqueuePrepaidOfferBatch(automation, {
@@ -2276,40 +2277,35 @@ export class AutomationService {
     );
 
     const isCronTrigger = automation.trigger === AutomationTrigger.CRON;
-    const isNoVisitTrigger =
-      automation.trigger === AutomationTrigger.NO_VISIT;
+    const isAskReviewTrigger =
+      automation.trigger === AutomationTrigger.ASK_REVIEW;
     const isUnpaidReminderPurpose =
       automation.purpose ===
         AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER ||
       automation.purpose ===
         AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER;
-    const useAllCronGuests =
-      isCronTrigger && !isUnpaidReminderPurpose && !isNoVisitTrigger;
+    const usePaidWithoutReview =
+      isAskReviewTrigger && automation.campaignId != null;
     const usePaidRecipients =
-      !useAllCronGuests &&
-      !isNoVisitTrigger &&
+      !usePaidWithoutReview &&
       (automation.trigger === AutomationTrigger.PAYMENT ||
         automation.purpose === AutomationPurpose.FUNNEL_PAYMENT);
+    const useAllCronGuests =
+      isCronTrigger &&
+      !isUnpaidReminderPurpose &&
+      !usePaidRecipients &&
+      !usePaidWithoutReview;
 
-    let inactiveDays = 30;
-    if (isNoVisitTrigger) {
-      const triggerNode = await this.nodeRepository.findOne({
-        where: { automationId: automation.id, type: AutomationNodeType.TRIGGER },
-        order: { order: 'ASC', id: 'ASC' },
-      });
-      const rawDays = Number(
-        (triggerNode?.config as Record<string, unknown> | undefined)
-          ?.inactiveDays ?? 30,
+    if (isAskReviewTrigger && automation.campaignId == null) {
+      throw new BadRequestException(
+        'Ask Review automations require a campaign to check submitted reviews',
       );
-      inactiveDays = Number.isFinite(rawDays)
-        ? Math.max(1, Math.min(Math.floor(rawDays), 365))
-        : 30;
     }
 
-    const recipientCount = isNoVisitTrigger
-      ? await this.recipientsService.countInactiveCustomersForFunnel(
+    const recipientCount = usePaidWithoutReview
+      ? await this.recipientsService.countPaidCustomersWithoutReviewForFunnel(
           automation.funnelId,
-          inactiveDays,
+          automation.campaignId!,
         )
       : useAllCronGuests
         ? await this.recipientsService.countAllCustomersForFunnel(
@@ -2328,8 +2324,8 @@ export class AutomationService {
         return null;
       }
       throw new BadRequestException(
-        isNoVisitTrigger
-          ? `No inactive guests found (no visit in ${inactiveDays} days)`
+        usePaidWithoutReview
+          ? 'No paid guests found who have not submitted a review yet'
           : useAllCronGuests
             ? 'No customers found for this funnel'
             : usePaidRecipients
@@ -2346,7 +2342,7 @@ export class AutomationService {
     );
 
     this.logger.log(
-      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} cronAllGuests=${useAllCronGuests} noVisit=${isNoVisitTrigger} predictedChunks=${predictedTotalChunks} startCap=${startCap || 'none'} staggerMs=${staggerMs} afterCustomerId=${options.startAfterCustomerId ?? 0}`,
+      `[Graph Driven] Batch enqueue start automation=${automation.id} funnel=${automation.funnelId} recipients=${recipientCount} paid=${usePaidRecipients} paidNoReview=${usePaidWithoutReview} cronAllGuests=${useAllCronGuests} predictedChunks=${predictedTotalChunks} startCap=${startCap || 'none'} staggerMs=${staggerMs} afterCustomerId=${options.startAfterCustomerId ?? 0}`,
     );
 
     let started = 0;
@@ -2361,10 +2357,10 @@ export class AutomationService {
       chunkSize: AUTOMATION_SEND_CHUNK_SIZE,
       startAfterCustomerId: options.startAfterCustomerId,
       fetchPage: (afterCustomerId, limit) =>
-        isNoVisitTrigger
-          ? this.recipientsService.getInactiveCustomersForFunnelPage(
+        usePaidWithoutReview
+          ? this.recipientsService.getPaidCustomersWithoutReviewForFunnelPage(
               automation.funnelId!,
-              inactiveDays,
+              automation.campaignId!,
               { afterCustomerId, limit },
             )
           : useAllCronGuests
@@ -4640,7 +4636,6 @@ export class AutomationService {
         triggers: [
           AutomationTrigger.SIGNUP,
           AutomationTrigger.ABANDONED_CHECKOUT,
-          AutomationTrigger.FUNNEL_COMPLETED,
         ],
       }).andWhere('automation.purpose IN (:...purposes)', {
         purposes: [
@@ -4653,8 +4648,7 @@ export class AutomationService {
       qb.andWhere('automation.trigger IN (:...triggers)', {
         triggers: [
           AutomationTrigger.PAYMENT,
-          AutomationTrigger.FIRST_PURCHASE,
-          AutomationTrigger.FUNNEL_COMPLETED,
+          AutomationTrigger.ASK_REVIEW,
         ],
       }).andWhere('automation.purpose IN (:...purposes)', {
         purposes: [
@@ -4704,27 +4698,33 @@ export class AutomationService {
       return;
     }
 
-    if (automation.trigger === AutomationTrigger.FIRST_PURCHASE) {
-      const isFirst = await this.isCustomerFirstPaidPurchase(
-        event.customerId,
-        event.funnelId,
-        event.funnelPaymentId,
-      );
-      if (!isFirst) {
+    if (automation.trigger === AutomationTrigger.ASK_REVIEW) {
+      if (
+        event.eventType !== FunnelEventType.PAYMENT ||
+        !this.isPaidFunnelEvent(event)
+      ) {
         return;
       }
-    }
 
-    if (
-      automation.trigger === AutomationTrigger.FUNNEL_COMPLETED &&
-      event.eventType === FunnelEventType.PAYMENT &&
-      !this.isPaidFunnelEvent(event)
-    ) {
-      return;
-    }
+      const campaignId = automation.campaignId ?? funnel.campaignId ?? null;
+      if (!campaignId) {
+        this.logger.log(
+          `[Ask Review] Skipped automation ${automation.id} — missing campaignId`,
+        );
+        return;
+      }
 
-    if (automation.trigger === AutomationTrigger.NO_VISIT) {
-      return;
+      const alreadyReviewed =
+        await this.campaignReviewService.hasSubmittedReviewForCampaign(
+          campaignId,
+          event.customerId,
+        );
+      if (alreadyReviewed) {
+        this.logger.log(
+          `[Ask Review] Skipped automation ${automation.id} — customer ${event.customerId} already submitted a review for campaign ${campaignId}`,
+        );
+        return;
+      }
     }
 
     const automationNodes = await this.nodeRepository.find({
@@ -4990,16 +4990,14 @@ export class AutomationService {
 
     if (
       eventType === FunnelEventType.SIGNUP &&
-      (automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT ||
-        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED)
+      automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT
     ) {
       return true;
     }
 
     if (
       eventType === FunnelEventType.PAYMENT &&
-      (automation.trigger === AutomationTrigger.FIRST_PURCHASE ||
-        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED)
+      automation.trigger === AutomationTrigger.ASK_REVIEW
     ) {
       return true;
     }
@@ -5021,50 +5019,23 @@ export class AutomationService {
     if (!configured) {
       return (
         automation.trigger === expectedTrigger ||
-        automation.trigger === AutomationTrigger.FIRST_PURCHASE ||
-        automation.trigger === AutomationTrigger.FUNNEL_COMPLETED ||
-        automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT
+        automation.trigger === AutomationTrigger.ABANDONED_CHECKOUT ||
+        automation.trigger === AutomationTrigger.ASK_REVIEW
       );
     }
 
     if (eventType === FunnelEventType.SIGNUP) {
       return (
-        configured.includes('signup') ||
-        configured.includes('abandoned') ||
-        configured.includes('funnel_complete')
+        configured.includes('signup') || configured.includes('abandoned')
       );
     }
     if (eventType === FunnelEventType.PAYMENT) {
       return (
-        configured.includes('payment') ||
-        configured.includes('first_purchase') ||
-        configured.includes('funnel_complete')
+        configured.includes('payment') || configured.includes('ask_review')
       );
     }
 
     return false;
-  }
-
-  private async isCustomerFirstPaidPurchase(
-    customerId: number,
-    funnelId: number,
-    funnelPaymentId: number | null | undefined,
-  ): Promise<boolean> {
-    if (funnelPaymentId == null || funnelPaymentId < 1) {
-      return false;
-    }
-
-    const priorPaid = await this.funnelPaymentRepository
-      .createQueryBuilder('payment')
-      .where('payment.customer_id = :customerId', { customerId })
-      .andWhere('payment.funnel_id = :funnelId', { funnelId })
-      .andWhere('payment.status = :status', {
-        status: FunnelPaymentStatus.PAID,
-      })
-      .andWhere('payment.id != :paymentId', { paymentId: funnelPaymentId })
-      .getCount();
-
-    return priorPaid === 0;
   }
 
   private mapFunnelEventToTrigger(
@@ -5091,6 +5062,16 @@ export class AutomationService {
     purpose: AutomationPurpose,
     trigger: AutomationTrigger,
   ): void {
+    if (
+      trigger === AutomationTrigger.FIRST_PURCHASE ||
+      trigger === AutomationTrigger.FUNNEL_COMPLETED ||
+      trigger === AutomationTrigger.NO_VISIT
+    ) {
+      throw new BadRequestException(
+        'This automation trigger is no longer available.',
+      );
+    }
+
     const signupPurposes = new Set<AutomationPurpose>([
       AutomationPurpose.FUNNEL_SIGNUP,
       AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER,
@@ -5099,52 +5080,43 @@ export class AutomationService {
     if (
       signupPurposes.has(purpose) &&
       trigger !== AutomationTrigger.SIGNUP &&
-      trigger !== AutomationTrigger.CRON &&
-      trigger !== AutomationTrigger.FUNNEL_COMPLETED &&
-      trigger !== AutomationTrigger.NO_VISIT
+      trigger !== AutomationTrigger.CRON
     ) {
       throw new BadRequestException(
-        'Signup / scheduled automations require trigger "signup", "cron", "funnel_completed", or "no_visit".',
+        'Signup / scheduled automations require trigger "signup" or "cron".',
       );
     }
 
     if (
       purpose === AutomationPurpose.FUNNEL_PAYMENT &&
       trigger !== AutomationTrigger.PAYMENT &&
-      trigger !== AutomationTrigger.FIRST_PURCHASE &&
-      trigger !== AutomationTrigger.FUNNEL_COMPLETED
+      trigger !== AutomationTrigger.ASK_REVIEW &&
+      trigger !== AutomationTrigger.CRON
     ) {
       throw new BadRequestException(
-        'Post-payment automations require trigger "payment", "first_purchase", or "funnel_completed".',
+        'Post-payment automations require trigger "payment", "ask_review", or "cron".',
       );
     }
 
     if (
       purpose === AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER &&
-      trigger !== AutomationTrigger.ABANDONED_CHECKOUT
+      trigger !== AutomationTrigger.ABANDONED_CHECKOUT &&
+      trigger !== AutomationTrigger.CRON
     ) {
       throw new BadRequestException(
-        'Abandoned checkout automations require trigger "abandoned_checkout".',
+        'Abandoned checkout automations require trigger "abandoned_checkout" or "cron".',
       );
     }
 
     if (
       trigger === AutomationTrigger.CRON &&
       purpose !== AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
-      purpose !== AutomationPurpose.FUNNEL_SIGNUP
+      purpose !== AutomationPurpose.FUNNEL_SIGNUP &&
+      purpose !== AutomationPurpose.FUNNEL_PAYMENT &&
+      purpose !== AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER
     ) {
       throw new BadRequestException(
-        'Cron automations require a scheduled signup or payment-reminder purpose.',
-      );
-    }
-
-    if (
-      trigger === AutomationTrigger.NO_VISIT &&
-      purpose !== AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER &&
-      purpose !== AutomationPurpose.FUNNEL_SIGNUP
-    ) {
-      throw new BadRequestException(
-        'No-visit automations require a signup or payment-reminder purpose (usually with a cron schedule).',
+        'Cron automations require a scheduled payment-reminder, signup, paid-guest, or abandoned-checkout purpose.',
       );
     }
   }
@@ -5165,6 +5137,39 @@ export class AutomationService {
       order: { order: 'ASC', id: 'ASC' },
     });
     return resolveCronFromAutomationNodes(nodes) !== null;
+  }
+
+  private async startAskReviewBatchForEligibleCustomers(
+    automation: Automation,
+  ): Promise<void> {
+    if (
+      automation.trigger !== AutomationTrigger.ASK_REVIEW ||
+      !automation.funnelId ||
+      !automation.campaignId
+    ) {
+      return;
+    }
+
+    try {
+      const result = await this.enqueueGraphDrivenBatch(automation, {
+        skipIfNoRecipients: true,
+      });
+      if (!result) {
+        this.logger.log(
+          `[Ask Review] Activate batch for automation ${automation.id}: no paid guests without a review`,
+        );
+        return;
+      }
+      this.logger.log(
+        `[Ask Review] Activate batch started for automation ${automation.id} (execution=${result.status.executionId})`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ask Review batch failed';
+      this.logger.warn(
+        `[Ask Review] Activate batch failed for automation ${automation.id}: ${message}`,
+      );
+    }
   }
 
   private async startSignupPaymentReminderForEligibleCustomers(
