@@ -783,6 +783,7 @@ export class MetaCampaignDraftService {
           name?: string;
           thumbnail_url?: string;
           image_url?: string;
+          image_hash?: string;
           object_story_spec?: {
             page_id?: string;
             instagram_actor_id?: string;
@@ -798,6 +799,7 @@ export class MetaCampaignDraftService {
             video_data?: {
               video_id?: string;
               image_url?: string;
+              image_hash?: string;
               message?: string;
               title?: string;
               call_to_action?: { type?: string; value?: { link?: string } };
@@ -807,7 +809,7 @@ export class MetaCampaignDraftService {
       }>;
     }>(`${liveAdSet.id}/ads`, accessToken, {
       fields:
-        'id,name,status,creative{id,name,thumbnail_url,image_url,object_story_spec}',
+        'id,name,status,creative{id,name,thumbnail_url,image_url,image_hash,object_story_spec}',
       limit: '1',
     });
 
@@ -824,6 +826,23 @@ export class MetaCampaignDraftService {
       ad: liveAd,
       draftIdPlaceholder: 'pending',
     });
+
+    const resolvedMediaUrl = await this.resolveLiveCreativeImageUrl(
+      adAccountId,
+      accessToken,
+      liveAd.creative,
+    );
+    if (resolvedMediaUrl) {
+      if (
+        mapped.adCreativeData.creativeFormat === MetaCreativeFormat.SINGLE_VIDEO
+      ) {
+        mapped.adCreativeData.thumbnailUrl =
+          mapped.adCreativeData.thumbnailUrl?.trim() || resolvedMediaUrl;
+      } else {
+        mapped.adCreativeData.imageUrl =
+          mapped.adCreativeData.imageUrl?.trim() || resolvedMediaUrl;
+      }
+    }
 
     const now = new Date();
     const existing = await this.draftRepository.findOne({
@@ -960,6 +979,7 @@ export class MetaCampaignDraftService {
         name?: string;
         thumbnail_url?: string;
         image_url?: string;
+        image_hash?: string;
         object_story_spec?: {
           page_id?: string;
           instagram_actor_id?: string;
@@ -968,12 +988,14 @@ export class MetaCampaignDraftService {
             name?: string;
             description?: string;
             link?: string;
+            image_hash?: string;
             call_to_action?: { type?: string; value?: { link?: string } };
             picture?: string;
           };
           video_data?: {
             video_id?: string;
             image_url?: string;
+            image_hash?: string;
             message?: string;
             title?: string;
             call_to_action?: { type?: string; value?: { link?: string } };
@@ -1177,6 +1199,98 @@ export class MetaCampaignDraftService {
     };
 
     return { campaignData, adSetData, adCreativeData };
+  }
+
+  private async resolveLiveCreativeImageUrl(
+    adAccountId: string,
+    accessToken: string,
+    creative:
+      | {
+          image_url?: string;
+          thumbnail_url?: string;
+          image_hash?: string;
+          object_story_spec?: {
+            link_data?: { image_hash?: string; picture?: string };
+            video_data?: { image_url?: string; image_hash?: string };
+          };
+        }
+      | undefined,
+  ): Promise<string | undefined> {
+    const story = creative?.object_story_spec;
+    const directUrl =
+      creative?.image_url?.trim() ||
+      story?.link_data?.picture?.trim() ||
+      creative?.thumbnail_url?.trim() ||
+      story?.video_data?.image_url?.trim() ||
+      '';
+    if (directUrl.startsWith('https://')) {
+      return directUrl;
+    }
+
+    const hashes = [
+      creative?.image_hash,
+      story?.link_data?.image_hash,
+      story?.video_data?.image_hash,
+    ]
+      .map((h) => (typeof h === 'string' ? h.trim() : ''))
+      .filter((h) => h.length > 0);
+
+    if (hashes.length === 0 || !adAccountId.trim()) {
+      return undefined;
+    }
+
+    try {
+      const uniqueHashes = [...new Set(hashes)];
+      type AdImageRow = {
+        hash?: string;
+        url?: string;
+        permalink_url?: string;
+      };
+      const response = await graphGetWithToken<{
+        data?: AdImageRow[] | Record<string, AdImageRow>;
+        images?: Record<string, AdImageRow>;
+      }>(`${adAccountId}/adimages`, accessToken, {
+        hashes: JSON.stringify(uniqueHashes),
+        fields: 'hash,url,permalink_url',
+      });
+
+      const rows: AdImageRow[] = [];
+      if (Array.isArray(response.data)) {
+        rows.push(...response.data);
+      } else if (response.data && typeof response.data === 'object') {
+        rows.push(...Object.values(response.data));
+      }
+      if (response.images && typeof response.images === 'object') {
+        rows.push(...Object.values(response.images));
+      }
+
+      const byHash = new Map<string, string>();
+      for (const row of rows) {
+        const hash = row.hash?.trim();
+        const url = row.permalink_url?.trim() || row.url?.trim() || '';
+        if (!url.startsWith('https://')) continue;
+        if (hash) byHash.set(hash, url);
+      }
+      if (response.data && !Array.isArray(response.data)) {
+        for (const [key, row] of Object.entries(response.data)) {
+          const url = row.permalink_url?.trim() || row.url?.trim() || '';
+          if (url.startsWith('https://')) byHash.set(key, url);
+        }
+      }
+
+      for (const hash of uniqueHashes) {
+        const resolved = byHash.get(hash);
+        if (resolved) return resolved;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not resolve Meta ad image hashes for import: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    return undefined;
   }
 
   private normalizeMetaObjective(raw?: string): string {
