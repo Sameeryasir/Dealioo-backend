@@ -1,4 +1,4 @@
-export const AUTOMATION_RECIPIENT_PAGE_SIZE = 200;
+export const AUTOMATION_RECIPIENT_PAGE_SIZE = 300;
 
 export const AUTOMATION_SEND_CHUNK_SIZE = 50;
 
@@ -61,10 +61,12 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
   let pageNumber = 0;
   let stoppedEarly = false;
   let lastCustomerId = afterCustomerId;
+  let nextPagePromise: Promise<T[]> | undefined;
 
   while (true) {
     if (!page) {
-      page = await options.fetchPage(afterCustomerId, pageSize);
+      page = await (nextPagePromise ?? options.fetchPage(afterCustomerId, pageSize));
+      nextPagePromise = undefined;
     }
 
     if (page.length === 0) {
@@ -72,6 +74,17 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
     }
 
     pageNumber += 1;
+
+    const pageLastId = page[page.length - 1]?.customerId;
+    const pageWasFull = page.length >= pageSize;
+    if (
+      pageWasFull &&
+      pageLastId != null &&
+      pageLastId > 0 &&
+      nextPagePromise == null
+    ) {
+      nextPagePromise = options.fetchPage(pageLastId, pageSize);
+    }
 
     for (const chunk of sliceIntoSendChunks(page, chunkSize)) {
       const customerIds = chunk
@@ -104,13 +117,11 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
       break;
     }
 
-    const lastId = page[page.length - 1]?.customerId;
-    if (lastId == null || lastId <= 0) {
+    if (pageLastId == null || pageLastId <= 0) {
       break;
     }
-    afterCustomerId = lastId;
-    lastCustomerId = lastId;
-    const pageWasFull = page.length >= pageSize;
+    afterCustomerId = pageLastId;
+    lastCustomerId = pageLastId;
     page = undefined;
     if (!pageWasFull) {
       break;

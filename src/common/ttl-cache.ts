@@ -25,6 +25,10 @@ export class TtlCache {
     });
   }
 
+  delete(key: string): void {
+    this.store.delete(key);
+  }
+
   async getOrSet<T>(
     key: string,
     ttlMs: number,

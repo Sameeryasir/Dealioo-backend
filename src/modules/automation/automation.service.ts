@@ -125,6 +125,7 @@ import {
 } from './automation-signup-filter.util';
 import { isGraphDrivenAutomationNodes } from './automation-graph-driven.util';
 import {
+  resolveAutomationChunkEnqueueStaggerMs,
   resolveAutomationGraphBatchStartCap,
   resolveAutomationGraphBatchStaggerMs,
   resolveAutomationUnifiedGraphExecution,
@@ -313,6 +314,7 @@ export class AutomationService {
     }
 
     const saved = await this.automationRepository.save(automation);
+    this.cronScheduler.invalidateAutomationActiveCache(saved.id);
 
     if (!saved.isActive && (wasActive || dto.isActive === false)) {
       await this.pauseAutomationExecutions(saved.id);
@@ -602,6 +604,7 @@ export class AutomationService {
     await this.graphValidator.assertValidOrThrow(automation.id, automation.trigger);
     automation.published = true;
     const saved = await this.automationRepository.save(automation);
+    this.cronScheduler.invalidateAutomationActiveCache(saved.id);
     await this.bumpAutomationGraphVersion(saved.id);
     await this.cronScheduler.syncAutomationCron(saved.id);
     return saved;
@@ -625,6 +628,7 @@ export class AutomationService {
       automation.published = true;
     }
     const saved = await this.automationRepository.save(automation);
+    this.cronScheduler.invalidateAutomationActiveCache(saved.id);
 
     const becomingActive = !wasActive && saved.isActive;
     const cronPaymentReminder =
@@ -2025,6 +2029,7 @@ export class AutomationService {
           .map((recipient) => recipient.customerId)
           .filter((id): id is number => id != null && id > 0);
 
+        const chunkStaggerMs = resolveAutomationChunkEnqueueStaggerMs();
         const queueJobId = await this.queueService.addUnpaidReminderBatch(
           {
             ...options.baseBatch,
@@ -2034,7 +2039,7 @@ export class AutomationService {
             totalChunks:
               options.predictedTotalChunks ?? Math.max(meta.chunkIndex + 1, 1),
           },
-          options.delayMs,
+          options.delayMs + meta.chunkIndex * chunkStaggerMs,
         );
 
         this.logger.log(
@@ -3520,12 +3525,16 @@ export class AutomationService {
       return;
     }
 
-    const automation = execution.automation;
-    if (!automation?.isActive || !automation.published) {
+    const activeSnapshot = await this.cronScheduler.getAutomationActiveSnapshot(
+      execution.automationId,
+    );
+    if (!activeSnapshot?.isActive || !activeSnapshot.published) {
       await this.executionService.pauseExecution(executionId);
       return;
     }
-    if (!automation.funnelId) {
+
+    const automation = execution.automation;
+    if (!automation?.funnelId) {
       await this.executionService.markFailed(
         executionId,
         'Automation has no funnel linked',

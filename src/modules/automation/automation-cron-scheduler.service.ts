@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { TtlCache } from '../../common/ttl-cache';
 import { Automation } from '../../db/entities/automation.entity';
 import { AutomationNode } from '../../db/entities/automation-node.entity';
 import {
@@ -9,6 +10,7 @@ import {
   resolveCronFromAutomationNodes,
   sortAutomationNodes,
 } from './automation-cron.config';
+import { AUTOMATION_ACTIVE_CACHE_TTL_MS } from './automation-queue.constants';
 
 import { AutomationQueueService } from './automation-queue.service';
 
@@ -18,9 +20,15 @@ export type VerifiedCronSchedule = {
   unit: string;
 };
 
+type AutomationActiveSnapshot = {
+  published: boolean;
+  isActive: boolean;
+};
+
 @Injectable()
 export class AutomationCronSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(AutomationCronSchedulerService.name);
+  private readonly activeCache = new TtlCache();
 
   constructor(
     @InjectRepository(Automation)
@@ -29,6 +37,33 @@ export class AutomationCronSchedulerService implements OnModuleInit {
     private readonly nodeRepository: Repository<AutomationNode>,
     private readonly queueService: AutomationQueueService,
   ) {}
+
+  async getAutomationActiveSnapshot(
+    automationId: number,
+  ): Promise<AutomationActiveSnapshot | null> {
+    const cacheKey = `automation-active:${automationId}`;
+    return this.activeCache.getOrSet(
+      cacheKey,
+      AUTOMATION_ACTIVE_CACHE_TTL_MS,
+      async () => {
+        const automation = await this.automationRepository.findOne({
+          where: { id: automationId },
+          select: ['id', 'published', 'isActive'],
+        });
+        if (!automation) {
+          return null;
+        }
+        return {
+          published: automation.published === true,
+          isActive: automation.isActive === true,
+        };
+      },
+    );
+  }
+
+  invalidateAutomationActiveCache(automationId: number): void {
+    this.activeCache.delete(`automation-active:${automationId}`);
+  }
 
   async onModuleInit(): Promise<void> {
     await this.syncAllCronSchedules();
@@ -73,14 +108,10 @@ export class AutomationCronSchedulerService implements OnModuleInit {
     return { ...verified, nextCronAt };
   }
 
-  /** Read cron config from DB only — does not touch the BullMQ scheduler. */
   async resolvePublishedCronSchedule(
     automationId: number,
   ): Promise<VerifiedCronSchedule | null> {
-    const automation = await this.automationRepository.findOne({
-      where: { id: automationId },
-      select: ['id', 'published', 'isActive'],
-    });
+    const automation = await this.getAutomationActiveSnapshot(automationId);
 
     if (!automation?.published || !automation.isActive) {
       return null;

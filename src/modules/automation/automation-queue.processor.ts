@@ -93,7 +93,20 @@ export class AutomationQueueProcessor extends WorkerHost {
           this.logger.log(
             `[PaymentReminderCron] QUEUE JOB RECEIVED automation=${automationId} jobId=${job.id ?? 'unknown'}`,
           );
-          await this.automationService.runCronTick(automationId);
+          const acquired = await this.queueService.tryAcquireCronTickSlot();
+          if (!acquired) {
+            const retryDelayMs = 2_000 + (automationId % 5) * 1_000;
+            this.logger.log(
+              `[PaymentReminderCron] TICK DEFERRED automation=${automationId} reason=concurrency_cap delayMs=${retryDelayMs}`,
+            );
+            await this.queueService.requeueCronTick(automationId, retryDelayMs);
+            break;
+          }
+          try {
+            await this.automationService.runCronTick(automationId);
+          } finally {
+            await this.queueService.releaseCronTickSlot();
+          }
           break;
         }
 

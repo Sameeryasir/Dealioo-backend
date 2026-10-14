@@ -8,6 +8,8 @@ import {
   AUTOMATION_JOB_CLEANUP_OPTIONS,
   AutomationJobName,
   automationCronSchedulerKey,
+  resolveAutomationCronStartOffsetMs,
+  resolveAutomationCronTickConcurrency,
 } from './automation-queue.constants';
 import {
   resolveProcessExecutionRetryPolicy,
@@ -459,9 +461,10 @@ export class AutomationQueueService {
     }
 
     const repeatEvery = intervalMs;
+    const staggerOffsetMs = resolveAutomationCronStartOffsetMs(automationId);
     const nextScheduledAt =
       restartFromNow || intervalChanged || existing == null
-        ? Date.now() + repeatEvery
+        ? Date.now() + repeatEvery + staggerOffsetMs
         : null;
 
     await this.queue.upsertJobScheduler(
@@ -478,6 +481,48 @@ export class AutomationQueueService {
     );
 
     return nextScheduledAt != null ? new Date(nextScheduledAt) : null;
+  }
+
+  async tryAcquireCronTickSlot(ttlSec = 120): Promise<boolean> {
+    const max = resolveAutomationCronTickConcurrency();
+    if (max < 1) {
+      return true;
+    }
+    const client = await this.queue.client;
+    const key = 'automation:cron-tick:inflight';
+    const current = Number((await client.get(key)) ?? 0) || 0;
+    if (current >= max) {
+      return false;
+    }
+    const next = await client.incr(key);
+    await client.expire(key, ttlSec);
+    if (next > max) {
+      await client.decr(key);
+      return false;
+    }
+    return true;
+  }
+
+  async releaseCronTickSlot(): Promise<void> {
+    const client = await this.queue.client;
+    const key = 'automation:cron-tick:inflight';
+    const next = await client.decr(key);
+    if (next < 0) {
+      await client.set(key, '0', 'EX', 120);
+    }
+  }
+
+  async requeueCronTick(automationId: number, delayMs: number): Promise<void> {
+    const safeDelay = Math.max(1_000, Math.min(delayMs, 60_000));
+    await this.queue.add(
+      AutomationJobName.CRON_TICK,
+      { automationId } satisfies CronTickJob,
+      {
+        jobId: `cron-tick-retry-${automationId}-${Date.now()}`,
+        delay: safeDelay,
+        ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+      },
+    );
   }
 
   async removeCronSchedule(automationId: number): Promise<void> {
