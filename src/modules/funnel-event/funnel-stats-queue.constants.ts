@@ -6,6 +6,9 @@ export enum FunnelStatsJobName {
   GUEST_AD_SOURCES = 'guest-ad-sources',
   STATS_TOTAL = 'stats-total',
   DASHBOARD_SUMMARY = 'dashboard-summary',
+  DASHBOARD_KPIS = 'dashboard-kpis',
+  DASHBOARD_CHARTS = 'dashboard-charts',
+  DROPOFF_COUNTS = 'dropoff-counts',
 }
 
 export type FunnelStatsJobPayload =
@@ -45,6 +48,32 @@ export type FunnelStatsJobPayload =
       timeZone: string;
       previousFromIso?: string;
       previousToIso?: string;
+    }
+  | {
+      kind: FunnelStatsJobName.DASHBOARD_KPIS;
+      cacheKey: string;
+      funnelId: number;
+      fromIso: string;
+      toIso: string;
+      timeZone: string;
+      previousFromIso?: string;
+      previousToIso?: string;
+    }
+  | {
+      kind: FunnelStatsJobName.DASHBOARD_CHARTS;
+      cacheKey: string;
+      funnelId: number;
+      fromIso: string;
+      toIso: string;
+      timeZone: string;
+    }
+  | {
+      kind: FunnelStatsJobName.DROPOFF_COUNTS;
+      cacheKey: string;
+      funnelId: number;
+      fromIso: string;
+      toIso: string;
+      timeZone: string;
     };
 
 export const FUNNEL_STATS_JOB_OPTIONS = {

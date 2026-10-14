@@ -1242,6 +1242,20 @@ export class FunnelEventService {
     )`;
   }
 
+  // Index-friendly unpaid check for dashboard ad-source totals
+  // (uses funnel_id + status + customer_id).
+  private eventCustomerHasNoCampaignPaidPaymentSql(eventAlias = 'e'): string {
+    return `NOT EXISTS (
+      SELECT 1
+      FROM funnel_payment p_unpaid
+      WHERE p_unpaid.funnel_id = ${eventAlias}.funnel_id
+        AND p_unpaid.status = '${FunnelPaymentStatus.PAID}'
+        AND p_unpaid.customer_id IS NOT NULL
+        AND p_unpaid.customer_id = ${eventAlias}.customer_id
+        AND ${campaignFunnelPaymentOriginSql('p_unpaid')}
+    )`;
+  }
+
   private eventHasCampaignFunnelPaidPaymentSql(eventAlias = 'e'): string {
     return `EXISTS (
       SELECT 1
@@ -1283,7 +1297,28 @@ export class FunnelEventService {
   private applyCampaignPaidJoins<T extends ObjectLiteral>(
     qb: SelectQueryBuilder<T>,
     eventAlias = 'e',
+    funnelId?: number,
   ): SelectQueryBuilder<T> {
+    // Scope paid-customer lookup to this funnel so Postgres does not scan
+    // every paid payment across all funnels on each dashboard request.
+    const paidCustomerSubquery =
+      funnelId != null && Number.isFinite(funnelId) && funnelId > 0
+        ? `(
+          SELECT DISTINCT p.customer_id AS customer_id, p.funnel_id AS funnel_id
+          FROM funnel_payment p
+          WHERE p.status = '${FunnelPaymentStatus.PAID}'
+            AND p.customer_id IS NOT NULL
+            AND p.funnel_id = ${Math.trunc(funnelId)}
+            AND ${campaignFunnelPaymentOriginSql('p')}
+        )`
+        : `(
+          SELECT DISTINCT p.customer_id AS customer_id, p.funnel_id AS funnel_id
+          FROM funnel_payment p
+          WHERE p.status = '${FunnelPaymentStatus.PAID}'
+            AND p.customer_id IS NOT NULL
+            AND ${campaignFunnelPaymentOriginSql('p')}
+        )`;
+
     return qb
       .leftJoin(
         FunnelPayment,
@@ -1294,13 +1329,7 @@ export class FunnelEventService {
           AND ${campaignFunnelPaymentOriginSql('paid_by_event')}`,
       )
       .leftJoin(
-        `(
-          SELECT DISTINCT p.customer_id AS customer_id, p.funnel_id AS funnel_id
-          FROM funnel_payment p
-          WHERE p.status = '${FunnelPaymentStatus.PAID}'
-            AND p.customer_id IS NOT NULL
-            AND ${campaignFunnelPaymentOriginSql('p')}
-        )`,
+        paidCustomerSubquery,
         'paid_by_customer',
         `paid_by_customer.funnel_id = ${eventAlias}.funnel_id
           AND paid_by_customer.customer_id = ${eventAlias}.customer_id`,
@@ -1356,6 +1385,8 @@ export class FunnelEventService {
         .where('e.funnel_id = :funnelId', { funnelId })
         .andWhere('e.created_at >= :rangeStart', { rangeStart })
         .groupBy(`DATE_TRUNC('month', e.created_at AT TIME ZONE 'UTC')`),
+      'e',
+      funnelId,
     );
 
     const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
@@ -1640,9 +1671,9 @@ export class FunnelEventService {
     adSources: {
       meta: number;
       google: number;
-      uniqueVisitors: { meta: number; google: number };
-      payments: { meta: number; google: number };
-      revenue: { meta: number; google: number };
+      uniqueVisitors: { meta: number; google: number; inStore: number };
+      payments: { meta: number; google: number; inStore: number };
+      revenue: { meta: number; google: number; inStore: number };
     };
     previous: {
       from: string;
@@ -1681,10 +1712,11 @@ export class FunnelEventService {
       previousTo != null &&
       previousFrom.getTime() <= previousTo.getTime();
 
-    const exists = await this.funnelRepository.exist({
+    const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
+      select: ['id', 'campaignId'],
     });
-    if (!exists) {
+    if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
 
@@ -1699,6 +1731,7 @@ export class FunnelEventService {
       signupSeries,
       paymentSeries,
       revenueSeries,
+      inStoreTotals,
     ] = await Promise.all([
       this.computeDashboardCoreTotals(funnelId, from, to),
       hasPrevious
@@ -1756,6 +1789,12 @@ export class FunnelEventService {
         useStoredAdSourceOnly: true,
         seriesOnly: true,
       }),
+      this.computeInStoreCampaignTotals(
+        funnelId,
+        funnel.campaignId ?? null,
+        from,
+        to,
+      ),
     ]);
 
     return {
@@ -1771,14 +1810,17 @@ export class FunnelEventService {
         uniqueVisitors: {
           meta: uniqueVisitorSeries.meta,
           google: uniqueVisitorSeries.google,
+          inStore: inStoreTotals.uniqueVisitors,
         },
         payments: {
           meta: paymentSeries.meta,
           google: paymentSeries.google,
+          inStore: inStoreTotals.payments,
         },
         revenue: {
           meta: revenueSeries.meta,
           google: revenueSeries.google,
+          inStore: inStoreTotals.revenue,
         },
       },
       previous:
@@ -1830,11 +1872,56 @@ export class FunnelEventService {
       previousFrom != null &&
       previousTo != null &&
       previousFrom.getTime() <= previousTo.getTime();
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
+    const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
+    const cacheKey = `funnel-dashboard-kpis-v1:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
-    const exists = await this.funnelRepository.exist({
+    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
+      this.funnelStatsQueueService.getCachedOrComputeInline(
+        {
+          kind: FunnelStatsJobName.DASHBOARD_KPIS,
+          cacheKey,
+          funnelId,
+          fromIso,
+          toIso,
+          timeZone: chartTz,
+          previousFromIso: hasPrevious ? previousFromIso : undefined,
+          previousToIso: hasPrevious ? previousToIso : undefined,
+        },
+        () =>
+          this.computeDashboardKpisForRange(
+            funnelId,
+            from,
+            to,
+            chartTz,
+            previousFrom,
+            previousTo,
+          ),
+      ),
+    );
+  }
+
+  async computeDashboardKpisForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+    timeZone?: string,
+    previousFrom?: Date | null,
+    previousTo?: Date | null,
+  ) {
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const hasPrevious =
+      previousFrom != null &&
+      previousTo != null &&
+      previousFrom.getTime() <= previousTo.getTime();
+
+    const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
+      select: ['id', 'campaignId'],
     });
-    if (!exists) {
+    if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
 
@@ -1848,6 +1935,7 @@ export class FunnelEventService {
       signupTotals,
       paymentTotals,
       revenueTotals,
+      inStoreTotals,
     ] = await Promise.all([
       this.computeDashboardCoreTotals(funnelId, from, to),
       hasPrevious
@@ -1905,6 +1993,12 @@ export class FunnelEventService {
         useStoredAdSourceOnly: true,
         totalsOnly: true,
       }),
+      this.computeInStoreCampaignTotals(
+        funnelId,
+        funnel.campaignId ?? null,
+        from,
+        to,
+      ),
     ]);
 
     return {
@@ -1920,14 +2014,17 @@ export class FunnelEventService {
         uniqueVisitors: {
           meta: uniqueVisitorTotals.meta,
           google: uniqueVisitorTotals.google,
+          inStore: inStoreTotals.uniqueVisitors,
         },
         payments: {
           meta: paymentTotals.meta,
           google: paymentTotals.google,
+          inStore: inStoreTotals.payments,
         },
         revenue: {
           meta: revenueTotals.meta,
           google: revenueTotals.google,
+          inStore: inStoreTotals.revenue,
         },
       },
       previous:
@@ -1951,91 +2048,420 @@ export class FunnelEventService {
     timeZone?: string,
   ) {
     const chartTz = resolveSafeTimeZone(timeZone);
-    const exists = await this.funnelRepository.exist({
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const cacheKey = `funnel-dashboard-charts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+
+    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
+      this.funnelStatsQueueService.getCachedOrComputeInline(
+        {
+          kind: FunnelStatsJobName.DASHBOARD_CHARTS,
+          cacheKey,
+          funnelId,
+          fromIso,
+          toIso,
+          timeZone: chartTz,
+        },
+        () =>
+          this.computeDashboardChartsForRange(funnelId, from, to, chartTz),
+      ),
+    );
+  }
+
+  async computeDashboardChartsForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
+    timeZone?: string,
+  ) {
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
+      select: ['id', 'campaignId'],
     });
-    if (!exists) {
+    if (!funnel) {
       throw new NotFoundException('Funnel not found');
     }
 
     const emptySeries = buildZonedRangeBucketKeys(from, to, chartTz).keys.map(
-      (month) => ({ month, meta: 0, google: 0 }),
+      (month) => ({ month, meta: 0, google: 0, inStore: 0 }),
     );
 
-    const [uniqueVisitorSeries, signupSeries, paymentSeries, revenueSeries] =
-      await Promise.all([
-        this.countFunnelEventAdSources({
-          funnelId,
-          eventType: null,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          paidOnly: false,
-          distinctCustomers: true,
-          useStoredAdSourceOnly: true,
-          seriesOnly: true,
-        }),
-        this.countFunnelEventAdSources({
-          funnelId,
-          eventType: FunnelEventType.SIGNUP,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          paidOnly: false,
-          unpaidOnly: true,
-          distinctCustomers: false,
-          useStoredAdSourceOnly: true,
-          seriesOnly: true,
-        }),
-        this.countFunnelEventAdSources({
-          funnelId,
-          eventType: FunnelEventType.PAYMENT,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          paidOnly: false,
-          paymentStatusPaid: true,
-          distinctCustomers: false,
-          useStoredAdSourceOnly: true,
-          skipPaymentOriginCheck: true,
-          seriesOnly: true,
-        }),
-        this.countRevenueAdSources({
-          funnelId,
-          rangeFrom: from,
-          rangeTo: to,
-          chartTz,
-          emptySeries,
-          useStoredAdSourceOnly: true,
-          seriesOnly: true,
-        }),
-      ]);
+    const [
+      uniqueVisitorSeries,
+      signupSeries,
+      paymentSeries,
+      revenueSeries,
+      inStoreSeries,
+    ] = await Promise.all([
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: null,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        distinctCustomers: true,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.SIGNUP,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        unpaidOnly: true,
+        distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
+      }),
+      this.countFunnelEventAdSources({
+        funnelId,
+        eventType: FunnelEventType.PAYMENT,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        paidOnly: false,
+        paymentStatusPaid: true,
+        distinctCustomers: false,
+        useStoredAdSourceOnly: true,
+        skipPaymentOriginCheck: true,
+        seriesOnly: true,
+      }),
+      this.countRevenueAdSources({
+        funnelId,
+        rangeFrom: from,
+        rangeTo: to,
+        chartTz,
+        emptySeries,
+        useStoredAdSourceOnly: true,
+        seriesOnly: true,
+      }),
+      this.computeInStoreChartSeries({
+        funnelId,
+        campaignId: funnel.campaignId ?? null,
+        from,
+        to,
+        chartTz,
+      }),
+    ]);
+
+    const mergeInStore = (
+      series: {
+        meta: number;
+        google: number;
+        data: Array<{ month: string; meta: number; google: number }>;
+      },
+      inStore: { total: number; data: Array<{ month: string; inStore: number }> },
+    ) => {
+      const byMonth = new Map(
+        inStore.data.map((row) => [row.month, row.inStore]),
+      );
+      return {
+        meta: series.meta,
+        google: series.google,
+        inStore: inStore.total,
+        data: series.data.map((row) => ({
+          month: row.month,
+          meta: row.meta,
+          google: row.google,
+          inStore: byMonth.get(row.month) ?? 0,
+        })),
+      };
+    };
 
     return {
       funnelId,
-      uniqueVisitors: {
-        meta: uniqueVisitorSeries.meta,
-        google: uniqueVisitorSeries.google,
-        data: uniqueVisitorSeries.data,
-      },
+      uniqueVisitors: mergeInStore(
+        uniqueVisitorSeries,
+        inStoreSeries.uniqueVisitors,
+      ),
       signups: {
         meta: signupSeries.meta,
         google: signupSeries.google,
-        data: signupSeries.data,
+        inStore: 0,
+        data: signupSeries.data.map((row) => ({
+          ...row,
+          inStore: 0,
+        })),
       },
+      payments: mergeInStore(paymentSeries, inStoreSeries.payments),
+      revenue: mergeInStore(revenueSeries, inStoreSeries.revenue),
+    };
+  }
+
+  private async computeInStoreChartSeries(params: {
+    funnelId: number;
+    campaignId: number | null;
+    from: Date;
+    to: Date;
+    chartTz: string;
+  }): Promise<{
+    payments: {
+      total: number;
+      data: Array<{ month: string; inStore: number }>;
+    };
+    revenue: {
+      total: number;
+      data: Array<{ month: string; inStore: number }>;
+    };
+    uniqueVisitors: {
+      total: number;
+      data: Array<{ month: string; inStore: number }>;
+    };
+  }> {
+    const { sameDay, keys } = buildZonedRangeBucketKeys(
+      params.from,
+      params.to,
+      params.chartTz,
+    );
+    const paymentBucketSql = overviewRangeBucketSql(
+      'COALESCE(payment.paid_at, payment.created_at)',
+      sameDay,
+      params.chartTz,
+    );
+    const visitBucketSql = overviewRangeBucketSql(
+      'v.visit_date',
+      sameDay,
+      params.chartTz,
+    );
+
+    const paymentSeriesRows = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .select(paymentBucketSql, 'month')
+      .addSelect('COUNT(*)', 'payments')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'revenue')
+      .where('payment.funnel_id = :funnelId', { funnelId: params.funnelId })
+      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+      .andWhere(
+        `(
+          payment.payment_source = :scannerSource
+          OR payment.collection_channel = :inStoreChannel
+        )`,
+        {
+          scannerSource: FunnelPaymentSource.SCANNER,
+          inStoreChannel: FunnelCollectionChannel.IN_STORE,
+        },
+      )
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) >= :from', {
+        from: params.from,
+      })
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) <= :to', {
+        to: params.to,
+      })
+      .groupBy(paymentBucketSql)
+      .getRawMany<{ month: string; payments: string; revenue: string }>();
+
+    const paymentByMonth = new Map(
+      paymentSeriesRows.map((row) => [
+        row.month,
+        {
+          payments: Number(row.payments ?? 0),
+          revenue: Number(row.revenue ?? 0),
+        },
+      ]),
+    );
+
+    const visitorByMonth = new Map<string, number>();
+    if (params.campaignId != null && params.campaignId > 0) {
+      const visitRows = (await this.dataSource.query(
+        `
+          SELECT ${visitBucketSql} AS month,
+                 COUNT(DISTINCT v.customer_id)::int AS "uniqueVisitors"
+          FROM customer_visits v
+          WHERE v.campaign_id = $1
+            AND v.deleted_at IS NULL
+            AND v.customer_id IS NOT NULL
+            AND v.visit_date >= $2
+            AND v.visit_date <= $3
+          GROUP BY 1
+        `,
+        [params.campaignId, params.from, params.to],
+      )) as Array<{ month: string; uniqueVisitors: number }>;
+
+      for (const row of visitRows) {
+        visitorByMonth.set(row.month, Number(row.uniqueVisitors ?? 0));
+      }
+    }
+
+    const payerRows = await this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .select(paymentBucketSql, 'month')
+      .addSelect('COUNT(DISTINCT payment.customer_id)', 'uniqueVisitors')
+      .where('payment.funnel_id = :funnelId', { funnelId: params.funnelId })
+      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+      .andWhere('payment.customer_id IS NOT NULL')
+      .andWhere(
+        `(
+          payment.payment_source = :scannerSource
+          OR payment.collection_channel = :inStoreChannel
+        )`,
+        {
+          scannerSource: FunnelPaymentSource.SCANNER,
+          inStoreChannel: FunnelCollectionChannel.IN_STORE,
+        },
+      )
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) >= :from', {
+        from: params.from,
+      })
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) <= :to', {
+        to: params.to,
+      })
+      .groupBy(paymentBucketSql)
+      .getRawMany<{ month: string; uniqueVisitors: string }>();
+
+    for (const row of payerRows) {
+      const current = visitorByMonth.get(row.month) ?? 0;
+      visitorByMonth.set(
+        row.month,
+        Math.max(current, Number(row.uniqueVisitors ?? 0)),
+      );
+    }
+
+    const paymentsData = keys.map((month) => ({
+      month,
+      inStore: paymentByMonth.get(month)?.payments ?? 0,
+    }));
+    const revenueData = keys.map((month) => ({
+      month,
+      inStore: paymentByMonth.get(month)?.revenue ?? 0,
+    }));
+    const uniqueVisitorsData = keys.map((month) => ({
+      month,
+      inStore: visitorByMonth.get(month) ?? 0,
+    }));
+
+    return {
       payments: {
-        meta: paymentSeries.meta,
-        google: paymentSeries.google,
-        data: paymentSeries.data,
+        total: paymentsData.reduce((sum, row) => sum + row.inStore, 0),
+        data: paymentsData,
       },
       revenue: {
-        meta: revenueSeries.meta,
-        google: revenueSeries.google,
-        data: revenueSeries.data,
+        total: revenueData.reduce((sum, row) => sum + row.inStore, 0),
+        data: revenueData,
       },
+      uniqueVisitors: {
+        total: uniqueVisitorsData.reduce((sum, row) => sum + row.inStore, 0),
+        data: uniqueVisitorsData,
+      },
+    };
+  }
+
+  private async computeInStoreCampaignTotals(
+    funnelId: number,
+    campaignId: number | null,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    payments: number;
+    revenue: number;
+    uniqueVisitors: number;
+  }> {
+    const paymentTotalsPromise = this.funnelPaymentRepository
+      .createQueryBuilder('payment')
+      .select('COUNT(*)', 'payments')
+      .addSelect('COALESCE(SUM(payment.amount), 0)', 'revenue')
+      .where('payment.funnel_id = :funnelId', { funnelId })
+      .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+      .andWhere(
+        `(
+          payment.payment_source = :scannerSource
+          OR payment.collection_channel = :inStoreChannel
+        )`,
+        {
+          scannerSource: FunnelPaymentSource.SCANNER,
+          inStoreChannel: FunnelCollectionChannel.IN_STORE,
+        },
+      )
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) >= :from', {
+        from,
+      })
+      .andWhere('COALESCE(payment.paid_at, payment.created_at) <= :to', { to })
+      .getRawOne<{ payments: string; revenue: string }>();
+
+    if (campaignId == null || campaignId <= 0) {
+      const [paymentRow, payersOnly] = await Promise.all([
+        paymentTotalsPromise,
+        this.funnelPaymentRepository
+          .createQueryBuilder('payment')
+          .select('COUNT(DISTINCT payment.customer_id)', 'uniqueVisitors')
+          .where('payment.funnel_id = :funnelId', { funnelId })
+          .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+          .andWhere('payment.customer_id IS NOT NULL')
+          .andWhere(
+            `(
+              payment.payment_source = :scannerSource
+              OR payment.collection_channel = :inStoreChannel
+            )`,
+            {
+              scannerSource: FunnelPaymentSource.SCANNER,
+              inStoreChannel: FunnelCollectionChannel.IN_STORE,
+            },
+          )
+          .andWhere('COALESCE(payment.paid_at, payment.created_at) >= :from', {
+            from,
+          })
+          .andWhere('COALESCE(payment.paid_at, payment.created_at) <= :to', {
+            to,
+          })
+          .getRawOne<{ uniqueVisitors: string }>(),
+      ]);
+
+      return {
+        payments: Number(paymentRow?.payments ?? 0),
+        revenue: Number(paymentRow?.revenue ?? 0),
+        uniqueVisitors: Number(payersOnly?.uniqueVisitors ?? 0),
+      };
+    }
+
+    const [paymentRow, uniqueRow] = await Promise.all([
+      paymentTotalsPromise,
+      this.dataSource.query(
+        `
+          SELECT COUNT(*)::int AS "uniqueVisitors"
+          FROM (
+            SELECT v.customer_id AS customer_id
+            FROM customer_visits v
+            WHERE v.campaign_id = $1
+              AND v.deleted_at IS NULL
+              AND v.visit_date >= $2
+              AND v.visit_date <= $3
+              AND v.customer_id IS NOT NULL
+            UNION
+            SELECT payment.customer_id AS customer_id
+            FROM funnel_payment payment
+            WHERE payment.funnel_id = $4
+              AND payment.status = $5
+              AND payment.customer_id IS NOT NULL
+              AND (
+                payment.payment_source = $6
+                OR payment.collection_channel = $7
+              )
+              AND COALESCE(payment.paid_at, payment.created_at) >= $2
+              AND COALESCE(payment.paid_at, payment.created_at) <= $3
+          ) store_guests
+        `,
+        [
+          campaignId,
+          from,
+          to,
+          funnelId,
+          FunnelPaymentStatus.PAID,
+          FunnelPaymentSource.SCANNER,
+          FunnelCollectionChannel.IN_STORE,
+        ],
+      ),
+    ]);
+
+    return {
+      payments: Number(paymentRow?.payments ?? 0),
+      revenue: Number(paymentRow?.revenue ?? 0),
+      uniqueVisitors: Number(uniqueRow?.[0]?.uniqueVisitors ?? 0),
     };
   }
 
@@ -2065,6 +2491,8 @@ export class FunnelEventService {
           .where('e.funnel_id = :funnelId', { funnelId })
           .andWhere('e.created_at >= :from', { from })
           .andWhere('e.created_at <= :to', { to }),
+        'e',
+        funnelId,
       ).getRawOne<{ signups: string; payments: string }>(),
       applyCampaignFunnelPaymentOriginFilter(
         this.funnelPaymentRepository
@@ -2103,6 +2531,38 @@ export class FunnelEventService {
     funnelId: number,
     from: Date,
     to: Date,
+    timeZone?: string,
+  ): Promise<{
+    funnelId: number;
+    pageViews: number;
+    signups: number;
+    payments: number;
+  }> {
+    const chartTz = resolveSafeTimeZone(timeZone);
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
+    const cacheKey = `funnel-dropoff-counts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+
+    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
+      this.funnelStatsQueueService.getCachedOrComputeInline(
+        {
+          kind: FunnelStatsJobName.DROPOFF_COUNTS,
+          cacheKey,
+          funnelId,
+          fromIso,
+          toIso,
+          timeZone: chartTz,
+        },
+        () =>
+          this.computeDropoffCountsForRange(funnelId, from, to, chartTz),
+      ),
+    );
+  }
+
+  async computeDropoffCountsForRange(
+    funnelId: number,
+    from: Date,
+    to: Date,
     _timeZone?: string,
   ): Promise<{
     funnelId: number;
@@ -2110,14 +2570,10 @@ export class FunnelEventService {
     signups: number;
     payments: number;
   }> {
-    const exists = await this.funnelRepository.exist({
-      where: { id: funnelId },
-    });
-    if (!exists) {
-      throw new NotFoundException('Funnel not found');
-    }
-
-    const [pageViews, signupRow] = await Promise.all([
+    const [exists, pageViews, signupRow] = await Promise.all([
+      this.funnelRepository.exist({
+        where: { id: funnelId },
+      }),
       this.funnelAnalyticsRepository
         .createQueryBuilder('e')
         .where('e.funnel_id = :funnelId', { funnelId })
@@ -2141,8 +2597,14 @@ export class FunnelEventService {
           .where('e.funnel_id = :funnelId', { funnelId })
           .andWhere('e.created_at >= :from', { from })
           .andWhere('e.created_at <= :to', { to }),
+        'e',
+        funnelId,
       ).getRawOne<{ signups: string; payments: string }>(),
     ]);
+
+    if (!exists) {
+      throw new NotFoundException('Funnel not found');
+    }
 
     return {
       funnelId,
@@ -2199,6 +2661,8 @@ export class FunnelEventService {
         .andWhere('e.created_at >= :from', { from })
         .andWhere('e.created_at <= :to', { to })
         .groupBy(eventBucket),
+      'e',
+      funnelId,
     );
 
     const [funnel, eventRows, paymentRows, currencyRow] = await Promise.all([
@@ -5057,7 +5521,9 @@ export class FunnelEventService {
         totalsQb.andWhere(paidSql);
       }
       if (params.unpaidOnly) {
-        totalsQb.andWhere(`NOT ${paidSql}`);
+        totalsQb.andWhere(
+          this.eventCustomerHasNoCampaignPaidPaymentSql('event'),
+        );
       }
       if (params.paymentStatusPaid) {
         totalsQb.andWhere('event.payment_status = :paidStatus', {
@@ -5127,7 +5593,9 @@ export class FunnelEventService {
         seriesQb.andWhere(paidSql);
       }
       if (params.unpaidOnly) {
-        seriesQb.andWhere(`NOT ${paidSql}`);
+        seriesQb.andWhere(
+          this.eventCustomerHasNoCampaignPaidPaymentSql('event'),
+        );
       }
       if (params.paymentStatusPaid) {
         seriesQb.andWhere('event.payment_status = :paidStatus', {
