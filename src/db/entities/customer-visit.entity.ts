@@ -27,6 +27,13 @@ export enum CustomerVisitSource {
   unique: true,
   where: '"deleted_at" IS NULL',
 })
+@Index('IDX_customer_visits_campaign_visit_customer', [
+  'campaignId',
+  'visitedAt',
+  'customerId',
+], {
+  where: '"deleted_at" IS NULL AND "customer_id" IS NOT NULL',
+})
 export class CustomerVisit {
   @PrimaryGeneratedColumn()
   id: number;

@@ -1242,8 +1242,6 @@ export class FunnelEventService {
     )`;
   }
 
-  // Index-friendly unpaid check for dashboard ad-source totals
-  // (uses funnel_id + status + customer_id).
   private eventCustomerHasNoCampaignPaidPaymentSql(eventAlias = 'e'): string {
     return `NOT EXISTS (
       SELECT 1
@@ -1299,8 +1297,6 @@ export class FunnelEventService {
     eventAlias = 'e',
     funnelId?: number,
   ): SelectQueryBuilder<T> {
-    // Scope paid-customer lookup to this funnel so Postgres does not scan
-    // every paid payment across all funnels on each dashboard request.
     const paidCustomerSubquery =
       funnelId != null && Number.isFinite(funnelId) && funnelId > 0
         ? `(
@@ -1629,7 +1625,6 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
     const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
-    // v4: one response for KPIs + charts (incl. in-store series) + dropoff
     const cacheKey = `funnel-dashboard-summary-v4:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
@@ -1920,7 +1915,6 @@ export class FunnelEventService {
             }
           : null,
       charts,
-      // Reuse core signup/payment totals so dropoff does not re-run heavy joins.
       dropoff: {
         pageViews,
         signups: current.signups,

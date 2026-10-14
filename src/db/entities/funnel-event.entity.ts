@@ -29,6 +29,18 @@ export type FunnelEventAdSource = 'meta' | 'google' | 'utm';
   'eventType',
   'createdAt',
 ])
+@Index('IDX_funnel_event_funnel_type_ad_source_created', [
+  'funnelId',
+  'eventType',
+  'adSource',
+  'createdAt',
+])
+@Index('IDX_funnel_event_funnel_type_payment_status_created', [
+  'funnelId',
+  'eventType',
+  'paymentStatus',
+  'createdAt',
+])
 export class FunnelEvent {
   @PrimaryGeneratedColumn()
   id: number;
