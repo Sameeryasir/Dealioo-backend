@@ -642,6 +642,153 @@ export class AutomationExecutionService {
     });
   }
 
+  async findLiveCustomerIds(
+    automationId: number,
+    customerIds: number[],
+  ): Promise<Set<number>> {
+    return this.findCustomerIdsWithStatuses(
+      automationId,
+      customerIds,
+      this.liveExecutionStatuses(),
+    );
+  }
+
+  async findCompletedCustomerIds(
+    automationId: number,
+    customerIds: number[],
+  ): Promise<Set<number>> {
+    return this.findCustomerIdsWithStatuses(automationId, customerIds, [
+      AutomationExecutionStatus.COMPLETED,
+    ]);
+  }
+
+  private async findCustomerIdsWithStatuses(
+    automationId: number,
+    customerIds: number[],
+    statuses: AutomationExecutionStatus[],
+  ): Promise<Set<number>> {
+    const uniqueIds = [
+      ...new Set(
+        customerIds.filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ];
+    if (uniqueIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.executionRepository
+      .createQueryBuilder('execution')
+      .select('DISTINCT execution.customer_id', 'customerId')
+      .where('execution.automation_id = :automationId', { automationId })
+      .andWhere('execution.customer_id IN (:...customerIds)', {
+        customerIds: uniqueIds,
+      })
+      .andWhere('execution.status IN (:...statuses)', { statuses })
+      .getRawMany<{ customerId: string | number }>();
+
+    return new Set(
+      rows
+        .map((row) => Number(row.customerId))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    );
+  }
+
+  async createJourneyExecutionsForCustomers(
+    dto: CreateAutomationExecutionDto,
+    customerIds: number[],
+  ): Promise<{ created: AutomationExecution[]; skippedActive: number }> {
+    const uniqueIds = [
+      ...new Set(
+        customerIds.filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ].sort((a, b) => a - b);
+
+    if (uniqueIds.length === 0) {
+      return { created: [], skippedActive: 0 };
+    }
+
+    return this.executionRepository.manager.transaction(async (manager) => {
+      for (const customerId of uniqueIds) {
+        await manager.query('SELECT pg_advisory_xact_lock($1, $2)', [
+          dto.automationId,
+          customerId,
+        ]);
+      }
+
+      const activeRows = await manager
+        .createQueryBuilder(AutomationExecution, 'execution')
+        .select('DISTINCT execution.customer_id', 'customerId')
+        .where('execution.automation_id = :automationId', {
+          automationId: dto.automationId,
+        })
+        .andWhere('execution.customer_id IN (:...customerIds)', {
+          customerIds: uniqueIds,
+        })
+        .andWhere('execution.status IN (:...statuses)', {
+          statuses: this.liveExecutionStatuses(),
+        })
+        .getRawMany<{ customerId: string | number }>();
+
+      const activeSet = new Set(
+        activeRows
+          .map((row) => Number(row.customerId))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      );
+      const toCreate = uniqueIds.filter((id) => !activeSet.has(id));
+      if (toCreate.length === 0) {
+        return { created: [], skippedActive: activeSet.size };
+      }
+
+      const node = await manager.findOne(AutomationNode, {
+        where: { id: dto.currentNodeId, automationId: dto.automationId },
+      });
+      if (!node) {
+        throw new NotFoundException('Start node not found for this automation');
+      }
+
+      const automation = await manager.findOne(Automation, {
+        where: { id: dto.automationId },
+        select: ['id', 'version'],
+      });
+
+      const now = new Date();
+      const entities = toCreate.map((customerId) =>
+        manager.create(AutomationExecution, {
+          automationId: dto.automationId,
+          customerId,
+          currentNodeId: dto.currentNodeId,
+          purpose: dto.purpose,
+          status: AutomationExecutionStatus.RUNNING,
+          scheduledAt: null,
+          totalRecipients: 0,
+          emailsSentCount: 0,
+          queueJobId: null,
+          lastError: null,
+          automationVersion: automation?.version ?? 1,
+          executionContext: {},
+          lastEventId: null,
+          startedAt: now,
+          completedAt: null,
+          attemptNumber: 1,
+          nextRetryAt: null,
+          recipientsFound: 0,
+          recipientsEligible: 0,
+          recipientsFiltered: 0,
+          recipientsSent: 0,
+          recipientsFailed: 0,
+          recipientsSkipped: 0,
+          recipientsBounced: 0,
+          recipientsPaidDuringWait: 0,
+          passEmailsSent: 0,
+          summary: null,
+        }),
+      );
+
+      const created = await manager.save(entities);
+      return { created, skippedActive: activeSet.size };
+    });
+  }
+
   async hasActiveExecutionForAutomation(automationId: number): Promise<boolean> {
     return this.executionRepository.exist({
       where: {

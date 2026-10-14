@@ -134,7 +134,7 @@ export class AutomationWaitSchedulerService
             .setLock('pessimistic_partial_write')
             .getMany();
 
-          let enqueued = 0;
+          const resumeIds: number[] = [];
           for (const execution of due) {
             if (
               !execution.automation?.isActive ||
@@ -143,22 +143,21 @@ export class AutomationWaitSchedulerService
               await this.executionService.pauseExecution(execution.id);
               continue;
             }
+            resumeIds.push(execution.id);
+          }
+
+          let enqueued = 0;
+          if (resumeIds.length > 0) {
             try {
-              if (await this.queueService.hasPendingResumeJob(execution.id)) {
-                continue;
-              }
-              await this.queueService.addResumeExecution(
-                { executionId: execution.id },
-                0,
-              );
-              enqueued += 1;
+              enqueued =
+                await this.queueService.addResumeExecutionsBulk(resumeIds);
             } catch (error) {
               const message =
                 error instanceof Error
                   ? error.message
                   : 'Resume enqueue failed';
               this.logger.warn(
-                `Left execution ${execution.id} WAITING in Postgres (queue unavailable): ${message}`,
+                `Left ${resumeIds.length} execution(s) WAITING in Postgres (queue unavailable): ${message}`,
               );
             }
           }

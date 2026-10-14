@@ -73,6 +73,7 @@ import {
   forEachRecipientPageChunks,
   predictSendChunkCount,
 } from './automation-recipient-batch.util';
+import { pickEligibleCustomerIdsForBatchStart } from './automation-batch-start.util';
 import { AutomationFlowService } from './automation-flow.service';
 import { AutomationCronSchedulerService } from './automation-cron-scheduler.service';
 import {
@@ -2119,6 +2120,136 @@ export class AutomationService {
     });
   }
 
+  private async startGraphJourneysForChunk(options: {
+    automation: Automation;
+    startNodeId: number;
+    startNodeType: AutomationNodeType;
+    recipients: Array<{ customerId?: number | null }>;
+    startCap: number;
+    staggerMs: number;
+    alreadyStarted: number;
+    skipCompleted?: boolean;
+  }): Promise<{
+    started: number;
+    skipped: number;
+    firstExecutionId: number | null;
+    lastStartedCustomerId: number;
+    hitCap: boolean;
+  }> {
+    const {
+      automation,
+      startNodeId,
+      startNodeType,
+      recipients,
+      startCap,
+      staggerMs,
+      alreadyStarted,
+      skipCompleted = false,
+    } = options;
+
+    const remainingCap =
+      startCap > 0
+        ? Math.max(0, startCap - alreadyStarted)
+        : Number.POSITIVE_INFINITY;
+    if (remainingCap === 0) {
+      return {
+        started: 0,
+        skipped: 0,
+        firstExecutionId: null,
+        lastStartedCustomerId: 0,
+        hitCap: true,
+      };
+    }
+
+    const chunkCustomerIds = recipients
+      .map((recipient) => recipient.customerId)
+      .filter((id): id is number => id != null && id > 0);
+
+    if (chunkCustomerIds.length === 0) {
+      return {
+        started: 0,
+        skipped: 0,
+        firstExecutionId: null,
+        lastStartedCustomerId: 0,
+        hitCap: false,
+      };
+    }
+
+    const [liveIds, completedIds] = await Promise.all([
+      this.executionService.findLiveCustomerIds(
+        automation.id,
+        chunkCustomerIds,
+      ),
+      skipCompleted
+        ? this.executionService.findCompletedCustomerIds(
+            automation.id,
+            chunkCustomerIds,
+          )
+        : Promise.resolve(new Set<number>()),
+    ]);
+
+    const picked = pickEligibleCustomerIdsForBatchStart({
+      customerIds: chunkCustomerIds,
+      liveIds,
+      completedIds,
+      remainingCap,
+    });
+    let skipped = picked.skipped;
+    const { eligible, hitCap } = picked;
+
+    if (eligible.length === 0) {
+      return {
+        started: 0,
+        skipped,
+        firstExecutionId: null,
+        lastStartedCustomerId: 0,
+        hitCap,
+      };
+    }
+
+    const { created, skippedActive } =
+      await this.executionService.createJourneyExecutionsForCustomers(
+        {
+          automationId: automation.id,
+          currentNodeId: startNodeId,
+          purpose: automation.purpose,
+        },
+        eligible,
+      );
+    skipped += skippedActive;
+
+    if (created.length === 0) {
+      return {
+        started: 0,
+        skipped,
+        firstExecutionId: null,
+        lastStartedCustomerId: 0,
+        hitCap,
+      };
+    }
+
+    await this.queueService.addProcessExecutionsBulk(
+      created.map((execution, index) => ({
+        data: {
+          executionId: execution.id,
+          nodeId: startNodeId,
+          nodeType: startNodeType,
+        },
+        delayMs:
+          staggerMs > 0 ? (alreadyStarted + index) * staggerMs : 0,
+      })),
+    );
+
+    const lastCreated = created[created.length - 1];
+    return {
+      started: created.length,
+      skipped,
+      firstExecutionId: created[0]?.id ?? null,
+      lastStartedCustomerId: lastCreated?.customerId ?? 0,
+      hitCap,
+    };
+  }
+
   private async enqueueGraphDrivenBatch(
     automation: Automation,
     options: {
@@ -2222,6 +2353,7 @@ export class AutomationService {
     let firstExecutionId: number | null = null;
     let skipped = 0;
     let hitCap = false;
+    let continueAfterCustomerId = 0;
 
     const { totalChunks, stoppedEarly, lastCustomerId } =
       await forEachRecipientPageChunks({
@@ -2254,63 +2386,42 @@ export class AutomationService {
           `[Graph Driven] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,
         );
 
-        for (const recipient of chunk) {
-          if (startCap > 0 && started >= startCap) {
-            hitCap = true;
-            return { stop: true };
-          }
-
-          const customerId = recipient.customerId;
-          if (customerId == null || customerId <= 0) {
-            continue;
-          }
-
-          const hasActive = await this.executionService.hasActiveExecution(
-            automation.id,
-            customerId,
-          );
-          if (hasActive) {
-            skipped += 1;
-            continue;
-          }
-
-          const execution = await this.executionService.createExecution(
-            {
-              automationId: automation.id,
-              currentNodeId: startNodeId,
-              purpose: automation.purpose,
-            },
-            customerId,
-          );
-
-          const delayMs = staggerMs > 0 ? started * staggerMs : 0;
-          await this.queueService.addProcessExecution(
-            {
-              executionId: execution.id,
-              nodeId: startNodeId,
-              nodeType: startNode.type,
-            },
-            delayMs,
-          );
-
-          if (firstExecutionId == null) {
-            firstExecutionId = execution.id;
-          }
-          started += 1;
+        const wave = await this.startGraphJourneysForChunk({
+          automation,
+          startNodeId,
+          startNodeType: startNode.type,
+          recipients: chunk,
+          startCap,
+          staggerMs,
+          alreadyStarted: started,
+        });
+        skipped += wave.skipped;
+        started += wave.started;
+        if (firstExecutionId == null && wave.firstExecutionId != null) {
+          firstExecutionId = wave.firstExecutionId;
+        }
+        if (wave.lastStartedCustomerId > 0) {
+          continueAfterCustomerId = wave.lastStartedCustomerId;
+        }
+        if (wave.hitCap) {
+          hitCap = true;
+          return { stop: true };
         }
       },
     });
 
-    if ((hitCap || stoppedEarly) && lastCustomerId > 0) {
+    const resumeAfterId =
+      continueAfterCustomerId > 0 ? continueAfterCustomerId : lastCustomerId;
+    if ((hitCap || stoppedEarly) && resumeAfterId > 0) {
       await this.queueService.addContinueGraphBatch(
         {
           automationId: automation.id,
-          afterCustomerId: lastCustomerId,
+          afterCustomerId: resumeAfterId,
         },
         Math.max(5_000, staggerMs * 10),
       );
       this.logger.log(
-        `[Graph Driven] Cap reached automation=${automation.id} started=${started} cap=${startCap} continuing afterCustomerId=${lastCustomerId}`,
+        `[Graph Driven] Cap reached automation=${automation.id} started=${started} cap=${startCap} continuing afterCustomerId=${resumeAfterId}`,
       );
     }
 
@@ -2395,6 +2506,7 @@ export class AutomationService {
     let firstExecutionId: number | null = null;
     let skipped = 0;
     let hitCap = false;
+    let continueAfterCustomerId = 0;
 
     const { totalChunks, stoppedEarly, lastCustomerId } =
       await forEachRecipientPageChunks({
@@ -2410,67 +2522,38 @@ export class AutomationService {
           `[Prepaid Offer] Processing chunk ${meta.chunkIndex + 1}/${predictedTotalChunks} page=${meta.pageNumber} guests=${chunk.length}`,
         );
 
-        for (const recipient of chunk) {
-          if (startCap > 0 && started >= startCap) {
-            hitCap = true;
-            return { stop: true };
-          }
-
-          const customerId = recipient.customerId;
-          if (customerId == null || customerId <= 0) {
-            continue;
-          }
-
-          const hasActive = await this.executionService.hasActiveExecution(
-            automation.id,
-            customerId,
-          );
-          if (hasActive) {
-            skipped += 1;
-            continue;
-          }
-          const hasCompleted =
-            await this.executionService.hasCompletedExecutionForCustomer(
-              automation.id,
-              customerId,
-            );
-          if (hasCompleted) {
-            skipped += 1;
-            continue;
-          }
-
-          const execution = await this.executionService.createExecution(
-            {
-              automationId: automation.id,
-              currentNodeId: startNodeId,
-              purpose: automation.purpose,
-            },
-            customerId,
-          );
-
-          const delayMs = staggerMs > 0 ? started * staggerMs : 0;
-          await this.queueService.addProcessExecution(
-            {
-              executionId: execution.id,
-              nodeId: startNodeId,
-              nodeType: startNode.type,
-            },
-            delayMs,
-          );
-
-          if (firstExecutionId == null) {
-            firstExecutionId = execution.id;
-          }
-          started += 1;
+        const wave = await this.startGraphJourneysForChunk({
+          automation,
+          startNodeId,
+          startNodeType: startNode.type,
+          recipients: chunk,
+          startCap,
+          staggerMs,
+          alreadyStarted: started,
+          skipCompleted: true,
+        });
+        skipped += wave.skipped;
+        started += wave.started;
+        if (firstExecutionId == null && wave.firstExecutionId != null) {
+          firstExecutionId = wave.firstExecutionId;
+        }
+        if (wave.lastStartedCustomerId > 0) {
+          continueAfterCustomerId = wave.lastStartedCustomerId;
+        }
+        if (wave.hitCap) {
+          hitCap = true;
+          return { stop: true };
         }
       },
     });
 
-    if ((hitCap || stoppedEarly) && lastCustomerId > 0) {
+    const resumeAfterId =
+      continueAfterCustomerId > 0 ? continueAfterCustomerId : lastCustomerId;
+    if ((hitCap || stoppedEarly) && resumeAfterId > 0) {
       await this.queueService.addContinueGraphBatch(
         {
           automationId: automation.id,
-          afterCustomerId: lastCustomerId,
+          afterCustomerId: resumeAfterId,
         },
         Math.max(5_000, staggerMs * 10),
       );

@@ -281,6 +281,47 @@ export class AutomationQueueService {
     return job.id ?? jobId;
   }
 
+  async addProcessExecutionsBulk(
+    items: Array<{
+      data: ProcessExecutionJob;
+      delayMs?: number;
+      jobIdSuffix?: string;
+    }>,
+  ): Promise<number> {
+    if (items.length === 0) {
+      return 0;
+    }
+    if (items.length === 1) {
+      const only = items[0];
+      await this.addProcessExecution(only.data, only.delayMs ?? 0, {
+        jobIdSuffix: only.jobIdSuffix,
+      });
+      return 1;
+    }
+
+    await this.queue.addBulk(
+      items.map(({ data, delayMs, jobIdSuffix }) => {
+        const nodeType = data.nodeType as AutomationNodeType | undefined;
+        const retry = resolveProcessExecutionRetryPolicy(nodeType);
+        const safeDelay =
+          Number.isFinite(delayMs) && (delayMs ?? 0) > 0 ? delayMs! : 0;
+        const suffix = jobIdSuffix?.trim() ? `-${jobIdSuffix.trim()}` : '';
+        return {
+          name: AutomationJobName.PROCESS_EXECUTION,
+          data,
+          opts: {
+            jobId: `process-execution-${data.executionId}-${data.nodeId}${suffix}`,
+            attempts: retry.attempts,
+            ...(retry.backoff ? { backoff: retry.backoff } : {}),
+            ...(safeDelay > 0 ? { delay: safeDelay } : {}),
+            ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+          },
+        };
+      }),
+    );
+    return items.length;
+  }
+
   async addResumeExecution(
     data: ResumeExecutionJob,
     delayMs: number,
@@ -313,6 +354,33 @@ export class AutomationQueueService {
       ...AUTOMATION_JOB_CLEANUP_OPTIONS,
     });
     return job.id ?? jobId;
+  }
+
+  async addResumeExecutionsBulk(executionIds: number[]): Promise<number> {
+    const uniqueIds = [
+      ...new Set(
+        executionIds.filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ];
+    if (uniqueIds.length === 0) {
+      return 0;
+    }
+
+    const retry = resolveResumeExecutionRetryPolicy();
+    await this.queue.addBulk(
+      uniqueIds.map((executionId) => ({
+        name: AutomationJobName.RESUME_EXECUTION,
+        data: { executionId } satisfies ResumeExecutionJob,
+        opts: {
+          jobId: `resume-execution-${executionId}`,
+          delay: 0,
+          attempts: retry.attempts,
+          ...(retry.backoff ? { backoff: retry.backoff } : {}),
+          ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+        },
+      })),
+    );
+    return uniqueIds.length;
   }
 
   async hasPendingResumeJob(executionId: number): Promise<boolean> {
