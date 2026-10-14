@@ -1629,28 +1629,31 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
     const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
-    const cacheKey = `funnel-dashboard-summary-v3:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+    // v4: one response for KPIs + charts (incl. in-store series) + dropoff
+    const cacheKey = `funnel-dashboard-summary-v4:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
-    return this.funnelStatsQueueService.getCachedOrComputeInline(
-      {
-        kind: FunnelStatsJobName.DASHBOARD_SUMMARY,
-        cacheKey,
-        funnelId,
-        fromIso,
-        toIso,
-        timeZone: chartTz,
-        previousFromIso: hasPrevious ? previousFromIso : undefined,
-        previousToIso: hasPrevious ? previousToIso : undefined,
-      },
-      () =>
-        this.computeDashboardSummaryForRange(
+    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
+      this.funnelStatsQueueService.getOrCompute(
+        {
+          kind: FunnelStatsJobName.DASHBOARD_SUMMARY,
+          cacheKey,
           funnelId,
-          from,
-          to,
-          chartTz,
-          previousFrom,
-          previousTo,
-        ),
+          fromIso,
+          toIso,
+          timeZone: chartTz,
+          previousFromIso: hasPrevious ? previousFromIso : undefined,
+          previousToIso: hasPrevious ? previousToIso : undefined,
+        },
+        () =>
+          this.computeDashboardSummaryForRange(
+            funnelId,
+            from,
+            to,
+            chartTz,
+            previousFrom,
+            previousTo,
+          ),
+      ),
     );
   }
 
@@ -1687,23 +1690,52 @@ export class FunnelEventService {
       uniqueVisitors: {
         meta: number;
         google: number;
-        data: Array<{ month: string; meta: number; google: number }>;
+        inStore: number;
+        data: Array<{
+          month: string;
+          meta: number;
+          google: number;
+          inStore: number;
+        }>;
       };
       signups: {
         meta: number;
         google: number;
-        data: Array<{ month: string; meta: number; google: number }>;
+        inStore: number;
+        data: Array<{
+          month: string;
+          meta: number;
+          google: number;
+          inStore: number;
+        }>;
       };
       payments: {
         meta: number;
         google: number;
-        data: Array<{ month: string; meta: number; google: number }>;
+        inStore: number;
+        data: Array<{
+          month: string;
+          meta: number;
+          google: number;
+          inStore: number;
+        }>;
       };
       revenue: {
         meta: number;
         google: number;
-        data: Array<{ month: string; meta: number; google: number }>;
+        inStore: number;
+        data: Array<{
+          month: string;
+          meta: number;
+          google: number;
+          inStore: number;
+        }>;
       };
+    };
+    dropoff: {
+      pageViews: number;
+      signups: number;
+      payments: number;
     };
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
@@ -1731,7 +1763,8 @@ export class FunnelEventService {
       signupSeries,
       paymentSeries,
       revenueSeries,
-      inStoreTotals,
+      inStoreSeries,
+      pageViews,
     ] = await Promise.all([
       this.computeDashboardCoreTotals(funnelId, from, to),
       hasPrevious
@@ -1789,13 +1822,65 @@ export class FunnelEventService {
         useStoredAdSourceOnly: true,
         seriesOnly: true,
       }),
-      this.computeInStoreCampaignTotals(
+      this.computeInStoreChartSeries({
         funnelId,
-        funnel.campaignId ?? null,
+        campaignId: funnel.campaignId ?? null,
         from,
         to,
-      ),
+        chartTz,
+      }),
+      this.funnelAnalyticsRepository
+        .createQueryBuilder('e')
+        .where('e.funnel_id = :funnelId', { funnelId })
+        .andWhere('e.event_type = :pageView', {
+          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
+        })
+        .andWhere('e.created_at >= :from', { from })
+        .andWhere('e.created_at <= :to', { to })
+        .getCount(),
     ]);
+
+    const mergeInStore = (
+      series: {
+        meta: number;
+        google: number;
+        data: Array<{ month: string; meta: number; google: number }>;
+      },
+      inStore: { total: number; data: Array<{ month: string; inStore: number }> },
+    ) => {
+      const byMonth = new Map(
+        inStore.data.map((row) => [row.month, row.inStore]),
+      );
+      return {
+        meta: series.meta,
+        google: series.google,
+        inStore: inStore.total,
+        data: series.data.map((row) => ({
+          month: row.month,
+          meta: row.meta,
+          google: row.google,
+          inStore: byMonth.get(row.month) ?? 0,
+        })),
+      };
+    };
+
+    const charts = {
+      uniqueVisitors: mergeInStore(
+        uniqueVisitorSeries,
+        inStoreSeries.uniqueVisitors,
+      ),
+      signups: {
+        meta: signupSeries.meta,
+        google: signupSeries.google,
+        inStore: 0,
+        data: signupSeries.data.map((row) => ({
+          ...row,
+          inStore: 0,
+        })),
+      },
+      payments: mergeInStore(paymentSeries, inStoreSeries.payments),
+      revenue: mergeInStore(revenueSeries, inStoreSeries.revenue),
+    };
 
     return {
       funnelId,
@@ -1810,17 +1895,17 @@ export class FunnelEventService {
         uniqueVisitors: {
           meta: uniqueVisitorSeries.meta,
           google: uniqueVisitorSeries.google,
-          inStore: inStoreTotals.uniqueVisitors,
+          inStore: inStoreSeries.uniqueVisitors.total,
         },
         payments: {
           meta: paymentSeries.meta,
           google: paymentSeries.google,
-          inStore: inStoreTotals.payments,
+          inStore: inStoreSeries.payments.total,
         },
         revenue: {
           meta: revenueSeries.meta,
           google: revenueSeries.google,
-          inStore: inStoreTotals.revenue,
+          inStore: inStoreSeries.revenue.total,
         },
       },
       previous:
@@ -1834,27 +1919,12 @@ export class FunnelEventService {
               uniqueVisitors: previousCore.uniqueVisitors,
             }
           : null,
-      charts: {
-        uniqueVisitors: {
-          meta: uniqueVisitorSeries.meta,
-          google: uniqueVisitorSeries.google,
-          data: uniqueVisitorSeries.data,
-        },
-        signups: {
-          meta: signupSeries.meta,
-          google: signupSeries.google,
-          data: signupSeries.data,
-        },
-        payments: {
-          meta: paymentSeries.meta,
-          google: paymentSeries.google,
-          data: paymentSeries.data,
-        },
-        revenue: {
-          meta: revenueSeries.meta,
-          google: revenueSeries.google,
-          data: revenueSeries.data,
-        },
+      charts,
+      // Reuse core signup/payment totals so dropoff does not re-run heavy joins.
+      dropoff: {
+        pageViews,
+        signups: current.signups,
+        payments: current.payments,
       },
     };
   }
