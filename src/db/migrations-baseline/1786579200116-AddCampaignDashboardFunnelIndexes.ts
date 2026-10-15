@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCampaignDashboardFunnelIndexes1786579200116
-  implements MigrationInterface
-{
+export class AddCampaignDashboardFunnelIndexes1786579200116 implements MigrationInterface {
   name = 'AddCampaignDashboardFunnelIndexes1786579200116';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

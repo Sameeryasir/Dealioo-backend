@@ -66,7 +66,9 @@ export class UserService {
         where: { email: email.trim() },
       });
       if (existingByEmail && existingByEmail.id !== userId) {
-        throw new ConflictException('An account with this email already exists.');
+        throw new ConflictException(
+          'An account with this email already exists.',
+        );
       }
       user.email = email.trim();
     }
@@ -115,27 +117,27 @@ export class UserService {
 
   async createUser(createUserDto: CreateUserDto, user: User): Promise<User> {
     const { email, password, phone, name, role: roleName } = createUserDto;
-  
+
     requireAdminRole(user, 'You do not have permission to create a user.');
-  
+
     const existingByEmail = await this.userRepository.findOne({
       where: { email },
     });
-  
+
     if (existingByEmail) {
       throw new ConflictException('An account with this email already exists.');
     }
-  
+
     const role = await this.roleRepository.findOne({
       where: { name: roleName },
     });
-  
+
     if (!role) {
       throw new NotFoundException(`Role '${roleName}' does not exist.`);
     }
-  
+
     const passwordHash = await bcrypt.hash(password, 10);
-  
+
     const newUser = this.userRepository.create({
       email,
       name,
@@ -144,9 +146,9 @@ export class UserService {
       role,
       createdBy: user,
     });
-  
+
     await this.userRepository.save(newUser);
-  
+
     return newUser;
   }
 
@@ -204,34 +206,34 @@ export class UserService {
     user: User,
   ): Promise<User> {
     requireAdminRole(user, 'You do not have permission to update this user.');
-  
+
     const targetUser = await this.userRepository.findOne({
       where: { id },
       relations: ['role'],
     });
-  
+
     if (!targetUser) {
       throw new NotFoundException(`User with id ${id} not found.`);
     }
-  
+
     const { email, phone, name, role: roleName } = updateUserDto;
-  
+
     if (email !== undefined) targetUser.email = email;
     if (phone !== undefined) targetUser.phone = phone;
     if (name !== undefined) targetUser.name = name;
-  
+
     if (roleName !== undefined) {
       const roleEntity = await this.roleRepository.findOne({
         where: { name: roleName },
       });
-  
+
       if (!roleEntity) {
         throw new NotFoundException(`Role '${roleName}' does not exist.`);
       }
-  
+
       targetUser.role = roleEntity;
     }
-  
+
     return this.userRepository.save(targetUser);
   }
 }

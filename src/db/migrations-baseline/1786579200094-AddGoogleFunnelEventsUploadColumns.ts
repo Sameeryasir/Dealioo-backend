@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddGoogleFunnelEventsUploadColumns1786579200094
-  implements MigrationInterface
-{
+export class AddGoogleFunnelEventsUploadColumns1786579200094 implements MigrationInterface {
   name = 'AddGoogleFunnelEventsUploadColumns1786579200094';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

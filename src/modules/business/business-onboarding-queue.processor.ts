@@ -67,6 +67,5 @@ export class BusinessOnboardingQueueProcessor extends WorkerHost {
         }`,
       );
     }
-
   }
 }

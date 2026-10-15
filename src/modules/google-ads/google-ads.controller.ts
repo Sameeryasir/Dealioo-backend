@@ -67,8 +67,11 @@ import {
 import { GoogleCampaignDraftService } from './google-campaign-draft.service';
 import { GooglePublishService } from './google-publish.service';
 
-function readIdempotencyKey(req: { headers?: Record<string, unknown> }): string | undefined {
-  const raw = req.headers?.['idempotency-key'] ?? req.headers?.['Idempotency-Key'];
+function readIdempotencyKey(req: {
+  headers?: Record<string, unknown>;
+}): string | undefined {
+  const raw =
+    req.headers?.['idempotency-key'] ?? req.headers?.['Idempotency-Key'];
   if (typeof raw === 'string' && raw.trim()) return raw.trim();
   if (Array.isArray(raw) && typeof raw[0] === 'string' && raw[0].trim()) {
     return raw[0].trim();
@@ -283,11 +286,7 @@ export class GoogleAdsController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: PublishGoogleCampaignDraftDto,
   ): Promise<EnqueueGooglePublishResponseDto> {
-    return this.googlePublishService.enqueuePublish(
-      req.user,
-      businessId,
-      body,
-    );
+    return this.googlePublishService.enqueuePublish(req.user, businessId, body);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -442,9 +441,7 @@ export class GoogleAdsController {
         scope,
       );
 
-      return res.redirect(
-        `/google/connected?businessId=${result.businessId}`,
-      );
+      return res.redirect(`/google/connected?businessId=${result.businessId}`);
     } catch (err) {
       const businessId =
         this.googleAdsService.parseBusinessIdFromOAuthState(state);
@@ -652,10 +649,7 @@ export class GoogleAdsController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<GoogleAdsCustomerDto[]> {
-    return this.googleAdsService.listCustomersForBusiness(
-      req.user,
-      businessId,
-    );
+    return this.googleAdsService.listCustomersForBusiness(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -698,4 +692,3 @@ export class GoogleAdsController {
     );
   }
 }
-

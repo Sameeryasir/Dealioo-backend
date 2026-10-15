@@ -38,8 +38,7 @@ export class BillingController {
     @Req() req: { user: { id: number } },
     @Query('refresh') refresh?: string,
   ): Promise<BillingOverviewResponse> {
-    const forceRefresh =
-      refresh === '1' || refresh?.toLowerCase() === 'true';
+    const forceRefresh = refresh === '1' || refresh?.toLowerCase() === 'true';
     return this.billingService.getOverview(req.user.id, { forceRefresh });
   }
 

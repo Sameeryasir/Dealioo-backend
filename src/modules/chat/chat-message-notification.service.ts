@@ -44,8 +44,7 @@ export class ChatMessageNotificationService {
         messageCount: conversation.messageCount,
         lastMessagePreview:
           conversation.lastMessagePreview?.trim() || message.body.trim(),
-        lastMessageChannel:
-          conversation.lastMessageChannel ?? message.channel,
+        lastMessageChannel: conversation.lastMessageChannel ?? message.channel,
         lastMessageAt: conversation.lastMessageAt ?? message.sentAt,
         customerName: conversation.customer?.name ?? null,
         customerEmail: conversation.customer?.email ?? null,

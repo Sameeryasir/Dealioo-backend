@@ -29,7 +29,12 @@ export class Business {
   @Column({ name: 'logo_url', type: 'text', nullable: true })
   logoUrl: string | null;
 
-  @Column({ name: 'logo_primary_color', type: 'varchar', length: 16, nullable: true })
+  @Column({
+    name: 'logo_primary_color',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
   logoPrimaryColor: string | null;
 
   @Column({
@@ -40,7 +45,12 @@ export class Business {
   })
   logoSecondaryColor: string | null;
 
-  @Column({ name: 'logo_accent_color', type: 'varchar', length: 16, nullable: true })
+  @Column({
+    name: 'logo_accent_color',
+    type: 'varchar',
+    length: 16,
+    nullable: true,
+  })
   logoAccentColor: string | null;
 
   /** Industry / business type (e.g. Restaurant, Retail). */

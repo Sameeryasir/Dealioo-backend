@@ -58,8 +58,7 @@ export class SidebarSectionNotifyService {
       businessId: params.businessId,
       section: 'activity',
       actorUserId:
-        params.actorUserId ??
-        extractActorUserIdFromMetadata(params.metadata),
+        params.actorUserId ?? extractActorUserIdFromMetadata(params.metadata),
       occurredAt: params.occurredAt,
     });
   }

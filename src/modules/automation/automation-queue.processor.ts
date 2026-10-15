@@ -66,7 +66,7 @@ export class AutomationQueueProcessor extends WorkerHost {
   ): number | null {
     const data = job.data;
     if (data && typeof data === 'object' && 'executionId' in data) {
-      return (data as { executionId: number }).executionId;
+      return data.executionId;
     }
     return null;
   }
@@ -212,14 +212,12 @@ export class AutomationQueueProcessor extends WorkerHost {
       } else if (executionId && !isFinalAttempt) {
         try {
           await this.executionService.markProcessing(executionId);
-        } catch {
-        }
+        } catch {}
       } else if (executionId) {
         try {
           await this.executionService.markFailed(executionId, message);
           this.metricsService.recordExecutionFailed();
-        } catch {
-        }
+        } catch {}
       }
 
       throw error;
@@ -314,7 +312,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       await this.deadLetterService.recordFailedJob({
         jobName: job.name,
         jobId: String(job.id ?? ''),
-        jobData: job.data as Record<string, unknown>,
+        jobData: job.data,
         error: message,
         attempts: job.attemptsMade,
         executionId,
@@ -326,8 +324,7 @@ export class AutomationQueueProcessor extends WorkerHost {
       await this.executionService.markFailed(executionId, message);
       this.metricsService.recordDeadLetter();
       this.metricsService.recordExecutionFailed();
-    } catch {
-    }
+    } catch {}
   }
 }
 
@@ -373,7 +370,7 @@ export class AutomationSendQueueProcessor extends WorkerHost {
           await this.deadLetterService.recordFailedJob({
             jobName: job.name,
             jobId: String(job.id ?? ''),
-            jobData: job.data as unknown as Record<string, unknown>,
+            jobData: job.data,
             error: message,
             attempts: job.attemptsMade,
             executionId,
@@ -383,8 +380,7 @@ export class AutomationSendQueueProcessor extends WorkerHost {
             nodeType: AutomationNodeType.EMAIL,
           });
           this.metricsService.recordDeadLetter();
-        } catch {
-        }
+        } catch {}
       }
       throw error;
     }

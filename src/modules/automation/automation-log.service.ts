@@ -131,13 +131,10 @@ export class AutomationLogService {
     return this.automationLogRepository
       .createQueryBuilder('log')
       .where('log.executionId = :executionId', { executionId })
-      .andWhere(
-        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
-        {
-          wait: 'Wait % minute(s) before sending QR pass email',
-          schedule: 'Scheduling QR pass email',
-        },
-      )
+      .andWhere('(log.message ILIKE :wait OR log.message ILIKE :schedule)', {
+        wait: 'Wait % minute(s) before sending QR pass email',
+        schedule: 'Scheduling QR pass email',
+      })
       .getExists();
   }
 
@@ -145,13 +142,10 @@ export class AutomationLogService {
     return this.automationLogRepository
       .createQueryBuilder('log')
       .where('log.executionId = :executionId', { executionId })
-      .andWhere(
-        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
-        {
-          wait: 'Wait % minute(s) before checking Google Wallet / sending wallet reminder',
-          schedule: 'Scheduling wallet reminder email',
-        },
-      )
+      .andWhere('(log.message ILIKE :wait OR log.message ILIKE :schedule)', {
+        wait: 'Wait % minute(s) before checking Google Wallet / sending wallet reminder',
+        schedule: 'Scheduling wallet reminder email',
+      })
       .getExists();
   }
 
@@ -159,13 +153,10 @@ export class AutomationLogService {
     return this.automationLogRepository
       .createQueryBuilder('log')
       .where('log.executionId = :executionId', { executionId })
-      .andWhere(
-        '(log.message ILIKE :wait OR log.message ILIKE :schedule)',
-        {
-          wait: 'Wait % minute(s) before checking offer expiry / sending expiry reminder',
-          schedule: 'Scheduling offer expiry reminder email',
-        },
-      )
+      .andWhere('(log.message ILIKE :wait OR log.message ILIKE :schedule)', {
+        wait: 'Wait % minute(s) before checking offer expiry / sending expiry reminder',
+        schedule: 'Scheduling offer expiry reminder email',
+      })
       .getExists();
   }
 

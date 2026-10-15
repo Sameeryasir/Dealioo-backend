@@ -21,7 +21,9 @@ import { UserSubscriptionsService } from './user-subscriptions.service';
     ]),
     StripeModule,
     AdminNotificationsModule,
-    forwardRef(() => require('../onboarding/onboarding.module').OnboardingModule),
+    forwardRef(
+      () => require('../onboarding/onboarding.module').OnboardingModule,
+    ),
   ],
   controllers: [UserSubscriptionsController],
   providers: [UserSubscriptionsService],

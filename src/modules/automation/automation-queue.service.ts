@@ -98,7 +98,12 @@ export class AutomationQueueService {
   ): Promise<void> {
     const client = await this.sendQueue.client;
     const key = this.unpaidChunkTotalKey(executionId, phase);
-    await client.set(key, String(Math.max(0, totalChunks)), 'EX', UNPAID_CHUNK_COORD_TTL_SEC);
+    await client.set(
+      key,
+      String(Math.max(0, totalChunks)),
+      'EX',
+      UNPAID_CHUNK_COORD_TTL_SEC,
+    );
   }
 
   async getUnpaidReminderChunkProgress(
@@ -142,7 +147,9 @@ export class AutomationQueueService {
     const done = await client.incr(doneKey);
     await client.expire(doneKey, UNPAID_CHUNK_COORD_TTL_SEC);
 
-    const totalRaw = await client.get(this.unpaidChunkTotalKey(executionId, phase));
+    const totalRaw = await client.get(
+      this.unpaidChunkTotalKey(executionId, phase),
+    );
     const total = Math.max(
       1,
       Number(totalRaw ?? fallbackTotalChunks) || fallbackTotalChunks || 1,
@@ -191,7 +198,11 @@ export class AutomationQueueService {
         let start = 0;
         const batchSize = 100;
         while (true) {
-          const jobs = await target.getJobs(state, start, start + batchSize - 1);
+          const jobs = await target.getJobs(
+            state,
+            start,
+            start + batchSize - 1,
+          );
           if (jobs.length === 0) {
             break;
           }
@@ -271,13 +282,17 @@ export class AutomationQueueService {
       await this.safeRemoveJob(existing);
     }
 
-    const job = await this.queue.add(AutomationJobName.PROCESS_EXECUTION, data, {
-      jobId,
-      attempts: retry.attempts,
-      ...(retry.backoff ? { backoff: retry.backoff } : {}),
-      ...(safeDelay > 0 ? { delay: safeDelay } : {}),
-      ...AUTOMATION_JOB_CLEANUP_OPTIONS,
-    });
+    const job = await this.queue.add(
+      AutomationJobName.PROCESS_EXECUTION,
+      data,
+      {
+        jobId,
+        attempts: retry.attempts,
+        ...(retry.backoff ? { backoff: retry.backoff } : {}),
+        ...(safeDelay > 0 ? { delay: safeDelay } : {}),
+        ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+      },
+    );
     return job.id ?? jobId;
   }
 
@@ -358,9 +373,7 @@ export class AutomationQueueService {
 
   async addResumeExecutionsBulk(executionIds: number[]): Promise<number> {
     const uniqueIds = [
-      ...new Set(
-        executionIds.filter((id) => Number.isFinite(id) && id > 0),
-      ),
+      ...new Set(executionIds.filter((id) => Number.isFinite(id) && id > 0)),
     ];
     if (uniqueIds.length === 0) {
       return 0;
@@ -429,12 +442,16 @@ export class AutomationQueueService {
       await this.safeRemoveJob(existing);
     }
 
-    const job = await this.queue.add(AutomationJobName.HANDLE_FUNNEL_EVENT, data, {
-      jobId,
-      attempts: 5,
-      backoff: { type: 'exponential', delay: 2000 },
-      ...AUTOMATION_JOB_CLEANUP_OPTIONS,
-    });
+    const job = await this.queue.add(
+      AutomationJobName.HANDLE_FUNNEL_EVENT,
+      data,
+      {
+        jobId,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 2000 },
+        ...AUTOMATION_JOB_CLEANUP_OPTIONS,
+      },
+    );
     return job.id ?? jobId;
   }
 
@@ -477,7 +494,11 @@ export class AutomationQueueService {
       const batchSize = 100;
 
       while (true) {
-        const jobs = await this.queue.getJobs(state, start, start + batchSize - 1);
+        const jobs = await this.queue.getJobs(
+          state,
+          start,
+          start + batchSize - 1,
+        );
         if (jobs.length === 0) {
           break;
         }
@@ -598,8 +619,7 @@ export class AutomationQueueService {
       await this.queue.removeJobScheduler(
         automationCronSchedulerKey(automationId),
       );
-    } catch {
-    }
+    } catch {}
   }
 
   async purgeExecutionJobs(executionIds: number[]): Promise<void> {
@@ -681,7 +701,11 @@ export class AutomationQueueService {
         let start = 0;
         const batchSize = 100;
         while (true) {
-          const jobs = await target.getJobs(state, start, start + batchSize - 1);
+          const jobs = await target.getJobs(
+            state,
+            start,
+            start + batchSize - 1,
+          );
           if (jobs.length === 0) {
             break;
           }
@@ -713,10 +737,7 @@ export class AutomationQueueService {
     return `unpaid-reminder-chunks-done:${executionId}:${phase}`;
   }
 
-  private jobBelongsToExecution(
-    job: Job,
-    executionIds: Set<number>,
-  ): boolean {
+  private jobBelongsToExecution(job: Job, executionIds: Set<number>): boolean {
     const data = job.data as { executionId?: number };
     if (
       typeof data.executionId === 'number' &&
@@ -759,7 +780,6 @@ export class AutomationQueueService {
         await job.discard();
       }
       await job.remove();
-    } catch {
-    }
+    } catch {}
   }
 }

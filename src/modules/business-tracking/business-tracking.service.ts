@@ -4,7 +4,10 @@ import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessTracking } from '../../db/entities/business-tracking.entity';
 import { User } from '../../db/entities/user.entity';
-import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../../utils/token-encryption.util';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { metaCampaignPermissionKeysFor } from '../member/member.constants';
 import { UpsertBusinessTrackingDto } from './dto/upsert-business-tracking.dto';
@@ -92,9 +95,7 @@ export class BusinessTrackingService {
     row: BusinessTracking,
   ): Promise<BusinessTrackingResponse> {
     const credentials = await this.getCapiCredentials(row.businessId);
-    const hasGoogleUploadReady = await this.hasGoogleConversionUploadReady(
-      row,
-    );
+    const hasGoogleUploadReady = await this.hasGoogleConversionUploadReady(row);
     return {
       id: row.id,
       businessId: row.businessId,
@@ -120,8 +121,8 @@ export class BusinessTrackingService {
     if (!row.googleTagManagerId?.trim()) return false;
     const hasLabel = Boolean(
       row.googleAdsSignupConversionLabel?.trim() ||
-        row.googleAdsPurchaseConversionLabel?.trim() ||
-        row.googleAdsLeadConversionLabel?.trim(),
+      row.googleAdsPurchaseConversionLabel?.trim() ||
+      row.googleAdsLeadConversionLabel?.trim(),
     );
     if (!hasLabel) return false;
 
@@ -131,7 +132,7 @@ export class BusinessTrackingService {
     });
     return Boolean(
       business?.googleRefreshToken?.trim() &&
-        business?.googleCustomerId?.trim(),
+      business?.googleCustomerId?.trim(),
     );
   }
 

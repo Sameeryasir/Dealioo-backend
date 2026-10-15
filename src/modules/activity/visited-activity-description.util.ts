@@ -14,7 +14,5 @@ export function visitedActivityDescription(
       : `Checked in at ${location}`;
   }
 
-  return offer
-    ? `Scanned ${offer} at ${location}`
-    : `Scanned at ${location}`;
+  return offer ? `Scanned ${offer} at ${location}` : `Scanned at ${location}`;
 }

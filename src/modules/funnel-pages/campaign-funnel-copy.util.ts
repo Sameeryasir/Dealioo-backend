@@ -113,7 +113,11 @@ export function applyOfferEyebrowToPages(
   }
 
   const landing = pages.landing;
-  if (typeof landing !== 'object' || landing === null || Array.isArray(landing)) {
+  if (
+    typeof landing !== 'object' ||
+    landing === null ||
+    Array.isArray(landing)
+  ) {
     pages.landing = { eyebrow: trimmed };
     return pages;
   }

@@ -1,23 +1,8 @@
 import { MetaApiStepError } from './facebook-campaign-meta';
 
-const TRANSIENT_META_CODES = new Set([
-  1, 
-  2, 
-  4, 
-  17, 
-  32, 
-  613, 
-  80001,
-  80004,
-]);
+const TRANSIENT_META_CODES = new Set([1, 2, 4, 17, 32, 613, 80001, 80004]);
 
-const NON_RETRYABLE_META_CODES = new Set([
-  100,
-  190,
-  10,
-  200,
-  294,
-]);
+const NON_RETRYABLE_META_CODES = new Set([100, 190, 10, 200, 294]);
 
 function extractStatusCode(err: unknown): number | null {
   if (!err || typeof err !== 'object') return null;
@@ -28,7 +13,8 @@ function extractStatusCode(err: unknown): number | null {
   };
   if (typeof anyErr.status === 'number') return anyErr.status;
   if (typeof anyErr.statusCode === 'number') return anyErr.statusCode;
-  if (typeof anyErr.response?.status === 'number') return anyErr.response.status;
+  if (typeof anyErr.response?.status === 'number')
+    return anyErr.response.status;
   return null;
 }
 

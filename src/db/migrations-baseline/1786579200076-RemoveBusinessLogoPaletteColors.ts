@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Why: Color extraction is no longer used for businesses (campaigns keep image palette).
  * Related: AddBusinessLogoPaletteColors1788390000000
  */
-export class RemoveBusinessLogoPaletteColors1786579200076
-  implements MigrationInterface
-{
+export class RemoveBusinessLogoPaletteColors1786579200076 implements MigrationInterface {
   name = 'RemoveBusinessLogoPaletteColors1786579200076';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateBusinessUserConversationReadState1786579200100
-  implements MigrationInterface
-{
+export class CreateBusinessUserConversationReadState1786579200100 implements MigrationInterface {
   name = 'CreateBusinessUserConversationReadState1786579200100';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

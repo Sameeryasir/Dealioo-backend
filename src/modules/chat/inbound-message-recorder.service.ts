@@ -20,10 +20,7 @@ import {
   type MessagingCorrelationContext,
 } from '../sms/types/inbound-messaging.types';
 import type { RecordInboundSmsDto } from '../sms/dto/record-inbound-sms.dto';
-import {
-  normalizePhoneNumber,
-  phoneDigitsOnly,
-} from '../sms/twilio.service';
+import { normalizePhoneNumber, phoneDigitsOnly } from '../sms/twilio.service';
 import {
   ChatMessageNotificationService,
   type ConversationSnapshot,
@@ -65,14 +62,18 @@ export class InboundMessageRecorderService {
     const messageSid = params.messageSid.trim();
     const body = params.body.trim();
     const normalizedFrom = normalizePhoneNumber(params.fromPhone);
-    const normalizedTo = normalizePhoneNumber(params.toPhone?.trim() || '') || null;
+    const normalizedTo =
+      normalizePhoneNumber(params.toPhone?.trim() || '') || null;
 
     if (!messageSid || !body || !normalizedFrom) {
       this.webhookLogger.warn(logContext, 'inbound.validation_failed', {
         reason: InboundMessageSkipReason.MISSING_FIELDS,
         fromPhone: params.fromPhone?.trim() || null,
       });
-      return { saved: false, skipReason: InboundMessageSkipReason.MISSING_FIELDS };
+      return {
+        saved: false,
+        skipReason: InboundMessageSkipReason.MISSING_FIELDS,
+      };
     }
 
     const idempotencyKey = buildInboundIdempotencyKey(provider, messageSid);
@@ -99,10 +100,16 @@ export class InboundMessageRecorderService {
         normalizedTo,
         businessId,
       });
-      return { saved: false, skipReason: InboundMessageSkipReason.CUSTOMER_NOT_FOUND };
+      return {
+        saved: false,
+        skipReason: InboundMessageSkipReason.CUSTOMER_NOT_FOUND,
+      };
     }
 
-    const conversation = await this.resolveConversation(customer.id, businessId);
+    const conversation = await this.resolveConversation(
+      customer.id,
+      businessId,
+    );
     const targetBusinessId = conversation?.businessId ?? businessId ?? null;
     if (targetBusinessId == null) {
       this.webhookLogger.warn(logContext, 'inbound.conversation_not_found', {
@@ -180,7 +187,8 @@ export class InboundMessageRecorderService {
         }
       }
 
-      const detail = error instanceof Error ? error.message : 'Unknown DB error';
+      const detail =
+        error instanceof Error ? error.message : 'Unknown DB error';
       this.webhookLogger.error(logContext, 'inbound.database_error', {
         reason: InboundMessageSkipReason.DATABASE_ERROR,
         customerId: customer.id,
@@ -251,7 +259,7 @@ export class InboundMessageRecorderService {
       });
     }
 
-    let conversation = await this.conversationRepository.findOne({
+    const conversation = await this.conversationRepository.findOne({
       where: { customerId, isPrivate: true },
       order: { lastMessageAt: 'DESC' },
     });
@@ -302,15 +310,18 @@ export class InboundMessageRecorderService {
         const conversation = await this.conversationRepository
           .createQueryBuilder('conversation')
           .where('conversation.business_id = :businessId', { businessId })
-          .andWhere('conversation.customer_id IN (:...linkedIds)', { linkedIds })
+          .andWhere('conversation.customer_id IN (:...linkedIds)', {
+            linkedIds,
+          })
           .andWhere('conversation.is_private = true')
           .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
           .getOne();
 
         if (conversation) {
           return (
-            linked.find((customer) => customer.id === conversation.customerId) ??
-            linked[0]
+            linked.find(
+              (customer) => customer.id === conversation.customerId,
+            ) ?? linked[0]
           );
         }
         return linked[0];
@@ -503,7 +514,10 @@ export class InboundMessageRecorderService {
       return false;
     }
 
-    const driverError = error.driverError as { code?: string; constraint?: string };
+    const driverError = error.driverError as {
+      code?: string;
+      constraint?: string;
+    };
     return (
       driverError.code === '23505' &&
       driverError.constraint === 'UQ_conversation_message_idempotency_key'

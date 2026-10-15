@@ -1,8 +1,4 @@
-export type NodeExecutionStatus =
-  | 'advance'
-  | 'wait'
-  | 'complete'
-  | 'failed';
+export type NodeExecutionStatus = 'advance' | 'wait' | 'complete' | 'failed';
 
 export type NodeExecutionResult = {
   status: NodeExecutionStatus;

@@ -64,7 +64,8 @@ export function resolveAutomationGraphBatchStaggerMs(): number {
 }
 
 export function resolveAutomationUnifiedGraphExecution(): boolean {
-  const raw = process.env.AUTOMATION_UNIFIED_GRAPH_EXECUTION?.trim().toLowerCase();
+  const raw =
+    process.env.AUTOMATION_UNIFIED_GRAPH_EXECUTION?.trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
     return false;
   }
@@ -111,7 +112,9 @@ export function resolveAutomationChunkEnqueueStaggerMs(): number {
   return Math.min(parsed, 2_000);
 }
 
-export function resolveAutomationCronStartOffsetMs(automationId: number): number {
+export function resolveAutomationCronStartOffsetMs(
+  automationId: number,
+): number {
   const windowMs = resolveAutomationCronStaggerWindowMs();
   if (windowMs <= 0 || automationId <= 0) {
     return 0;
@@ -149,7 +152,8 @@ export function resolveAutomationSendQueueLimiter():
   | { max: number; duration: number }
   | undefined {
   const maxRaw = process.env.AUTOMATION_SEND_QUEUE_RATE_MAX?.trim();
-  const durationRaw = process.env.AUTOMATION_SEND_QUEUE_RATE_DURATION_MS?.trim();
+  const durationRaw =
+    process.env.AUTOMATION_SEND_QUEUE_RATE_DURATION_MS?.trim();
   if (!maxRaw && !durationRaw) {
     return { max: 100, duration: 1000 };
   }

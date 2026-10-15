@@ -418,7 +418,12 @@ export class CampaignReviewService {
       .trim()
       .toLowerCase()
       .slice(0, 255);
-    if (!value || !value.includes('@') || value.includes('<') || value.includes('>')) {
+    if (
+      !value ||
+      !value.includes('@') ||
+      value.includes('<') ||
+      value.includes('>')
+    ) {
       return null;
     }
     return value;

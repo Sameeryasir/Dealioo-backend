@@ -53,14 +53,18 @@ export class AutomationFlowService {
     return plan.startNodeId;
   }
 
-  async buildExecutionPlan(automationId: number): Promise<AutomationExecutionPlan> {
+  async buildExecutionPlan(
+    automationId: number,
+  ): Promise<AutomationExecutionPlan> {
     const nodes = await this.nodeRepository.find({
       where: { automationId },
       order: { order: 'ASC' },
     });
 
     if (nodes.length === 0) {
-      throw new BadRequestException('Automation has no nodes. Build the flow first.');
+      throw new BadRequestException(
+        'Automation has no nodes. Build the flow first.',
+      );
     }
 
     let emailNode: AutomationNode | null = null;
@@ -89,7 +93,10 @@ export class AutomationFlowService {
         sendToUnpaidOnly = true;
       }
       if (node.type === AutomationNodeType.CONDITION) {
-        if (conditionNode == null && this.conditionTargetsUnpaidCustomers(node.config ?? {})) {
+        if (
+          conditionNode == null &&
+          this.conditionTargetsUnpaidCustomers(node.config ?? {})
+        ) {
           conditionNode = node;
         }
         if (this.conditionTargetsUnpaidCustomers(node.config ?? {})) {
@@ -144,8 +151,8 @@ export class AutomationFlowService {
         nodes.find(
           (node) =>
             node.type === AutomationNodeType.WAIT &&
-            node.order > passEmailNode!.order &&
-            node.order < walletEmailNode!.order,
+            node.order > passEmailNode.order &&
+            node.order < walletEmailNode.order,
         ) ?? null;
     }
 
@@ -158,8 +165,8 @@ export class AutomationFlowService {
         nodes.find(
           (node) =>
             node.type === AutomationNodeType.CONDITION &&
-            node.order > passEmailNode!.order &&
-            node.order < walletEmailNode!.order &&
+            node.order > passEmailNode.order &&
+            node.order < walletEmailNode.order &&
             this.conditionTargetsPassNotAdded(node.config ?? {}),
         ) ?? null;
     }
@@ -169,8 +176,8 @@ export class AutomationFlowService {
         nodes.find(
           (node) =>
             node.type === AutomationNodeType.WAIT &&
-            node.order > walletEmailNode!.order &&
-            node.order < expiryEmailNode!.order,
+            node.order > walletEmailNode.order &&
+            node.order < expiryEmailNode.order,
         ) ?? null;
     }
 
@@ -183,8 +190,8 @@ export class AutomationFlowService {
         nodes.find(
           (node) =>
             node.type === AutomationNodeType.CONDITION &&
-            node.order > walletEmailNode!.order &&
-            node.order < expiryEmailNode!.order &&
+            node.order > walletEmailNode.order &&
+            node.order < expiryEmailNode.order &&
             this.conditionTargetsOfferExpiresWithin(node.config ?? {}),
         ) ?? null;
     }
@@ -232,7 +239,9 @@ export class AutomationFlowService {
     const label = String(
       config.conditionType ?? config.type ?? config.label ?? '',
     ).toLowerCase();
-    const raw = JSON.stringify(config.conditions ?? config.value ?? '').toLowerCase();
+    const raw = JSON.stringify(
+      config.conditions ?? config.value ?? '',
+    ).toLowerCase();
     return (
       label.includes('pass not added') ||
       raw.includes('pass was added') ||
@@ -245,7 +254,9 @@ export class AutomationFlowService {
     const label = String(
       config.conditionType ?? config.type ?? config.label ?? '',
     ).toLowerCase();
-    const raw = JSON.stringify(config.conditions ?? config.value ?? '').toLowerCase();
+    const raw = JSON.stringify(
+      config.conditions ?? config.value ?? '',
+    ).toLowerCase();
     return (
       label.includes('offer expires') ||
       raw.includes('offer expires in less than')
@@ -255,7 +266,9 @@ export class AutomationFlowService {
   parseOfferExpiresWithin(
     config: Record<string, unknown>,
   ): { amount: number; unit: string } | null {
-    const conditions = Array.isArray(config.conditions) ? config.conditions : [];
+    const conditions = Array.isArray(config.conditions)
+      ? config.conditions
+      : [];
     const first =
       conditions[0] && typeof conditions[0] === 'object'
         ? (conditions[0] as Record<string, unknown>)
@@ -266,7 +279,9 @@ export class AutomationFlowService {
       if (Number.isFinite(amount) && amount > 0) {
         return { amount: Math.floor(amount), unit };
       }
-      const fromValue = this.parseOfferExpiresWithinLabel(String(first.value ?? ''));
+      const fromValue = this.parseOfferExpiresWithinLabel(
+        String(first.value ?? ''),
+      );
       if (fromValue) {
         return fromValue;
       }

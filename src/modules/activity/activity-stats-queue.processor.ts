@@ -49,7 +49,10 @@ export class ActivityStatsQueueProcessor extends WorkerHost {
         return null;
     }
 
-    await this.activityStatsQueueService.persistResult(payload.cacheKey, result);
+    await this.activityStatsQueueService.persistResult(
+      payload.cacheKey,
+      result,
+    );
     return result;
   }
 }

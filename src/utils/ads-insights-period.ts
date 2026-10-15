@@ -21,9 +21,7 @@ export function normalizeAdsInsightsPeriodInput(
 
 export function isAdsMaximumPeriod(value: string): boolean {
   return (
-    value === 'maximum' ||
-    value === 'all_time' ||
-    value === 'data_maximum'
+    value === 'maximum' || value === 'all_time' || value === 'data_maximum'
   );
 }
 

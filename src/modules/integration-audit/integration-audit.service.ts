@@ -52,10 +52,11 @@ export class IntegrationAuditService {
     businessId: number,
     filters: IntegrationAuditListFilters = {},
   ): Promise<{ data: IntegrationAuditLogListItem[]; meta: PaginationMeta }> {
-    const { page: safePage, limit, skip } = normalizePagination(
-      filters.page,
-      10,
-    );
+    const {
+      page: safePage,
+      limit,
+      skip,
+    } = normalizePagination(filters.page, 10);
 
     const eventTypes =
       filters.eventType && CONNECTION_EVENT_TYPES.includes(filters.eventType)
@@ -177,7 +178,10 @@ function pickSafeLabel(value: unknown): string | null {
   if (!text) return null;
   // Drop values that look like account ids (acct_, act_, 10-digit Google ids).
   if (/^(acct_|act_)/i.test(text)) return null;
-  if (/^\d{8,12}$/.test(text.replace(/\D/g, '')) && text.replace(/\D/g, '').length >= 8) {
+  if (
+    /^\d{8,12}$/.test(text.replace(/\D/g, '')) &&
+    text.replace(/\D/g, '').length >= 8
+  ) {
     if (/^[\d-]+$/.test(text)) return null;
   }
   return text;

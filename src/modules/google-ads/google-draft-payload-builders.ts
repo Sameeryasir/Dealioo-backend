@@ -140,7 +140,9 @@ function mapMatchType(matchType: GoogleKeywordMatchType | undefined): number {
   }
 }
 
-function mapBidding(draft: GoogleCampaignBuilderDraftData): Record<string, unknown> {
+function mapBidding(
+  draft: GoogleCampaignBuilderDraftData,
+): Record<string, unknown> {
   const strategy: GoogleBidStrategyId = draft.bidStrategy || 'MAXIMIZE_CLICKS';
   switch (strategy) {
     case 'MAXIMIZE_CONVERSIONS':
@@ -214,8 +216,7 @@ export function buildCampaignPayloadFromDraft(
 
   const networks = draft.networkSelection ?? [];
   const targetGoogleSearch =
-    networks.length === 0 ||
-    networks.some((row) => /google search/i.test(row));
+    networks.length === 0 || networks.some((row) => /google search/i.test(row));
   const targetSearchNetwork = networks.some((row) =>
     /search partners|search network/i.test(row),
   );

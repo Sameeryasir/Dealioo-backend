@@ -19,7 +19,11 @@ import { StripeService } from './stripe.service';
     AdminNotificationsModule,
   ],
   controllers: [StripeController],
-  providers: [StripeService, StripeCatalogService, StripeIntegrationAuditService],
+  providers: [
+    StripeService,
+    StripeCatalogService,
+    StripeIntegrationAuditService,
+  ],
   exports: [StripeService, StripeCatalogService],
 })
 export class StripeModule {}

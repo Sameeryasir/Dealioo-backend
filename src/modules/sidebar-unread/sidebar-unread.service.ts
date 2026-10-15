@@ -6,7 +6,10 @@ import {
   type SidebarUnreadSection,
 } from '../../db/entities/business-user-sidebar-section-read-state.entity';
 import { Order } from '../../db/entities/order.entity';
-import { ActivityEvent, ActivityEventType } from '../../db/entities/activity-event.entity';
+import {
+  ActivityEvent,
+  ActivityEventType,
+} from '../../db/entities/activity-event.entity';
 import { BusinessHistory } from '../../db/entities/business-history.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import {
@@ -297,8 +300,7 @@ export class SidebarUnreadService {
       hasUnread: unreadCount > 0,
       unreadCount,
       lastViewedAt: viewedAt.toISOString(),
-      latestAt:
-        unreadCount > 0 && latest ? latest.toISOString() : null,
+      latestAt: unreadCount > 0 && latest ? latest.toISOString() : null,
       latestDescription,
     };
   }
@@ -318,7 +320,7 @@ export class SidebarUnreadService {
     return this.countUnreadHistory(businessId, userId, since);
   }
 
-    private ordersListSortSql(): string {
+  private ordersListSortSql(): string {
     return `COALESCE(
       ord.paid_at,
       (
@@ -514,9 +516,7 @@ export class SidebarUnreadService {
           ? payload.businessName.trim()
           : 'Business',
       previousRole:
-        typeof payload.previousRole === 'string'
-          ? payload.previousRole
-          : '',
+        typeof payload.previousRole === 'string' ? payload.previousRole : '',
       role: typeof payload.role === 'string' ? payload.role : '',
       grantedPermissions: Array.isArray(payload.grantedPermissions)
         ? payload.grantedPermissions.filter(
@@ -596,18 +596,14 @@ export class SidebarUnreadService {
     }
 
     const metadata =
-      row.metadata && typeof row.metadata === 'object'
-        ? (row.metadata as Record<string, unknown>)
-        : null;
+      row.metadata && typeof row.metadata === 'object' ? row.metadata : null;
     const campaignNameRaw = metadata?.campaignName;
     const campaignName =
       typeof campaignNameRaw === 'string' && campaignNameRaw.trim()
         ? campaignNameRaw.trim()
         : null;
     const guestName =
-      row.customer?.name?.trim() ||
-      row.customer?.email?.trim() ||
-      'A guest';
+      row.customer?.name?.trim() || row.customer?.email?.trim() || 'A guest';
     const guestEmail = row.customer?.email?.trim() || null;
 
     return {

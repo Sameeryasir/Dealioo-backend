@@ -120,9 +120,7 @@ export class FunnelMetaCapiService {
 
     if (!response.ok) {
       const message =
-        typeof json.error === 'object' &&
-        json.error &&
-        'message' in (json.error as object)
+        typeof json.error === 'object' && json.error && 'message' in json.error
           ? String((json.error as { message?: string }).message)
           : `Meta CAPI HTTP ${response.status}`;
       const err = new Error(message) as Error & {

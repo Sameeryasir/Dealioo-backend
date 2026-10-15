@@ -107,8 +107,9 @@ export class FunnelMetaTrackingService {
   }
 
   async enqueue(row: MetaFunnelEvent): Promise<void> {
-    const credentials =
-      await this.businessTrackingService.getCapiCredentials(row.businessId);
+    const credentials = await this.businessTrackingService.getCapiCredentials(
+      row.businessId,
+    );
 
     if (!credentials || credentials.pixelId !== row.pixelId) {
       await this.eventsRepo.update(row.id, {
@@ -150,8 +151,9 @@ export class FunnelMetaTrackingService {
       return;
     }
 
-    const credentials =
-      await this.businessTrackingService.getCapiCredentials(row.businessId);
+    const credentials = await this.businessTrackingService.getCapiCredentials(
+      row.businessId,
+    );
     if (!credentials || credentials.pixelId !== row.pixelId) {
       await this.eventsRepo.update(row.id, {
         status: MetaFunnelEventStatus.DEAD_LETTER,
@@ -168,8 +170,8 @@ export class FunnelMetaTrackingService {
       const metaResponse = await this.capiService.sendEvent(row, credentials);
       await this.eventsRepo.update(row.id, {
         status: MetaFunnelEventStatus.SENT,
-        payload: payload as object,
-        metaResponse: metaResponse as object,
+        payload: payload,
+        metaResponse: metaResponse,
         retryCount: attempt,
         lastError: null,
         sentAt: new Date(),
@@ -183,8 +185,8 @@ export class FunnelMetaTrackingService {
 
       await this.eventsRepo.update(row.id, {
         status: MetaFunnelEventStatus.FAILED,
-        payload: payload as object,
-        metaResponse: metaResponse as object | null,
+        payload: payload,
+        metaResponse: metaResponse,
         retryCount: attempt,
         lastError: message,
       });
@@ -200,7 +202,10 @@ export class FunnelMetaTrackingService {
     }
   }
 
-  async markDeadLetter(eventRowId: string, errorMessage: string): Promise<void> {
+  async markDeadLetter(
+    eventRowId: string,
+    errorMessage: string,
+  ): Promise<void> {
     await this.eventsRepo.update(eventRowId, {
       status: MetaFunnelEventStatus.DEAD_LETTER,
       lastError: errorMessage,

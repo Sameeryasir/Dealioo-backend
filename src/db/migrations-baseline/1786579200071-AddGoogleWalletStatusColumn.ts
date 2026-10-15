@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddGoogleWalletStatusColumn1786579200071
-  implements MigrationInterface
-{
+export class AddGoogleWalletStatusColumn1786579200071 implements MigrationInterface {
   name = 'AddGoogleWalletStatusColumn1786579200071';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

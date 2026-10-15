@@ -159,7 +159,9 @@ export class ProductMetaTrackingService {
       };
     } catch (err) {
       if (this.isUniqueViolation(err)) {
-        const winner = await this.attributionRepo.findOne({ where: { userId } });
+        const winner = await this.attributionRepo.findOne({
+          where: { userId },
+        });
         return {
           claimed: false,
           alreadyHad: true,
@@ -222,8 +224,8 @@ export class ProductMetaTrackingService {
       const metaResponse = await this.capiService.sendEvent(row);
       await this.eventsRepo.update(row.id, {
         status: MetaProductEventStatus.SENT,
-        payload: payload as object,
-        metaResponse: metaResponse as object,
+        payload: payload,
+        metaResponse: metaResponse,
         retryCount: attempt,
         lastError: null,
         sentAt: new Date(),
@@ -237,8 +239,8 @@ export class ProductMetaTrackingService {
 
       await this.eventsRepo.update(row.id, {
         status: MetaProductEventStatus.FAILED,
-        payload: payload as object,
-        metaResponse: metaResponse as object | null,
+        payload: payload,
+        metaResponse: metaResponse,
         retryCount: attempt,
         lastError: message,
       });
@@ -254,7 +256,10 @@ export class ProductMetaTrackingService {
     }
   }
 
-  async markDeadLetter(eventRowId: string, errorMessage: string): Promise<void> {
+  async markDeadLetter(
+    eventRowId: string,
+    errorMessage: string,
+  ): Promise<void> {
     await this.eventsRepo.update(eventRowId, {
       status: MetaProductEventStatus.DEAD_LETTER,
       lastError: errorMessage,

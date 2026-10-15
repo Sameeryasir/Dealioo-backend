@@ -12,7 +12,6 @@ export type AutomationEmailTemplateProps = {
   googleWalletSaveUrl?: string;
 };
 
-
 export type AutomationEmailRenderResult = {
   html: string;
   text: string;

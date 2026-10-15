@@ -47,7 +47,9 @@ export class UpdateBillingDetailsDto {
   name?: string;
 
   @IsOptional()
-  @ValidateIf((_, value) => typeof value === 'string' && value.trim().length > 0)
+  @ValidateIf(
+    (_, value) => typeof value === 'string' && value.trim().length > 0,
+  )
   @IsEmail()
   @MaxLength(255)
   email?: string;

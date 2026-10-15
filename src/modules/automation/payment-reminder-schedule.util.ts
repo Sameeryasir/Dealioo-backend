@@ -56,10 +56,7 @@ export function resolveCronPeriodMinutesFromConfig(
     .trim()
     .toLowerCase();
   const raw =
-    config.interval ??
-    config.intervalMinutes ??
-    config.value ??
-    config.amount;
+    config.interval ?? config.intervalMinutes ?? config.value ?? config.amount;
   const amount = Math.floor(Number(raw));
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
@@ -79,27 +76,20 @@ export function resolveCronPeriodMinutesFromConfig(
   ) {
     // Convert sub-minute units up to whole minutes (ceil so tiny waits still compare safely)
     const ms =
-      unit === 'ms' || unit.startsWith('millisecond')
-        ? amount
-        : amount * 1000;
+      unit === 'ms' || unit.startsWith('millisecond') ? amount : amount * 1000;
     return Math.max(1, Math.ceil(ms / 60_000));
   }
 
   return amount;
 }
 
-export function findMaxFixedWaitDelayMinutes(
-  nodes: AutomationNode[],
-): number {
+export function findMaxFixedWaitDelayMinutes(nodes: AutomationNode[]): number {
   let maxWait = 0;
   for (const node of nodes) {
     if (node.type !== AutomationNodeType.WAIT) {
       continue;
     }
-    maxWait = Math.max(
-      maxWait,
-      resolveWaitDelayMinutes(node.config ?? {}),
-    );
+    maxWait = Math.max(maxWait, resolveWaitDelayMinutes(node.config ?? {}));
   }
   return maxWait;
 }
@@ -118,9 +108,7 @@ export function assertPaymentReminderScheduleValid(
     return;
   }
 
-  const cronMinutes = resolveCronPeriodMinutesFromConfig(
-    cronNode.config ?? {},
-  );
+  const cronMinutes = resolveCronPeriodMinutesFromConfig(cronNode.config ?? {});
   if (cronMinutes == null || cronMinutes <= 0) {
     return;
   }

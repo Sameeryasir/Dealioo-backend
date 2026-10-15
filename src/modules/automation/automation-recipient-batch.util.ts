@@ -38,7 +38,9 @@ export function sliceIntoSendChunks<T>(
   return chunks;
 }
 
-export async function forEachRecipientPageChunks<T extends RecipientPageItem>(options: {
+export async function forEachRecipientPageChunks<
+  T extends RecipientPageItem,
+>(options: {
   fetchPage: (afterCustomerId: number, limit: number) => Promise<T[]>;
   onChunk: (
     chunk: T[],
@@ -48,12 +50,19 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
   chunkSize?: number;
   seedPage?: T[];
   startAfterCustomerId?: number;
-}): Promise<{ totalChunks: number; stoppedEarly: boolean; lastCustomerId: number }> {
+}): Promise<{
+  totalChunks: number;
+  stoppedEarly: boolean;
+  lastCustomerId: number;
+}> {
   const pageSize = Math.max(
     1,
     options.pageSize ?? AUTOMATION_RECIPIENT_PAGE_SIZE,
   );
-  const chunkSize = Math.max(1, options.chunkSize ?? AUTOMATION_SEND_CHUNK_SIZE);
+  const chunkSize = Math.max(
+    1,
+    options.chunkSize ?? AUTOMATION_SEND_CHUNK_SIZE,
+  );
 
   let afterCustomerId = Math.max(0, options.startAfterCustomerId ?? 0);
   let chunkIndex = 0;
@@ -65,7 +74,8 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
 
   while (true) {
     if (!page) {
-      page = await (nextPagePromise ?? options.fetchPage(afterCustomerId, pageSize));
+      page = await (nextPagePromise ??
+        options.fetchPage(afterCustomerId, pageSize));
       nextPagePromise = undefined;
     }
 
@@ -95,8 +105,7 @@ export async function forEachRecipientPageChunks<T extends RecipientPageItem>(op
       }
 
       const chunkWithIds = chunk.filter(
-        (recipient) =>
-          recipient.customerId != null && recipient.customerId > 0,
+        (recipient) => recipient.customerId != null && recipient.customerId > 0,
       );
       const result = await options.onChunk(chunkWithIds, {
         chunkIndex,

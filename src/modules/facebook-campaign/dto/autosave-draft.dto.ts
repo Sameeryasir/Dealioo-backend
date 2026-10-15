@@ -1,11 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  IsArray,
-  IsInt,
-  IsObject,
-  IsOptional,
-  Min,
-} from 'class-validator';
+import { IsArray, IsInt, IsObject, IsOptional, Min } from 'class-validator';
 
 export class AutosaveDraftDto {
   @Type(() => Number)

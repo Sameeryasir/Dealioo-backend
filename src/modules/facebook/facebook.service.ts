@@ -14,7 +14,10 @@ import {
   MetaOAuthSessionStatus,
 } from '../../db/entities/meta-oauth-session.entity';
 import { User } from '../../db/entities/user.entity';
-import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import {
@@ -70,7 +73,6 @@ import {
 } from './meta-oauth-selectable-scopes';
 const FACEBOOK_GRAPH = 'https://graph.facebook.com/v24.0';
 const FACEBOOK_OAUTH_DIALOG = 'https://www.facebook.com/v24.0/dialog/oauth';
-
 
 type FacebookTokenResponse = {
   access_token?: string;
@@ -135,8 +137,7 @@ function withMetaInsightsPeriodParams(
 ): Record<string, string> {
   return { ...base, ...period.graphParams };
 }
-const META_CAMPAIGN_FIELDS =
-  'id,name,status,effective_status,daily_budget';
+const META_CAMPAIGN_FIELDS = 'id,name,status,effective_status,daily_budget';
 const META_CAMPAIGN_INSIGHT_FIELDS =
   'campaign_id,spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type';
 const META_SINGLE_CAMPAIGN_INSIGHT_FIELDS =
@@ -526,13 +527,12 @@ export class FacebookService {
         period.snapshotKey,
       );
       if (snapshot && (!includeInsights || snapshot.includeInsights)) {
-        const payload = snapshot.payload as unknown as FacebookAdCampaignStatsDto;
+        const payload =
+          snapshot.payload as unknown as FacebookAdCampaignStatsDto;
         const missingCampaignDaily =
           includeInsights &&
           Array.isArray(payload.campaigns) &&
-          payload.campaigns.some(
-            (c) => !Array.isArray((c as FacebookAdCampaignDto).dailyInsights),
-          );
+          payload.campaigns.some((c) => !Array.isArray(c.dailyInsights));
 
         if (missingCampaignDaily) {
           this.logger.log(
@@ -733,10 +733,7 @@ export class FacebookService {
 
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const page = Math.min(
-      totalPages,
-      Math.max(1, options?.page ?? 1),
-    );
+    const page = Math.min(totalPages, Math.max(1, options?.page ?? 1));
     const start = (page - 1) * pageSize;
 
     const pagination: FacebookAdCampaignPaginationDto = {
@@ -839,7 +836,7 @@ export class FacebookService {
       }
     }
     if (!primaryActionType && actionTotals.size > 0) {
-      const [type, value] = [...actionTotals.entries()][0]!;
+      const [type, value] = [...actionTotals.entries()][0];
       primaryActionType = type;
       primaryActionValue = String(value);
     }
@@ -919,8 +916,10 @@ export class FacebookService {
     );
 
     if (campaigns.length > 0) {
-      const thumbnailsByCampaignId =
-        await this.fetchAccountCampaignThumbnails(adAccountId, accessToken);
+      const thumbnailsByCampaignId = await this.fetchAccountCampaignThumbnails(
+        adAccountId,
+        accessToken,
+      );
       campaigns = campaigns.map((c) => ({
         ...c,
         imageUrl: thumbnailsByCampaignId.get(c.id) ?? null,
@@ -1066,12 +1065,11 @@ export class FacebookService {
         params.after = after;
       }
 
-      const response =
-        await this.graphGetWithToken<FacebookCampaignsResponse>(
-          `/${adAccountId}/campaigns`,
-          accessToken,
-          params,
-        );
+      const response = await this.graphGetWithToken<FacebookCampaignsResponse>(
+        `/${adAccountId}/campaigns`,
+        accessToken,
+        params,
+      );
 
       const batch = response.data ?? [];
       rows.push(...batch);
@@ -1352,9 +1350,7 @@ export class FacebookService {
       });
       const creative = response.data?.[0]?.creative;
       return (
-        creative?.image_url?.trim() ||
-        creative?.thumbnail_url?.trim() ||
-        null
+        creative?.image_url?.trim() || creative?.thumbnail_url?.trim() || null
       );
     } catch (err) {
       this.logger.warn(
@@ -1421,7 +1417,7 @@ export class FacebookService {
           const current = nextIndex;
           nextIndex += 1;
           if (current >= items.length) return;
-          results[current] = await mapper(items[current]!);
+          results[current] = await mapper(items[current]);
         }
       },
     );
@@ -1466,9 +1462,9 @@ export class FacebookService {
 
     const connected = Boolean(
       business.metaUserId?.trim() &&
-        business.metaAccessToken?.trim() &&
-        business.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
-        hasAdsScope,
+      business.metaAccessToken?.trim() &&
+      business.metaConnectionStatus !== FacebookConnectionStatus.FAILED &&
+      hasAdsScope,
     );
 
     return {
@@ -1732,7 +1728,10 @@ export class FacebookService {
 
     const byId = new Map<string, FacebookAdPixelDto>();
 
-    const fetchPixelsForAccount = async (adAccountId: string, accountName: string | null) => {
+    const fetchPixelsForAccount = async (
+      adAccountId: string,
+      accountName: string | null,
+    ) => {
       try {
         const response = await this.graphGetWithToken<{
           data?: Array<{ id?: string | number; name?: string }>;
@@ -1878,9 +1877,7 @@ export class FacebookService {
       metadata: { connectedAccount: 'Meta Ads was removed' },
     });
 
-    this.logger.log(
-      `Facebook disconnected for business ${businessId}`,
-    );
+    this.logger.log(`Facebook disconnected for business ${businessId}`);
 
     return { disconnected: true };
   }
@@ -1978,8 +1975,7 @@ export class FacebookService {
 
   private getAppId(): string | undefined {
     return (
-      process.env.FACEBOOK_APP_ID?.trim() ||
-      process.env.META_APP_ID?.trim()
+      process.env.FACEBOOK_APP_ID?.trim() || process.env.META_APP_ID?.trim()
     );
   }
 
@@ -2217,13 +2213,18 @@ export class FacebookService {
   private async fetchAdAccountMeta(
     adAccountId: string,
     accessToken: string,
-  ): Promise<{ name: string | null; currency: string | null; timezoneName: string | null }> {
+  ): Promise<{
+    name: string | null;
+    currency: string | null;
+    timezoneName: string | null;
+  }> {
     try {
-      const response = await this.graphGetWithToken<FacebookAdAccountMetaResponse>(
-        `/${adAccountId}`,
-        accessToken,
-        { fields: 'name,currency,timezone_name' },
-      );
+      const response =
+        await this.graphGetWithToken<FacebookAdAccountMetaResponse>(
+          `/${adAccountId}`,
+          accessToken,
+          { fields: 'name,currency,timezone_name' },
+        );
 
       return {
         name: response.name ?? null,

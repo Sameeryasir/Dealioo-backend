@@ -1,4 +1,7 @@
-import { MetaCampaignObjective, MetaOptimizationGoal } from './meta-campaign.constants';
+import {
+  MetaCampaignObjective,
+  MetaOptimizationGoal,
+} from './meta-campaign.constants';
 
 export const OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   MetaCampaignObjective,
@@ -42,9 +45,7 @@ export function isOptimizationGoalValidForObjective(
   objective: MetaCampaignObjective,
   optimizationGoal: MetaOptimizationGoal,
 ): boolean {
-  return OPTIMIZATION_GOALS_BY_OBJECTIVE[objective]?.includes(
-    optimizationGoal,
-  );
+  return OPTIMIZATION_GOALS_BY_OBJECTIVE[objective]?.includes(optimizationGoal);
 }
 
 export function defaultOptimizationGoalForObjective(

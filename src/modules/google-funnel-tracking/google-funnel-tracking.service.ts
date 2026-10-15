@@ -110,7 +110,7 @@ export class GoogleFunnelTrackingService {
         googleResponse: {
           skipped: true,
           reason: 'analytics_only_or_missing_gclid_label',
-        } as object,
+        },
       });
       return;
     }
@@ -150,7 +150,7 @@ export class GoogleFunnelTrackingService {
         googleResponse: {
           skipped: true,
           reason: 'analytics_only_or_missing_gclid_label',
-        } as object,
+        },
       });
       return;
     }
@@ -193,8 +193,8 @@ export class GoogleFunnelTrackingService {
       await this.eventsRepo.update(row.id, {
         status: GoogleFunnelEventStatus.SENT,
         conversionAction,
-        payload: payload as object,
-        googleResponse: googleResponse as object,
+        payload: payload,
+        googleResponse: googleResponse,
         retryCount: attempt,
         lastError: null,
         sentAt: new Date(),
@@ -209,8 +209,8 @@ export class GoogleFunnelTrackingService {
       await this.eventsRepo.update(row.id, {
         status: GoogleFunnelEventStatus.FAILED,
         conversionAction,
-        payload: payload as object,
-        googleResponse: googleResponse as object | null,
+        payload: payload,
+        googleResponse: googleResponse,
         retryCount: attempt,
         lastError: message,
       });
@@ -226,7 +226,10 @@ export class GoogleFunnelTrackingService {
     }
   }
 
-  async markDeadLetter(eventRowId: string, errorMessage: string): Promise<void> {
+  async markDeadLetter(
+    eventRowId: string,
+    errorMessage: string,
+  ): Promise<void> {
     await this.eventsRepo.update(eventRowId, {
       status: GoogleFunnelEventStatus.DEAD_LETTER,
       lastError: errorMessage,

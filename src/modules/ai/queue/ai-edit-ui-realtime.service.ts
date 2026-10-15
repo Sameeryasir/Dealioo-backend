@@ -29,7 +29,7 @@ export class AiEditUiRealtimeService {
       await this.pusherService.triggerRaw(
         pusherBusinessAiEditUiChannel(payload.businessId),
         PUSHER_EVENT.AI_EDIT_UI_RESULT,
-        payload as unknown as Record<string, unknown>,
+        payload,
       );
     } catch (err) {
       this.logger.warn(

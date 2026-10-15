@@ -2,7 +2,9 @@
 export function resolveWaitDelayMinutes(
   config: Record<string, unknown>,
 ): number {
-  const waitMode = String(config.waitMode ?? '').trim().toLowerCase();
+  const waitMode = String(config.waitMode ?? '')
+    .trim()
+    .toLowerCase();
   if (
     waitMode === 'until_customer_visited' ||
     waitMode === 'until_visit_date' ||
@@ -12,7 +14,9 @@ export function resolveWaitDelayMinutes(
     return 0;
   }
 
-  const untilLabel = String(config.untilLabel ?? '').trim().toLowerCase();
+  const untilLabel = String(config.untilLabel ?? '')
+    .trim()
+    .toLowerCase();
   if (untilLabel.includes('visit date')) {
     return 0;
   }
@@ -35,7 +39,9 @@ export function resolveWaitDelayMinutes(
     return 0;
   }
 
-  const unit = String(config.unit ?? 'minutes').trim().toLowerCase();
+  const unit = String(config.unit ?? 'minutes')
+    .trim()
+    .toLowerCase();
   if (unit.startsWith('hour')) {
     return delay * 60;
   }
@@ -103,7 +109,9 @@ function parseDayOfWeek(config: Record<string, unknown>): number | null {
     .trim()
     .toLowerCase();
   if (!raw) {
-    const label = String(config.untilLabel ?? '').trim().toLowerCase();
+    const label = String(config.untilLabel ?? '')
+      .trim()
+      .toLowerCase();
     const days = [
       'sunday',
       'monday',
@@ -134,7 +142,7 @@ function parseDayOfWeek(config: Record<string, unknown>): number | null {
     sat: 6,
   };
   if (raw in named) {
-    return named[raw]!;
+    return named[raw];
   }
   const asNum = Number(raw);
   if (Number.isInteger(asNum) && asNum >= 0 && asNum <= 6) {
@@ -166,8 +174,12 @@ export function resolveWaitResumeAt(
     return null;
   }
 
-  const waitMode = String(config.waitMode ?? '').trim().toLowerCase();
-  const untilLabel = String(config.untilLabel ?? '').trim().toLowerCase();
+  const waitMode = String(config.waitMode ?? '')
+    .trim()
+    .toLowerCase();
+  const untilLabel = String(config.untilLabel ?? '')
+    .trim()
+    .toLowerCase();
   const clock = parseClockTime(config);
 
   if (
@@ -191,7 +203,10 @@ export function resolveWaitResumeAt(
   if (
     waitMode === 'until_time' ||
     untilLabel.includes('next day') ||
-    (clock && (untilLabel.includes('at ') || untilLabel.includes('am') || untilLabel.includes('pm')))
+    (clock &&
+      (untilLabel.includes('at ') ||
+        untilLabel.includes('am') ||
+        untilLabel.includes('pm')))
   ) {
     if (!clock) {
       return null;

@@ -57,7 +57,9 @@ export class AutomationGraphValidatorService {
       return { valid: false, issues };
     }
 
-    const triggerNodes = nodes.filter((node) => node.type === AutomationNodeType.TRIGGER);
+    const triggerNodes = nodes.filter(
+      (node) => node.type === AutomationNodeType.TRIGGER,
+    );
     if (triggerNodes.length === 0) {
       issues.push({
         code: 'MISSING_TRIGGER',
@@ -100,9 +102,9 @@ export class AutomationGraphValidatorService {
       );
     }
 
-    const registeredMissing = this.nodeRegistry.assertAllTypesRegistered(
-      [...new Set(nodes.map((node) => node.type))],
-    );
+    const registeredMissing = this.nodeRegistry.assertAllTypesRegistered([
+      ...new Set(nodes.map((node) => node.type)),
+    ]);
     for (const type of registeredMissing) {
       if (!(Object.values(AutomationNodeType) as string[]).includes(type)) {
         issues.push({
@@ -179,15 +181,17 @@ export class AutomationGraphValidatorService {
     automationId: number,
     trigger: AutomationTrigger,
   ): Promise<void> {
-    return this.validateAutomationGraph(automationId, trigger).then((result) => {
-      if (result.valid) {
-        return;
-      }
-      const summary = result.issues.map((issue) => issue.message).join(' ');
-      throw new BadRequestException(
-        `Automation graph is invalid: ${summary}`,
-      );
-    });
+    return this.validateAutomationGraph(automationId, trigger).then(
+      (result) => {
+        if (result.valid) {
+          return;
+        }
+        const summary = result.issues.map((issue) => issue.message).join(' ');
+        throw new BadRequestException(
+          `Automation graph is invalid: ${summary}`,
+        );
+      },
+    );
   }
 
   private validateConditionNode(
@@ -209,7 +213,9 @@ export class AutomationGraphValidatorService {
       .filter((branch): branch is string => branch != null);
 
     if (outgoing.length > 1 && branches.length < outgoing.length) {
-      const targets = new Set(outgoing.map((connection) => connection.targetNodeId));
+      const targets = new Set(
+        outgoing.map((connection) => connection.targetNodeId),
+      );
       if (targets.size < outgoing.length) {
         issues.push({
           code: 'CONDITION_AMBIGUOUS_BRANCHES',
@@ -253,7 +259,10 @@ export class AutomationGraphValidatorService {
   }
 
   private isTerminalNode(node: AutomationNode): boolean {
-    return !TRIGGER_NODE_TYPES.has(node.type) && node.type !== AutomationNodeType.WAIT;
+    return (
+      !TRIGGER_NODE_TYPES.has(node.type) &&
+      node.type !== AutomationNodeType.WAIT
+    );
   }
 
   private findUnreachableNodeIds(

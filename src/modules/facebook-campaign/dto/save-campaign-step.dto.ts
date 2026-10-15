@@ -47,7 +47,10 @@ export class SaveCampaignStepDto {
   @IsEnum(MetaBudgetStrategy)
   budgetStrategy: MetaBudgetStrategy;
 
-  @ValidateIf((dto: SaveCampaignStepDto) => dto.budgetStrategy === MetaBudgetStrategy.CAMPAIGN)
+  @ValidateIf(
+    (dto: SaveCampaignStepDto) =>
+      dto.budgetStrategy === MetaBudgetStrategy.CAMPAIGN,
+  )
   @IsEnum(MetaAdSetBudgetType)
   campaignBudgetType?: MetaAdSetBudgetType;
 
@@ -71,7 +74,10 @@ export class SaveCampaignStepDto {
   @Max(1_000_000)
   campaignLifetimeBudget?: number;
 
-  @ValidateIf((dto: SaveCampaignStepDto) => dto.budgetStrategy === MetaBudgetStrategy.CAMPAIGN)
+  @ValidateIf(
+    (dto: SaveCampaignStepDto) =>
+      dto.budgetStrategy === MetaBudgetStrategy.CAMPAIGN,
+  )
   @IsEnum(MetaBidStrategy)
   campaignBidStrategy?: MetaBidStrategy;
 

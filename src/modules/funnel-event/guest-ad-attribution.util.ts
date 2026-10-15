@@ -53,7 +53,8 @@ export function attributionFromUtm(params: {
     };
   }
 
-  const labelSource = params.utmSource?.trim() || params.utmMedium?.trim() || 'Ad';
+  const labelSource =
+    params.utmSource?.trim() || params.utmMedium?.trim() || 'Ad';
   return {
     source: 'utm',
     label: labelSource,

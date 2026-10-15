@@ -15,9 +15,7 @@ describe('stripe-oauth-state', () => {
   it('rejects tampered state', () => {
     const state = createStripeOAuthState(42, secret);
     const tampered = state.replace(/^42/, '99');
-    expect(() => parseStripeOAuthState(tampered, secret)).toThrow(
-      /signature/i,
-    );
+    expect(() => parseStripeOAuthState(tampered, secret)).toThrow(/signature/i);
   });
 
   it('rejects bare businessId state', () => {

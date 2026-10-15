@@ -23,7 +23,7 @@ export class AutomationExecutionRecorderService {
     });
     const snapshot = this.eventService.buildSnapshotFromExecution({
       ...refreshed,
-      executionContext: context as Record<string, unknown>,
+      executionContext: context,
     });
 
     await this.eventService.appendEvent({

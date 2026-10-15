@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddMetaFunnelEventsCapiColumns1786579200093
-  implements MigrationInterface
-{
+export class AddMetaFunnelEventsCapiColumns1786579200093 implements MigrationInterface {
   name = 'AddMetaFunnelEventsCapiColumns1786579200093';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

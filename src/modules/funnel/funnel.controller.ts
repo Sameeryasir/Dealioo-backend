@@ -97,9 +97,8 @@ export class FunnelController {
       return undefined;
     }
 
-    const funnel = await this.funnelService.getFunnelBodyByCampaignId(
-      campaignId,
-    );
+    const funnel =
+      await this.funnelService.getFunnelBodyByCampaignId(campaignId);
     if (!funnel) {
       throw new NotFoundException('No funnel found for this campaign.');
     }

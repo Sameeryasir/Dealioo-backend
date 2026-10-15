@@ -7,7 +7,8 @@ function extractStatusCode(err: unknown): number | null {
   };
   if (typeof anyErr.status === 'number') return anyErr.status;
   if (typeof anyErr.statusCode === 'number') return anyErr.statusCode;
-  if (typeof anyErr.response?.status === 'number') return anyErr.response.status;
+  if (typeof anyErr.response?.status === 'number')
+    return anyErr.response.status;
   return null;
 }
 

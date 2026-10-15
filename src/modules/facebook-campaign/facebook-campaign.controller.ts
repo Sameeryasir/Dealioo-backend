@@ -218,11 +218,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('draftId') draftId: string,
   ): Promise<EnqueueMetaPublishResponseDto> {
-    return this.adPublishService.enqueuePublish(
-      req.user,
-      businessId,
-      draftId,
-    );
+    return this.adPublishService.enqueuePublish(req.user, businessId, draftId);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -232,11 +228,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Body() body: PresignMediaDto,
   ): Promise<PresignMediaResponseDto> {
-    return this.mediaService.createPresignedUpload(
-      req.user,
-      businessId,
-      body,
-    );
+    return this.mediaService.createPresignedUpload(req.user, businessId, body);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -246,11 +238,7 @@ export class FacebookCampaignController {
     @Param('businessId', ParseIntPipe) businessId: number,
     @Param('mediaId') mediaId: string,
   ): Promise<MetaCampaignMedia> {
-    return this.mediaService.completeUpload(
-      req.user,
-      businessId,
-      mediaId,
-    );
+    return this.mediaService.completeUpload(req.user, businessId, mediaId);
   }
 
   @UseGuards(AuthGuard('jwt'))
@@ -259,7 +247,12 @@ export class FacebookCampaignController {
     FileInterceptor(
       'file',
       createUploadMulterOptions(CAMPAIGNS_UPLOAD_SUBDIR, {
-        allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        allowedMimeTypes: [
+          'image/png',
+          'image/jpeg',
+          'image/webp',
+          'image/gif',
+        ],
         fileFilterErrorMessage:
           'Only image files are allowed (PNG, JPEG, WebP, GIF).',
       }),
@@ -385,9 +378,6 @@ export class FacebookCampaignController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookCampaign[]> {
-    return this.facebookCampaignService.listForBusiness(
-      req.user,
-      businessId,
-    );
+    return this.facebookCampaignService.listForBusiness(req.user, businessId);
   }
 }

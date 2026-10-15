@@ -1,7 +1,17 @@
 import type { BusinessMemberPermission } from '../member/member.constants';
 
 export const BUSINESS_PERMISSION_ALIASES = {
-  'campaign.view': ['campaigns', 'campaigns_view', 'campaigns_create', 'campaigns_update', 'campaigns_edit', 'campaigns_delete', 'campaigns_guests', 'campaigns_orders', 'campaigns_reviews'],
+  'campaign.view': [
+    'campaigns',
+    'campaigns_view',
+    'campaigns_create',
+    'campaigns_update',
+    'campaigns_edit',
+    'campaigns_delete',
+    'campaigns_guests',
+    'campaigns_orders',
+    'campaigns_reviews',
+  ],
   'campaign.create': ['campaigns_create', 'campaigns'],
   'campaign.update': ['campaigns_edit', 'campaigns_update', 'campaigns'],
   'campaign.delete': ['campaigns_delete', 'campaigns'],
@@ -12,7 +22,12 @@ export const BUSINESS_PERMISSION_ALIASES = {
   'staff.remove': ['members'],
   'branch.manage': ['settings'],
   'twilio.manage': ['settings'],
-  'google_ads.manage': ['google_campaigns_view', 'google_campaigns_create', 'google_campaigns_delete', 'campaigns'],
+  'google_ads.manage': [
+    'google_campaigns_view',
+    'google_campaigns_create',
+    'google_campaigns_delete',
+    'campaigns',
+  ],
   'billing.manage': ['settings'],
 } as const satisfies Record<string, readonly BusinessMemberPermission[]>;
 

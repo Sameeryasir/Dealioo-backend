@@ -70,7 +70,10 @@ export function peekStripeOAuthStateBusinessId(
 }
 
 function signPayload(payload: string, secret: string): string {
-  return createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+  return createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex')
+    .slice(0, 32);
 }
 
 function safeEqual(a: string, b: string): boolean {

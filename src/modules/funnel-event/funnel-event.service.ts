@@ -7,7 +7,13 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
-import { DataSource, In, Repository, type SelectQueryBuilder, type ObjectLiteral } from 'typeorm';
+import {
+  DataSource,
+  In,
+  Repository,
+  type SelectQueryBuilder,
+  type ObjectLiteral,
+} from 'typeorm';
 import {
   Campaign,
   CampaignPublicationStatus,
@@ -30,6 +36,7 @@ import {
 } from '../../common/money.util';
 import {
   DASHBOARD_CACHE_TTL_MS,
+  DASHBOARD_OVERVIEW_CACHE_TTL_MS,
   dashboardTtlCache,
 } from '../../common/ttl-cache';
 import {
@@ -1211,8 +1218,9 @@ export class FunnelEventService {
       revenue: number;
     }[];
   }> {
+    // Inline on miss so peak-month highlight never waits on the Bull queue (25s cap).
     const cacheKey = `funnel-stats-monthly-v6:${funnelId}:${monthCount}`;
-    return this.funnelStatsQueueService.getOrCompute(
+    return this.funnelStatsQueueService.getCachedOrComputeInline(
       {
         kind: FunnelStatsJobName.STATS_MONTHLY,
         cacheKey,
@@ -1524,7 +1532,7 @@ export class FunnelEventService {
     const currentStatsKey = `funnel-stats-range-v7:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
     const adSourcesKey = `funnel-guest-ad-sources-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
     const previousStatsKey = hasPrevious
-      ? `funnel-stats-range-v7:${funnelId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`
+      ? `funnel-stats-range-v7:${funnelId}:${previousFrom.toISOString()}:${previousTo.toISOString()}:${chartTz}`
       : null;
 
     const [stats, analytics, adSources, previousStats, previousAnalytics] =
@@ -1568,15 +1576,15 @@ export class FunnelEventService {
                 kind: FunnelStatsJobName.STATS_RANGE,
                 cacheKey: previousStatsKey,
                 funnelId,
-                fromIso: previousFrom!.toISOString(),
-                toIso: previousTo!.toISOString(),
+                fromIso: previousFrom.toISOString(),
+                toIso: previousTo.toISOString(),
                 timeZone: chartTz,
               },
               () =>
                 this.computeStatsForRange(
                   funnelId,
-                  previousFrom!,
-                  previousTo!,
+                  previousFrom,
+                  previousTo,
                   chartTz,
                 ),
             )
@@ -1584,8 +1592,8 @@ export class FunnelEventService {
         hasPrevious
           ? this.funnelAnalyticsService.getAnalyticsOverviewForRange(
               funnelId,
-              previousFrom!,
-              previousTo!,
+              previousFrom,
+              previousTo,
               chartTz,
             )
           : Promise.resolve(null),
@@ -1599,8 +1607,8 @@ export class FunnelEventService {
       previous:
         hasPrevious && previousStats != null && previousAnalytics != null
           ? {
-              from: previousFrom!.toISOString(),
-              to: previousTo!.toISOString(),
+              from: previousFrom.toISOString(),
+              to: previousTo.toISOString(),
               stats: previousStats,
               analytics: previousAnalytics,
             }
@@ -1623,32 +1631,38 @@ export class FunnelEventService {
       previousFrom.getTime() <= previousTo.getTime();
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
-    const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
+    const previousFromIso = hasPrevious ? previousFrom.toISOString() : '';
+    const previousToIso = hasPrevious ? previousTo.toISOString() : '';
+    // --- Campaign dashboard perf ---
+    // What: Inline compute + longer TTL (no Bull waitUntilFinished for Overview).
+    // Why: Cold opens were waiting up to FUNNEL_STATS_WAIT_MS on the queue.
     const cacheKey = `funnel-dashboard-summary-v4:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
-    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
-      this.funnelStatsQueueService.getOrCompute(
-        {
-          kind: FunnelStatsJobName.DASHBOARD_SUMMARY,
-          cacheKey,
-          funnelId,
-          fromIso,
-          toIso,
-          timeZone: chartTz,
-          previousFromIso: hasPrevious ? previousFromIso : undefined,
-          previousToIso: hasPrevious ? previousToIso : undefined,
-        },
-        () =>
-          this.computeDashboardSummaryForRange(
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_OVERVIEW_CACHE_TTL_MS,
+      () =>
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.DASHBOARD_SUMMARY,
+            cacheKey,
             funnelId,
-            from,
-            to,
-            chartTz,
-            previousFrom,
-            previousTo,
-          ),
-      ),
+            fromIso,
+            toIso,
+            timeZone: chartTz,
+            previousFromIso: hasPrevious ? previousFromIso : undefined,
+            previousToIso: hasPrevious ? previousToIso : undefined,
+          },
+          () =>
+            this.computeDashboardSummaryForRange(
+              funnelId,
+              from,
+              to,
+              chartTz,
+              previousFrom,
+              previousTo,
+            ),
+        ),
     );
   }
 
@@ -1763,11 +1777,7 @@ export class FunnelEventService {
     ] = await Promise.all([
       this.computeDashboardCoreTotals(funnelId, from, to),
       hasPrevious
-        ? this.computeDashboardCoreTotals(
-            funnelId,
-            previousFrom!,
-            previousTo!,
-          )
+        ? this.computeDashboardCoreTotals(funnelId, previousFrom, previousTo)
         : Promise.resolve(null),
       this.countFunnelEventAdSources({
         funnelId,
@@ -1841,7 +1851,10 @@ export class FunnelEventService {
         google: number;
         data: Array<{ month: string; meta: number; google: number }>;
       },
-      inStore: { total: number; data: Array<{ month: string; inStore: number }> },
+      inStore: {
+        total: number;
+        data: Array<{ month: string; inStore: number }>;
+      },
     ) => {
       const byMonth = new Map(
         inStore.data.map((row) => [row.month, row.inStore]),
@@ -1938,32 +1951,35 @@ export class FunnelEventService {
       previousFrom.getTime() <= previousTo.getTime();
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const previousFromIso = hasPrevious ? previousFrom!.toISOString() : '';
-    const previousToIso = hasPrevious ? previousTo!.toISOString() : '';
+    const previousFromIso = hasPrevious ? previousFrom.toISOString() : '';
+    const previousToIso = hasPrevious ? previousTo.toISOString() : '';
     const cacheKey = `funnel-dashboard-kpis-v1:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
-    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
-      this.funnelStatsQueueService.getCachedOrComputeInline(
-        {
-          kind: FunnelStatsJobName.DASHBOARD_KPIS,
-          cacheKey,
-          funnelId,
-          fromIso,
-          toIso,
-          timeZone: chartTz,
-          previousFromIso: hasPrevious ? previousFromIso : undefined,
-          previousToIso: hasPrevious ? previousToIso : undefined,
-        },
-        () =>
-          this.computeDashboardKpisForRange(
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_OVERVIEW_CACHE_TTL_MS,
+      () =>
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.DASHBOARD_KPIS,
+            cacheKey,
             funnelId,
-            from,
-            to,
-            chartTz,
-            previousFrom,
-            previousTo,
-          ),
-      ),
+            fromIso,
+            toIso,
+            timeZone: chartTz,
+            previousFromIso: hasPrevious ? previousFromIso : undefined,
+            previousToIso: hasPrevious ? previousToIso : undefined,
+          },
+          () =>
+            this.computeDashboardKpisForRange(
+              funnelId,
+              from,
+              to,
+              chartTz,
+              previousFrom,
+              previousTo,
+            ),
+        ),
     );
   }
 
@@ -2003,11 +2019,7 @@ export class FunnelEventService {
     ] = await Promise.all([
       this.computeDashboardCoreTotals(funnelId, from, to),
       hasPrevious
-        ? this.computeDashboardCoreTotals(
-            funnelId,
-            previousFrom!,
-            previousTo!,
-          )
+        ? this.computeDashboardCoreTotals(funnelId, previousFrom, previousTo)
         : Promise.resolve(null),
       this.countFunnelEventAdSources({
         funnelId,
@@ -2116,19 +2128,22 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const cacheKey = `funnel-dashboard-charts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
 
-    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
-      this.funnelStatsQueueService.getCachedOrComputeInline(
-        {
-          kind: FunnelStatsJobName.DASHBOARD_CHARTS,
-          cacheKey,
-          funnelId,
-          fromIso,
-          toIso,
-          timeZone: chartTz,
-        },
-        () =>
-          this.computeDashboardChartsForRange(funnelId, from, to, chartTz),
-      ),
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_OVERVIEW_CACHE_TTL_MS,
+      () =>
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.DASHBOARD_CHARTS,
+            cacheKey,
+            funnelId,
+            fromIso,
+            toIso,
+            timeZone: chartTz,
+          },
+          () =>
+            this.computeDashboardChartsForRange(funnelId, from, to, chartTz),
+        ),
     );
   }
 
@@ -2221,7 +2236,10 @@ export class FunnelEventService {
         google: number;
         data: Array<{ month: string; meta: number; google: number }>;
       },
-      inStore: { total: number; data: Array<{ month: string; inStore: number }> },
+      inStore: {
+        total: number;
+        data: Array<{ month: string; inStore: number }>;
+      },
     ) => {
       const byMonth = new Map(
         inStore.data.map((row) => [row.month, row.inStore]),
@@ -2333,7 +2351,7 @@ export class FunnelEventService {
 
     const visitorByMonth = new Map<string, number>();
     if (params.campaignId != null && params.campaignId > 0) {
-      const visitRows = (await this.dataSource.query(
+      const visitRows = await this.dataSource.query(
         `
           SELECT ${visitBucketSql} AS month,
                  COUNT(DISTINCT v.customer_id)::int AS "uniqueVisitors"
@@ -2346,7 +2364,7 @@ export class FunnelEventService {
           GROUP BY 1
         `,
         [params.campaignId, params.from, params.to],
-      )) as Array<{ month: string; uniqueVisitors: number }>;
+      );
 
       for (const row of visitRows) {
         visitorByMonth.set(row.month, Number(row.uniqueVisitors ?? 0));
@@ -2455,7 +2473,9 @@ export class FunnelEventService {
           .createQueryBuilder('payment')
           .select('COUNT(DISTINCT payment.customer_id)', 'uniqueVisitors')
           .where('payment.funnel_id = :funnelId', { funnelId })
-          .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
+          .andWhere('payment.status = :paid', {
+            paid: FunnelPaymentStatus.PAID,
+          })
           .andWhere('payment.customer_id IS NOT NULL')
           .andWhere(
             `(
@@ -2607,19 +2627,21 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const cacheKey = `funnel-dropoff-counts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
 
-    return dashboardTtlCache.getOrSet(cacheKey, 30_000, () =>
-      this.funnelStatsQueueService.getCachedOrComputeInline(
-        {
-          kind: FunnelStatsJobName.DROPOFF_COUNTS,
-          cacheKey,
-          funnelId,
-          fromIso,
-          toIso,
-          timeZone: chartTz,
-        },
-        () =>
-          this.computeDropoffCountsForRange(funnelId, from, to, chartTz),
-      ),
+    return dashboardTtlCache.getOrSet(
+      cacheKey,
+      DASHBOARD_OVERVIEW_CACHE_TTL_MS,
+      () =>
+        this.funnelStatsQueueService.getCachedOrComputeInline(
+          {
+            kind: FunnelStatsJobName.DROPOFF_COUNTS,
+            cacheKey,
+            funnelId,
+            fromIso,
+            toIso,
+            timeZone: chartTz,
+          },
+          () => this.computeDropoffCountsForRange(funnelId, from, to, chartTz),
+        ),
     );
   }
 
@@ -4155,7 +4177,7 @@ export class FunnelEventService {
     const dataWithAds = data.map((row) => {
       const attribution =
         row.customer?.id != null
-          ? attributionByCustomerId.get(row.customer.id) ?? null
+          ? (attributionByCustomerId.get(row.customer.id) ?? null)
           : null;
       return {
         ...row,
@@ -5098,7 +5120,9 @@ export class FunnelEventService {
         adSourceDetail: string | null;
       }>();
 
-    const customerIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
+    const customerIds = rows
+      .map((row) => Number(row.id))
+      .filter((id) => id > 0);
 
     const paidCustomerIds = new Set<number>();
     if (customerIds.length > 0) {
@@ -5157,9 +5181,7 @@ export class FunnelEventService {
                   ? 'Google'
                   : null)
             : null,
-          adSourceDetail: adSource
-            ? row.adSourceDetail?.trim() || null
-            : null,
+          adSourceDetail: adSource ? row.adSourceDetail?.trim() || null : null,
         };
       }),
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
@@ -5745,10 +5767,7 @@ export class FunnelEventService {
     )`;
     const totalsQb = this.funnelAnalyticsRepository
       .createQueryBuilder('event')
-      .select(
-        `COUNT(*) FILTER (WHERE ${resolvedSourceSql} = 'meta')`,
-        'meta',
-      )
+      .select(`COUNT(*) FILTER (WHERE ${resolvedSourceSql} = 'meta')`, 'meta')
       .addSelect(
         `COUNT(*) FILTER (WHERE ${resolvedSourceSql} = 'google')`,
         'google',

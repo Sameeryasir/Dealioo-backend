@@ -15,9 +15,7 @@ import { SidebarSectionNotifyService } from './sidebar-section-notify.service';
 
 @Injectable()
 @EventSubscriber()
-export class FunnelPaymentSidebarUnreadSubscriber
-  implements EntitySubscriberInterface<FunnelPayment>
-{
+export class FunnelPaymentSidebarUnreadSubscriber implements EntitySubscriberInterface<FunnelPayment> {
   constructor(
     dataSource: DataSource,
     private readonly sidebarNotify: SidebarSectionNotifyService,
@@ -49,7 +47,8 @@ export class FunnelPaymentSidebarUnreadSubscriber
     this.sidebarNotify.notifyOrders({
       businessId: payment.businessId,
       actorUserId: payment.paymentCollectedBy,
-      occurredAt: payment.paidAt ?? payment.paymentCollectedAt ?? payment.updatedAt,
+      occurredAt:
+        payment.paidAt ?? payment.paymentCollectedAt ?? payment.updatedAt,
     });
   }
 }

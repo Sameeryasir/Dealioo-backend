@@ -1,4 +1,3 @@
-
 export type GoogleAuthMode = 'login' | 'signup';
 
 export interface GoogleAuthProfile {

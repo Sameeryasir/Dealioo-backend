@@ -26,10 +26,7 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
     configService: ConfigService,
   ) {
     const host = configService.get<string>('REDIS_HOST', '127.0.0.1');
-    const port = parseInt(
-      configService.get<string>('REDIS_PORT', '6379'),
-      10,
-    );
+    const port = parseInt(configService.get<string>('REDIS_PORT', '6379'), 10);
     this.queueEvents = new QueueEvents(ACTIVITY_STATS_QUEUE, {
       connection: { host, port },
     });
@@ -52,7 +49,9 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
       10,
     );
     this.waitMs =
-      Number.isFinite(waitRaw) && waitRaw > 0 ? waitRaw : ACTIVITY_STATS_WAIT_MS;
+      Number.isFinite(waitRaw) && waitRaw > 0
+        ? waitRaw
+        : ACTIVITY_STATS_WAIT_MS;
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -110,7 +109,9 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
     await this.cache.set(cacheKey, value);
   }
 
-  private async computeViaQueue<T>(payload: ActivityStatsJobPayload): Promise<T> {
+  private async computeViaQueue<T>(
+    payload: ActivityStatsJobPayload,
+  ): Promise<T> {
     const job = await this.addJob(payload);
     try {
       const result = (await job.waitUntilFinished(

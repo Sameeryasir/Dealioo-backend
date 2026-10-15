@@ -9,7 +9,10 @@ import {
   CustomerJourneyEvent,
   CustomerJourneyStep,
 } from '../../db/entities/customer-journey-event.entity';
-import { CustomerVisit, CustomerVisitSource } from '../../db/entities/customer-visit.entity';
+import {
+  CustomerVisit,
+  CustomerVisitSource,
+} from '../../db/entities/customer-visit.entity';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -252,7 +255,8 @@ export class CustomerJourneyService {
     const signup = this.pickSignupStep(events);
     const payment = this.pickPaymentStep(events, params.funnelPaymentId);
     const qr = this.pickQrStepFromEventsOnly(events, params.funnelPaymentId);
-    const includeQrStep = qr.occurredAt != null || payment.source === 'funnel_track';
+    const includeQrStep =
+      qr.occurredAt != null || payment.source === 'funnel_track';
 
     return this.buildJourneyView({
       params,
@@ -304,7 +308,7 @@ export class CustomerJourneyService {
       }
       const metaPaymentId = Number(row.metadata?.funnelPaymentId);
       const metaPaymentIds = Array.isArray(row.metadata?.funnelPaymentIds)
-        ? (row.metadata!.funnelPaymentIds as unknown[]).map(Number)
+        ? (row.metadata.funnelPaymentIds as unknown[]).map(Number)
         : [];
       if (
         metaPaymentId === params.funnelPaymentId ||
@@ -345,11 +349,11 @@ export class CustomerJourneyService {
         }
         const metaPaymentId = Number(row.metadata?.funnelPaymentId);
         const metaPaymentIds = Array.isArray(row.metadata?.funnelPaymentIds)
-          ? (row.metadata!.funnelPaymentIds as unknown[]).map(Number)
+          ? (row.metadata.funnelPaymentIds as unknown[]).map(Number)
           : [];
         return (
           metaPaymentId === params.funnelPaymentId ||
-          metaPaymentIds.includes(params.funnelPaymentId!)
+          metaPaymentIds.includes(params.funnelPaymentId)
         );
       }) ?? null;
 

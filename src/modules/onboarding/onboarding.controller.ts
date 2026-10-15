@@ -61,9 +61,7 @@ export class OnboardingController {
 
   @UseGuards(JwtAuthGuard)
   @Get('plan-fit')
-  getPlanFit(
-    @Req() req: { user: { id: number } },
-  ): Promise<GetPlanFitResult> {
+  getPlanFit(@Req() req: { user: { id: number } }): Promise<GetPlanFitResult> {
     return this.onboardingService.getPlanFit(req.user.id);
   }
 

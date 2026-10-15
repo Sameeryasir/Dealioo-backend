@@ -46,8 +46,7 @@ export class GoogleCampaignAiService {
     const interests = (input.interests ?? [])
       .map((row) => row.trim())
       .filter(Boolean);
-    const goalLabel =
-      input.goalLabel?.trim() || input.goal?.trim() || 'Leads';
+    const goalLabel = input.goalLabel?.trim() || input.goal?.trim() || 'Leads';
     const gender = input.gender?.trim() || 'ALL';
 
     const prompt = [
@@ -95,7 +94,9 @@ export class GoogleCampaignAiService {
     } catch (error) {
       if (error instanceof ServiceUnavailableException) throw error;
       const message =
-        error instanceof Error ? error.message : 'AI keyword generation failed.';
+        error instanceof Error
+          ? error.message
+          : 'AI keyword generation failed.';
       throw new ServiceUnavailableException(message);
     }
 

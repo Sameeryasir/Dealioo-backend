@@ -15,7 +15,9 @@ async function bootstrap() {
   app.use((req, res, next) => {
     const path = req.path;
     if (path === '/auth/google' || path === '/auth/google/callback') {
-      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      const query = req.url.includes('?')
+        ? req.url.slice(req.url.indexOf('?'))
+        : '';
       res.redirect(307, `/api${path}${query}`);
       return;
     }

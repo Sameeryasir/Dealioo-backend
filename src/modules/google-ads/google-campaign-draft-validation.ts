@@ -51,7 +51,9 @@ function assertRequiredStepsCompleted(
   errors: GoogleDraftValidationError[],
 ): void {
   const done = new Set(completedSteps ?? []);
-  const missing = GOOGLE_REQUIRED_PUBLISH_STEPS.filter((step) => !done.has(step));
+  const missing = GOOGLE_REQUIRED_PUBLISH_STEPS.filter(
+    (step) => !done.has(step),
+  );
   if (missing.length > 0) {
     errors.push({
       step: missing[0],
@@ -349,7 +351,8 @@ export function validateGoogleDraftForPublish(
       errors.push({
         step: 7,
         field: 'sitelinks',
-        message: 'Enabled sitelinks need a valid URL that begins with https://.',
+        message:
+          'Enabled sitelinks need a valid URL that begins with https://.',
       });
       break;
     }
@@ -369,7 +372,8 @@ export function validateGoogleDraftForPublish(
     errors.push({
       step: 9,
       field: 'finalUrl',
-      message: 'Ad final URL should use the same website domain as your sales site.',
+      message:
+        'Ad final URL should use the same website domain as your sales site.',
     });
   }
 

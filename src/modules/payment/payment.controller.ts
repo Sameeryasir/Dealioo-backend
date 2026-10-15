@@ -87,8 +87,7 @@ export class PaymentController {
     @Query() query: GetFunnelOrdersQueryDto,
     @Req() req: AuthRequest,
   ) {
-    const businessId =
-      await this.paymentService.getFunnelBusinessId(funnelId);
+    const businessId = await this.paymentService.getFunnelBusinessId(funnelId);
     await this.businessAccessService.assertAnyPermission(
       req.user,
       businessId,
@@ -109,8 +108,7 @@ export class PaymentController {
     @Param('funnelId', ParseIntPipe) funnelId: number,
     @Req() req: AuthRequest,
   ) {
-    const businessId =
-      await this.paymentService.getFunnelBusinessId(funnelId);
+    const businessId = await this.paymentService.getFunnelBusinessId(funnelId);
     await this.businessAccessService.assertAnyPermission(
       req.user,
       businessId,

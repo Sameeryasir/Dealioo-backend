@@ -32,10 +32,15 @@ type ConversionActionRow = {
 
 @Injectable()
 export class FunnelGoogleConversionUploadService {
-  private readonly logger = new Logger(FunnelGoogleConversionUploadService.name);
+  private readonly logger = new Logger(
+    FunnelGoogleConversionUploadService.name,
+  );
   private readonly actionCache = new Map<
     string,
-    { at: number; actions: Array<{ resourceName: string; labelHints: string[] }> }
+    {
+      at: number;
+      actions: Array<{ resourceName: string; labelHints: string[] }>;
+    }
   >();
 
   constructor(
@@ -52,10 +57,17 @@ export class FunnelGoogleConversionUploadService {
 
   isRetryableError(err: unknown): boolean {
     const message =
-      err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+      err instanceof Error
+        ? err.message.toLowerCase()
+        : String(err).toLowerCase();
     if (message.includes('rate') || message.includes('quota')) return true;
-    if (message.includes('timeout') || message.includes('temporarily')) return true;
-    if (message.includes('503') || message.includes('500') || message.includes('429')) {
+    if (message.includes('timeout') || message.includes('temporarily'))
+      return true;
+    if (
+      message.includes('503') ||
+      message.includes('500') ||
+      message.includes('429')
+    ) {
       return true;
     }
     return false;
@@ -100,7 +112,9 @@ export class FunnelGoogleConversionUploadService {
     }
 
     const credentials =
-      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(
+        business,
+      );
     const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
     const loginCustomerId = normalizeGoogleCustomerId(
       credentials.loginCustomerId || customerId,
@@ -114,9 +128,12 @@ export class FunnelGoogleConversionUploadService {
 
     const gclid = row.gclid?.trim();
     if (!gclid) {
-      throw Object.assign(new Error('Missing gclid for click conversion upload'), {
-        status: 400,
-      });
+      throw Object.assign(
+        new Error('Missing gclid for click conversion upload'),
+        {
+          status: 400,
+        },
+      );
     }
 
     const client = createGoogleAdsApiClient({
@@ -133,7 +150,9 @@ export class FunnelGoogleConversionUploadService {
     const conversion: Record<string, unknown> = {
       gclid,
       conversion_action: conversionAction,
-      conversion_date_time: this.formatConversionDateTime(Number(row.eventTime)),
+      conversion_date_time: this.formatConversionDateTime(
+        Number(row.eventTime),
+      ),
     };
 
     if (row.value != null && String(row.value).trim()) {
@@ -201,7 +220,9 @@ export class FunnelGoogleConversionUploadService {
     let credentials;
     try {
       credentials =
-        await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+        await this.googleAdsTokenService.assertBusinessGoogleCredentials(
+          business,
+        );
     } catch {
       return [];
     }
@@ -235,7 +256,7 @@ export class FunnelGoogleConversionUploadService {
 
     let rows: ConversionActionRow[] = [];
     try {
-      rows = (await customer.query(query)) as ConversionActionRow[];
+      rows = await customer.query(query);
     } catch (err) {
       this.logger.warn(
         `Could not list conversion actions businessId=${businessId}: ${
@@ -249,9 +270,7 @@ export class FunnelGoogleConversionUploadService {
       .map((row) => {
         const action = row.conversionAction ?? row.conversion_action;
         const resourceName =
-          action?.resourceName?.trim() ||
-          action?.resource_name?.trim() ||
-          '';
+          action?.resourceName?.trim() || action?.resource_name?.trim() || '';
         if (!resourceName) return null;
 
         const snippets = action?.tagSnippets ?? action?.tag_snippets ?? [];

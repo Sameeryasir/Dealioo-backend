@@ -37,16 +37,14 @@ export class AutomationExecutionRecoveryService {
       ? new Date(replayed.scheduledAt)
       : null;
     const status = replayed.status as AutomationExecutionStatus;
-    const context = normalizeExecutionContext(
-      replayed.executionContext as Record<string, unknown>,
-    );
+    const context = normalizeExecutionContext(replayed.executionContext);
 
     await this.executionService.applyRecoveredState(executionId, {
       currentNodeId: replayed.currentNodeId,
       status,
       scheduledAt,
       automationVersion: replayed.automationVersion,
-      executionContext: context as Record<string, unknown>,
+      executionContext: context,
     });
 
     const refreshed = await this.executionService.findById(executionId);

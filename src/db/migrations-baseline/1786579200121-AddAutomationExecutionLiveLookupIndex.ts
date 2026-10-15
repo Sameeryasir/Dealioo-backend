@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddAutomationExecutionLiveLookupIndex1786579200121
-  implements MigrationInterface
-{
+export class AddAutomationExecutionLiveLookupIndex1786579200121 implements MigrationInterface {
   name = 'AddAutomationExecutionLiveLookupIndex1786579200121';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

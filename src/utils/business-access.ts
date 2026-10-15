@@ -21,6 +21,8 @@ export function isBusinessOwnerScopedUser(user: BusinessAccessUser): boolean {
   return isAdminRole(roleName) && !isSuperAdmin(user);
 }
 
-export function isBusinessOwnerScopedRole(roleName: string | null | undefined): boolean {
+export function isBusinessOwnerScopedRole(
+  roleName: string | null | undefined,
+): boolean {
   return isAdminRole(roleName);
 }

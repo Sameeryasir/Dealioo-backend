@@ -27,9 +27,7 @@ import { BusinessMemberPermission } from '../../db/entities/business-member-perm
 import { Role } from '../../db/entities/role.entity';
 import { requireAdminRole } from '../../utils/require-admin-role';
 import { ADMIN_ROLE, isSuperAdmin } from '../../utils/user-roles';
-import {
-  ALL_BUSINESS_MEMBER_PERMISSIONS,
-} from '../member/member.constants';
+import { ALL_BUSINESS_MEMBER_PERMISSIONS } from '../member/member.constants';
 import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { CreateBusinessDto } from './businessDto/create-business.dto';
 import { UpdateBusinessDto } from './businessDto/update-business.dto';
@@ -37,9 +35,7 @@ import { AssociateTwilioPhoneNumberDto } from './businessDto/associate-twilio-ph
 import { ConnectTwilioCredentialsDto } from './businessDto/connect-twilio-credentials.dto';
 import { PurchaseTwilioPhoneNumberDto } from './businessDto/purchase-twilio-phone-number.dto';
 import { SearchTwilioAvailableNumbersDto } from './businessDto/search-twilio-available-numbers.dto';
-import {
-  BUSINESSES_UPLOAD_SUBDIR,
-} from '../../utils/disk-file-upload-multer';
+import { BUSINESSES_UPLOAD_SUBDIR } from '../../utils/disk-file-upload-multer';
 import { persistUploadedFile } from '../../utils/persist-uploaded-file';
 import {
   clearLogoPalette,
@@ -55,7 +51,10 @@ import {
   normalizePhoneNumber,
   TwilioService,
 } from '../sms/twilio.service';
-import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../../utils/token-encryption.util';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import {
   isValidBusinessSlug,
@@ -121,7 +120,9 @@ export class BusinessService {
     business: Business,
     owner: User,
   ): Promise<void> {
-    const ownerBit = owner.email?.trim() ? ` (owner: ${owner.email.trim()})` : '';
+    const ownerBit = owner.email?.trim()
+      ? ` (owner: ${owner.email.trim()})`
+      : '';
     try {
       const saved = await this.adminNotificationRepository.save(
         this.adminNotificationRepository.create({
@@ -184,10 +185,7 @@ export class BusinessService {
     user: User,
     file?: Express.Multer.File,
   ): Promise<Business> {
-    requireAdminRole(
-      user,
-      'You do not have permission to create a business.',
-    );
+    requireAdminRole(user, 'You do not have permission to create a business.');
 
     await this.assertActiveSubscription(user.id);
     await this.assertStarterBusinessLimit(user.id);
@@ -247,7 +245,7 @@ export class BusinessService {
     const optionalTwilioSid = twilioPhoneSid?.trim() || null;
     const rawTwilioNumber = twilioPhoneNumber?.trim() || '';
     const optionalTwilioNumber = rawTwilioNumber
-      ? normalizePhoneNumber(rawTwilioNumber) ?? rawTwilioNumber
+      ? (normalizePhoneNumber(rawTwilioNumber) ?? rawTwilioNumber)
       : null;
 
     const business = this.businessRepository.create({
@@ -362,7 +360,9 @@ export class BusinessService {
     let candidate = root;
     let suffix = 2;
 
-    while (await this.businessRepository.exists({ where: { slug: candidate } })) {
+    while (
+      await this.businessRepository.exists({ where: { slug: candidate } })
+    ) {
       candidate = `${root}-${suffix}`;
       suffix += 1;
     }
@@ -651,7 +651,7 @@ export class BusinessService {
     await this.businessMemberPermissionRepository.save(
       ALL_BUSINESS_MEMBER_PERMISSIONS.map((permission) =>
         this.businessMemberPermissionRepository.create({
-          businessMember: member!,
+          businessMember: member,
           permission,
         }),
       ),
@@ -1033,9 +1033,8 @@ export class BusinessService {
 
     this.twilioService.assertInboundSmsConfigured();
 
-    const available = await this.twilioService.listIncomingPhoneNumbers(
-      ownCredentials,
-    );
+    const available =
+      await this.twilioService.listIncomingPhoneNumbers(ownCredentials);
     const match = available.find(
       (n) =>
         n.sid === phoneSid ||

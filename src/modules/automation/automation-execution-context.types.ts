@@ -29,7 +29,9 @@ export function normalizeExecutionContext(
 
   const rawPaymentId = raw.funnelPaymentId;
   const funnelPaymentId =
-    typeof rawPaymentId === 'number' && Number.isFinite(rawPaymentId) && rawPaymentId > 0
+    typeof rawPaymentId === 'number' &&
+    Number.isFinite(rawPaymentId) &&
+    rawPaymentId > 0
       ? rawPaymentId
       : typeof rawPaymentId === 'string' &&
           Number.isFinite(Number(rawPaymentId)) &&
@@ -43,7 +45,8 @@ export function normalizeExecutionContext(
         ? raw.loopCount
         : 0,
     stepsProcessed:
-      typeof raw.stepsProcessed === 'number' && Number.isFinite(raw.stepsProcessed)
+      typeof raw.stepsProcessed === 'number' &&
+      Number.isFinite(raw.stepsProcessed)
         ? raw.stepsProcessed
         : 0,
     branchMemory:
@@ -57,7 +60,9 @@ export function normalizeExecutionContext(
         ? raw.lastConditionResult
         : null,
     stepHistoryPointer:
-      typeof raw.stepHistoryPointer === 'number' ? raw.stepHistoryPointer : null,
+      typeof raw.stepHistoryPointer === 'number'
+        ? raw.stepHistoryPointer
+        : null,
     ...(funnelPaymentId != null ? { funnelPaymentId } : {}),
     ...(typeof raw.pausedFromStatus === 'string'
       ? { pausedFromStatus: raw.pausedFromStatus }
@@ -67,20 +72,23 @@ export function normalizeExecutionContext(
       ? { paymentReminderResume: raw.paymentReminderResume }
       : {}),
     ...(raw.nodeOutputs && typeof raw.nodeOutputs === 'object'
-      ? { nodeOutputs: raw.nodeOutputs as Record<string, Record<string, unknown>> }
+      ? {
+          nodeOutputs: raw.nodeOutputs as Record<
+            string,
+            Record<string, unknown>
+          >,
+        }
       : {}),
   };
 }
 
-export function buildExecutionSnapshot(
-  execution: {
-    currentNodeId: number;
-    status: string;
-    scheduledAt: Date | null;
-    automationVersion: number | null;
-    executionContext?: Record<string, unknown> | null;
-  },
-): AutomationExecutionSnapshot {
+export function buildExecutionSnapshot(execution: {
+  currentNodeId: number;
+  status: string;
+  scheduledAt: Date | null;
+  automationVersion: number | null;
+  executionContext?: Record<string, unknown> | null;
+}): AutomationExecutionSnapshot {
   return {
     currentNodeId: execution.currentNodeId,
     status: execution.status,

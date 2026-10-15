@@ -6,16 +6,20 @@ export function normalizeEmailLinkUrl(url: string): string {
 
   try {
     const parsed = new URL(trimmed);
-    return `${parsed.origin}${parsed.pathname}`.replace(/\/$/, '').toLowerCase();
+    return `${parsed.origin}${parsed.pathname}`
+      .replace(/\/$/, '')
+      .toLowerCase();
   } catch {
     return trimmed.replace(/\/$/, '').toLowerCase();
   }
 }
 
 export function isPassLinkCtaLabel(label: string | undefined): boolean {
-  return String(label ?? '')
-    .trim()
-    .toLowerCase() === 'pass link';
+  return (
+    String(label ?? '')
+      .trim()
+      .toLowerCase() === 'pass link'
+  );
 }
 
 function normalizeCtaLabel(label: string | undefined): string {
@@ -37,8 +41,7 @@ export function isCompletePaymentCtaLabel(label: string | undefined): boolean {
 export function isGoogleWalletCtaLabel(label: string | undefined): boolean {
   const normalized = normalizeCtaLabel(label);
   return (
-    normalized.includes('google wallet') ||
-    normalized.includes('add to wallet')
+    normalized.includes('google wallet') || normalized.includes('add to wallet')
   );
 }
 
@@ -70,9 +73,7 @@ export function shouldShowPassLinkCta(options: {
     return true;
   }
 
-  if (
-    normalizeEmailLinkUrl(passUrl) === normalizeEmailLinkUrl(walletUrl)
-  ) {
+  if (normalizeEmailLinkUrl(passUrl) === normalizeEmailLinkUrl(walletUrl)) {
     return false;
   }
 

@@ -264,13 +264,19 @@ export class FacebookMetaTokenService {
     }
   }
 
-  async debugUserAccessToken(accessToken: string): Promise<DebugTokenData | undefined> {
-    const appId = process.env.FACEBOOK_APP_ID?.trim() || process.env.META_APP_ID?.trim();
+  async debugUserAccessToken(
+    accessToken: string,
+  ): Promise<DebugTokenData | undefined> {
+    const appId =
+      process.env.FACEBOOK_APP_ID?.trim() || process.env.META_APP_ID?.trim();
     const appSecret =
-      process.env.FACEBOOK_APP_SECRET?.trim() || process.env.META_APP_SECRET?.trim();
+      process.env.FACEBOOK_APP_SECRET?.trim() ||
+      process.env.META_APP_SECRET?.trim();
 
     if (!appId || !appSecret) {
-      throw new BadRequestException('Facebook app credentials are not configured.');
+      throw new BadRequestException(
+        'Facebook app credentials are not configured.',
+      );
     }
 
     const url = new URL(`${FACEBOOK_GRAPH}/debug_token`);
@@ -341,15 +347,10 @@ export function mapMetaMarketingApiError(
   errorCode?: number,
 ): string {
   const lower = message.toLowerCase();
-  if (
-    errorCode === 3 ||
-    lower.includes('does not have the capability')
-  ) {
+  if (errorCode === 3 || lower.includes('does not have the capability')) {
     const appId =
       process.env.FACEBOOK_APP_ID?.trim() || process.env.META_APP_ID?.trim();
-    const appHint = appId
-      ? ` (App ID ${appId})`
-      : '';
+    const appHint = appId ? ` (App ID ${appId})` : '';
     return (
       `Meta blocked creating ads${appHint}: your app is in Development mode or lacks ads_management approval. ` +
       'In Meta Developer Console → your app → App roles, add your Facebook account as Administrator, ' +
@@ -363,9 +364,7 @@ export function mapMetaMarketingApiError(
     lower.includes('cannot call api for app') &&
     lower.includes('on behalf of user')
   ) {
-    return (
-      'Meta blocked this action for your Facebook user. Add your Facebook account as a Tester/Developer on the Dealioo Meta app, complete Marketing API testing, then reconnect Facebook in Settings → Integrations with ads permissions.'
-    );
+    return 'Meta blocked this action for your Facebook user. Add your Facebook account as a Tester/Developer on the Dealioo Meta app, complete Marketing API testing, then reconnect Facebook in Settings → Integrations with ads permissions.';
   }
   if (lower.includes('permission') || lower.includes('oauth')) {
     return `${message} Reconnect Facebook in Settings → Integrations.`;

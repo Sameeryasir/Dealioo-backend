@@ -20,10 +20,7 @@ export function createFacebookOAuthState(
 /**
  * Validates signature + TTL, then returns the business ID from state.
  */
-export function parseFacebookOAuthState(
-  state: string,
-  secret: string,
-): number {
+export function parseFacebookOAuthState(state: string, secret: string): number {
   const trimmed = state?.trim();
   if (!trimmed) {
     throw new Error('Missing Facebook OAuth state.');
@@ -61,7 +58,10 @@ export function parseFacebookOAuthState(
 }
 
 function signPayload(payload: string, secret: string): string {
-  return createHmac('sha256', secret).update(payload).digest('hex').slice(0, 32);
+  return createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex')
+    .slice(0, 32);
 }
 
 function safeEqual(a: string, b: string): boolean {

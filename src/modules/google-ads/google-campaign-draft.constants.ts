@@ -20,11 +20,12 @@ export const GoogleCampaignPublishStatus = {
 export type GoogleCampaignPublishStatusValue =
   (typeof GoogleCampaignPublishStatus)[keyof typeof GoogleCampaignPublishStatus];
 
-export const GOOGLE_DRAFT_EDITABLE_STATUSES: GoogleCampaignDraftStatusValue[] = [
-  GoogleCampaignDraftStatus.DRAFT,
-  GoogleCampaignDraftStatus.FAILED,
-  GoogleCampaignDraftStatus.PUBLISHED,
-];
+export const GOOGLE_DRAFT_EDITABLE_STATUSES: GoogleCampaignDraftStatusValue[] =
+  [
+    GoogleCampaignDraftStatus.DRAFT,
+    GoogleCampaignDraftStatus.FAILED,
+    GoogleCampaignDraftStatus.PUBLISHED,
+  ];
 
 export const DRAFT_CONFLICT_MESSAGE =
   'This draft has been modified elsewhere. Please refresh.';

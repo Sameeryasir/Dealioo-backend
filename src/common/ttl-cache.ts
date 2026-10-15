@@ -42,8 +42,7 @@ export class TtlCache {
       return existing as Promise<T>;
     }
 
-    let promise!: Promise<T>;
-    promise = (async () => {
+    const promise: Promise<T> = (async () => {
       try {
         const value = await compute();
         this.set(key, value, ttlMs);
@@ -62,6 +61,10 @@ export class TtlCache {
 
 export const dashboardTtlCache = new TtlCache();
 
-export const DASHBOARD_CACHE_TTL_MS = 10_000;
+// In-process layer in front of Redis for dashboard KPIs/charts (MCP context 7: short local TTL + longer Redis).
+export const DASHBOARD_CACHE_TTL_MS = 60_000;
+
+/** Overview KPI/chart/dropoff responses — keep warm across month toggles in one session. */
+export const DASHBOARD_OVERVIEW_CACHE_TTL_MS = 300_000;
 
 export const AD_SPEND_CACHE_TTL_MS = 60_000;

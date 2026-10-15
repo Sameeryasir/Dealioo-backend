@@ -59,10 +59,7 @@ import {
   sdkUploadAdImageHash,
   sdkUploadAdVideoId,
 } from './meta-business-sdk';
-import {
-  MetaCreationStep,
-  MetaDistanceUnit,
-} from './meta-campaign.constants';
+import { MetaCreationStep, MetaDistanceUnit } from './meta-campaign.constants';
 
 type MetaPageListResponse = {
   data?: Array<{ id?: string; name?: string }>;
@@ -137,7 +134,6 @@ export class FacebookCampaignService {
     businessId: number,
     file: Express.Multer.File,
   ): Promise<{ videoUrl: string }> {
-
     await this.loadOwnedBusiness(user, businessId, 'create');
 
     if (!file) {
@@ -176,7 +172,6 @@ export class FacebookCampaignService {
     businessId: number,
     dto: CreateFacebookCampaignDto,
   ): Promise<CreateFacebookCampaignResponseDto> {
-
     const business = await this.loadOwnedBusiness(user, businessId, 'create');
 
     const { accessToken, adAccountId: storedAdAccountId } =
@@ -345,7 +340,7 @@ export class FacebookCampaignService {
       void this.businessHistoryService
         .logCampaignCreated({
           businessId,
-          campaignId: metaCampaignId!,
+          campaignId: metaCampaignId,
           campaignName: dto.name.trim(),
           actorUserId: user.id,
           source: 'meta',
@@ -354,9 +349,9 @@ export class FacebookCampaignService {
 
       return {
         id: tracking.id,
-        metaCampaignId: metaCampaignId!,
-        metaAdsetId: metaAdsetId!,
-        metaCreativeId: metaCreativeId!,
+        metaCampaignId: metaCampaignId,
+        metaAdsetId: metaAdsetId,
+        metaCreativeId: metaCreativeId,
         metaAdId: adId,
         status: 'PAUSED',
         adsManagerUrl: adsManagerCampaignsUrl(adAccountId),
@@ -383,7 +378,6 @@ export class FacebookCampaignService {
     metaCampaignId: string,
     providedCampaignName?: string,
   ): Promise<{ deleted: true; metaCampaignId: string }> {
-
     const campaignId = metaCampaignId.trim();
     if (!campaignId) {
       throw new BadRequestException('Meta campaign id is required.');
@@ -600,7 +594,6 @@ export class FacebookCampaignService {
     user: User,
     businessId: number,
   ): Promise<FacebookCampaign[]> {
-
     await this.loadOwnedBusiness(user, businessId, 'view');
 
     return this.facebookCampaignRepository.find({
@@ -695,7 +688,6 @@ export class FacebookCampaignService {
     );
   }
 
-
   private async handleCreationFailure(
     userId: number,
     businessId: number,
@@ -711,8 +703,7 @@ export class FacebookCampaignService {
       err instanceof MetaApiStepError ? err.step : 'campaign';
     const metaErrorCode =
       err instanceof MetaApiStepError ? err.metaErrorCode : null;
-    const metaErrorMessage =
-      err instanceof Error ? err.message : String(err);
+    const metaErrorMessage = err instanceof Error ? err.message : String(err);
     const rawResponse =
       err instanceof MetaApiStepError ? err.rawResponse : null;
 

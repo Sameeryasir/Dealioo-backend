@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
 
-const WALLET_ISSUER_SCOPE = 'https://www.googleapis.com/auth/wallet_object.issuer';
+const WALLET_ISSUER_SCOPE =
+  'https://www.googleapis.com/auth/wallet_object.issuer';
 
 export type GoogleWalletObjectState = {
   hasUsers: boolean;

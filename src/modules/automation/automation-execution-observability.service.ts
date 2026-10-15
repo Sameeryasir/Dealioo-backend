@@ -85,7 +85,9 @@ export class AutomationExecutionObservabilityService {
         startedAt: new Date(),
       });
 
-      const execution = await this.executionService.findById(params.executionId);
+      const execution = await this.executionService.findById(
+        params.executionId,
+      );
       const snapshot = this.eventService.buildSnapshotFromExecution(execution);
       await this.eventService.appendEvent({
         executionId: params.executionId,
@@ -131,7 +133,9 @@ export class AutomationExecutionObservabilityService {
     });
   }
 
-  async ensureStep(input: EnsureStepInput): Promise<AutomationExecutionStep | null> {
+  async ensureStep(
+    input: EnsureStepInput,
+  ): Promise<AutomationExecutionStep | null> {
     return this.safe('ensureStep', async () => {
       const existing = await this.stepRepository.findOne({
         where: {
@@ -191,7 +195,9 @@ export class AutomationExecutionObservabilityService {
       }
       step = await this.stepRepository.save(step);
 
-      const execution = await this.executionService.findById(params.executionId);
+      const execution = await this.executionService.findById(
+        params.executionId,
+      );
       await this.eventService.appendEvent({
         executionId: params.executionId,
         eventType: AutomationExecutionEventType.NODE_STARTED,
@@ -224,8 +230,7 @@ export class AutomationExecutionObservabilityService {
       if (!step) return;
 
       const now = new Date();
-      step.status =
-        params.status ?? AutomationExecutionStepStatus.COMPLETED;
+      step.status = params.status ?? AutomationExecutionStepStatus.COMPLETED;
       step.completedAt = now;
       if (step.startedAt) {
         step.durationMs = Math.max(0, now.getTime() - step.startedAt.getTime());
@@ -247,7 +252,9 @@ export class AutomationExecutionObservabilityService {
       }
       await this.stepRepository.save(step);
 
-      const execution = await this.executionService.findById(params.executionId);
+      const execution = await this.executionService.findById(
+        params.executionId,
+      );
       await this.eventService.appendEvent({
         executionId: params.executionId,
         eventType:
@@ -304,7 +311,7 @@ export class AutomationExecutionObservabilityService {
         if (value == null || !Number.isFinite(value) || value <= 0) continue;
         await this.executionRepository.increment(
           { id: executionId },
-          key as keyof AutomationExecution,
+          key,
           value,
         );
       }
@@ -347,7 +354,9 @@ export class AutomationExecutionObservabilityService {
         phase: 'pass',
       });
 
-      const execution = await this.executionService.findById(params.executionId);
+      const execution = await this.executionService.findById(
+        params.executionId,
+      );
       await this.eventService.appendEvent({
         executionId: params.executionId,
         eventType: AutomationExecutionEventType.EXECUTION_WAITING,
@@ -371,7 +380,9 @@ export class AutomationExecutionObservabilityService {
     error?: string | null;
   }): Promise<void> {
     await this.safe('onExecutionFinished', async () => {
-      const execution = await this.executionService.findById(params.executionId);
+      const execution = await this.executionService.findById(
+        params.executionId,
+      );
       const durationMs =
         execution.startedAt != null
           ? Math.max(0, Date.now() - execution.startedAt.getTime())
@@ -397,7 +408,9 @@ export class AutomationExecutionObservabilityService {
         error: params.error ?? execution.lastError,
       };
 
-      const refreshed = await this.executionService.findById(params.executionId);
+      const refreshed = await this.executionService.findById(
+        params.executionId,
+      );
       refreshed.summary = summary;
       await this.executionRepository.save(refreshed);
 
@@ -533,9 +546,7 @@ export class AutomationExecutionObservabilityService {
     return this.recipientRepository.find({
       where: {
         executionId: params.executionId,
-        ...(params.customerId != null
-          ? { customerId: params.customerId }
-          : {}),
+        ...(params.customerId != null ? { customerId: params.customerId } : {}),
       },
       order: { occurredAt: 'ASC', id: 'ASC' },
     });

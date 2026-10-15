@@ -23,7 +23,9 @@ export function parseCronTriggerConfig(
     return null;
   }
 
-  const frequency = String(config.frequency ?? '').trim().toLowerCase();
+  const frequency = String(config.frequency ?? '')
+    .trim()
+    .toLowerCase();
   const intervalMs = resolveIntervalMsFromConfig(config);
 
   if (intervalMs !== null) {
@@ -40,7 +42,9 @@ export function parseCronTriggerConfig(
 function resolveIntervalMsFromConfig(
   config: Record<string, unknown>,
 ): number | null {
-  const frequency = String(config.frequency ?? '').trim().toLowerCase();
+  const frequency = String(config.frequency ?? '')
+    .trim()
+    .toLowerCase();
   if (frequency && frequency !== 'interval') {
     return null;
   }

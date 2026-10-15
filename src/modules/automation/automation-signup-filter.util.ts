@@ -29,11 +29,7 @@ export function collectSignupFilterConditions(
 }
 
 export function normalizeSignupFilterText(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ');
+  return raw.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
 export type SignupDelayUnit = 'seconds' | 'minutes' | 'hours' | 'days';
@@ -83,7 +79,12 @@ export function normalizeSignupDelayUnit(raw: unknown): SignupDelayUnit | null {
   ) {
     return 'minutes';
   }
-  if (value === 'hours' || value === 'hour' || value === 'hrs' || value === 'hr') {
+  if (
+    value === 'hours' ||
+    value === 'hour' ||
+    value === 'hrs' ||
+    value === 'hr'
+  ) {
     return 'hours';
   }
   if (value === 'days' || value === 'day') {
@@ -92,10 +93,7 @@ export function normalizeSignupDelayUnit(raw: unknown): SignupDelayUnit | null {
   return null;
 }
 
-export function signupDelayToMs(
-  amount: number,
-  unit: SignupDelayUnit,
-): number {
+export function signupDelayToMs(amount: number, unit: SignupDelayUnit): number {
   if (!Number.isFinite(amount) || amount <= 0) {
     return 0;
   }
@@ -126,9 +124,7 @@ export function parseDurationPhrase(
 ): { amount: number; unit: SignupDelayUnit } | null {
   const normalized = normalizeSignupFilterText(text);
 
-  const weekMatch = normalized.match(
-    /(?:(\d+(?:\.\d+)?)|an?|one)\s*weeks?\b/,
-  );
+  const weekMatch = normalized.match(/(?:(\d+(?:\.\d+)?)|an?|one)\s*weeks?\b/);
   if (weekMatch) {
     const rawAmount = weekMatch[1];
     const weeks = rawAmount ? Number(rawAmount) : 1;
@@ -239,8 +235,7 @@ export function parseSignupFilterCondition(
         ? amountFromConfig
         : fromPhrase?.amount;
     const unit = unitFromConfig ?? fromPhrase?.unit;
-    const comparator =
-      comparatorFromConfig ?? inferTimeComparator(core);
+    const comparator = comparatorFromConfig ?? inferTimeComparator(core);
 
     if (amount != null && amount > 0 && unit) {
       return {

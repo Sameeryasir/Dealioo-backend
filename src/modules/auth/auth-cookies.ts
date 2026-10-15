@@ -48,10 +48,7 @@ export function setAuthCookies(
     REFRESH_TOKEN_COOKIE,
     refreshToken,
     authCookieOptions(
-      durationMs(
-        process.env.JWT_REFRESH_EXPIRES_IN,
-        10 * 24 * 60 * 60 * 1000,
-      ),
+      durationMs(process.env.JWT_REFRESH_EXPIRES_IN, 10 * 24 * 60 * 60 * 1000),
     ),
   );
 }
@@ -83,9 +80,9 @@ export function readCookie(
   return null;
 }
 
-export function withoutAuthTokens<T extends { token?: string; refreshToken?: string }>(
-  body: T,
-): Omit<T, 'token' | 'refreshToken'> {
+export function withoutAuthTokens<
+  T extends { token?: string; refreshToken?: string },
+>(body: T): Omit<T, 'token' | 'refreshToken'> {
   const rest = { ...body };
   delete rest.token;
   delete rest.refreshToken;

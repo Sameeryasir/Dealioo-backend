@@ -153,7 +153,9 @@ export class BusinessHistoryService {
 
     const categoryTypes = categoryEventTypes(filters.category);
     if (categoryTypes) {
-      qb.andWhere('history.eventType IN (:...categoryTypes)', { categoryTypes });
+      qb.andWhere('history.eventType IN (:...categoryTypes)', {
+        categoryTypes,
+      });
     }
 
     if (
@@ -528,8 +530,9 @@ export class BusinessHistoryService {
   }
 
   private couponIdsKey(couponIds: number[]): string {
-    const ids = [...new Set(couponIds.filter((id) => Number.isFinite(id) && id > 0))]
-      .sort((a, b) => a - b);
+    const ids = [
+      ...new Set(couponIds.filter((id) => Number.isFinite(id) && id > 0)),
+    ].sort((a, b) => a - b);
     return ids.length > 0 ? ids.join(',') : 'none';
   }
 

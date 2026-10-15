@@ -74,7 +74,11 @@ export class AiEditUiQueueService {
       return { jobId, status: 'delayed' };
     }
 
-    if (state === 'waiting' || state === 'waiting-children' || state === 'prioritized') {
+    if (
+      state === 'waiting' ||
+      state === 'waiting-children' ||
+      state === 'prioritized'
+    ) {
       return { jobId, status: 'queued' };
     }
 

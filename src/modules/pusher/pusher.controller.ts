@@ -39,7 +39,9 @@ export class PusherController {
     @Req() req: AuthRequest,
   ) {
     if (!this.pusherService.isEnabled()) {
-      throw new ServiceUnavailableException('Realtime messaging is not configured.');
+      throw new ServiceUnavailableException(
+        'Realtime messaging is not configured.',
+      );
     }
 
     const trimmedSocketId = socketId?.trim();
@@ -55,7 +57,10 @@ export class PusherController {
           'Only Super Admin can subscribe to admin notifications.',
         );
       }
-      return this.pusherService.authorizeChannel(trimmedSocketId, trimmedChannel);
+      return this.pusherService.authorizeChannel(
+        trimmedSocketId,
+        trimmedChannel,
+      );
     }
 
     const channelUserId = parseUserIdFromUserChannel(trimmedChannel);
@@ -68,7 +73,10 @@ export class PusherController {
           'You can only subscribe to your own user channel.',
         );
       }
-      return this.pusherService.authorizeChannel(trimmedSocketId, trimmedChannel);
+      return this.pusherService.authorizeChannel(
+        trimmedSocketId,
+        trimmedChannel,
+      );
     }
 
     const businessId = parseBusinessIdFromChatChannel(trimmedChannel);

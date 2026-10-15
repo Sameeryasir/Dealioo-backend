@@ -53,7 +53,10 @@ import {
   sdkCreateAdSet,
   sdkCreateCampaign,
 } from './meta-business-sdk';
-import { MetaCreativeFormat, MetaCreationStep } from './meta-campaign.constants';
+import {
+  MetaCreativeFormat,
+  MetaCreationStep,
+} from './meta-campaign.constants';
 import {
   buildAdPayloadFromDraft,
   buildAdSetPayloadFromDraft,
@@ -107,7 +110,6 @@ export class MetaPublishService {
     private readonly realtimeService: MetaPublishRealtimeService,
   ) {}
 
-  
   async publishFullCampaign(
     user: User,
     businessId: number,
@@ -168,7 +170,6 @@ export class MetaPublishService {
 
       await this.recoverStalePublishingDraftInTx(draftRepo, draft);
 
-      
       if (draft.status === 'publishing' && draft.publishJobId) {
         const existingJob = await this.metaPublishQueue.getJob(
           draft.publishJobId,
@@ -195,7 +196,6 @@ export class MetaPublishService {
           }
         }
 
-        
         draft.status = 'failed';
         draft.publishStatus = 'FAILED';
         draft.errorMessage =
@@ -241,7 +241,6 @@ export class MetaPublishService {
 
     const { draft, response } = result;
 
-    
     const prior = await this.metaPublishQueue.getJob(jobId);
     if (prior) {
       const state = await prior.getState();
@@ -297,9 +296,7 @@ export class MetaPublishService {
     return response;
   }
 
-  async processQueuedPublish(
-    job: Job<MetaPublishJobPayload>,
-  ): Promise<void> {
+  async processQueuedPublish(job: Job<MetaPublishJobPayload>): Promise<void> {
     const { userId, businessId, draftId } = job.data;
     const jobId = String(job.id ?? metaPublishJobId(businessId, draftId));
     const maxAttempts = job.opts.attempts ?? 3;
@@ -499,7 +496,7 @@ export class MetaPublishService {
       if (!metaAdsetId) {
         await this.beginStep(draft, jobId, 'adset', userId, businessId);
         logMetaPublishStep('adset', 'start', { metaCampaignId });
-        metaAdsetId = await this.createAdSet(ctx, metaCampaignId!);
+        metaAdsetId = await this.createAdSet(ctx, metaCampaignId);
         this.logger.log(`Meta ad set created: ${metaAdsetId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
@@ -533,7 +530,7 @@ export class MetaPublishService {
       if (!metaAdId) {
         await this.beginStep(draft, jobId, 'ad', userId, businessId);
         logMetaPublishStep('ad', 'start', { metaAdsetId, metaCreativeId });
-        metaAdId = await this.createAd(ctx, metaAdsetId!, metaCreativeId!);
+        metaAdId = await this.createAd(ctx, metaAdsetId, metaCreativeId);
         this.logger.log(`Meta ad created: ${metaAdId}`);
         await this.updatePartialState(draft.id, tracking.id, {
           metaCampaignId,
@@ -545,12 +542,7 @@ export class MetaPublishService {
         await this.completeStep(draft, jobId, 'ad', metaAdId);
       }
 
-      if (
-        isLiveLinkedUpdate &&
-        metaCampaignId &&
-        metaAdsetId &&
-        metaAdId
-      ) {
+      if (isLiveLinkedUpdate && metaCampaignId && metaAdsetId && metaAdId) {
         await this.beginStep(draft, jobId, 'campaign', userId, businessId);
         const updatedCreativeId = await this.updateLiveLinkedMetaObjects(ctx, {
           metaCampaignId,
@@ -591,10 +583,7 @@ export class MetaPublishService {
       const publishedAt = new Date();
       const linkedDealioCampaignId =
         draft.campaignId ??
-        parseCampaignIdFromDestinationUrl(
-          (draft.adCreativeData as { destinationUrl?: string } | null)
-            ?.destinationUrl,
-        );
+        parseCampaignIdFromDestinationUrl(draft.adCreativeData?.destinationUrl);
 
       await this.draftRepository.update(draft.id, {
         metaCampaignId,
@@ -649,12 +638,12 @@ export class MetaPublishService {
       const campaignName =
         typeof ctx.campaign?.name === 'string' && ctx.campaign.name.trim()
           ? ctx.campaign.name.trim()
-          : metaCampaignId!;
+          : metaCampaignId;
 
       void this.businessHistoryService
         .logCampaignCreated({
           businessId,
-          campaignId: metaCampaignId!,
+          campaignId: metaCampaignId,
           campaignName,
           actorUserId: userId,
           source: 'meta',
@@ -709,7 +698,9 @@ export class MetaPublishService {
         ctx.campaign.campaignDailyBudget != null
       ) {
         await updateMetaObject(ids.metaCampaignId, ctx.accessToken, {
-          daily_budget: budgetToMetaMinorUnits(ctx.campaign.campaignDailyBudget),
+          daily_budget: budgetToMetaMinorUnits(
+            ctx.campaign.campaignDailyBudget,
+          ),
         });
       }
 
@@ -721,7 +712,9 @@ export class MetaPublishService {
         !ctx.campaign.campaignBudgetOptimization &&
         ctx.adSet.dailyBudget != null
       ) {
-        adSetFields.daily_budget = budgetToMetaMinorUnits(ctx.adSet.dailyBudget);
+        adSetFields.daily_budget = budgetToMetaMinorUnits(
+          ctx.adSet.dailyBudget,
+        );
       }
       await updateMetaObject(ids.metaAdsetId, ctx.accessToken, adSetFields);
     } catch (err) {
@@ -786,8 +779,7 @@ export class MetaPublishService {
           name: ctx.creative.name.trim(),
           status: ctx.creative.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
         });
-      } catch {
-      }
+      } catch {}
       return null;
     }
 
@@ -873,7 +865,9 @@ export class MetaPublishService {
       case MetaCreativeFormat.CAROUSEL: {
         const cards = creative.carouselCards ?? [];
         if (cards.length < 2) {
-          throw new BadRequestException('Carousel ads require at least 2 cards.');
+          throw new BadRequestException(
+            'Carousel ads require at least 2 cards.',
+          );
         }
 
         for (const [index, card] of cards.entries()) {
@@ -934,7 +928,7 @@ export class MetaPublishService {
       const storySpec =
         payload.object_story_spec &&
         typeof payload.object_story_spec === 'object'
-          ? (payload.object_story_spec as Record<string, unknown>)
+          ? payload.object_story_spec
           : {};
       const videoData: Record<string, unknown> =
         storySpec.video_data && typeof storySpec.video_data === 'object'
@@ -970,11 +964,7 @@ export class MetaPublishService {
       );
     }
 
-    return sdkCreateAdCreative(
-      ctx.accessToken,
-      ctx.adAccountId,
-      payload,
-    );
+    return sdkCreateAdCreative(ctx.accessToken, ctx.adAccountId, payload);
   }
 
   async createAd(
@@ -1216,8 +1206,7 @@ export class MetaPublishService {
       err instanceof MetaApiStepError ? err.step : 'campaign';
     const metaErrorCode =
       err instanceof MetaApiStepError ? err.metaErrorCode : null;
-    const metaErrorMessage =
-      err instanceof Error ? err.message : String(err);
+    const metaErrorMessage = err instanceof Error ? err.message : String(err);
     const rawResponse =
       err instanceof MetaApiStepError ? err.rawResponse : null;
 

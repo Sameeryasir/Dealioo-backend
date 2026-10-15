@@ -115,10 +115,7 @@ export function extraItemLabels(items: StoredExtraItem[]): string[] {
 }
 
 export function extraItemsTotalCents(items: StoredExtraItem[]): number {
-  return items.reduce(
-    (sum, item) => sum + item.unitPriceCents * item.qty,
-    0,
-  );
+  return items.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0);
 }
 
 export function extraItemsForApi(

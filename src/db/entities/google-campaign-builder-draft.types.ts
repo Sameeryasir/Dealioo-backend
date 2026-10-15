@@ -34,12 +34,7 @@ export type GoogleDestinationTypeId =
   | 'phone'
   | 'physical_location';
 
-export type GoogleAgeRangeId =
-  | '18-24'
-  | '25-34'
-  | '35-44'
-  | '45-54'
-  | '55+';
+export type GoogleAgeRangeId = '18-24' | '25-34' | '35-44' | '45-54' | '55+';
 
 export type GoogleKeywordMatchType = 'BROAD' | 'PHRASE' | 'EXACT';
 

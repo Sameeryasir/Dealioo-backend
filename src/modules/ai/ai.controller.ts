@@ -50,9 +50,7 @@ export class AiController {
 
   @UseGuards(AuthGuard('jwt'))
   @Post('landing-image/clear')
-  async clearLandingImage(
-    @Body() dto: ClearLandingImageDto,
-  ): Promise<{
+  async clearLandingImage(@Body() dto: ClearLandingImageDto): Promise<{
     success: true;
     imageUrl: string;
     message: string;

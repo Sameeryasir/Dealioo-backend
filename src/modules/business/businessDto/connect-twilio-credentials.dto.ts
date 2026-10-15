@@ -5,7 +5,8 @@ export class ConnectTwilioCredentialsDto {
   @IsNotEmpty()
   @MaxLength(64)
   @Matches(/^AC[0-9a-fA-F]{32}$/, {
-    message: 'Account SID must look like a Twilio Account SID (starts with AC).',
+    message:
+      'Account SID must look like a Twilio Account SID (starts with AC).',
   })
   accountSid!: string;
 

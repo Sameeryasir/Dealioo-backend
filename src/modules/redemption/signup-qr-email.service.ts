@@ -124,10 +124,7 @@ export class SignupQrEmailService {
       return;
     }
 
-    if (
-      !Number.isFinite(funnelPaymentId) ||
-      funnelPaymentId < 1
-    ) {
+    if (!Number.isFinite(funnelPaymentId) || funnelPaymentId < 1) {
       return;
     }
 
@@ -184,9 +181,7 @@ export class SignupQrEmailService {
       signupPassEmailCancelledAt: null,
     });
 
-    this.logger.log(
-      `Payment pass email sent for coupon ${coupon.id}`,
-    );
+    this.logger.log(`Payment pass email sent for coupon ${coupon.id}`);
   }
 
   private async removePendingSignupPassEmailJob(
@@ -228,9 +223,7 @@ export class SignupQrEmailService {
       signupPassEmailCancelledAt: null,
     });
 
-    this.logger.log(
-      `Signup pass email sent for coupon ${params.couponId}`,
-    );
+    this.logger.log(`Signup pass email sent for coupon ${params.couponId}`);
   }
 
   private async deliverPaymentPassEmail(
@@ -339,9 +332,7 @@ export class SignupQrEmailService {
   private resolveGuestPassUrl(coupon: Coupon): string {
     const token = coupon.qrToken?.trim();
     if (!token) {
-      this.logger.warn(
-        `Pass email missing qrToken for coupon ${coupon.id}`,
-      );
+      this.logger.warn(`Pass email missing qrToken for coupon ${coupon.id}`);
       throw new Error('Coupon access token is missing');
     }
     return buildGuestPassUrl(token);

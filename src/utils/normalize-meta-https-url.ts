@@ -10,7 +10,7 @@ export function normalizeMetaHttpsUrl(value: unknown): unknown {
   }
 
   const trimmed = value.trim();
-  let normalized =
+  const normalized =
     normalizeCampaignImageUrlForMeta(trimmed) ??
     toAbsoluteAssetUrlIfRelative(trimmed) ??
     trimmed;
@@ -23,10 +23,7 @@ export function normalizeMetaHttpsUrl(value: unknown): unknown {
   if (publicBase.startsWith('https://')) {
     try {
       const parsed = new URL(normalized);
-      if (
-        parsed.hostname === 'localhost' ||
-        parsed.hostname === '127.0.0.1'
-      ) {
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
         return `${publicBase}${parsed.pathname}${parsed.search}${parsed.hash}`;
       }
     } catch {

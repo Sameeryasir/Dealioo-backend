@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddGranularCampaignMemberPermissions1786579200067
-  implements MigrationInterface
-{
+export class AddGranularCampaignMemberPermissions1786579200067 implements MigrationInterface {
   name = 'AddGranularCampaignMemberPermissions1786579200067';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

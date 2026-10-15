@@ -224,9 +224,7 @@ export class MemberService {
           email: member.user.email,
           role: member.role,
           status:
-            member.role === 'Owner'
-              ? ('owner' as const)
-              : ('active' as const),
+            member.role === 'Owner' ? ('owner' as const) : ('active' as const),
           permissions:
             member.role === 'Owner' || isAdminOrSuperAdmin(member.user)
               ? [FULL_ACCESS_PERMISSION]
@@ -277,7 +275,11 @@ export class MemberService {
 
     return {
       members,
-      meta: buildPaginationMeta(allMembers.length, pagination.page, pagination.limit),
+      meta: buildPaginationMeta(
+        allMembers.length,
+        pagination.page,
+        pagination.limit,
+      ),
       stats,
     };
   }
@@ -306,11 +308,7 @@ export class MemberService {
       const userId = member.user.id;
       const toEmail = member.user.email;
 
-      await this.purgeMemberAccess(
-        businessId,
-        member.user.email,
-        userId,
-      );
+      await this.purgeMemberAccess(businessId, member.user.email, userId);
       await this.businessAccessService.invalidateMembershipCache(
         businessId,
         userId,
@@ -341,7 +339,13 @@ export class MemberService {
   }> {
     const member = await this.businessMemberRepository.findOne({
       where: { id: memberId },
-      relations: ['business', 'business.owner', 'user', 'user.role', 'permissionRows'],
+      relations: [
+        'business',
+        'business.owner',
+        'user',
+        'user.role',
+        'permissionRows',
+      ],
     });
 
     if (!member) {
@@ -350,8 +354,13 @@ export class MemberService {
 
     await this.assertCanManageMembers(member.business, user);
 
-    if (member.business.owner?.id === member.user.id || member.role === 'Owner') {
-      throw new ForbiddenException('The business owner access cannot be edited.');
+    if (
+      member.business.owner?.id === member.user.id ||
+      member.role === 'Owner'
+    ) {
+      throw new ForbiddenException(
+        'The business owner access cannot be edited.',
+      );
     }
 
     const role = normalizeInvitationRole(dto.role);
@@ -420,9 +429,7 @@ export class MemberService {
       void this.pusherService.notifyMemberRoleUpdated({
         businessId: member.business.id,
         businessName:
-          payload?.businessName ||
-          member.business.name?.trim() ||
-          'Business',
+          payload?.businessName || member.business.name?.trim() || 'Business',
         userId: member.user.id,
         previousRole: payload?.previousRole || previousRole || role,
         role: payload?.role || role,

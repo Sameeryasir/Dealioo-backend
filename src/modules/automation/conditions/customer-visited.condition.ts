@@ -16,9 +16,7 @@ import type {
 } from '../automation-condition.types';
 
 @Injectable()
-export class CustomerVisitedConditionEvaluator
-  implements AutomationConditionEvaluator
-{
+export class CustomerVisitedConditionEvaluator implements AutomationConditionEvaluator {
   constructor(
     @InjectRepository(FunnelEvent)
     private readonly funnelEventRepository: Repository<FunnelEvent>,

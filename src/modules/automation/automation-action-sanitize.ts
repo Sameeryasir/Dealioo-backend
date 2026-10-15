@@ -23,7 +23,9 @@ export function resolveTagActionMode(
   const workflowKind = String(config.workflowKind ?? '').trim();
   if (workflowKind === 'prepaid_payment_actions') return 'prepaid';
   if (workflowKind === 'actions') return 'bundled';
-  const action = String(config.action ?? '').trim().toLowerCase();
+  const action = String(config.action ?? '')
+    .trim()
+    .toLowerCase();
   if (action === 'ask_review' || workflowKind === 'ask_review') {
     return 'ask_review';
   }

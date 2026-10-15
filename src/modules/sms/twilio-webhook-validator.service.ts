@@ -4,10 +4,7 @@ import Twilio from 'twilio';
 import { Repository } from 'typeorm';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { decryptSecret } from '../../utils/token-encryption.util';
-import {
-  normalizePhoneNumber,
-  phoneDigitsOnly,
-} from './twilio.service';
+import { normalizePhoneNumber, phoneDigitsOnly } from './twilio.service';
 
 function envTrim(key: string): string | undefined {
   const value = process.env[key]?.trim();
@@ -87,8 +84,7 @@ export class TwilioWebhookValidatorService {
       for (const integration of integrations) {
         try {
           push(decryptSecret(integration.twilioAuthToken!.trim()));
-        } catch {
-        }
+        } catch {}
       }
     }
 

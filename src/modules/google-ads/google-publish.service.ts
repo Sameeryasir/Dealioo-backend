@@ -10,7 +10,12 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { Job, Queue, UnrecoverableError } from 'bullmq';
-import type { Customer, MutateOperation, resources, services } from 'google-ads-api';
+import type {
+  Customer,
+  MutateOperation,
+  resources,
+  services,
+} from 'google-ads-api';
 import { DataSource, Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import type { GoogleCampaignBuilderDraftData } from '../../db/entities/google-campaign-builder-draft.types';
@@ -308,9 +313,7 @@ export class GooglePublishService {
     };
   }
 
-  async processQueuedPublish(
-    job: Job<GooglePublishJobPayload>,
-  ): Promise<void> {
+  async processQueuedPublish(job: Job<GooglePublishJobPayload>): Promise<void> {
     const { userId, businessId, draftId } = job.data;
     const jobId = String(job.id ?? googlePublishJobId(businessId, draftId));
 
@@ -371,7 +374,9 @@ export class GooglePublishService {
     }
 
     const credentials =
-      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(
+        business,
+      );
 
     const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
     const loginCustomerId = normalizeGoogleCustomerId(
@@ -425,7 +430,7 @@ export class GooglePublishService {
 
     if (!campaignId) {
       await this.beginStep(draft, 'campaign');
-      campaignId = await this.createCampaign(ctx, budgetId!);
+      campaignId = await this.createCampaign(ctx, budgetId);
       draft.googleCampaignId = campaignId;
       await this.draftRepository.save(draft);
       await this.syncTrackingPartial(tracking.id, {
@@ -435,22 +440,22 @@ export class GooglePublishService {
     }
 
     await this.beginStep(draft, 'campaign');
-    await this.applyCampaignConversionGoals(ctx, campaignId!);
+    await this.applyCampaignConversionGoals(ctx, campaignId);
 
     if (!adGroupId) {
-      await this.createCampaignCriteria(ctx, campaignId!);
+      await this.createCampaignCriteria(ctx, campaignId);
       await this.completeStep(draft, 'campaign');
     }
 
     if (!adGroupId) {
       await this.beginStep(draft, 'ad_group');
-      adGroupId = await this.createAdGroup(ctx, campaignId!);
+      adGroupId = await this.createAdGroup(ctx, campaignId);
       draft.googleAdGroupId = adGroupId;
       await this.draftRepository.save(draft);
       await this.syncTrackingPartial(tracking.id, {
         googleAdGroupId: adGroupId,
       });
-      await this.createAdGroupDemographics(ctx, adGroupId!);
+      await this.createAdGroupDemographics(ctx, adGroupId);
       await this.completeStep(draft, 'ad_group');
     } else {
       await this.createAdGroupDemographics(ctx, adGroupId);
@@ -458,7 +463,7 @@ export class GooglePublishService {
 
     if (keywordIds.length === 0) {
       await this.beginStep(draft, 'keywords');
-      keywordIds = await this.createKeywords(ctx, adGroupId!);
+      keywordIds = await this.createKeywords(ctx, adGroupId);
       draft.googleKeywordIds = keywordIds;
       await this.draftRepository.save(draft);
       await this.syncTrackingPartial(tracking.id, {
@@ -469,17 +474,17 @@ export class GooglePublishService {
 
     if (!adId) {
       await this.beginStep(draft, 'ads');
-      adId = await this.createResponsiveSearchAd(ctx, adGroupId!);
+      adId = await this.createResponsiveSearchAd(ctx, adGroupId);
       draft.googleAdId = adId;
       await this.draftRepository.save(draft);
-      await this.uploadBusinessBrandingAssets(ctx, campaignId!);
+      await this.uploadBusinessBrandingAssets(ctx, campaignId);
       await this.syncTrackingPartial(tracking.id, {
         googleAdId: adId,
       });
       await this.completeStep(draft, 'ads');
     } else {
       await this.beginStep(draft, 'ads');
-      await this.updateResponsiveSearchAd(ctx, adGroupId!, adId);
+      await this.updateResponsiveSearchAd(ctx, adGroupId, adId);
       if (campaignId && budgetId) {
         await this.updateExistingCampaignBasics(ctx, campaignId, budgetId);
       }
@@ -528,12 +533,12 @@ export class GooglePublishService {
     const campaignName =
       draft.campaignName?.trim() ||
       draft.draftData?.campaignName?.trim() ||
-      campaignId!;
+      campaignId;
 
     void this.businessHistoryService
       .logCampaignCreated({
         businessId,
-        campaignId: campaignId!,
+        campaignId: campaignId,
         campaignName,
         actorUserId: userId,
         source: 'google',
@@ -695,8 +700,7 @@ export class GooglePublishService {
       status: payload.status,
       advertising_channel_type: payload.advertisingChannelType,
       campaign_budget: ResourceNames.campaignBudget(ctx.customerId, budgetId),
-      contains_eu_political_advertising:
-        payload.containsEuPoliticalAdvertising,
+      contains_eu_political_advertising: payload.containsEuPoliticalAdvertising,
       network_settings: {
         target_google_search: payload.networkSettings.targetGoogleSearch,
         target_search_network: payload.networkSettings.targetSearchNetwork,
@@ -761,13 +765,13 @@ export class GooglePublishService {
 
     let customerRows: GoalRow[] = [];
     try {
-      customerRows = (await ctx.customer.query(`
+      customerRows = await ctx.customer.query(`
         SELECT
           customer_conversion_goal.category,
           customer_conversion_goal.origin,
           customer_conversion_goal.biddable
         FROM customer_conversion_goal
-      `)) as GoalRow[];
+      `);
     } catch (err) {
       this.logger.warn(
         `Skipping conversion goals apply (customer goal query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
@@ -814,14 +818,11 @@ export class GooglePublishService {
         if (goal?.biddable !== true) continue;
         const category = this.normalizeAdsEnumName(
           goal.category,
-          enums.ConversionActionCategory as unknown as Record<
-            string,
-            string | number
-          >,
+          enums.ConversionActionCategory,
         );
         const origin = this.normalizeAdsEnumName(
           goal.origin,
-          enums.ConversionOrigin as unknown as Record<string, string | number>,
+          enums.ConversionOrigin,
         );
         if (category && origin) {
           wantKeys.add(`${category}::${origin}`);
@@ -848,9 +849,7 @@ export class GooglePublishService {
 
     let campaignRows: CampaignGoalRow[] = [];
     try {
-      campaignRows = (await ctx.customer.query(
-        campaignGoalQuery,
-      )) as CampaignGoalRow[];
+      campaignRows = await ctx.customer.query(campaignGoalQuery);
     } catch (err) {
       this.logger.warn(
         `Skipping conversion goals apply (campaign goal query failed): ${formatGoogleAdsSdkError(err, 'query failed')}`,
@@ -862,9 +861,7 @@ export class GooglePublishService {
       // Goals can lag campaign creation briefly — retry once, then skip.
       await new Promise((resolve) => setTimeout(resolve, 1500));
       try {
-        campaignRows = (await ctx.customer.query(
-          campaignGoalQuery,
-        )) as CampaignGoalRow[];
+        campaignRows = await ctx.customer.query(campaignGoalQuery);
       } catch {
         campaignRows = [];
       }
@@ -879,8 +876,7 @@ export class GooglePublishService {
 
     const updates: Array<{ resource_name: string; biddable: boolean }> = [];
     for (const row of campaignRows) {
-      const goal =
-        row.campaignConversionGoal ?? row.campaign_conversion_goal;
+      const goal = row.campaignConversionGoal ?? row.campaign_conversion_goal;
       const resourceName = (
         goal?.resourceName ||
         goal?.resource_name ||
@@ -890,14 +886,11 @@ export class GooglePublishService {
 
       const categoryName = this.normalizeAdsEnumName(
         goal?.category,
-        enums.ConversionActionCategory as unknown as Record<
-          string,
-          string | number
-        >,
+        enums.ConversionActionCategory,
       );
       const originName = this.normalizeAdsEnumName(
         goal?.origin,
-        enums.ConversionOrigin as unknown as Record<string, string | number>,
+        enums.ConversionOrigin,
       );
       if (!categoryName || !originName) continue;
 
@@ -988,14 +981,11 @@ export class GooglePublishService {
       const item = row.customerConversionGoal ?? row.customer_conversion_goal;
       const category = this.normalizeAdsEnumName(
         item?.category,
-        enums.ConversionActionCategory as unknown as Record<
-          string,
-          string | number
-        >,
+        enums.ConversionActionCategory,
       );
       const origin = this.normalizeAdsEnumName(
         item?.origin,
-        enums.ConversionOrigin as unknown as Record<string, string | number>,
+        enums.ConversionOrigin,
       );
       if (!category || !origin) continue;
       if (allowed.size > 0 && !allowed.has(category)) continue;
@@ -1045,7 +1035,10 @@ export class GooglePublishService {
             row.centerLocationId === pin.id?.trim(),
         ),
     );
-    if (pinTargets.length > 0 && (proximities.length === 0 || missingTargetRadius)) {
+    if (
+      pinTargets.length > 0 &&
+      (proximities.length === 0 || missingTargetRadius)
+    ) {
       throw new BadRequestException(
         '[campaign/proximity] Each city/region needs its own map radius. Go back to Locations, click each place, set its radius, then publish again.',
       );
@@ -1125,7 +1118,9 @@ export class GooglePublishService {
       }
     }
 
-    for (const languageId of buildLanguageCriterionIdsFromDraft(ctx.draftData)) {
+    for (const languageId of buildLanguageCriterionIdsFromDraft(
+      ctx.draftData,
+    )) {
       const label = `language:${languageId}`;
       try {
         await this.mutateOne(ctx, 'campaign', label, {
@@ -1168,10 +1163,11 @@ export class GooglePublishService {
 
     let response;
     try {
-      response = await ctx.customer.geoTargetConstants.suggestGeoTargetConstants({
-        locale: 'en',
-        location_names: { names: [geo.name] },
-      } as services.SuggestGeoTargetConstantsRequest);
+      response =
+        await ctx.customer.geoTargetConstants.suggestGeoTargetConstants({
+          locale: 'en',
+          location_names: { names: [geo.name] },
+        } as services.SuggestGeoTargetConstantsRequest);
     } catch (err) {
       throw new BadRequestException(
         `[campaign/location:${geo.rawId}] Could not look up Google location for "${geo.name}". ${formatGoogleAdsSdkError(err, 'Geo suggest failed.')}`,
@@ -1295,7 +1291,10 @@ export class GooglePublishService {
       includedAgeTypes.add(enums.AgeRangeType.AGE_RANGE_65_UP);
     }
 
-    if (includedAgeTypes.size > 0 && includedAgeTypes.size < allAgeTypes.length) {
+    if (
+      includedAgeTypes.size > 0 &&
+      includedAgeTypes.size < allAgeTypes.length
+    ) {
       for (const ageType of allAgeTypes) {
         if (includedAgeTypes.has(ageType)) continue;
         const label = `age_exclude:${ageType}`;
@@ -1459,11 +1458,7 @@ export class GooglePublishService {
       entity: 'ad_group_ad',
       operation: 'update',
       resource: {
-        resource_name: ResourceNames.adGroupAd(
-          ctx.customerId,
-          adGroupId,
-          adId,
-        ),
+        resource_name: ResourceNames.adGroupAd(ctx.customerId, adGroupId, adId),
         ad: {
           final_urls: payload.finalUrls,
           responsive_search_ad: {
@@ -1505,10 +1500,7 @@ export class GooglePublishService {
         entity: 'campaign_budget',
         operation: 'update',
         resource: {
-          resource_name: ResourceNames.campaignBudget(
-            ctx.customerId,
-            budgetId,
-          ),
+          resource_name: ResourceNames.campaignBudget(ctx.customerId, budgetId),
           amount_micros: budgetPayload.amountMicros,
         },
       });
@@ -1566,15 +1558,20 @@ export class GooglePublishService {
     campaignResource: string,
     businessName: string,
   ): Promise<void> {
-    const textResponse = await this.mutateOne(ctx, 'ads', 'business_name_asset', {
-      entity: 'asset',
-      operation: 'create',
-      resource: {
-        name: `Business name · ${businessName}`.slice(0, 100),
-        type: enums.AssetType.TEXT,
-        text_asset: { text: businessName.slice(0, 100) },
+    const textResponse = await this.mutateOne(
+      ctx,
+      'ads',
+      'business_name_asset',
+      {
+        entity: 'asset',
+        operation: 'create',
+        resource: {
+          name: `Business name · ${businessName}`.slice(0, 100),
+          type: enums.AssetType.TEXT,
+          text_asset: { text: businessName.slice(0, 100) },
+        },
       },
-    });
+    );
     const textAssetName = this.firstResourceName(textResponse);
     if (!textAssetName) {
       throw new BadRequestException(
@@ -1811,9 +1808,7 @@ export class GooglePublishService {
   ): Promise<void> {
     const step = draft.publishStep ?? 'preparing';
     const message = this.publishErrorMessage(err);
-    const withStep = message.startsWith('[')
-      ? message
-      : `[${step}] ${message}`;
+    const withStep = message.startsWith('[') ? message : `[${step}] ${message}`;
     draft.status = GoogleCampaignDraftStatus.FAILED;
     draft.publishStatus = GoogleCampaignPublishStatus.FAILED;
     draft.errorMessage = withStep;

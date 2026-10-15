@@ -130,14 +130,10 @@ export class SpacesService {
           ACL: 'public-read',
         }),
       );
-    } catch {
-    }
+    } catch {}
   }
 
-  async uploadFile(
-    file: Express.Multer.File,
-    folder: string,
-  ): Promise<string> {
+  async uploadFile(file: Express.Multer.File, folder: string): Promise<string> {
     if (!this.client || !this.bucket) {
       throw new ServiceUnavailableException(
         'DigitalOcean Spaces is not configured.',

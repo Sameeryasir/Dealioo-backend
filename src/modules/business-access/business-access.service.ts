@@ -307,9 +307,7 @@ export class BusinessAccessService {
     }
 
     if (member.permissionRows?.length) {
-      return member.permissionRows.map(
-        (row) => row.permission as BusinessMemberPermissionKey,
-      );
+      return member.permissionRows.map((row) => row.permission);
     }
 
     const rows = await this.permissionRepository.find({
@@ -317,9 +315,9 @@ export class BusinessAccessService {
     });
 
     if (rows.length > 0) {
-      return rows.map((row) => row.permission as BusinessMemberPermissionKey);
+      return rows.map((row) => row.permission);
     }
 
-    return (member.permissions ?? []) as BusinessMemberPermissionKey[];
+    return member.permissions ?? [];
   }
 }

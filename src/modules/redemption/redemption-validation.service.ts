@@ -4,9 +4,7 @@ import {
   CouponPaymentStatus,
   CouponStatus,
 } from '../../db/entities/coupon.entity';
-import {
-  FunnelPaymentStatus,
-} from '../../db/entities/funnel-payment.entity';
+import { FunnelPaymentStatus } from '../../db/entities/funnel-payment.entity';
 import { CouponService } from './coupon.service';
 import {
   ScannerErrorCode,
@@ -213,7 +211,9 @@ export class RedemptionValidationService {
     if (paymentStatus === CouponPaymentStatus.PENDING) {
       const walkInAmount = options?.orderSubtotal;
       const hasWalkInPayment =
-        walkInAmount != null && Number.isFinite(walkInAmount) && walkInAmount > 0;
+        walkInAmount != null &&
+        Number.isFinite(walkInAmount) &&
+        walkInAmount > 0;
 
       if (hasWalkInPayment) {
         return {

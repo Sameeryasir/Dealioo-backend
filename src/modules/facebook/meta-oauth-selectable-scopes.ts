@@ -15,14 +15,14 @@ export function normalizeSelectableMetaScopes(raw: string[]): string[] {
   const allowed = new Set<string>(SELECTABLE_META_OAUTH_SCOPES);
   return [
     ...new Set(
-      raw
-        .map((scope) => scope.trim())
-        .filter((scope) => allowed.has(scope)),
+      raw.map((scope) => scope.trim()).filter((scope) => allowed.has(scope)),
     ),
   ];
 }
 
-export function assertRequestedMetaScopesSelected(selected: string[]): string[] {
+export function assertRequestedMetaScopesSelected(
+  selected: string[],
+): string[] {
   const normalized = normalizeSelectableMetaScopes(selected);
   if (normalized.length === 0) {
     throw new Error(

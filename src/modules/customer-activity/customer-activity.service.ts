@@ -45,7 +45,9 @@ export class CustomerActivityService {
     private readonly customerActivityRepository: Repository<CustomerActivity>,
   ) {}
 
-  async record(input: RecordCustomerActivityInput): Promise<CustomerActivity | null> {
+  async record(
+    input: RecordCustomerActivityInput,
+  ): Promise<CustomerActivity | null> {
     const repo = input.manager
       ? input.manager.getRepository(CustomerActivity)
       : this.customerActivityRepository;
@@ -147,8 +149,7 @@ export class CustomerActivityService {
         funnelPaymentId: params.funnelPaymentId ?? null,
         funnelId: params.funnelId ?? null,
         campaignId: params.campaignId ?? null,
-        campaignIds:
-          params.campaignId != null ? [params.campaignId] : [],
+        campaignIds: params.campaignId != null ? [params.campaignId] : [],
         label: 'Purchased online',
       },
       occurredAt: params.occurredAt,

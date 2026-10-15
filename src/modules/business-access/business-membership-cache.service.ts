@@ -23,7 +23,10 @@ export class BusinessMembershipCacheService implements OnModuleDestroy {
       10,
     );
     this.ttlSeconds = parseInt(
-      this.configService.get<string>('BUSINESS_MEMBER_CACHE_TTL_SECONDS', '300'),
+      this.configService.get<string>(
+        'BUSINESS_MEMBER_CACHE_TTL_SECONDS',
+        '300',
+      ),
       10,
     );
 

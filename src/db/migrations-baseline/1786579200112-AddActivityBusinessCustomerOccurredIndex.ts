@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddActivityBusinessCustomerOccurredIndex1786579200112
-  implements MigrationInterface
-{
+export class AddActivityBusinessCustomerOccurredIndex1786579200112 implements MigrationInterface {
   name = 'AddActivityBusinessCustomerOccurredIndex1786579200112';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

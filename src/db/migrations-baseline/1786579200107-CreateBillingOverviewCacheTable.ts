@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateBillingOverviewCacheTable1786579200107
-  implements MigrationInterface
-{
+export class CreateBillingOverviewCacheTable1786579200107 implements MigrationInterface {
   name = 'CreateBillingOverviewCacheTable1786579200107';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

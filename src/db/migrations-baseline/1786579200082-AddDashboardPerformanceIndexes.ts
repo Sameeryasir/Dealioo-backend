@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddDashboardPerformanceIndexes1786579200082
-  implements MigrationInterface
-{
+export class AddDashboardPerformanceIndexes1786579200082 implements MigrationInterface {
   name = 'AddDashboardPerformanceIndexes1786579200082';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

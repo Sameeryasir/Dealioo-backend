@@ -6,7 +6,8 @@ import {
 import { assertPaymentReminderScheduleValid } from './payment-reminder-schedule.util';
 
 function node(
-  partial: Partial<AutomationNode> & Pick<AutomationNode, 'id' | 'type' | 'order'>,
+  partial: Partial<AutomationNode> &
+    Pick<AutomationNode, 'id' | 'type' | 'order'>,
 ): AutomationNode {
   return {
     automationId: 1,

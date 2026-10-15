@@ -31,10 +31,7 @@ export class AiConversationController {
     @Body() dto: CreateAiConversationDto,
     @Req() req: { user: User },
   ) {
-    const conversation = await this.conversationService.create(
-      dto,
-      req.user,
-    );
+    const conversation = await this.conversationService.create(dto, req.user);
 
     return {
       id: conversation.id,
@@ -46,9 +43,7 @@ export class AiConversationController {
   }
 
   @Get('funnel/:funnelId')
-  async findByFunnelId(
-    @Param('funnelId', ParseIntPipe) funnelId: number,
-  ) {
+  async findByFunnelId(@Param('funnelId', ParseIntPipe) funnelId: number) {
     return this.conversationService.findByFunnelId(funnelId);
   }
 
@@ -90,11 +85,7 @@ export class AiConversationController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
-    return this.messageService.findByConversation(
-      conversationId,
-      page,
-      limit,
-    );
+    return this.messageService.findByConversation(conversationId, page, limit);
   }
 
   @Post(':conversationId/messages')

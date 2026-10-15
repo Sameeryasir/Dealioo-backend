@@ -26,8 +26,6 @@ export function isGraphDrivenAutomationNodes(
   return nodes.some(
     (node) =>
       node.type === AutomationNodeType.TRIGGER &&
-      isGraphDrivenNodeConfig(
-        (node.config ?? {}) as Record<string, unknown>,
-      ),
+      isGraphDrivenNodeConfig(node.config ?? {}),
   );
 }

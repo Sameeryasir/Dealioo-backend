@@ -110,7 +110,9 @@ import { TriggerNodeHandler } from './handlers/trigger-node.handler';
     AuthModule,
     GoogleWalletModule,
     CampaignReviewModule,
-    forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
+    forwardRef(
+      () => require('../redemption/redemption.module').RedemptionModule,
+    ),
     forwardRef(() => PaymentModule),
   ],
   controllers: [AutomationController],

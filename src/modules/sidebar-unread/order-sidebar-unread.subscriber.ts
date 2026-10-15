@@ -13,9 +13,7 @@ import { SidebarSectionNotifyService } from './sidebar-section-notify.service';
 
 @Injectable()
 @EventSubscriber()
-export class OrderSidebarUnreadSubscriber
-  implements EntitySubscriberInterface<Order>
-{
+export class OrderSidebarUnreadSubscriber implements EntitySubscriberInterface<Order> {
   constructor(
     private readonly dataSource: DataSource,
     private readonly sidebarNotify: SidebarSectionNotifyService,
@@ -34,9 +32,7 @@ export class OrderSidebarUnreadSubscriber
   }
 
   afterUpdate(event: UpdateEvent<Order>): void {
-    const entity = (event.entity ?? event.databaseEntity) as
-      | Order
-      | undefined;
+    const entity = (event.entity ?? event.databaseEntity) as Order | undefined;
     runAfterTransactionCommit(event.manager, () => {
       void this.notify(entity);
     });

@@ -12,9 +12,7 @@ export type PurposeEmailDefaults = {
   ctaLabel?: string;
 };
 
-export function parseEmailNodeConfig(
-  config: Record<string, unknown>,
-): {
+export function parseEmailNodeConfig(config: Record<string, unknown>): {
   subject: string;
   message?: string;
   headline?: string;
@@ -112,7 +110,9 @@ export function resolveSubjectForPurpose(
     subject = defaults.subject ?? subject;
   }
 
-  const templateLooksAbandoned = rawTemplate.toLowerCase().includes('abandoned');
+  const templateLooksAbandoned = rawTemplate
+    .toLowerCase()
+    .includes('abandoned');
   if (
     purpose === AutomationPurpose.FUNNEL_PAYMENT &&
     (!subject || templateLooksAbandoned)
@@ -143,7 +143,8 @@ export function getBrevoTemplateIdForPurpose(
     [AutomationPurpose.FUNNEL_SIGNUP]: env.welcome,
     [AutomationPurpose.FUNNEL_PAYMENT]: env.paymentConfirmation,
     [AutomationPurpose.FUNNEL_SIGNUP_PAYMENT_REMINDER]: env.abandonedPayment,
-    [AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER]: env.abandonedPayment,
+    [AutomationPurpose.FUNNEL_ABANDONED_CHECKOUT_REMINDER]:
+      env.abandonedPayment,
   };
 
   const raw = map[purpose]?.trim();

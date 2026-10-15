@@ -168,7 +168,9 @@ export class OnboardingService {
 
   async assertOwnerCanAccessPlanSelection(userId: number): Promise<void> {
     const user = await this.requireAdminUser(userId);
-    if (await this.userSubscriptionsService.userHasActiveSubscription(user.id)) {
+    if (
+      await this.userSubscriptionsService.userHasActiveSubscription(user.id)
+    ) {
       throw new BadRequestException(
         'You already have an active subscription. Continue to business setup.',
       );
@@ -220,10 +222,8 @@ export class OnboardingService {
       user.planFitVersion
         ? {
             planSlug: user.planFitRecommendedPlan,
-            reason: this.recommendationService.recommend(
-              answers,
-              planContents,
-            ).reason,
+            reason: this.recommendationService.recommend(answers, planContents)
+              .reason,
             confidence: user.planFitConfidence,
             scores: user.planFitScores,
             version: user.planFitVersion,
@@ -380,7 +380,7 @@ export class OnboardingService {
     );
 
     await this.userRepository.update(userId, {
-      planFitAnswers: answers as unknown as Record<string, string>,
+      planFitAnswers: answers,
       planFitRecommendedPlan: recommendation.planSlug,
       planFitCompletedAt: completedAt,
       planFitScores: scores,
@@ -479,8 +479,7 @@ export class OnboardingService {
         userId,
         step: dto.step?.trim() || 'basics',
         payload: nextPayload,
-        logoUrl:
-          dto.logoUrl === undefined ? null : (dto.logoUrl?.trim() || null),
+        logoUrl: dto.logoUrl === undefined ? null : dto.logoUrl?.trim() || null,
       });
     } else {
       draft.step = dto.step?.trim() || draft.step || 'basics';
@@ -660,10 +659,7 @@ export class OnboardingService {
       businessCreated,
     });
     const onboardingCompleted = businessCreated;
-    const redirectPath = this.buildRedirectPath(
-      nextStep,
-      onboardingCompleted,
-    );
+    const redirectPath = this.buildRedirectPath(nextStep, onboardingCompleted);
 
     const checklist = this.buildChecklist({
       subscriptionCompleted,
@@ -882,7 +878,7 @@ export class OnboardingService {
   ): BusinessOnboardingDraftResponse {
     return {
       step: draft.step,
-      payload: (draft.payload ?? {}) as BusinessOnboardingDraftPayload,
+      payload: draft.payload ?? {},
       logoUrl: draft.logoUrl,
       updatedAt: draft.updatedAt.toISOString(),
     };
@@ -938,7 +934,9 @@ export class OnboardingService {
       return null;
     }
     const out: Partial<PlanFitAnswersInput> = {};
-    if (Object.values(BusinessCount).includes(raw.businesses as BusinessCount)) {
+    if (
+      Object.values(BusinessCount).includes(raw.businesses as BusinessCount)
+    ) {
       out.businesses = raw.businesses as BusinessCount;
     }
     if (Object.values(HelpStyle).includes(raw.helpStyle as HelpStyle)) {

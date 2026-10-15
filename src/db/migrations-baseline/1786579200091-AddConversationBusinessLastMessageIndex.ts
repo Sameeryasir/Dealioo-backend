@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddConversationBusinessLastMessageIndex1786579200091
-  implements MigrationInterface
-{
+export class AddConversationBusinessLastMessageIndex1786579200091 implements MigrationInterface {
   name = 'AddConversationBusinessLastMessageIndex1786579200091';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

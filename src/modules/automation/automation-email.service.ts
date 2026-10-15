@@ -50,9 +50,7 @@ export class AutomationEmailService {
 
     const campaignName = options?.campaignName?.trim() || 'the campaign';
     const message = String(config.message ?? '').trim();
-    const ctaLabel = String(
-      config.ctaLabel ?? config.linkLabel ?? '',
-    ).trim();
+    const ctaLabel = String(config.ctaLabel ?? config.linkLabel ?? '').trim();
     const subject = String(config.subject ?? '').trim();
 
     if (options?.requireSubject && !subject) {
@@ -65,7 +63,9 @@ export class AutomationEmailService {
       subject,
       templateKey: resolveEmailTemplateKey(
         purpose,
-        String(config.template ?? config.templateId ?? 'Payment reminder').trim(),
+        String(
+          config.template ?? config.templateId ?? 'Payment reminder',
+        ).trim(),
       ),
       templateProps: {
         message: message || undefined,
@@ -93,9 +93,7 @@ export class AutomationEmailService {
     const subject = parsed.subject;
 
     if (options?.requireSubject && !subject) {
-      throw new BadRequestException(
-        'Email node config must include subject.',
-      );
+      throw new BadRequestException('Email node config must include subject.');
     }
 
     const templateKey = resolveEmailTemplateKey(purpose, parsed.rawTemplate);
@@ -175,11 +173,7 @@ export class AutomationEmailService {
     if (ctaUrl && !text.includes(ctaUrl)) {
       extras.push(`${ctaLabel}: ${ctaUrl}`);
     }
-    if (
-      walletUrl &&
-      walletUrl !== ctaUrl &&
-      !text.includes(walletUrl)
-    ) {
+    if (walletUrl && walletUrl !== ctaUrl && !text.includes(walletUrl)) {
       extras.push(`Add to Google Wallet: ${walletUrl}`);
     }
 

@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * What changed: add 14 industry categories. Why: Performance + create dropdown need ~10–20 types.
  * Related: campaign.entity.ts CampaignCategory, FE app/lib/campaign-category.ts
  */
-export class ExpandCampaignCategories1786579200080
-  implements MigrationInterface
-{
+export class ExpandCampaignCategories1786579200080 implements MigrationInterface {
   name = 'ExpandCampaignCategories1786579200080';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

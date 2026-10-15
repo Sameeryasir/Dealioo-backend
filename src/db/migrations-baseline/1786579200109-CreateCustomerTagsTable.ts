@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateCustomerTagsTable1786579200109
-  implements MigrationInterface
-{
+export class CreateCustomerTagsTable1786579200109 implements MigrationInterface {
   name = 'CreateCustomerTagsTable1786579200109';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -35,7 +33,9 @@ export class CreateCustomerTagsTable1786579200109
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_customer_tags_customer"`);
+    await queryRunner.query(
+      `DROP INDEX IF EXISTS "IDX_customer_tags_customer"`,
+    );
     await queryRunner.query(
       `DROP INDEX IF EXISTS "IDX_customer_tags_business_tag"`,
     );

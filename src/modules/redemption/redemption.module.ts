@@ -47,7 +47,9 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     GoogleWalletModule,
     // --- SWC circular import fix ---
     forwardRef(() => require('../activity/activity.module').ActivityModule),
-    forwardRef(() => require('../automation/automation.module').AutomationModule),
+    forwardRef(
+      () => require('../automation/automation.module').AutomationModule,
+    ),
     BusinessHistoryModule,
     CustomerActivityModule,
     CustomerJourneyModule,

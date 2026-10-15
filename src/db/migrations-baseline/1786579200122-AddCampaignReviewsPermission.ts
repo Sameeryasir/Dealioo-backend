@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCampaignReviewsPermission1786579200122
-  implements MigrationInterface
-{
+export class AddCampaignReviewsPermission1786579200122 implements MigrationInterface {
   name = 'AddCampaignReviewsPermission1786579200122';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

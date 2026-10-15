@@ -156,9 +156,7 @@ export class BillingService {
     };
 
     const stripeCustomerId =
-      user.stripeCustomerId?.trim() ||
-      localSub?.stripeCustomerId?.trim() ||
-      '';
+      user.stripeCustomerId?.trim() || localSub?.stripeCustomerId?.trim() || '';
 
     if (!stripeCustomerId) {
       this.logger.warn(`No Stripe customer id for user ${userId}.`);
@@ -241,10 +239,12 @@ export class BillingService {
 
   async createSetupIntent(userId: number): Promise<BillingSetupIntentResponse> {
     const { stripeCustomerId } = await this.requireStripeCustomer(userId);
-    const { clientSecret } = await this.stripeService.createPlatformSetupIntent({
-      stripeCustomerId,
-      userId,
-    });
+    const { clientSecret } = await this.stripeService.createPlatformSetupIntent(
+      {
+        stripeCustomerId,
+        userId,
+      },
+    );
     return { clientSecret };
   }
 
@@ -262,7 +262,7 @@ export class BillingService {
     const setupCustomerId =
       typeof setupIntent.customer === 'string'
         ? setupIntent.customer
-        : setupIntent.customer?.id ?? '';
+        : (setupIntent.customer?.id ?? '');
 
     if (setupCustomerId !== stripeCustomerId) {
       throw new BadRequestException('This card setup does not belong to you.');
@@ -282,7 +282,7 @@ export class BillingService {
     const paymentMethodId =
       typeof setupIntent.payment_method === 'string'
         ? setupIntent.payment_method
-        : setupIntent.payment_method?.id ?? '';
+        : (setupIntent.payment_method?.id ?? '');
 
     if (!paymentMethodId) {
       throw new BadRequestException('Stripe did not return a payment method.');
@@ -483,7 +483,9 @@ export class BillingService {
       issuedAt: this.formatInvoiceDate(invoice.created),
       status: this.formatInvoiceStatus(invoice.status),
       billToName:
-        invoice.customer_name?.trim() || user?.name?.trim() || 'Dealioo customer',
+        invoice.customer_name?.trim() ||
+        user?.name?.trim() ||
+        'Dealioo customer',
       billToEmail: invoice.customer_email?.trim() || user?.email?.trim() || '',
       billToAddress,
       lines,
@@ -505,7 +507,7 @@ export class BillingService {
     const invoiceCustomerId =
       typeof invoice.customer === 'string'
         ? invoice.customer
-        : invoice.customer?.id ?? '';
+        : (invoice.customer?.id ?? '');
     if (invoiceCustomerId !== stripeCustomerId) {
       throw new ForbiddenException('This invoice does not belong to you.');
     }
@@ -517,7 +519,8 @@ export class BillingService {
     invoiceNumber: string | null | undefined,
     invoiceId: string,
   ): string {
-    const raw = invoiceNumber?.trim() || invoiceId.replace(/^in_/, '').slice(-8);
+    const raw =
+      invoiceNumber?.trim() || invoiceId.replace(/^in_/, '').slice(-8);
     const safe = raw.replace(/[^A-Za-z0-9._-]/g, '-') || 'invoice';
     return `Invoice-${safe}.pdf`;
   }
@@ -558,9 +561,7 @@ export class BillingService {
     });
 
     const stripeCustomerId =
-      user.stripeCustomerId?.trim() ||
-      localSub?.stripeCustomerId?.trim() ||
-      '';
+      user.stripeCustomerId?.trim() || localSub?.stripeCustomerId?.trim() || '';
 
     if (!stripeCustomerId) {
       throw new BadRequestException('No billing customer found');
@@ -714,15 +715,15 @@ export class BillingService {
     const customerId =
       typeof updated.subscription.customer === 'string'
         ? updated.subscription.customer
-        : updated.subscription.customer?.id ??
+        : (updated.subscription.customer?.id ??
           localSub.stripeCustomerId ??
           user.stripeCustomerId ??
-          null;
+          null);
 
     const latestInvoice =
       typeof updated.subscription.latest_invoice === 'string'
         ? updated.subscription.latest_invoice
-        : updated.subscription.latest_invoice?.id ?? null;
+        : (updated.subscription.latest_invoice?.id ?? null);
 
     return {
       success: true,
@@ -876,7 +877,10 @@ export class BillingService {
       planName: localSub?.plan?.name || 'Dealioo plan',
       planSlug: localSub?.plan?.slug || '',
       billingCycle: localSub?.billingCycle ?? 'monthly',
-      status: this.mapStripeStatus(stripeSubscription?.status) ?? localSub?.status ?? 'active',
+      status:
+        this.mapStripeStatus(stripeSubscription?.status) ??
+        localSub?.status ??
+        'active',
       priceFormatted:
         this.formatStripePrice(priceObject) ??
         this.formatLocalPlanPrice(localSub),
@@ -1002,7 +1006,9 @@ export class BillingService {
     }
   }
 
-  private toIsoFromUnixSeconds(value: number | null | undefined): string | null {
+  private toIsoFromUnixSeconds(
+    value: number | null | undefined,
+  ): string | null {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
       return null;
     }
@@ -1037,11 +1043,11 @@ export class BillingService {
 
     const hasAddress = Boolean(
       address &&
-        (address.line1 ||
-          address.city ||
-          address.state ||
-          address.postalCode ||
-          address.country),
+      (address.line1 ||
+        address.city ||
+        address.state ||
+        address.postalCode ||
+        address.country),
     );
 
     return {
@@ -1120,7 +1126,8 @@ export class BillingService {
     return {
       id: invoice.id,
       number: invoice.number?.trim() || null,
-      createdAt: this.toIsoFromUnixSeconds(invoice.created) ?? new Date(0).toISOString(),
+      createdAt:
+        this.toIsoFromUnixSeconds(invoice.created) ?? new Date(0).toISOString(),
       amountFormatted: this.formatMoney(amount, invoice.currency, true),
       currency: invoice.currency,
       status: invoice.status?.trim() || 'unknown',

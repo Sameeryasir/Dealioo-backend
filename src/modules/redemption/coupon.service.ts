@@ -484,7 +484,10 @@ export class CouponService {
       if (raced) {
         return raced;
       }
-      this.logger.warn(`Failed to issue coupon for payment ${funnelPaymentId}`, err);
+      this.logger.warn(
+        `Failed to issue coupon for payment ${funnelPaymentId}`,
+        err,
+      );
       return null;
     }
   }

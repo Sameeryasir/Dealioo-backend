@@ -204,10 +204,7 @@ export class FacebookController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<FacebookAdAccountDto[]> {
-    return this.facebookService.listAdAccountsForBusiness(
-      req.user,
-      businessId,
-    );
+    return this.facebookService.listAdAccountsForBusiness(req.user, businessId);
   }
 
   @UseGuards(AuthGuard('jwt'))

@@ -213,12 +213,7 @@ export class SaveGoogleLocationsStepDto {
   radiusTargeting?: string;
 
   @IsOptional()
-  @IsIn([
-    'PRESENCE',
-    'SEARCH',
-    'PRESENCE_OR_INTEREST',
-    'PRESENCE_NOT_EXCLUDED',
-  ])
+  @IsIn(['PRESENCE', 'SEARCH', 'PRESENCE_OR_INTEREST', 'PRESENCE_NOT_EXCLUDED'])
   presenceOption?: GooglePresenceOptionId;
 }
 

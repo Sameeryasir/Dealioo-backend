@@ -9,12 +9,12 @@ import {
 
 describe('automation-email-cta.util', () => {
   it('normalizes email URLs for comparison', () => {
-    expect(
-      normalizeEmailLinkUrl('https://example.com/pass/'),
-    ).toBe('https://example.com/pass');
-    expect(
-      normalizeEmailLinkUrl('https://Example.com/pass'),
-    ).toBe('https://example.com/pass');
+    expect(normalizeEmailLinkUrl('https://example.com/pass/')).toBe(
+      'https://example.com/pass',
+    );
+    expect(normalizeEmailLinkUrl('https://Example.com/pass')).toBe(
+      'https://example.com/pass',
+    );
   });
 
   it('hides pass link when wallet URL matches', () => {

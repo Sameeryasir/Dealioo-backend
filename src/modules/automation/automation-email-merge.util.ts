@@ -26,7 +26,9 @@ export function resolveAutomationFullName(customerName: string): string {
 export function isSignupPassLinkActionConfig(
   config: Record<string, unknown>,
 ): boolean {
-  const linkLabel = String(config.linkLabel ?? '').trim().toLowerCase();
+  const linkLabel = String(config.linkLabel ?? '')
+    .trim()
+    .toLowerCase();
   if (linkLabel === 'pass link') {
     return true;
   }

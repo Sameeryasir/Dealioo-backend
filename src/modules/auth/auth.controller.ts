@@ -64,7 +64,8 @@ export class AuthController {
   @Post('accept-invitation')
   async acceptInvitation(
     @Body() dto: AcceptInvitationDto,
-    @Req() req: Request & {
+    @Req()
+    req: Request & {
       user: { id: number; email: string; role?: { name: string } | null };
     },
     @Res({ passthrough: true }) res: Response,

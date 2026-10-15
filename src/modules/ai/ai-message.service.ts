@@ -44,7 +44,9 @@ export class AiMessageService {
     ) {
       const cleaned = dto.content.trim().replace(/\s+/g, ' ');
       conversation.title =
-        cleaned.length > 60 ? `${cleaned.slice(0, 60)}…` : cleaned || 'New chat';
+        cleaned.length > 60
+          ? `${cleaned.slice(0, 60)}…`
+          : cleaned || 'New chat';
     }
 
     await this.conversationRepository.save(conversation);

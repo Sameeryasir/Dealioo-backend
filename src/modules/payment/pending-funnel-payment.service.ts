@@ -132,7 +132,9 @@ export class PendingFunnelPaymentService {
     return [key1, key2];
   }
 
-  private resolveProvenance(campaignType: CampaignType | string | null | undefined) {
+  private resolveProvenance(
+    campaignType: CampaignType | string | null | undefined,
+  ) {
     const isPostpaid =
       String(campaignType ?? '').toLowerCase() === CampaignType.POSTPAID;
     if (isPostpaid) {
@@ -165,7 +167,7 @@ export class PendingFunnelPaymentService {
     const provenance = this.resolveProvenance(input.campaignType);
     const hasStripeLink = Boolean(
       payment.stripePaymentIntentId?.trim() ||
-        payment.stripeCheckoutSessionId?.trim(),
+      payment.stripeCheckoutSessionId?.trim(),
     );
     const shouldHealProvenance = provenance.isPostpaid && !hasStripeLink;
     const amountCents =
@@ -245,9 +247,7 @@ export class PendingFunnelPaymentService {
     }
 
     await this.ensureOrderForPayment(manager, payment, {
-      orderSource: shouldHealProvenance
-        ? provenance.orderSource
-        : undefined,
+      orderSource: shouldHealProvenance ? provenance.orderSource : undefined,
       amountCents: payment.amount,
       currency: payment.currency || input.currency,
       businessId: input.businessId,

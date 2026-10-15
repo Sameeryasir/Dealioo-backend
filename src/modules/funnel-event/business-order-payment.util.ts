@@ -78,8 +78,7 @@ export function isCounterExtrasOnlyScannerPayment(input: {
     return false;
   }
   const scannerPayment =
-    input.paymentSource === 'SCANNER' ||
-    input.collectionChannel === 'IN_STORE';
+    input.paymentSource === 'SCANNER' || input.collectionChannel === 'IN_STORE';
   const scannerOrder =
     input.orderSource == null || input.orderSource === 'SCANNER';
   return scannerPayment && scannerOrder;

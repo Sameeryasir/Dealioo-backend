@@ -44,9 +44,7 @@ export class FeeService {
     let model: PlatformFeeModel = 'fixed';
 
     if (percentBps > 0) {
-      const percentFee = Math.round(
-        (chargeAmountMinor * percentBps) / 10_000,
-      );
+      const percentFee = Math.round((chargeAmountMinor * percentBps) / 10_000);
       fee = Math.max(fee, percentFee);
       model = fixedMinor > 0 ? 'fixed_plus_percentage' : 'percentage';
     }

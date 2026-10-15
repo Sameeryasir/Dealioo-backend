@@ -46,7 +46,10 @@ export function stripAutomationLinksForChat(text: string): string {
     cleaned.push(withoutUrls);
   }
 
-  return cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return cleaned
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /** Full chat-body sanitizer used when saving and returning guest messages. */

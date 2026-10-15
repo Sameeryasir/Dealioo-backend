@@ -2,7 +2,10 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
-import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../../utils/token-encryption.util';
 import {
   GOOGLE_TAG_MANAGER_READONLY_SCOPE,
   refreshGoogleAccessToken,
@@ -44,8 +47,7 @@ export class GoogleAdsTokenService {
   assertGoogleScopes(scopes: string[]): void {
     const hasAdsScope = scopes.some(
       (scope) =>
-        scope === GOOGLE_ADS_REQUIRED_SCOPE ||
-        scope.includes('auth/adwords'),
+        scope === GOOGLE_ADS_REQUIRED_SCOPE || scope.includes('auth/adwords'),
     );
     if (!hasAdsScope) {
       throw new BadRequestException(
@@ -68,9 +70,7 @@ export class GoogleAdsTokenService {
     }
   }
 
-  async assertBusinessGoogleToken(
-    business: Business,
-  ): Promise<{
+  async assertBusinessGoogleToken(business: Business): Promise<{
     accessToken: string;
     refreshToken: string;
     googleUserId: string;

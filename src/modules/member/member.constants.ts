@@ -16,8 +16,7 @@ export const INVITABLE_BUSINESS_MEMBER_ROLES = [
 export type InvitableBusinessMemberRole =
   (typeof INVITABLE_BUSINESS_MEMBER_ROLES)[number];
 
-export const INVITABLE_ROLE_ERROR =
-  'Role must be Manager, Staff, or Scanner.';
+export const INVITABLE_ROLE_ERROR = 'Role must be Manager, Staff, or Scanner.';
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
   'campaigns_create',
@@ -135,7 +134,10 @@ export const FULL_ACCESS_PERMISSION = 'full_access' as const;
 export function hasAnyCampaignPermission(
   permissions: readonly string[],
 ): boolean {
-  if (permissions.includes('campaigns') || permissions.includes('campaigns_view')) {
+  if (
+    permissions.includes('campaigns') ||
+    permissions.includes('campaigns_view')
+  ) {
     return true;
   }
   if (CAMPAIGN_WORKSPACE_PERMISSIONS.some((key) => permissions.includes(key))) {
@@ -241,9 +243,7 @@ export function hasAnyAutomationPermission(
   if (permissions.includes('automations')) {
     return true;
   }
-  return AUTOMATION_ACTION_PERMISSIONS.some((key) =>
-    permissions.includes(key),
-  );
+  return AUTOMATION_ACTION_PERMISSIONS.some((key) => permissions.includes(key));
 }
 
 export function automationPermissionKeysFor(

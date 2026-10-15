@@ -70,7 +70,9 @@ export class TwilioService implements OnModuleInit {
       await client.api.accounts(accountSid).fetch();
     } catch (error) {
       const detail =
-        error instanceof Error ? error.message : 'Twilio rejected these credentials.';
+        error instanceof Error
+          ? error.message
+          : 'Twilio rejected these credentials.';
       this.logger.warn(`Twilio credential check failed → ${detail}`);
       throw new BadRequestException(
         'Could not connect to Twilio with those credentials. Check Account SID and Auth Token.',
@@ -251,8 +253,7 @@ export class TwilioService implements OnModuleInit {
         isoCountry: n.isoCountry?.trim() || countryCode,
         numberType,
         addressRequirement: formatAddressRequirement(n.addressRequirements),
-        monthlyFee:
-          numberType === 'Local' ? feeByType.local : feeByType.mobile,
+        monthlyFee: numberType === 'Local' ? feeByType.local : feeByType.mobile,
         capabilities: {
           sms: Boolean(caps.sms ?? caps.SMS),
           mms: Boolean(caps.mms ?? caps.MMS),
@@ -348,7 +349,11 @@ export class TwilioService implements OnModuleInit {
     accountSid: string;
     authToken: string;
     phoneNumber: string;
-  }): Promise<{ sid: string; phoneNumber: string; friendlyName: string | null }> {
+  }): Promise<{
+    sid: string;
+    phoneNumber: string;
+    friendlyName: string | null;
+  }> {
     const accountSid = params.accountSid.trim();
     const authToken = params.authToken.trim();
     const phoneNumber =
@@ -381,7 +386,9 @@ export class TwilioService implements OnModuleInit {
         throw error;
       }
       const detail =
-        error instanceof Error ? error.message : 'Twilio rejected this purchase.';
+        error instanceof Error
+          ? error.message
+          : 'Twilio rejected this purchase.';
       this.logger.warn(`Twilio purchase failed → ${phoneNumber}: ${detail}`);
       throw new BadRequestException(
         `Could not buy that Twilio number: ${detail}`,
@@ -394,7 +401,8 @@ export class TwilioService implements OnModuleInit {
     body: string,
     options?: TwilioSendOptions,
   ): Promise<{ sid: string }> {
-    const accountSid = options?.accountSid?.trim() || resolveAccountSid() || null;
+    const accountSid =
+      options?.accountSid?.trim() || resolveAccountSid() || null;
     const authToken =
       options?.authToken?.trim() || envTrim('TWILIO_AUTH_TOKEN') || null;
     const fromPhoneNumber =
@@ -529,8 +537,13 @@ export class TwilioService implements OnModuleInit {
         return;
       }
 
-      if (phoneRecord.smsUrl === webhookUrl && phoneRecord.smsMethod === 'POST') {
-        this.logger.log(`Twilio inbound webhook already configured → ${webhookUrl}`);
+      if (
+        phoneRecord.smsUrl === webhookUrl &&
+        phoneRecord.smsMethod === 'POST'
+      ) {
+        this.logger.log(
+          `Twilio inbound webhook already configured → ${webhookUrl}`,
+        );
         return;
       }
 
@@ -538,7 +551,9 @@ export class TwilioService implements OnModuleInit {
         smsUrl: webhookUrl,
         smsMethod: 'POST',
       });
-      this.logger.log(`Twilio inbound webhook synced on phone number → ${webhookUrl}`);
+      this.logger.log(
+        `Twilio inbound webhook synced on phone number → ${webhookUrl}`,
+      );
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : 'Unknown Twilio API error';
@@ -613,7 +628,9 @@ export function phoneDigitsOnly(normalizedPhone: string): string {
   return normalizedPhone.replace(/\D/g, '');
 }
 
-export function maskTwilioAccountSid(accountSid: string | null | undefined): string | null {
+export function maskTwilioAccountSid(
+  accountSid: string | null | undefined,
+): string | null {
   const sid = accountSid?.trim() || '';
   if (!sid) return null;
   if (sid.length <= 8) return sid;

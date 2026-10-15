@@ -1,4 +1,11 @@
-import { IsArray, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import {
+  IsArray,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+} from 'class-validator';
 
 export class SaveGoogleCampaignInfoStepDto {
   @IsUUID()

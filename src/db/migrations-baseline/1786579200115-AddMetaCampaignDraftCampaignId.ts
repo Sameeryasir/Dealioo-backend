@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddMetaCampaignDraftCampaignId1786579200115
-  implements MigrationInterface
-{
+export class AddMetaCampaignDraftCampaignId1786579200115 implements MigrationInterface {
   name = 'AddMetaCampaignDraftCampaignId1786579200115';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

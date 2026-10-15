@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddAskReviewAutomationTrigger1786579200124
-  implements MigrationInterface
-{
+export class AddAskReviewAutomationTrigger1786579200124 implements MigrationInterface {
   name = 'AddAskReviewAutomationTrigger1786579200124';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

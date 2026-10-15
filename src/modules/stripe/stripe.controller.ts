@@ -43,12 +43,10 @@ export class StripeController {
         : '';
 
     if (error?.trim()) {
-      const reason = errorDescription?.trim() || error.trim() || 'access_denied';
+      const reason =
+        errorDescription?.trim() || error.trim() || 'access_denied';
       await this.stripeService.notifyConnectFailure(state, reason);
-      const qs = [
-        businessQuery,
-        `error=${encodeURIComponent(reason)}`,
-      ]
+      const qs = [businessQuery, `error=${encodeURIComponent(reason)}`]
         .filter(Boolean)
         .join('&');
       return res.redirect(`${frontend}/stripe/success?${qs}`);
@@ -73,10 +71,7 @@ export class StripeController {
           ? err.message
           : 'Stripe account connection failed.';
       await this.stripeService.notifyConnectFailure(state, message);
-      const qs = [
-        businessQuery,
-        `error=${encodeURIComponent(message)}`,
-      ]
+      const qs = [businessQuery, `error=${encodeURIComponent(message)}`]
         .filter(Boolean)
         .join('&');
       return res.redirect(`${frontend}/stripe/success?${qs}`);

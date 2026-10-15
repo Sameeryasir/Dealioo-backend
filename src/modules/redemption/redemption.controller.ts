@@ -170,13 +170,14 @@ export class RedemptionController {
     return this.buildGuestCouponResponse(coupon);
   }
 
-  private async buildGuestCouponResponse(coupon: Awaited<
-    ReturnType<CouponService['findByPaymentId']>
-  >) {
+  private async buildGuestCouponResponse(
+    coupon: Awaited<ReturnType<CouponService['findByPaymentId']>>,
+  ) {
     if (!coupon) {
       throw new NotFoundException('Coupon not found');
     }
-    const liveCoupon = await this.couponService.resolveLiveCouponForScan(coupon);
+    const liveCoupon =
+      await this.couponService.resolveLiveCouponForScan(coupon);
     await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
     const paymentConfirmed =
       await this.couponService.isPaymentConfirmed(liveCoupon);

@@ -209,7 +209,9 @@ export class ChatService {
       .getOne();
 
     if (!execution) {
-      throw new NotFoundException('Automation run not found for this business.');
+      throw new NotFoundException(
+        'Automation run not found for this business.',
+      );
     }
 
     const [logs, activityEvents] = await Promise.all([
@@ -362,9 +364,7 @@ export class ChatService {
     });
 
     if (!conversation || conversation.messageCount === 0) {
-      throw new NotFoundException(
-        'No conversation found for this business.',
-      );
+      throw new NotFoundException('No conversation found for this business.');
     }
 
     return this.toGuestConversation(conversation);
@@ -498,9 +498,7 @@ export class ChatService {
     });
 
     if (!conversation || conversation.messageCount === 0) {
-      throw new NotFoundException(
-        'No messages found for this conversation.',
-      );
+      throw new NotFoundException('No messages found for this conversation.');
     }
 
     return this.getCustomerConversationMessages(
@@ -521,9 +519,7 @@ export class ChatService {
     });
 
     if (!conversation) {
-      throw new NotFoundException(
-        'No messages found for this conversation.',
-      );
+      throw new NotFoundException('No messages found for this conversation.');
     }
 
     if (conversation.messageCount === 0) {
@@ -643,7 +639,9 @@ export class ChatService {
     };
   }
 
-  private toGuestConversation(conversation: Conversation): GuestConversationDto {
+  private toGuestConversation(
+    conversation: Conversation,
+  ): GuestConversationDto {
     const summary = this.toChatCustomerSummary(conversation, 0);
     return {
       conversationId: conversation.id,
@@ -946,9 +944,7 @@ export class ChatService {
         ? metadata.campaignName.trim()
         : '';
     const metaFunnelName =
-      typeof metadata.funnelName === 'string'
-        ? metadata.funnelName.trim()
-        : '';
+      typeof metadata.funnelName === 'string' ? metadata.funnelName.trim() : '';
     const metaFunnelIdRaw = metadata.funnelId;
     const metaFunnelId =
       typeof metaFunnelIdRaw === 'number'

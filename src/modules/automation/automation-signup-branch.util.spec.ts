@@ -62,10 +62,7 @@ describe('automation-wait.util', () => {
 
   it('schedules relative waits via resumeAt', () => {
     const now = new Date('2026-08-04T12:00:00Z');
-    const resumeAt = resolveWaitResumeAt(
-      { delay: 15, unit: 'minutes' },
-      now,
-    );
+    const resumeAt = resolveWaitResumeAt({ delay: 15, unit: 'minutes' }, now);
     expect(resumeAt?.getTime()).toBe(now.getTime() + 15 * 60_000);
   });
 });
@@ -252,10 +249,9 @@ describe('shouldSkipSignupBranchOutboundEmail', () => {
       }),
     ).toBe(false);
     expect(
-      shouldSkipSignupBranchOutboundEmail(
-        AutomationPurpose.FUNNEL_PAYMENT,
-        { flowBranch: 'wallet_reminder' },
-      ),
+      shouldSkipSignupBranchOutboundEmail(AutomationPurpose.FUNNEL_PAYMENT, {
+        flowBranch: 'wallet_reminder',
+      }),
     ).toBe(false);
   });
 

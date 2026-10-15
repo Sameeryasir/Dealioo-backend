@@ -36,10 +36,7 @@ export class TypeOrmAiVersionStore implements AiVersionStore {
     const changedPages = version.changedPages ?? version.schema;
     const pagesForSave = isPostpaid
       ? (() => {
-          const { payment: _payment, ...rest } = changedPages as Record<
-            string,
-            unknown
-          >;
+          const { payment: _payment, ...rest } = changedPages;
           return rest;
         })()
       : changedPages;

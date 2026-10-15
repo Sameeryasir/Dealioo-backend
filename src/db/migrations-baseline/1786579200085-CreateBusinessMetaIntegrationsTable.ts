@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateBusinessMetaIntegrationsTable1786579200085
-  implements MigrationInterface
-{
+export class CreateBusinessMetaIntegrationsTable1786579200085 implements MigrationInterface {
   name = 'CreateBusinessMetaIntegrationsTable1786579200085';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -81,6 +79,8 @@ export class CreateBusinessMetaIntegrationsTable1786579200085
     await queryRunner.query(
       `DROP INDEX IF EXISTS "UQ_business_meta_integrations_business_id"`,
     );
-    await queryRunner.query(`DROP TABLE IF EXISTS "business_meta_integrations"`);
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS "business_meta_integrations"`,
+    );
   }
 }

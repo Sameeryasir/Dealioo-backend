@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddConversationMessageThreadIndex1786579200092
-  implements MigrationInterface
-{
+export class AddConversationMessageThreadIndex1786579200092 implements MigrationInterface {
   name = 'AddConversationMessageThreadIndex1786579200092';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateBusinessUserSidebarSectionReadState1786579200095
-  implements MigrationInterface
-{
+export class CreateBusinessUserSidebarSectionReadState1786579200095 implements MigrationInterface {
   name = 'CreateBusinessUserSidebarSectionReadState1786579200095';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -49,7 +49,10 @@ import { AutomationConditionRegistry } from './automation-condition.registry';
 import { AutomationExecutionEventService } from './automation-execution-event.service';
 import { normalizeExecutionContext } from './automation-execution-context.types';
 import { AutomationMetricsService } from './automation-metrics.service';
-import { isParallelSplitConfig, resolveWaitResumeAt } from './automation-wait.util';
+import {
+  isParallelSplitConfig,
+  resolveWaitResumeAt,
+} from './automation-wait.util';
 import {
   hasConditionLoopRestartConfig,
   isUnpaidGuestCondition,
@@ -213,7 +216,11 @@ export class AutomationEngineService {
         execution,
         AutomationExecutionEventType.NODE_COMPLETED,
         node.id,
-        { nodeType: node.type, result: result.status, branchKey: result.branchKey ?? null },
+        {
+          nodeType: node.type,
+          result: result.status,
+          branchKey: result.branchKey ?? null,
+        },
       );
       await this.handleNodeResult(executionId, execution, node.id, result);
       this.logger.log(
@@ -379,17 +386,18 @@ export class AutomationEngineService {
     }
 
     if (result.outputs && Object.keys(result.outputs).length > 0) {
-      const context = this.eventService.mergeContext(execution.executionContext, {
-        nodeOutputs: {
-          ...(normalizeExecutionContext(execution.executionContext).nodeOutputs ?? {}),
-          [String(nodeId)]: result.outputs,
+      const context = this.eventService.mergeContext(
+        execution.executionContext,
+        {
+          nodeOutputs: {
+            ...(normalizeExecutionContext(execution.executionContext)
+              .nodeOutputs ?? {}),
+            [String(nodeId)]: result.outputs,
+          },
         },
-      });
-      await this.executionService.updateExecutionContext(
-        executionId,
-        context as Record<string, unknown>,
       );
-      execution.executionContext = context as Record<string, unknown>;
+      await this.executionService.updateExecutionContext(executionId, context);
+      execution.executionContext = context;
     }
 
     const advanced = await this.advanceToNextNode(
@@ -611,15 +619,11 @@ export class AutomationEngineService {
         const purpose = execution.automation.purpose;
 
         if (
-          shouldSkipSignupBranchOutboundEmail(
-            purpose,
-            (config ?? {}) as Record<string, unknown>,
-            {
-              graphDriven: await this.isGraphDrivenAutomation(
-                execution.automationId,
-              ),
-            },
-          )
+          shouldSkipSignupBranchOutboundEmail(purpose, config ?? {}, {
+            graphDriven: await this.isGraphDrivenAutomation(
+              execution.automationId,
+            ),
+          })
         ) {
           await this.logService.createLog({
             executionId: execution.id,
@@ -640,7 +644,7 @@ export class AutomationEngineService {
         const emailConfig = await this.enrichPaymentEmailConfig(
           purpose,
           execution,
-          (config ?? {}) as Record<string, unknown>,
+          config ?? {},
           node.id,
         );
 
@@ -654,7 +658,9 @@ export class AutomationEngineService {
           execution,
           node.id,
         );
-        if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
+        if (
+          await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)
+        ) {
           this.logger.log(
             `Execution ${execution.id}: skipping duplicate email for key ${chatIdempotencyKey}`,
           );
@@ -684,18 +690,18 @@ export class AutomationEngineService {
           error: sendResult.error,
         });
 
-      if (sendResult.sent) {
-        await this.executionService.incrementEmailsSent(execution.id);
-        this.metricsService.recordEmailSend(true);
-        await this.recordAutomationEmailInChat(
-          execution,
-          node.id,
-          purpose,
-          prepared,
-          to ?? '',
-        );
-        return 'advance';
-      }
+        if (sendResult.sent) {
+          await this.executionService.incrementEmailsSent(execution.id);
+          this.metricsService.recordEmailSend(true);
+          await this.recordAutomationEmailInChat(
+            execution,
+            node.id,
+            purpose,
+            prepared,
+            to ?? '',
+          );
+          return 'advance';
+        }
 
         if (to && sendResult.error) {
           this.metricsService.recordEmailSend(false);
@@ -720,9 +726,7 @@ export class AutomationEngineService {
         return 'advance';
 
       case AutomationNodeType.CONDITION: {
-        const conditionType = String(
-          config.conditionType ?? config.type ?? '',
-        );
+        const conditionType = String(config.conditionType ?? config.type ?? '');
 
         if (isCustomerVisitedCondition(conditionType)) {
           const registryResult = await this.conditionRegistry.evaluate({
@@ -744,9 +748,9 @@ export class AutomationEngineService {
           );
           await this.executionService.updateExecutionContext(
             execution.id,
-            context as Record<string, unknown>,
+            context,
           );
-          execution.executionContext = context as Record<string, unknown>;
+          execution.executionContext = context;
 
           await this.recordExecutionEvent(
             execution,
@@ -839,9 +843,7 @@ export class AutomationEngineService {
           return 'complete';
         }
 
-        if (
-          execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP
-        ) {
+        if (execution.automation?.purpose === AutomationPurpose.FUNNEL_SIGNUP) {
           const passes = await this.evaluateSignupBranchFilters(
             execution,
             config,
@@ -951,7 +953,8 @@ export class AutomationEngineService {
 
     const [primaryNodeId, ...siblingNodeIds] = nextNodeIds;
     const baseContext =
-      execution.executionContext && typeof execution.executionContext === 'object'
+      execution.executionContext &&
+      typeof execution.executionContext === 'object'
         ? { ...execution.executionContext }
         : {};
 
@@ -991,17 +994,17 @@ export class AutomationEngineService {
 
     const primaryNode = await this.executionService.findNodeForAutomation(
       execution.automationId,
-      primaryNodeId!,
+      primaryNodeId,
     );
     await this.executionService.updateCurrentNode(
       execution.id,
-      primaryNodeId!,
+      primaryNodeId,
       AutomationExecutionStatus.RUNNING,
       null,
     );
     await this.queueService.addProcessExecution({
       executionId: execution.id,
-      nodeId: primaryNodeId!,
+      nodeId: primaryNodeId,
       nodeType: primaryNode.type,
     });
 
@@ -1212,7 +1215,9 @@ export class AutomationEngineService {
       }
 
       const action = rawAction as Record<string, unknown>;
-      const actionType = String(action.type ?? '').trim().toLowerCase();
+      const actionType = String(action.type ?? '')
+        .trim()
+        .toLowerCase();
 
       if (actionType !== 'send_email') {
         continue;
@@ -1235,7 +1240,9 @@ export class AutomationEngineService {
         execution,
         node.id,
       );
-      if (await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)) {
+      if (
+        await this.chatMessageService.hasOutboundMessage(chatIdempotencyKey)
+      ) {
         this.logger.log(
           `[Prepaid Offer] Skipping duplicate email for execution ${execution.id} key ${chatIdempotencyKey}`,
         );
@@ -1281,9 +1288,7 @@ export class AutomationEngineService {
     }
 
     if (emailFailed) {
-      throw new AutomationRetryableError(
-        lastEmailError || 'Email send failed',
-      );
+      throw new AutomationRetryableError(lastEmailError || 'Email send failed');
     }
     return 'advance';
   }
@@ -1333,12 +1338,13 @@ export class AutomationEngineService {
     >,
     config: Record<string, unknown>,
   ): Promise<LegacyNodeRunResult> {
-    const channel = String(config.channel ?? 'email').trim().toLowerCase();
+    const channel = String(config.channel ?? 'email')
+      .trim()
+      .toLowerCase();
     const campaignId = execution.automation?.campaignId ?? null;
     const campaignName =
       execution.automation?.campaign?.campaignName?.trim() || 'the campaign';
-    const ctaLabel =
-      String(config.ctaLabel ?? '').trim() || 'Give Feedback';
+    const ctaLabel = String(config.ctaLabel ?? '').trim() || 'Give Feedback';
     const subject =
       String(config.subject ?? '').trim() || `How was your visit?`;
     const message =
@@ -1537,10 +1543,11 @@ export class AutomationEngineService {
     const funnelId = execution.automation?.funnelId ?? null;
     if (funnelId && execution.customerId) {
       try {
-        const coupon = await this.couponService.ensurePendingCouponForUnpaidFunnel(
-          funnelId,
-          execution.customerId,
-        );
+        const coupon =
+          await this.couponService.ensurePendingCouponForUnpaidFunnel(
+            funnelId,
+            execution.customerId,
+          );
         await this.logService.createLog({
           executionId: execution.id,
           nodeId: node.id,
@@ -1782,8 +1789,7 @@ export class AutomationEngineService {
         executionId: execution.id,
         nodeId: node.id,
         customerId: execution.customerId,
-        message:
-          'Signup branch SMS skipped (only initial Actions block sends)',
+        message: 'Signup branch SMS skipped (only initial Actions block sends)',
       });
       return 'advance';
     }
@@ -1814,7 +1820,7 @@ export class AutomationEngineService {
       purpose === AutomationPurpose.FUNNEL_SIGNUP &&
       isSignupPassLinkActionConfig(config);
     const passLink = isPassLinkStep
-      ? (await this.resolvePassUrlForExecution(execution)) ?? ''
+      ? ((await this.resolvePassUrlForExecution(execution)) ?? '')
       : '';
 
     // Multi-select labels (checkboxes) are appended into the SMS body only.
@@ -1857,9 +1863,7 @@ export class AutomationEngineService {
         message: `SMS failed: ${sendResult.error ?? 'unknown error'}`,
         error: sendResult.error,
       });
-      throw new AutomationRetryableError(
-        sendResult.error || 'SMS send failed',
-      );
+      throw new AutomationRetryableError(sendResult.error || 'SMS send failed');
     }
 
     await this.logService.createLog({
@@ -1892,10 +1896,7 @@ export class AutomationEngineService {
       customerId: execution.customerId,
       messagePreview:
         this.automationEmailService.resolvePreparedEmailPreview(prepared),
-      idempotencyKey: idempotencyKey.replace(
-        /^chat_message:/,
-        'message_sent:',
-      ),
+      idempotencyKey: idempotencyKey.replace(/^chat_message:/, 'message_sent:'),
       metadata: {
         automationId: execution.automationId,
         automationExecutionId: execution.id,
@@ -2046,10 +2047,7 @@ export class AutomationEngineService {
     config: Record<string, unknown>,
     nodeId: number,
   ): Promise<Record<string, unknown>> {
-    const {
-      qrImageDataUrl: _qrImageDataUrl,
-      ...withoutQr
-    } = config;
+    const { qrImageDataUrl: _qrImageDataUrl, ...withoutQr } = config;
 
     const multiLabels = this.normalizeBodyLinkLabels(withoutQr);
     if (multiLabels != null) {
@@ -2073,7 +2071,7 @@ export class AutomationEngineService {
     const ctaLabel = String(
       withoutQr.ctaLabel ?? withoutQr.linkLabel ?? '',
     ).trim();
-    let next: Record<string, unknown> = { ...withoutQr };
+    const next: Record<string, unknown> = { ...withoutQr };
 
     if (ctaLabel) {
       const ctaLink = await this.resolveCustomerCtaLinkForLabel(
@@ -2143,10 +2141,8 @@ export class AutomationEngineService {
       return next;
     }
 
-    const googleWalletSaveUrl = await this.tryCreateGoogleWalletSaveUrlForExecution(
-      execution,
-      passUrl,
-    );
+    const googleWalletSaveUrl =
+      await this.tryCreateGoogleWalletSaveUrlForExecution(execution, passUrl);
 
     return {
       ...next,
@@ -2161,7 +2157,8 @@ export class AutomationEngineService {
     ctaLabel: string,
   ): Promise<Record<string, string> | null> {
     if (isCompletePaymentCtaLabel(ctaLabel)) {
-      const checkoutUrl = await this.tryCreateCheckoutUrlForExecution(execution);
+      const checkoutUrl =
+        await this.tryCreateCheckoutUrlForExecution(execution);
       if (checkoutUrl) {
         return { ctaUrl: checkoutUrl };
       }
@@ -2271,9 +2268,10 @@ export class AutomationEngineService {
       order: { createdAt: 'DESC' },
     });
 
-    const candidates = [contextPaymentId, event?.funnelPaymentId ?? null].filter(
-      (id): id is number => id != null && Number.isFinite(id) && id > 0,
-    );
+    const candidates = [
+      contextPaymentId,
+      event?.funnelPaymentId ?? null,
+    ].filter((id): id is number => id != null && Number.isFinite(id) && id > 0);
 
     const seen = new Set<number>();
     for (const paymentId of candidates) {
@@ -2306,10 +2304,11 @@ export class AutomationEngineService {
       funnelId,
     );
     if (!signupCoupon?.qrToken?.trim() && options?.ensurePendingCoupon) {
-      signupCoupon = await this.couponService.ensurePendingCouponForUnpaidFunnel(
-        funnelId,
-        execution.customerId,
-      );
+      signupCoupon =
+        await this.couponService.ensurePendingCouponForUnpaidFunnel(
+          funnelId,
+          execution.customerId,
+        );
     }
     const signupToken = signupCoupon?.qrToken?.trim();
     if (signupToken) {
@@ -2418,9 +2417,9 @@ export class AutomationEngineService {
     );
     await this.executionService.updateExecutionContext(
       execution.id,
-      loopContext as Record<string, unknown>,
+      loopContext,
     );
-    execution.executionContext = loopContext as Record<string, unknown>;
+    execution.executionContext = loopContext;
     this.metricsService.recordPrepaidLoopRestart();
 
     await this.recordExecutionEvent(
@@ -2507,7 +2506,9 @@ export class AutomationEngineService {
     });
   }
 
-  private async isGraphDrivenAutomation(automationId: number): Promise<boolean> {
+  private async isGraphDrivenAutomation(
+    automationId: number,
+  ): Promise<boolean> {
     const triggers = await this.nodeRepository.find({
       where: { automationId, type: AutomationNodeType.TRIGGER },
       select: ['id', 'type', 'config'],
@@ -2522,15 +2523,12 @@ export class AutomationEngineService {
     details?: Record<string, unknown>,
   ): Promise<void> {
     const refreshed = await this.executionService.findById(execution.id);
-    const context = this.eventService.mergeContext(
-      refreshed.executionContext,
-      {
-        stepHistoryPointer: refreshed.lastEventId ?? undefined,
-      },
-    );
+    const context = this.eventService.mergeContext(refreshed.executionContext, {
+      stepHistoryPointer: refreshed.lastEventId ?? undefined,
+    });
     const snapshot = this.eventService.buildSnapshotFromExecution({
       ...refreshed,
-      executionContext: context as Record<string, unknown>,
+      executionContext: context,
     });
 
     await this.eventService.appendEvent({

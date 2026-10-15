@@ -41,7 +41,7 @@ describe('automation-recipient-batch.util', () => {
         return second;
       },
       onChunk: async (chunk) => {
-        seen.push(chunk.map((row) => row.customerId!));
+        seen.push(chunk.map((row) => row.customerId));
       },
     });
 
@@ -52,7 +52,9 @@ describe('automation-recipient-batch.util', () => {
   });
 
   it('prefetches the next page while processing the current page', async () => {
-    const first = Array.from({ length: 300 }, (_, i) => ({ customerId: i + 1 }));
+    const first = Array.from({ length: 300 }, (_, i) => ({
+      customerId: i + 1,
+    }));
     const second = Array.from({ length: 10 }, (_, i) => ({
       customerId: 300 + i + 1,
     }));

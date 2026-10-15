@@ -20,11 +20,7 @@ import {
   PresignMediaDto,
   PresignMediaResponseDto,
 } from './dto/presign-media.dto';
-import {
-  MediaStatus,
-  MediaType,
-  toStorageMediaType,
-} from './media.constants';
+import { MediaStatus, MediaType, toStorageMediaType } from './media.constants';
 
 const IMAGE_MIMES = new Set([
   'image/png',
@@ -34,11 +30,7 @@ const IMAGE_MIMES = new Set([
   'image/gif',
 ]);
 
-const VIDEO_MIMES = new Set([
-  'video/mp4',
-  'video/quicktime',
-  'video/webm',
-]);
+const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 
 @Injectable()
 export class MediaService {
@@ -181,9 +173,10 @@ export class MediaService {
     });
   }
 
-  async findMetaRefsByStorageUrl(
-    storageUrl: string,
-  ): Promise<{ metaImageHash: string | null; metaVideoId: string | null } | null> {
+  async findMetaRefsByStorageUrl(storageUrl: string): Promise<{
+    metaImageHash: string | null;
+    metaVideoId: string | null;
+  } | null> {
     const media = await this.findByStorageUrl(storageUrl);
     if (!media) return null;
     if (!media.metaImageHash && !media.metaVideoId) return null;
@@ -193,9 +186,10 @@ export class MediaService {
     };
   }
 
-  async findReadyMetaRefsByUrl(
-    storageUrl: string,
-  ): Promise<{ metaImageHash: string | null; metaVideoId: string | null } | null> {
+  async findReadyMetaRefsByUrl(storageUrl: string): Promise<{
+    metaImageHash: string | null;
+    metaVideoId: string | null;
+  } | null> {
     return this.findMetaRefsByStorageUrl(storageUrl);
   }
 

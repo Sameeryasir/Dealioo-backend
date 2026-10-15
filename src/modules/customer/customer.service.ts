@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import {
@@ -44,7 +48,6 @@ export class CustomerService {
     private readonly dataSource: DataSource,
     private readonly automationQueueService: AutomationQueueService,
   ) {}
-
 
   async listForBusiness(
     businessId: number,
@@ -154,7 +157,10 @@ export class CustomerService {
 
     const rows = await this.businessCustomerRepository
       .createQueryBuilder('link')
-      .select(`TO_CHAR(DATE_TRUNC('month', link.joinedAt), 'YYYY-MM')`, 'monthKey')
+      .select(
+        `TO_CHAR(DATE_TRUNC('month', link.joinedAt), 'YYYY-MM')`,
+        'monthKey',
+      )
       .addSelect('COUNT(link.id)', 'joined')
       .where('link.businessId = :businessId', { businessId })
       .andWhere('link.joinedAt >= :start', { start })

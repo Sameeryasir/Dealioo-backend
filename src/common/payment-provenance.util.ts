@@ -33,9 +33,10 @@ export function campaignFunnelPaymentOriginSql(alias = 'payment'): string {
     )`;
 }
 
-export function applyCampaignFunnelPaymentOriginFilter<
-  T extends ObjectLiteral,
->(qb: SelectQueryBuilder<T>, alias = 'payment'): SelectQueryBuilder<T> {
+export function applyCampaignFunnelPaymentOriginFilter<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
+  alias = 'payment',
+): SelectQueryBuilder<T> {
   return qb.andWhere(
     `(
       ${alias}.payment_source IN (:...campaignFunnelPaymentSources)

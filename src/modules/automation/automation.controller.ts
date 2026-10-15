@@ -222,10 +222,7 @@ export class AutomationController {
 
   @UseGuards(AuthGuard('jwt'))
   @Post('execution/:id/recover')
-  recoverExecution(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req,
-  ) {
+  recoverExecution(@Param('id', ParseIntPipe) id: number, @Req() req) {
     return this.automationService.recoverExecution(id, req.user);
   }
 
@@ -245,10 +242,7 @@ export class AutomationController {
 
   @UseGuards(AuthGuard('jwt'))
   @Post('dead-letter/:id/retry')
-  retryDeadLetter(
-    @Param('id', ParseIntPipe) id: number,
-    @Req() req,
-  ) {
+  retryDeadLetter(@Param('id', ParseIntPipe) id: number, @Req() req) {
     return this.automationService.retryDeadLetter(id, req.user);
   }
 

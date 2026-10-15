@@ -62,9 +62,7 @@ export class UpdateCampaignDto {
   offer?: string;
 
   @IsOptional()
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @MaxLength(80)
   @Matches(/^(?=.*\p{L}.*\p{L})(?!^[\d\s\W_]+$).+$/u, {

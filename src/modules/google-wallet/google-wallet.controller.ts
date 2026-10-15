@@ -57,9 +57,7 @@ export class GoogleWalletController {
 
     const result = await this.googleWalletService.handleCallback(dto);
 
-    this.logger.log(
-      `Google Wallet webhook RESPONSE ${JSON.stringify(result)}`,
-    );
+    this.logger.log(`Google Wallet webhook RESPONSE ${JSON.stringify(result)}`);
     return result;
   }
 }

@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCampaignWorkspaceAndHistoryPermissions1786579200098
-  implements MigrationInterface
-{
+export class AddCampaignWorkspaceAndHistoryPermissions1786579200098 implements MigrationInterface {
   name = 'AddCampaignWorkspaceAndHistoryPermissions1786579200098';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

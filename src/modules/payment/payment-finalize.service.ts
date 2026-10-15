@@ -101,8 +101,10 @@ export class PaymentFinalizeService {
       }
 
       if (payment.customerId == null) {
-        const resolvedCustomerId =
-          await this.resolveCustomerIdFromPaymentEmail(manager, payment);
+        const resolvedCustomerId = await this.resolveCustomerIdFromPaymentEmail(
+          manager,
+          payment,
+        );
         if (resolvedCustomerId != null) {
           payment.customerId = resolvedCustomerId;
         }
@@ -243,8 +245,7 @@ export class PaymentFinalizeService {
       payment.stripeCheckoutSessionId = input.stripeCheckoutSessionId.trim();
     }
     if (input.stripeConnectedAccountId?.trim()) {
-      payment.stripeConnectedAccountId =
-        input.stripeConnectedAccountId.trim();
+      payment.stripeConnectedAccountId = input.stripeConnectedAccountId.trim();
     }
     if (input.stripeChargeId?.trim()) {
       payment.stripeChargeId = input.stripeChargeId.trim();

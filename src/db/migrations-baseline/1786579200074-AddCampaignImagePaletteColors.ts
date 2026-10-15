@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCampaignImagePaletteColors1786579200074
-  implements MigrationInterface
-{
+export class AddCampaignImagePaletteColors1786579200074 implements MigrationInterface {
   name = 'AddCampaignImagePaletteColors1786579200074';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

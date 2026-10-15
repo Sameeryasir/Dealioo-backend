@@ -191,7 +191,10 @@ export class PaymentService implements OnModuleInit {
       this.logger.log(
         `[FunnelPayment] paymentId=${paymentId} still pending — checking Stripe via status API (webhook may be late)`,
       );
-      const sync = await this.syncPendingPaymentFromStripe(payment, 'status_sync');
+      const sync = await this.syncPendingPaymentFromStripe(
+        payment,
+        'status_sync',
+      );
       syncedFromStripe = sync.changed;
       stripeLifecycle = sync.stripeLifecycle;
       payment =
@@ -414,11 +417,9 @@ export class PaymentService implements OnModuleInit {
     return { changed: false, stripeLifecycle: null };
   }
 
-
   async createPaymentIntent(dto: CreatePaymentIntentDto) {
     return this.createPaymentSession(dto);
   }
-
 
   async createPaymentSession(
     dto: CreatePaymentIntentDto,
@@ -462,8 +463,7 @@ export class PaymentService implements OnModuleInit {
     const stripeAccountId = business.stripeAccountId.trim();
     await this.stripeService.validateConnectedAccount(stripeAccountId);
 
-    const serverCurrency =
-      (business.currency?.trim() || 'usd').toLowerCase();
+    const serverCurrency = (business.currency?.trim() || 'usd').toLowerCase();
 
     const catalog =
       await this.stripeCatalogService.ensureCampaignCatalogOnConnectedAccount({
@@ -487,18 +487,20 @@ export class PaymentService implements OnModuleInit {
 
     const customerEmail = checkoutIdentity.customerEmail.trim().toLowerCase();
 
-    const payment = await this.pendingFunnelPaymentService.ensurePendingPayment({
-      funnelId: checkoutIdentity.funnelId,
-      businessId: checkoutIdentity.businessId,
-      campaignId: funnel.campaign.id,
-      campaignType: funnel.campaign.campaignType,
-      stripeConnectedAccountId: stripeAccountId,
-      amountCents: catalog.amount,
-      currency: catalog.currency,
-      platformFeeAmount: applicationFeeAmount,
-      customerEmail,
-      customerId: checkoutIdentity.customerId,
-    });
+    const payment = await this.pendingFunnelPaymentService.ensurePendingPayment(
+      {
+        funnelId: checkoutIdentity.funnelId,
+        businessId: checkoutIdentity.businessId,
+        campaignId: funnel.campaign.id,
+        campaignType: funnel.campaign.campaignType,
+        stripeConnectedAccountId: stripeAccountId,
+        amountCents: catalog.amount,
+        currency: catalog.currency,
+        platformFeeAmount: applicationFeeAmount,
+        customerEmail,
+        customerId: checkoutIdentity.customerId,
+      },
+    );
 
     const result = await this.ensureOpenCheckoutSessionForPayment({
       payment,
@@ -882,7 +884,6 @@ export class PaymentService implements OnModuleInit {
     };
   }
 
-
   async getFunnelBusinessId(funnelId: number): Promise<number> {
     const funnel = await this.funnelRepository.findOne({
       where: { id: funnelId },
@@ -940,10 +941,9 @@ export class PaymentService implements OnModuleInit {
       );
     }
     if (rangeTo) {
-      qb.andWhere(
-        'COALESCE(payment.paid_at, payment.created_at) <= :rangeTo',
-        { rangeTo },
-      );
+      qb.andWhere('COALESCE(payment.paid_at, payment.created_at) <= :rangeTo', {
+        rangeTo,
+      });
     }
     if (search) {
       qb.andWhere(
@@ -967,7 +967,6 @@ export class PaymentService implements OnModuleInit {
       meta: buildPaginationMeta(total, pagination.page, pagination.limit),
     };
   }
-
 
   async getPaidFunnelPayments(funnelId: number): Promise<{
     funnelId: number;
@@ -1075,7 +1074,9 @@ export class PaymentService implements OnModuleInit {
       await this.checkoutResumeService.attachPaymentToSession(token, paymentId);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'Checkout session update failed';
+        error instanceof Error
+          ? error.message
+          : 'Checkout session update failed';
       warnStripePayment({
         phase: 'checkout_session_attach',
         outcome: 'failed',

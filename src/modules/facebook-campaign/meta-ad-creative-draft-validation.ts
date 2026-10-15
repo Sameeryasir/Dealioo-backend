@@ -12,7 +12,9 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
   switch (dto.creativeFormat) {
     case MetaCreativeFormat.SINGLE_IMAGE:
       if (!dto.imageUrl?.trim()) {
-        throw new BadRequestException('Image is required for single image ads.');
+        throw new BadRequestException(
+          'Image is required for single image ads.',
+        );
       }
       const imageForMeta =
         normalizeCampaignImageUrlForMeta(dto.imageUrl) ?? dto.imageUrl.trim();
@@ -20,7 +22,9 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
       break;
     case MetaCreativeFormat.SINGLE_VIDEO:
       if (!dto.videoUrl?.trim()) {
-        throw new BadRequestException('Video is required for single video ads.');
+        throw new BadRequestException(
+          'Video is required for single video ads.',
+        );
       }
       assertDirectMetaVideoUrl(String(normalizeMetaHttpsUrl(dto.videoUrl)));
       if (!dto.thumbnailUrl?.trim()) {
@@ -37,9 +41,7 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
       break;
     case MetaCreativeFormat.CAROUSEL:
       if (!dto.carouselCards?.length || dto.carouselCards.length < 2) {
-        throw new BadRequestException(
-          'Carousel ads require at least 2 cards.',
-        );
+        throw new BadRequestException('Carousel ads require at least 2 cards.');
       }
       for (const [index, card] of dto.carouselCards.entries()) {
         if (!card.imageUrl?.trim()) {
@@ -69,7 +71,9 @@ export function assertAdCreativeMedia(dto: SaveAdCreativeStepDto): void {
   }
 }
 
-export function assertAdCreativeDestinationUrl(dto: SaveAdCreativeStepDto): void {
+export function assertAdCreativeDestinationUrl(
+  dto: SaveAdCreativeStepDto,
+): void {
   if (dto.creativeFormat === MetaCreativeFormat.CAROUSEL) {
     return;
   }

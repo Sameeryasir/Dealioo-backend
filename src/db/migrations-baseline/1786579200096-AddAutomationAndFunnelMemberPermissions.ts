@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddAutomationAndFunnelMemberPermissions1786579200096
-  implements MigrationInterface
-{
+export class AddAutomationAndFunnelMemberPermissions1786579200096 implements MigrationInterface {
   name = 'AddAutomationAndFunnelMemberPermissions1786579200096';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

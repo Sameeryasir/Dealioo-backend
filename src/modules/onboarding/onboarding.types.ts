@@ -12,7 +12,7 @@ export type OnboardingChecklistItem = {
 export type OnboardingStatusResponse = {
   businessId: number | null;
   twoFactorCompleted: boolean;
-  
+
   subscriptionSelected: boolean;
   subscriptionCompleted: boolean;
   businessCreated: boolean;

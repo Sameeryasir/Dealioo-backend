@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class GoogleWalletWebhookReconciliation1786579200070
-  implements MigrationInterface
-{
+export class GoogleWalletWebhookReconciliation1786579200070 implements MigrationInterface {
   name = 'GoogleWalletWebhookReconciliation1786579200070';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

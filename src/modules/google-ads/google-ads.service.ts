@@ -918,7 +918,9 @@ export class GoogleAdsService {
     return 'this_month';
   }
 
-  private sanitizePublicCurrency(raw: string | null | undefined): string | null {
+  private sanitizePublicCurrency(
+    raw: string | null | undefined,
+  ): string | null {
     const trimmed = raw?.trim().toUpperCase() || '';
     return /^[A-Z]{3}$/.test(trimmed) ? trimmed : null;
   }

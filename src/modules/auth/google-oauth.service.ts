@@ -5,7 +5,10 @@ import type {
   GoogleAuthMode,
   GoogleAuthProfile,
 } from './interfaces/google-auth.interface';
-import { getFrontendBaseUrl, isAllowedCorsOrigin } from '../../utils/frontend-base-url';
+import {
+  getFrontendBaseUrl,
+  isAllowedCorsOrigin,
+} from '../../utils/frontend-base-url';
 
 type OAuthStatePayload = {
   n: string;
@@ -29,7 +32,8 @@ export class GoogleOAuthService {
     this.clientID =
       this.configService.get<string>('GOOGLE_LOGIN_CLIENT_ID')?.trim() || '';
     this.clientSecret =
-      this.configService.get<string>('GOOGLE_LOGIN_CLIENT_SECRET')?.trim() || '';
+      this.configService.get<string>('GOOGLE_LOGIN_CLIENT_SECRET')?.trim() ||
+      '';
     this.callbackURL =
       this.configService.get<string>('GOOGLE_LOGIN_CALLBACK_URL')?.trim() || '';
     this.authURI =
@@ -76,19 +80,20 @@ export class GoogleOAuthService {
     return `${authBase}?${params.toString()}`;
   }
 
-  parseState(rawState: string | undefined): {
-    ok: true;
-    mode: GoogleAuthMode;
-    frontend: string;
-  } | {
-    ok: false;
-    message: string;
-  } {
+  parseState(rawState: string | undefined):
+    | {
+        ok: true;
+        mode: GoogleAuthMode;
+        frontend: string;
+      }
+    | {
+        ok: false;
+        message: string;
+      } {
     if (!rawState?.includes('.')) {
       return {
         ok: false,
-        message:
-          'Google sign-in expired or was interrupted. Please try again.',
+        message: 'Google sign-in expired or was interrupted. Please try again.',
       };
     }
 
@@ -120,8 +125,7 @@ export class GoogleOAuthService {
     ) {
       return {
         ok: false,
-        message:
-          'Google sign-in expired or was interrupted. Please try again.',
+        message: 'Google sign-in expired or was interrupted. Please try again.',
       };
     }
 

@@ -22,7 +22,10 @@ export class IntegrationsStatusService {
     private readonly googleAdsService: GoogleAdsService,
   ) {}
 
-  async getStatus(user: User, businessId: number): Promise<IntegrationsStatusDto> {
+  async getStatus(
+    user: User,
+    businessId: number,
+  ): Promise<IntegrationsStatusDto> {
     const business = await this.businessAccessService.findAccessibleBusiness(
       user,
       businessId,
@@ -90,7 +93,8 @@ export class IntegrationsStatusService {
       cached.stripe.connected === current.stripe.connected &&
       cached.facebook.metaAdAccountId === current.facebook.metaAdAccountId &&
       cached.facebook.connected === current.facebook.connected &&
-      cached.googleAds.googleCustomerId === current.googleAds.googleCustomerId &&
+      cached.googleAds.googleCustomerId ===
+        current.googleAds.googleCustomerId &&
       cached.googleAds.connected === current.googleAds.connected
     );
   }

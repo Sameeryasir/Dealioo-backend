@@ -15,10 +15,7 @@ export function resolveBusinessEventDisplayStatus(event: {
 }): BusinessEventDisplayStatus {
   const paymentStatus = event.paymentStatus?.toLowerCase() ?? null;
 
-  if (
-    paymentStatus === 'refunded' ||
-    paymentStatus === 'partially_refunded'
-  ) {
+  if (paymentStatus === 'refunded' || paymentStatus === 'partially_refunded') {
     return 'refunded';
   }
 
@@ -113,9 +110,7 @@ export function matchesBusinessFunnelEventDateFilter(
     return true;
   }
 
-  return (
-    resolveBusinessEventPaymentSortDate(event) >= dateFrom.getTime()
-  );
+  return resolveBusinessEventPaymentSortDate(event) >= dateFrom.getTime();
 }
 
 export function normalizeBusinessFunnelEventSearch(
@@ -297,7 +292,12 @@ export function mergeBusinessOrderRowsByCheckout<
     campaignName: string;
     campaignType?: 'prepaid' | 'postpaid' | null;
     campaignImageUrl?: string | null;
-    customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
+    customer?: {
+      id: number;
+      name?: string;
+      email?: string;
+      phone?: string | null;
+    } | null;
     customerEmail?: string | null;
     amount?: number | null;
     currency?: string | null;
@@ -360,7 +360,8 @@ export function mergeBusinessOrderRowsByCheckout<
     const seenCampaignNames = new Set<string>();
     const campaignTypes: Array<'prepaid' | 'postpaid'> = [];
     const seenCampaignTypes = new Set<string>();
-    let campaignImageUrl: string | null = primary.campaignImageUrl?.trim() || null;
+    let campaignImageUrl: string | null =
+      primary.campaignImageUrl?.trim() || null;
     const mergedExtraItems: Array<{
       name: string;
       unitPrice: number;
@@ -373,10 +374,7 @@ export function mergeBusinessOrderRowsByCheckout<
       totalVisitNetDollars += businessOrderVisitNetDollars(row);
       orderStatus = pickBetterOrderStatus(orderStatus, row.orderStatus);
       paidAt = latestDate(paidAt, row.paidAt);
-      businessVisitedAt = latestDate(
-        businessVisitedAt,
-        row.businessVisitedAt,
-      );
+      businessVisitedAt = latestDate(businessVisitedAt, row.businessVisitedAt);
       createdAt = latestDate(createdAt, row.createdAt) ?? createdAt;
       paymentCollectedAt = latestDate(
         paymentCollectedAt,
@@ -427,7 +425,7 @@ export function mergeBusinessOrderRowsByCheckout<
       campaignName: campaignNames.join(', ') || primary.campaignName,
       campaignType:
         campaignTypes.length > 0
-          ? campaignTypes[0]!
+          ? campaignTypes[0]
           : (primary.campaignType ?? null),
       campaignImageUrl,
       amount: totalCampaignCents > 0 ? totalCampaignCents : primary.amount,
@@ -459,7 +457,12 @@ export function mergeBusinessOrderRowsByCustomer<
     campaignId: number;
     campaignName: string;
     campaignImageUrl?: string | null;
-    customer?: { id: number; name?: string; email?: string; phone?: string | null } | null;
+    customer?: {
+      id: number;
+      name?: string;
+      email?: string;
+      phone?: string | null;
+    } | null;
     customerEmail?: string | null;
     amount?: number | null;
     currency?: string | null;

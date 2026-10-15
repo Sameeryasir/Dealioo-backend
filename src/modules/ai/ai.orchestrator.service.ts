@@ -100,10 +100,7 @@ export class AiOrchestratorService {
         };
       }
 
-      const targetPageId =
-        pageId ??
-        affectedTypes[0] ??
-        FunnelPageType.LANDING;
+      const targetPageId = pageId ?? affectedTypes[0] ?? FunnelPageType.LANDING;
 
       const mergedPage = this.schemaEngine.applyPatch(pageBase, fieldPatch);
       const changedOnly: Record<string, unknown> = {
@@ -188,7 +185,9 @@ export class AiOrchestratorService {
         const trimmed = value.trim();
         if (!trimmed) continue;
         const preview =
-          trimmed.length > 120 ? `${trimmed.slice(0, 117).trimEnd()}…` : trimmed;
+          trimmed.length > 120
+            ? `${trimmed.slice(0, 117).trimEnd()}…`
+            : trimmed;
         parts.push(`${label}: "${preview}"`);
       } else if (value != null && value !== '') {
         parts.push(`${label}`);
@@ -296,10 +295,7 @@ export class AiOrchestratorService {
       ) {
         continue;
       }
-      const key = this.resolveEditableFieldKey(
-        rawKey,
-        allowed,
-      );
+      const key = this.resolveEditableFieldKey(rawKey, allowed);
       if (allowed.size === 0 || allowed.has(key)) {
         const constrained = fieldConstraints?.[key];
         if (constrained != null && constrained.length > 0) {

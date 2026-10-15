@@ -24,7 +24,8 @@ export function campaignPriceToStripeAmount(
   if (price === null || price === undefined) {
     return NaN;
   }
-  const major = typeof price === 'string' ? Number.parseFloat(price) : Number(price);
+  const major =
+    typeof price === 'string' ? Number.parseFloat(price) : Number(price);
   if (!Number.isFinite(major) || major <= 0) {
     return NaN;
   }

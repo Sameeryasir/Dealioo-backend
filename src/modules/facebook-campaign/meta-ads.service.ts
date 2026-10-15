@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import {
   normalizeCampaignImageUrlForMeta,
   toAbsoluteAssetUrlIfRelative,
@@ -11,10 +7,7 @@ import {
   assertDirectMetaImageUrl,
   assertDirectMetaVideoUrl,
 } from './facebook-campaign-meta';
-import {
-  sdkUploadAdImageHash,
-  sdkUploadAdVideoId,
-} from './meta-business-sdk';
+import { sdkUploadAdImageHash, sdkUploadAdVideoId } from './meta-business-sdk';
 import { MediaService } from './media.service';
 
 export type MetaAdsImageResult = {
@@ -47,7 +40,8 @@ export class MetaAdsService {
     this.assertPublicHttpsUrl(storageUrl, 'image');
     assertDirectMetaImageUrl(storageUrl);
 
-    const existing = await this.mediaService.findMetaRefsByStorageUrl(storageUrl);
+    const existing =
+      await this.mediaService.findMetaRefsByStorageUrl(storageUrl);
     if (existing?.metaImageHash?.trim()) {
       return {
         storageUrl,
@@ -86,7 +80,8 @@ export class MetaAdsService {
     this.assertPublicHttpsUrl(storageUrl, 'video');
     assertDirectMetaVideoUrl(storageUrl);
 
-    const existing = await this.mediaService.findMetaRefsByStorageUrl(storageUrl);
+    const existing =
+      await this.mediaService.findMetaRefsByStorageUrl(storageUrl);
     if (existing?.metaVideoId?.trim()) {
       return {
         storageUrl,
@@ -116,7 +111,10 @@ export class MetaAdsService {
     }
   }
 
-  assertMediaExists(storageUrl: string | null | undefined, kind: 'image' | 'video'): string {
+  assertMediaExists(
+    storageUrl: string | null | undefined,
+    kind: 'image' | 'video',
+  ): string {
     const url = storageUrl?.trim();
     if (!url) {
       throw new BadRequestException(

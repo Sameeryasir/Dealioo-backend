@@ -1,6 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 
-export function resolveTwilioCountryCode(input: string | null | undefined): string {
+export function resolveTwilioCountryCode(
+  input: string | null | undefined,
+): string {
   const raw = input?.trim() || '';
   if (!raw) {
     return 'US';

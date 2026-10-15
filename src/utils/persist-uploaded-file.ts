@@ -1,4 +1,7 @@
-import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { SpacesService } from '../modules/spaces/spaces.service';
 
 export type PersistUploadedFileMode = 'relative' | 'absolute';

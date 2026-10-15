@@ -34,7 +34,10 @@ import {
 } from './dto/meta-campaign-draft-response.dto';
 import { SaveAdCreativeStepDto } from './dto/save-ad-creative-step.dto';
 import { SaveAdSetStepDto } from './dto/save-adset-step.dto';
-import { SaveCampaignStepDto, MetaBudgetStrategy } from './dto/save-campaign-step.dto';
+import {
+  SaveCampaignStepDto,
+  MetaBudgetStrategy,
+} from './dto/save-campaign-step.dto';
 import {
   MetaAdSetBudgetType,
   MetaBidStrategy,
@@ -253,9 +256,10 @@ export class MetaCampaignDraftService {
 
     draft.adSetData = adSetData;
     draft.currentStep = Math.max(draft.currentStep, 3);
-    draft.completedSteps = this.mergeCompletedSteps(draft.completedSteps, [
-      1, 2,
-    ]);
+    draft.completedSteps = this.mergeCompletedSteps(
+      draft.completedSteps,
+      [1, 2],
+    );
     draft.lastSavedAt = new Date();
     draft.version = (draft.version ?? 1) + 1;
     const saved = await this.draftRepository.save(draft);
@@ -298,7 +302,8 @@ export class MetaCampaignDraftService {
       status: dto.status,
       creativeFormat: dto.creativeFormat,
       imageUrl: dto.imageUrl
-        ? (normalizeCampaignImageUrlForMeta(dto.imageUrl) ?? dto.imageUrl.trim())
+        ? (normalizeCampaignImageUrlForMeta(dto.imageUrl) ??
+          dto.imageUrl.trim())
         : undefined,
       imageAltText: dto.imageAltText?.trim() || undefined,
       videoUrl: dto.videoUrl?.trim(),
@@ -333,9 +338,10 @@ export class MetaCampaignDraftService {
     draft.adCreativeData = adCreativeData;
     draft.campaignId = this.resolveCampaignIdFromCreative(adCreativeData);
     draft.currentStep = Math.max(draft.currentStep, 4);
-    draft.completedSteps = this.mergeCompletedSteps(draft.completedSteps, [
-      1, 2, 3,
-    ]);
+    draft.completedSteps = this.mergeCompletedSteps(
+      draft.completedSteps,
+      [1, 2, 3],
+    );
     draft.lastSavedAt = new Date();
     draft.version = (draft.version ?? 1) + 1;
     const saved = await this.draftRepository.save(draft);
@@ -358,27 +364,26 @@ export class MetaCampaignDraftService {
 
     if ((draft.version ?? 1) !== dto.expectedVersion) {
       throw new ConflictException({
-        message:
-          'Draft was updated elsewhere. Reload and try saving again.',
+        message: 'Draft was updated elsewhere. Reload and try saving again.',
         currentVersion: draft.version ?? 1,
       });
     }
 
     if (dto.campaignData) {
       draft.campaignData = {
-        ...((draft.campaignData as Record<string, unknown>) ?? {}),
+        ...(draft.campaignData ?? {}),
         ...dto.campaignData,
       };
     }
     if (dto.adSetData) {
       draft.adSetData = {
-        ...((draft.adSetData as Record<string, unknown>) ?? {}),
+        ...(draft.adSetData ?? {}),
         ...dto.adSetData,
       };
     }
     if (dto.adCreativeData) {
       draft.adCreativeData = {
-        ...((draft.adCreativeData as Record<string, unknown>) ?? {}),
+        ...(draft.adCreativeData ?? {}),
         ...dto.adCreativeData,
       };
       draft.campaignId = this.resolveCampaignIdFromCreative(
@@ -602,7 +607,9 @@ export class MetaCampaignDraftService {
     }
 
     if (!Array.isArray(dto.specialAdCategories)) {
-      throw new BadRequestException('Special ad categories selection is required.');
+      throw new BadRequestException(
+        'Special ad categories selection is required.',
+      );
     }
 
     if (dto.budgetStrategy === MetaBudgetStrategy.CAMPAIGN) {
@@ -644,7 +651,9 @@ export class MetaCampaignDraftService {
     }
 
     if (!dto.audience?.country?.trim()) {
-      throw new BadRequestException('Country is required for audience targeting.');
+      throw new BadRequestException(
+        'Country is required for audience targeting.',
+      );
     }
 
     if (dto.audience.ageMin > dto.audience.ageMax) {
@@ -666,7 +675,9 @@ export class MetaCampaignDraftService {
 
     if (!campaignData.campaignBudgetOptimization) {
       if (!dto.budgetType) {
-        throw new BadRequestException('Budget type is required for ad set budget mode.');
+        throw new BadRequestException(
+          'Budget type is required for ad set budget mode.',
+        );
       }
       const hasDaily =
         dto.budgetType === MetaAdSetBudgetType.DAILY &&
@@ -858,12 +869,9 @@ export class MetaCampaignDraftService {
       businessId,
       currentStep: 4,
       status: 'draft',
-      campaignData: mapped.campaignData as unknown as Record<string, unknown>,
-      adSetData: mapped.adSetData as unknown as Record<string, unknown>,
-      adCreativeData: mapped.adCreativeData as unknown as Record<
-        string,
-        unknown
-      >,
+      campaignData: mapped.campaignData,
+      adSetData: mapped.adSetData,
+      adCreativeData: mapped.adCreativeData,
       campaignId: this.resolveCampaignIdFromCreative(mapped.adCreativeData),
       metaCampaignId: campaignId,
       metaAdsetId: liveAdSet.id,
@@ -887,8 +895,8 @@ export class MetaCampaignDraftService {
       const creative = existing.adCreativeData as AdCreativeStepDataDto | null;
       if (adSet) adSet.draftId = existing.id;
       if (creative) creative.draftId = existing.id;
-      existing.adSetData = adSet as unknown as Record<string, unknown>;
-      existing.adCreativeData = creative as unknown as Record<string, unknown>;
+      existing.adSetData = adSet;
+      existing.adCreativeData = creative;
       saved = await this.draftRepository.save(existing);
     } else {
       saved = await this.draftRepository.save({
@@ -899,8 +907,8 @@ export class MetaCampaignDraftService {
       const creative = saved.adCreativeData as AdCreativeStepDataDto | null;
       if (adSet) adSet.draftId = saved.id;
       if (creative) creative.draftId = saved.id;
-      saved.adSetData = adSet as unknown as Record<string, unknown>;
-      saved.adCreativeData = creative as unknown as Record<string, unknown>;
+      saved.adSetData = adSet;
+      saved.adCreativeData = creative;
       saved = await this.draftRepository.save(saved);
     }
 
@@ -1024,7 +1032,9 @@ export class MetaCampaignDraftService {
         ? input.campaign.special_ad_categories
         : [],
       campaignBudgetOptimization: cbo,
-      budgetStrategy: cbo ? MetaBudgetStrategy.CAMPAIGN : MetaBudgetStrategy.ADSET,
+      budgetStrategy: cbo
+        ? MetaBudgetStrategy.CAMPAIGN
+        : MetaBudgetStrategy.ADSET,
       campaignBudgetType: campaignLifetime != null ? 'lifetime' : 'daily',
       campaignDailyBudget: campaignDaily,
       campaignLifetimeBudget: campaignLifetime,
@@ -1064,7 +1074,9 @@ export class MetaCampaignDraftService {
     const endIso = input.adSet.end_time?.trim() || undefined;
     const endDate = endIso ? endIso.slice(0, 10) : undefined;
     const endTime =
-      endIso && endIso.includes('T') ? endIso.slice(11, 16) || undefined : undefined;
+      endIso && endIso.includes('T')
+        ? endIso.slice(11, 16) || undefined
+        : undefined;
 
     const adSetDaily =
       this.metaMinorToDollars(input.adSet.daily_budget) ?? undefined;
@@ -1094,10 +1106,8 @@ export class MetaCampaignDraftService {
       endTime,
       timezone: 'UTC',
       startDateTime: `${startDate}T${startTime}:00`,
-      endDateTime:
-        endDate && endTime ? `${endDate}T${endTime}:00` : undefined,
-      optimizationGoal:
-        input.adSet.optimization_goal?.trim() || 'LINK_CLICKS',
+      endDateTime: endDate && endTime ? `${endDate}T${endTime}:00` : undefined,
+      optimizationGoal: input.adSet.optimization_goal?.trim() || 'LINK_CLICKS',
       destinationType: input.adSet.destination_type?.trim() || 'WEBSITE',
       promotedObject: {
         pageId: input.adSet.promoted_object?.page_id,
@@ -1189,9 +1199,7 @@ export class MetaCampaignDraftService {
       videoUrl: isVideo ? undefined : undefined,
       thumbnailUrl: isVideo ? imageUrl : undefined,
       primaryText:
-        linkData?.message?.trim() ||
-        videoData?.message?.trim() ||
-        'Learn more',
+        linkData?.message?.trim() || videoData?.message?.trim() || 'Learn more',
       headline: linkData?.name?.trim() || videoData?.title?.trim() || undefined,
       description: linkData?.description?.trim() || undefined,
       destinationUrl,
@@ -1337,7 +1345,11 @@ export class MetaCampaignDraftService {
       throw new NotFoundException('Campaign draft not found.');
     }
 
-    if (draft.status === 'published' && draft.metaAdId && !draft.metaCampaignId) {
+    if (
+      draft.status === 'published' &&
+      draft.metaAdId &&
+      !draft.metaCampaignId
+    ) {
       throw new BadRequestException(
         'This campaign was already published. Create a new campaign to make changes.',
       );
@@ -1560,7 +1572,9 @@ export class MetaCampaignDraftService {
     return 'this_month';
   }
 
-  private sanitizePublicCurrency(raw: string | null | undefined): string | null {
+  private sanitizePublicCurrency(
+    raw: string | null | undefined,
+  ): string | null {
     const trimmed = raw?.trim().toUpperCase() || '';
     return /^[A-Z]{3}$/.test(trimmed) ? trimmed : null;
   }

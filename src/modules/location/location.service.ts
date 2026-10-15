@@ -21,10 +21,7 @@ export class LocationService {
     createLocationDto: CreateLocationDto,
     user: User,
   ): Promise<Location> {
-    requireAdminRole(
-      user,
-      'You do not have permission to create a location.',
-    );
+    requireAdminRole(user, 'You do not have permission to create a location.');
 
     const { businessId, name, address, city, state, country, postalCode } =
       createLocationDto;
@@ -64,14 +61,8 @@ export class LocationService {
     if (!location) {
       throw new NotFoundException('Location not found');
     }
-    const {
-      name,
-      address,
-      city,
-      state,
-      country,
-      postalCode,
-    } = updateLocationDto;
+    const { name, address, city, state, country, postalCode } =
+      updateLocationDto;
 
     if (name !== undefined) location.name = name;
     if (address !== undefined) location.address = address;
@@ -82,10 +73,12 @@ export class LocationService {
 
     return this.locationRepository.save(location);
   }
-  
+
   async deleteLocation(locationId: number, user: User): Promise<Location> {
     requireAdminRole(user, 'You do not have permission to delete location.');
-    const location = await this.locationRepository.findOne({ where: { id: locationId } });
+    const location = await this.locationRepository.findOne({
+      where: { id: locationId },
+    });
     if (!location) {
       throw new NotFoundException('Location not found');
     }

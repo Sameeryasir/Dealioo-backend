@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class FunnelOrderBusinessDeleteCascade1786579200101
-  implements MigrationInterface
-{
+export class FunnelOrderBusinessDeleteCascade1786579200101 implements MigrationInterface {
   name = 'FunnelOrderBusinessDeleteCascade1786579200101';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

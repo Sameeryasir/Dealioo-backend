@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddAutomationUnpaidLookupIndexes1786579200120
-  implements MigrationInterface
-{
+export class AddAutomationUnpaidLookupIndexes1786579200120 implements MigrationInterface {
   name = 'AddAutomationUnpaidLookupIndexes1786579200120';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -85,7 +85,8 @@ export class CampaignService {
     actorUserId: number | null;
     description: string;
   }): void {
-    const campaignName = params.campaignName.trim() || `Campaign #${params.campaignId}`;
+    const campaignName =
+      params.campaignName.trim() || `Campaign #${params.campaignId}`;
     void this.pusherService
       .notifyCampaignActivity({
         businessId: params.businessId,
@@ -315,9 +316,12 @@ export class CampaignService {
               "COALESCE(campaign.website_url, '') ILIKE :containsPattern",
               { containsPattern },
             )
-            .orWhere("COALESCE(campaign.status::text, '') ILIKE :containsPattern", {
-              containsPattern,
-            });
+            .orWhere(
+              "COALESCE(campaign.status::text, '') ILIKE :containsPattern",
+              {
+                containsPattern,
+              },
+            );
         }),
       );
     }
@@ -335,9 +339,7 @@ export class CampaignService {
     };
   }
 
-  private async attachCampaignReviewRatings(
-    campaigns: Campaign[],
-  ): Promise<
+  private async attachCampaignReviewRatings(campaigns: Campaign[]): Promise<
     Array<
       Campaign & {
         averageRating: number | null;
@@ -350,7 +352,7 @@ export class CampaignService {
     }
 
     const campaignIds = campaigns.map((campaign) => campaign.id);
-    const rows = (await this.dataSource.query(
+    const rows = await this.dataSource.query(
       `
         SELECT
           campaign_id AS "campaignId",
@@ -363,11 +365,7 @@ export class CampaignService {
         GROUP BY campaign_id
       `,
       [campaignIds],
-    )) as Array<{
-      campaignId: number;
-      totalReviews: number;
-      averageRating: number | null;
-    }>;
+    );
 
     const byCampaignId = new Map(
       rows.map((row) => {
@@ -375,9 +373,7 @@ export class CampaignService {
         const averageRaw =
           row.averageRating == null ? null : Number(row.averageRating);
         const averageRating =
-          totalReviews > 0 &&
-          averageRaw != null &&
-          Number.isFinite(averageRaw)
+          totalReviews > 0 && averageRaw != null && Number.isFinite(averageRaw)
             ? Math.round(averageRaw * 10) / 10
             : null;
         return [
@@ -396,10 +392,7 @@ export class CampaignService {
     });
   }
 
-  async getCampaignById(
-    campaignId: number,
-    user: AuthUser,
-  ): Promise<Campaign> {
+  async getCampaignById(campaignId: number, user: AuthUser): Promise<Campaign> {
     const campaign = await this.campaignRepository.findOne({
       where: { id: campaignId },
     });
@@ -535,8 +528,7 @@ export class CampaignService {
       await this.funnelRepository.update(
         { campaignId: saved.id },
         {
-          published:
-            saved.status === CampaignPublicationStatus.PUBLISHED,
+          published: saved.status === CampaignPublicationStatus.PUBLISHED,
         },
       );
     }
@@ -553,11 +545,11 @@ export class CampaignService {
 
     const previous =
       updateCampaignDto.status !== undefined
-        ? previousStatus?.trim().toLowerCase() ?? ''
+        ? (previousStatus?.trim().toLowerCase() ?? '')
         : '';
     const next =
       updateCampaignDto.status !== undefined
-        ? saved.status?.trim().toLowerCase() ?? ''
+        ? (saved.status?.trim().toLowerCase() ?? '')
         : '';
     let description = `Updated campaign "${saved.campaignName?.trim() || saved.id}"`;
     if (previous && next && previous !== next) {

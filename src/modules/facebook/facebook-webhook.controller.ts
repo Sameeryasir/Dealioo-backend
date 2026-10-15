@@ -60,12 +60,13 @@ export class FacebookWebhookController {
 
     const rawBody = req.rawBody;
     if (!rawBody?.length) {
-      throw new ForbiddenException('Missing raw webhook body for signature check.');
+      throw new ForbiddenException(
+        'Missing raw webhook body for signature check.',
+      );
     }
 
     const expected =
-      'sha256=' +
-      createHmac('sha256', appSecret).update(rawBody).digest('hex');
+      'sha256=' + createHmac('sha256', appSecret).update(rawBody).digest('hex');
     const provided = Buffer.from(signature);
     const expectedBuf = Buffer.from(expected);
     if (

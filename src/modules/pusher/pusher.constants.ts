@@ -60,9 +60,7 @@ export function pusherUserChannel(userId: number): string {
   return `${PUSHER_PRIVATE_CHANNEL_PREFIX}user-${userId}`;
 }
 
-export function parseUserIdFromUserChannel(
-  channelName: string,
-): number | null {
+export function parseUserIdFromUserChannel(channelName: string): number | null {
   const prefix = `${PUSHER_PRIVATE_CHANNEL_PREFIX}user-`;
   if (!channelName.startsWith(prefix)) {
     return null;
@@ -173,9 +171,7 @@ export function isAuthorizedBusinessChatChannel(
   }
 
   const conversationMessagesMatch = channelName.match(
-    new RegExp(
-      `^private-business-conversation-messages-${businessId}-(\\d+)$`,
-    ),
+    new RegExp(`^private-business-conversation-messages-${businessId}-(\\d+)$`),
   );
   if (!conversationMessagesMatch) {
     return false;

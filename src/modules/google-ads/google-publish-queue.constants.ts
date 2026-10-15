@@ -10,7 +10,10 @@ export type GooglePublishJobPayload = {
   userId: number;
 };
 
-export function googlePublishJobId(businessId: number, draftId: string): string {
+export function googlePublishJobId(
+  businessId: number,
+  draftId: string,
+): string {
   return `google-publish-${businessId}-${draftId}`;
 }
 

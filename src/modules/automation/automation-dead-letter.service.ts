@@ -58,7 +58,9 @@ export class AutomationDeadLetterService {
     });
   }
 
-  async listRetryableProviderOutages(limit = 25): Promise<AutomationDeadLetter[]> {
+  async listRetryableProviderOutages(
+    limit = 25,
+  ): Promise<AutomationDeadLetter[]> {
     const rows = await this.deadLetterRepository.find({
       where: { status: AutomationDeadLetterStatus.PENDING },
       order: { createdAt: 'ASC' },
@@ -97,10 +99,12 @@ export class AutomationDeadLetterService {
 
       const nodeType =
         (entry.nodeType as AutomationNodeType | undefined) ??
-        (await this.executionService.findNodeForAutomation(
-          execution.automationId,
-          data.nodeId,
-        )).type;
+        (
+          await this.executionService.findNodeForAutomation(
+            execution.automationId,
+            data.nodeId,
+          )
+        ).type;
 
       jobId = await this.queueService.addProcessExecution({
         executionId: data.executionId,

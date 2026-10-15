@@ -9,7 +9,10 @@ export function sanitizeMetaPayload(
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     if (key === 'access_token' || key === 'bytes') {
-      out[key] = key === 'bytes' ? `[base64 ${String(value).length} chars]` : '[redacted]';
+      out[key] =
+        key === 'bytes'
+          ? `[base64 ${String(value).length} chars]`
+          : '[redacted]';
       continue;
     }
     out[key] = value;
@@ -50,8 +53,9 @@ export function logMetaApiResponse(
   httpStatus: number,
   body: unknown,
 ): void {
-  const text =
-    typeof body === 'string' ? body : JSON.stringify(body);
+  const text = typeof body === 'string' ? body : JSON.stringify(body);
   const truncated = text.length > 4000 ? `${text.slice(0, 4000)}…` : text;
-  logger.log(`[MetaPublish:${step}] response status=${httpStatus} body=${truncated}`);
+  logger.log(
+    `[MetaPublish:${step}] response status=${httpStatus} body=${truncated}`,
+  );
 }

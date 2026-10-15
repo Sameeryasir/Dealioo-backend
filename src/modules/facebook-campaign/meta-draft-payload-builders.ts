@@ -1,6 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { AdCreativeStepDataDto } from './dto/ad-creative-step-data.dto';
-import { AdSetPlacementsDto, AdSetStepDataDto } from './dto/adset-step-data.dto';
+import {
+  AdSetPlacementsDto,
+  AdSetStepDataDto,
+} from './dto/adset-step-data.dto';
 import { CampaignStepDataDto } from './dto/meta-campaign-draft-response.dto';
 import {
   MetaCreativeFormat,
@@ -60,7 +63,10 @@ export function buildCampaignPayloadFromDraft(campaign: CampaignStepDataDto) {
   let campaignLifetimeBudgetMinor: string | undefined;
 
   if (cboEnabled) {
-    if (campaign.campaignBudgetType === 'lifetime' && campaign.campaignLifetimeBudget) {
+    if (
+      campaign.campaignBudgetType === 'lifetime' &&
+      campaign.campaignLifetimeBudget
+    ) {
       campaignLifetimeBudgetMinor = budgetToMetaMinorUnits(
         campaign.campaignLifetimeBudget,
       );
@@ -73,7 +79,9 @@ export function buildCampaignPayloadFromDraft(campaign: CampaignStepDataDto) {
 
   let campaignSpendLimitMinor: string | undefined;
   if (campaign.campaignSpendLimit) {
-    campaignSpendLimitMinor = budgetToMetaMinorUnits(campaign.campaignSpendLimit);
+    campaignSpendLimitMinor = budgetToMetaMinorUnits(
+      campaign.campaignSpendLimit,
+    );
   }
 
   return buildCampaignPayload({
@@ -115,16 +123,20 @@ export function buildPlacementSpecFromDraft(placements: AdSetPlacementsDto): {
   if (placements.devicePlatforms.mobile) devicePlatforms.push('mobile');
   if (placements.devicePlatforms.desktop) devicePlatforms.push('desktop');
 
-  if (placements.publisherPlatforms.facebook) publisherPlatforms.add('facebook');
-  if (placements.publisherPlatforms.instagram) publisherPlatforms.add('instagram');
+  if (placements.publisherPlatforms.facebook)
+    publisherPlatforms.add('facebook');
+  if (placements.publisherPlatforms.instagram)
+    publisherPlatforms.add('instagram');
   if (placements.publisherPlatforms.audienceNetwork) {
     publisherPlatforms.add('audience_network');
   }
-  if (placements.publisherPlatforms.messenger) publisherPlatforms.add('messenger');
+  if (placements.publisherPlatforms.messenger)
+    publisherPlatforms.add('messenger');
 
   if (placements.facebookPositions.feed) facebookPositions.push('feed');
   if (placements.facebookPositions.story) facebookPositions.push('story');
-  if (placements.facebookPositions.reels) facebookPositions.push('facebook_reels');
+  if (placements.facebookPositions.reels)
+    facebookPositions.push('facebook_reels');
   if (placements.facebookPositions.marketplace) {
     facebookPositions.push('marketplace');
   }
@@ -148,7 +160,9 @@ export function buildPlacementSpecFromDraft(placements: AdSetPlacementsDto): {
     publisher_platforms: [...publisherPlatforms],
     facebook_positions: [...new Set(facebookPositions)],
     instagram_positions: [...new Set(instagramPositions)],
-    device_platforms: devicePlatforms.length ? devicePlatforms : ['mobile', 'desktop'],
+    device_platforms: devicePlatforms.length
+      ? devicePlatforms
+      : ['mobile', 'desktop'],
     useAdvantagePlus: false,
   };
 }
@@ -360,12 +374,14 @@ async function resolveNamedGeoTargets(
     }
 
     if (hit?.type === 'region' && hit.key) {
-      if (item.mode === 'exclude') buckets.excludedRegions.push({ key: hit.key });
+      if (item.mode === 'exclude')
+        buckets.excludedRegions.push({ key: hit.key });
       else buckets.includedRegions.push({ key: hit.key });
       continue;
     }
     if (hit?.type === 'city' && hit.key) {
-      if (item.mode === 'exclude') buckets.excludedCities.push({ key: hit.key });
+      if (item.mode === 'exclude')
+        buckets.excludedCities.push({ key: hit.key });
       else buckets.includedCities.push({ key: hit.key });
       continue;
     }
@@ -541,7 +557,9 @@ export async function buildAdSetPayloadFromDraft(
 
   // Meta only allows WEBSITE / APP / MESSENGER for many outcome objectives.
   // Older drafts stored FACEBOOK_PAGE for Awareness — coerce on publish.
-  const destinationType = resolveMetaAdSetDestinationType(adSet.destinationType);
+  const destinationType = resolveMetaAdSetDestinationType(
+    adSet.destinationType,
+  );
 
   const body: Record<string, unknown> = {
     name: adSet.name,
@@ -667,7 +685,9 @@ export function buildCreativePayloadFromDraft(
     const childAttachments = cards.map((card, index) => {
       const hash = media.carouselHashes?.[index];
       if (!hash) {
-        throw new BadRequestException(`Missing image hash for carousel card ${index + 1}.`);
+        throw new BadRequestException(
+          `Missing image hash for carousel card ${index + 1}.`,
+        );
       }
       return {
         link: card.destinationUrl,

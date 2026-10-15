@@ -76,9 +76,7 @@ export class CheckoutResumeService {
       funnel.campaign &&
       funnel.campaign.id !== input.campaignId
     ) {
-      throw new BadRequestException(
-        'Campaign does not match this funnel.',
-      );
+      throw new BadRequestException('Campaign does not match this funnel.');
     }
 
     const membership = await this.businessCustomerRepository.findOne({
@@ -88,9 +86,7 @@ export class CheckoutResumeService {
       },
     });
     if (!membership) {
-      throw new ForbiddenException(
-        'Customer is not linked to this business.',
-      );
+      throw new ForbiddenException('Customer is not linked to this business.');
     }
 
     const customer = await this.customerRepository.findOne({
@@ -106,13 +102,9 @@ export class CheckoutResumeService {
     );
     const paidPayment = pendingPayment
       ? null
-      : await this.findLatestPaidPayment(
-          input.funnelId,
-          customer.email.trim(),
-        );
+      : await this.findLatestPaidPayment(input.funnelId, customer.email.trim());
     const funnelPaymentId = pendingPayment?.id ?? paidPayment?.id ?? null;
-    const paymentStatus =
-      pendingPayment?.status ?? paidPayment?.status ?? null;
+    const paymentStatus = pendingPayment?.status ?? paidPayment?.status ?? null;
 
     const token = randomBytes(32).toString('base64url');
     const tokenHash = this.hashToken(token);

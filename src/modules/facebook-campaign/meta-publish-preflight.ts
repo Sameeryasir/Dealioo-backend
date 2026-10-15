@@ -81,7 +81,9 @@ const CONVERSION_EVENTS_BY_OBJECTIVE: Partial<
 export function normalizeMetaCustomEventType(
   raw: string | null | undefined,
 ): string {
-  const trimmed = String(raw ?? '').trim().toUpperCase();
+  const trimmed = String(raw ?? '')
+    .trim()
+    .toUpperCase();
   if (!trimmed) return '';
   return META_CUSTOM_EVENT_ALIASES[trimmed] ?? trimmed;
 }
@@ -195,13 +197,19 @@ export function assertPublishReady(
   creative: AdCreativeStepDataDto,
 ): void {
   if (!campaign?.name?.trim()) {
-    throw new BadRequestException('Campaign name is required before publishing.');
+    throw new BadRequestException(
+      'Campaign name is required before publishing.',
+    );
   }
   if (!campaign.objective) {
-    throw new BadRequestException('Campaign objective is required before publishing.');
+    throw new BadRequestException(
+      'Campaign objective is required before publishing.',
+    );
   }
   if (!Array.isArray(campaign.specialAdCategories)) {
-    throw new BadRequestException('Special ad categories are required before publishing.');
+    throw new BadRequestException(
+      'Special ad categories are required before publishing.',
+    );
   }
 
   if (!adSet?.name?.trim()) {
@@ -260,7 +268,9 @@ export function assertPublishReady(
   }
 
   if (!adSet.startDateTime?.trim()) {
-    throw new BadRequestException('Ad set schedule start is required before publishing.');
+    throw new BadRequestException(
+      'Ad set schedule start is required before publishing.',
+    );
   }
   assertScheduleOrder(adSet.startDateTime, adSet.endDateTime);
 
@@ -296,12 +306,12 @@ export function assertPublishReady(
     throw new BadRequestException('Ad name is required before publishing.');
   }
   if (!creative.facebookPageId?.trim()) {
-    throw new BadRequestException(
-      'Select a Facebook Page before publishing.',
-    );
+    throw new BadRequestException('Select a Facebook Page before publishing.');
   }
   if (!creative.primaryText?.trim()) {
-    throw new BadRequestException('Primary text is required before publishing.');
+    throw new BadRequestException(
+      'Primary text is required before publishing.',
+    );
   }
 
   assertAdCreativeMedia(creative as never);

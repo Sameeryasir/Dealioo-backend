@@ -9,9 +9,7 @@ import { CustomerVisitedConditionEvaluator } from './conditions/customer-visited
 export class AutomationConditionRegistry {
   private readonly evaluators: AutomationConditionEvaluator[];
 
-  constructor(
-    customerVisitedEvaluator: CustomerVisitedConditionEvaluator,
-  ) {
+  constructor(customerVisitedEvaluator: CustomerVisitedConditionEvaluator) {
     this.evaluators = [customerVisitedEvaluator];
   }
 

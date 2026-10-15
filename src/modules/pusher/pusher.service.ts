@@ -74,7 +74,9 @@ export class PusherService implements OnModuleInit {
     channelName: string,
   ): { auth: string; channel_data?: string } {
     if (!this.client) {
-      throw new ServiceUnavailableException('Realtime messaging is not configured.');
+      throw new ServiceUnavailableException(
+        'Realtime messaging is not configured.',
+      );
     }
 
     return this.client.authorizeChannel(socketId, channelName);
@@ -162,8 +164,7 @@ export class PusherService implements OnModuleInit {
 
       results.forEach((result, index) => {
         if (result.status === 'rejected') {
-          const target =
-            index === 0 ? conversationsChannel : messagesChannel;
+          const target = index === 0 ? conversationsChannel : messagesChannel;
           const reason =
             result.reason instanceof Error
               ? result.reason.message
@@ -369,11 +370,7 @@ export class PusherService implements OnModuleInit {
     const channel = pusherBusinessActivityChannel(payload.businessId);
 
     try {
-      await this.client.trigger(
-        channel,
-        PUSHER_EVENT.GUEST_JOINED,
-        payload,
-      );
+      await this.client.trigger(channel, PUSHER_EVENT.GUEST_JOINED, payload);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Pusher trigger failed';

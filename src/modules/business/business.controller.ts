@@ -57,11 +57,7 @@ export class BusinessController {
     @Req() req: Request & { user: User },
   ): Promise<Business> {
     const user = req.user;
-    return this.businessService.createBusiness(
-      createBusinessDto,
-      user,
-      file,
-    );
+    return this.businessService.createBusiness(createBusinessDto, user, file);
   }
   @UseGuards(AuthGuard('jwt'))
   @Get('all')

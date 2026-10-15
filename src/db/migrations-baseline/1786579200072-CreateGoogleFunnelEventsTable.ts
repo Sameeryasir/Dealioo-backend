@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateGoogleFunnelEventsTable1786579200072
-  implements MigrationInterface
-{
+export class CreateGoogleFunnelEventsTable1786579200072 implements MigrationInterface {
   name = 'CreateGoogleFunnelEventsTable1786579200072';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

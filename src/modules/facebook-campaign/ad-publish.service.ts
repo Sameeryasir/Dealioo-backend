@@ -24,7 +24,9 @@ export class AdPublishService {
     return this.metaPublishService.getPublishStatus(user, businessId, draftId);
   }
 
-  processQueuedPublish(job: Parameters<MetaPublishService['processQueuedPublish']>[0]) {
+  processQueuedPublish(
+    job: Parameters<MetaPublishService['processQueuedPublish']>[0],
+  ) {
     return this.metaPublishService.processQueuedPublish(job);
   }
 

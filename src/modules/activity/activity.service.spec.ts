@@ -26,7 +26,9 @@ describe('ActivityService', () => {
         { provide: PusherService, useValue: {} },
         {
           provide: ActivityStatsQueueService,
-          useValue: { getOrCompute: async (_p: unknown, fb: () => unknown) => fb() },
+          useValue: {
+            getOrCompute: async (_p: unknown, fb: () => unknown) => fb(),
+          },
         },
       ],
     }).compile();

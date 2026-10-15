@@ -1,4 +1,11 @@
-import { IsIn, IsInt, IsOptional, IsUUID, Min, ValidateIf } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsUUID,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import type { GoogleCampaignGoalId } from '../../../db/entities/google-campaign-builder-draft.types';
 
 export const GOOGLE_CAMPAIGN_GOALS = [

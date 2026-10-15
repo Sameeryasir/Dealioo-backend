@@ -88,12 +88,15 @@ export function buildDealiooInvoicePdf(input: DealiooInvoicePdfInput): Buffer {
   text('F2', 10, margin, y, 'Description');
   rightText('F2', 10, pageWidth - margin, y, 'Amount');
   y -= 10;
-  fill(0.90, 0.93, 0.96);
+  fill(0.9, 0.93, 0.96);
   rect(margin, y, pageWidth - margin * 2, 0.6);
 
   const descMax = 78;
   for (const line of input.lines) {
-    const wrapped = wrapText(pdfSafe(line.description) || 'Subscription', descMax);
+    const wrapped = wrapText(
+      pdfSafe(line.description) || 'Subscription',
+      descMax,
+    );
     y -= 16;
     fill(0.07, 0.16, 0.29);
     text('F1', 10, margin, y, wrapped[0] ?? 'Subscription');
@@ -106,14 +109,14 @@ export function buildDealiooInvoicePdf(input: DealiooInvoicePdfInput): Buffer {
   }
 
   y -= 14;
-  fill(0.90, 0.93, 0.96);
+  fill(0.9, 0.93, 0.96);
   rect(margin, y, pageWidth - margin * 2, 0.6);
   y -= 20;
   fill(0.07, 0.16, 0.29);
   text('F2', 11, margin, y, 'Total');
   rightText('F2', 12, pageWidth - margin, y, pdfSafe(input.totalAmount));
 
-  fill(0.45, 0.51, 0.60);
+  fill(0.45, 0.51, 0.6);
   text(
     'F1',
     9,
@@ -168,11 +171,7 @@ function escapePdfText(value: string): string {
     .replace(/\)/g, '\\)');
 }
 
-function estimateTextWidth(
-  value: string,
-  size: number,
-  bold: boolean,
-): number {
+function estimateTextWidth(value: string, size: number, bold: boolean): number {
   return pdfSafe(value).length * size * (bold ? 0.55 : 0.5);
 }
 

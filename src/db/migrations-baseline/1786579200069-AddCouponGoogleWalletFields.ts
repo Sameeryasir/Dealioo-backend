@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddCouponGoogleWalletFields1786579200069
-  implements MigrationInterface
-{
+export class AddCouponGoogleWalletFields1786579200069 implements MigrationInterface {
   name = 'AddCouponGoogleWalletFields1786579200069';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

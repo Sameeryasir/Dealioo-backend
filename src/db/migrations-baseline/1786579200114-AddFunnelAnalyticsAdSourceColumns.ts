@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddFunnelAnalyticsAdSourceColumns1786579200114
-  implements MigrationInterface
-{
+export class AddFunnelAnalyticsAdSourceColumns1786579200114 implements MigrationInterface {
   name = 'AddFunnelAnalyticsAdSourceColumns1786579200114';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateBusinessStripeIntegrationsTable1786579200084
-  implements MigrationInterface
-{
+export class CreateBusinessStripeIntegrationsTable1786579200084 implements MigrationInterface {
   name = 'CreateBusinessStripeIntegrationsTable1786579200084';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

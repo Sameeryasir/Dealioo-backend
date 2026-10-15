@@ -39,8 +39,7 @@ export class SidebarUnreadController {
         'orders',
       );
       allowed.push('orders');
-    } catch {
-    }
+    } catch {}
     try {
       await this.sidebarUnreadService.assertCanAccessSection(
         req.user,
@@ -48,8 +47,7 @@ export class SidebarUnreadController {
         'activity',
       );
       allowed.push('activity');
-    } catch {
-    }
+    } catch {}
     try {
       await this.sidebarUnreadService.assertCanAccessSection(
         req.user,
@@ -57,8 +55,7 @@ export class SidebarUnreadController {
         'history',
       );
       allowed.push('history');
-    } catch {
-    }
+    } catch {}
 
     return this.sidebarUnreadService.getBusinessUnread(
       businessId,

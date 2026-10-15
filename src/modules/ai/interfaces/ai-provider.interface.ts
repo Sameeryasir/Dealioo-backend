@@ -1,7 +1,10 @@
 export interface AiProvider {
   readonly name: string;
 
-  complete(prompt: string, options?: AiProviderCompleteOptions): Promise<string>;
+  complete(
+    prompt: string,
+    options?: AiProviderCompleteOptions,
+  ): Promise<string>;
 }
 
 export type AiProviderCompleteOptions = {

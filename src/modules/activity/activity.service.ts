@@ -1585,7 +1585,7 @@ export class ActivityService {
       return currentPromise;
     }
 
-    const previousCacheKey = `activity-range-v15:${businessId}:${previousFrom!.toISOString()}:${previousTo!.toISOString()}:${chartTz}`;
+    const previousCacheKey = `activity-range-v15:${businessId}:${previousFrom.toISOString()}:${previousTo.toISOString()}:${chartTz}`;
     const [current, previous] = await Promise.all([
       currentPromise,
       this.activityStatsQueueService.getOrCompute(
@@ -1593,15 +1593,15 @@ export class ActivityService {
           kind: ActivityStatsJobName.SUMMARY_RANGE,
           cacheKey: previousCacheKey,
           businessId,
-          fromIso: previousFrom!.toISOString(),
-          toIso: previousTo!.toISOString(),
+          fromIso: previousFrom.toISOString(),
+          toIso: previousTo.toISOString(),
           timeZone: chartTz,
         },
         () =>
           this.computeBusinessSummaryForRange(
             businessId,
-            previousFrom!,
-            previousTo!,
+            previousFrom,
+            previousTo,
             chartTz,
           ),
       ),
@@ -1610,8 +1610,8 @@ export class ActivityService {
     return {
       ...current,
       previous: {
-        from: previousFrom!.toISOString(),
-        to: previousTo!.toISOString(),
+        from: previousFrom.toISOString(),
+        to: previousTo.toISOString(),
         data: previous.data,
         newGuests: previous.newGuests,
         returningGuests: previous.returningGuests,
@@ -1663,100 +1663,104 @@ export class ActivityService {
 
     const [kpi, activityRows, orderRows, memberRows, guestMix, payingGuests] =
       await Promise.all([
-      this.getDashboardKpiSnapshot(businessId),
-      this.activityRepository
-        .createQueryBuilder('activity')
-        .select(activityBucket, 'month')
-        .addSelect(
-          `COUNT(*) FILTER (WHERE activity.event_type = :visited)`,
-          'visited',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE ${SCANNED_VISIT_SQL})`,
-          'scannedVisits',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE ${IN_STORE_VISIT_SQL})`,
-          'inStoreVisits',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
-          'redeemedReward',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE activity.event_type = :prepaid)`,
-          'prepaidForOffer',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE activity.event_type = :message)`,
-          'messageSent',
-        )
-        .addSelect(
-          `COALESCE(SUM(
+        this.getDashboardKpiSnapshot(businessId),
+        this.activityRepository
+          .createQueryBuilder('activity')
+          .select(activityBucket, 'month')
+          .addSelect(
+            `COUNT(*) FILTER (WHERE activity.event_type = :visited)`,
+            'visited',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE ${SCANNED_VISIT_SQL})`,
+            'scannedVisits',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE ${IN_STORE_VISIT_SQL})`,
+            'inStoreVisits',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE activity.event_type = :redeemed)`,
+            'redeemedReward',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE activity.event_type = :prepaid)`,
+            'prepaidForOffer',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE activity.event_type = :message)`,
+            'messageSent',
+          )
+          .addSelect(
+            `COALESCE(SUM(
           CASE
             WHEN activity.event_type = :prepaid
             THEN NULLIF(activity.metadata->>'amountCents', '')::int
             ELSE 0
           END
         ), 0)`,
-          'prepaidRevenueCents',
-        )
-        .addSelect(PREPAID_EXTRA_ITEMS_REVENUE_SQL, 'extraItemsRevenueCents')
-        .where('activity.businessId = :businessId', { businessId })
-        .andWhere('activity.occurredAt >= :from', { from })
-        .andWhere('activity.occurredAt <= :to', { to })
-        .groupBy(activityBucket)
-        .setParameters({
-          visited: ActivityEventType.VISITED,
-          redeemed: ActivityEventType.REDEEMED_REWARD,
-          prepaid: ActivityEventType.PREPAID_FOR_OFFER,
-          message: ActivityEventType.MESSAGE_SENT,
-          qrVisitSource: CustomerVisitSource.QR_REDEMPTION,
-          staffVisitSource: CustomerVisitSource.STAFF_LOOKUP,
-        })
-        .getRawMany<{
-          month: string;
-          visited: string;
-          scannedVisits: string;
-          inStoreVisits: string;
-          redeemedReward: string;
-          prepaidForOffer: string;
-          messageSent: string;
-          prepaidRevenueCents: string;
-          extraItemsRevenueCents: string;
-        }>(),
-      this.funnelPaymentRepository
-        .createQueryBuilder('payment')
-        .select(paymentBucket, 'month')
-        .addSelect('COUNT(*)', 'orders')
-        .addSelect(
-          `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
-          'funnelOrders',
-        )
-        .addSelect(
-          `COUNT(*) FILTER (WHERE ${IN_STORE_ORDER_SQL})`,
-          'inStoreOrders',
-        )
-        .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
-        .where('payment.businessId = :businessId', { businessId })
-        .andWhere('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
-        .andWhere('COALESCE(payment.paidAt, payment.createdAt) >= :from', {
-          from,
-        })
-        .andWhere('COALESCE(payment.paidAt, payment.createdAt) <= :to', { to })
-        .groupBy(paymentBucket)
-        .getRawMany<{
-          month: string;
-          orders: string;
-          funnelOrders: string;
-          inStoreOrders: string;
-          paidRevenueCents?: string;
-          paidrevenuecents?: string;
-        }>(),
-      this.membersSummaryQuery(businessId, memberBucket, { from, to }),
-      this.countNewVsReturningGuests(businessId, from, to),
-      this.countPayingGuests(businessId, from, to),
-    ]);
+            'prepaidRevenueCents',
+          )
+          .addSelect(PREPAID_EXTRA_ITEMS_REVENUE_SQL, 'extraItemsRevenueCents')
+          .where('activity.businessId = :businessId', { businessId })
+          .andWhere('activity.occurredAt >= :from', { from })
+          .andWhere('activity.occurredAt <= :to', { to })
+          .groupBy(activityBucket)
+          .setParameters({
+            visited: ActivityEventType.VISITED,
+            redeemed: ActivityEventType.REDEEMED_REWARD,
+            prepaid: ActivityEventType.PREPAID_FOR_OFFER,
+            message: ActivityEventType.MESSAGE_SENT,
+            qrVisitSource: CustomerVisitSource.QR_REDEMPTION,
+            staffVisitSource: CustomerVisitSource.STAFF_LOOKUP,
+          })
+          .getRawMany<{
+            month: string;
+            visited: string;
+            scannedVisits: string;
+            inStoreVisits: string;
+            redeemedReward: string;
+            prepaidForOffer: string;
+            messageSent: string;
+            prepaidRevenueCents: string;
+            extraItemsRevenueCents: string;
+          }>(),
+        this.funnelPaymentRepository
+          .createQueryBuilder('payment')
+          .select(paymentBucket, 'month')
+          .addSelect('COUNT(*)', 'orders')
+          .addSelect(
+            `COUNT(*) FILTER (WHERE NOT ${IN_STORE_ORDER_SQL})`,
+            'funnelOrders',
+          )
+          .addSelect(
+            `COUNT(*) FILTER (WHERE ${IN_STORE_ORDER_SQL})`,
+            'inStoreOrders',
+          )
+          .addSelect('COALESCE(SUM(payment.amount), 0)', 'paidRevenueCents')
+          .where('payment.businessId = :businessId', { businessId })
+          .andWhere('payment.status = :paid', {
+            paid: FunnelPaymentStatus.PAID,
+          })
+          .andWhere('COALESCE(payment.paidAt, payment.createdAt) >= :from', {
+            from,
+          })
+          .andWhere('COALESCE(payment.paidAt, payment.createdAt) <= :to', {
+            to,
+          })
+          .groupBy(paymentBucket)
+          .getRawMany<{
+            month: string;
+            orders: string;
+            funnelOrders: string;
+            inStoreOrders: string;
+            paidRevenueCents?: string;
+            paidrevenuecents?: string;
+          }>(),
+        this.membersSummaryQuery(businessId, memberBucket, { from, to }),
+        this.countNewVsReturningGuests(businessId, from, to),
+        this.countPayingGuests(businessId, from, to),
+      ]);
 
     const activityByBucket = monthKeyToMap(activityRows);
     const ordersByBucket = monthKeyToMap(orderRows);

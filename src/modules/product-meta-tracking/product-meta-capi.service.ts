@@ -111,7 +111,9 @@ export class ProductMetaCapiService {
 
     const version = this.getGraphVersion();
     const body = this.buildCapiPayload(row);
-    const url = new URL(`https://graph.facebook.com/${version}/${pixelId}/events`);
+    const url = new URL(
+      `https://graph.facebook.com/${version}/${pixelId}/events`,
+    );
     url.searchParams.set('access_token', token);
 
     this.logger.log(
@@ -131,9 +133,7 @@ export class ProductMetaCapiService {
 
     if (!response.ok) {
       const message =
-        typeof json.error === 'object' &&
-        json.error &&
-        'message' in (json.error as object)
+        typeof json.error === 'object' && json.error && 'message' in json.error
           ? String((json.error as { message?: string }).message)
           : `Meta CAPI HTTP ${response.status}`;
       const err = new Error(message) as Error & {

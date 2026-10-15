@@ -21,7 +21,10 @@ import {
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import type { OnboardingService } from '../onboarding/onboarding.service';
 import { StripeService } from '../stripe/stripe.service';
-import { SelectUserPlanDto, CancelSubscriptionDto } from './user-subscriptions.dto';
+import {
+  SelectUserPlanDto,
+  CancelSubscriptionDto,
+} from './user-subscriptions.dto';
 
 export type UserSubscriptionResponse = {
   id: string;
@@ -272,8 +275,8 @@ export class UserSubscriptionsService {
       metadata: { planSlug: plan.slug, billingCycle: dto.billingCycle },
     });
 
-    const checkout = await this.stripeService.createPlatformSubscriptionCheckoutSession(
-      {
+    const checkout =
+      await this.stripeService.createPlatformSubscriptionCheckoutSession({
         userId: user.id,
         userEmail: user.email,
         userName: user.name,
@@ -281,8 +284,7 @@ export class UserSubscriptionsService {
         priceId,
         planSlug: plan.slug,
         billingCycle: dto.billingCycle,
-      },
-    );
+      });
 
     if (
       checkout.stripeCustomerId &&
@@ -412,9 +414,8 @@ export class UserSubscriptionsService {
       throw new BadRequestException('Missing Stripe checkout session id.');
     }
 
-    const session = await this.stripeService.retrievePlatformCheckoutSession(
-      trimmed,
-    );
+    const session =
+      await this.stripeService.retrievePlatformCheckoutSession(trimmed);
 
     this.assertSessionBelongsToUser(session, userId);
 
@@ -549,7 +550,8 @@ export class UserSubscriptionsService {
     const buyer = await this.userRepository.findOne({ where: { id: userId } });
     await this.adminNotificationWriter.notifySubscriptionPurchased({
       userId,
-      userName: buyer?.name?.trim() || buyer?.email?.trim() || `User #${userId}`,
+      userName:
+        buyer?.name?.trim() || buyer?.email?.trim() || `User #${userId}`,
       planName: plan.name,
       planSlug,
       billingCycle,
@@ -744,9 +746,7 @@ export class UserSubscriptionsService {
     return date?.toISOString() ?? null;
   }
 
-  private toDateFromUnixSeconds(
-    value: number | null | undefined,
-  ): Date | null {
+  private toDateFromUnixSeconds(value: number | null | undefined): Date | null {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
       return null;
     }

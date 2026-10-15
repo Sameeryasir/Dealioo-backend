@@ -36,7 +36,9 @@ export class TrackFunnelEventDto {
   @Min(1)
   customerId?: number;
 
-  @ValidateIf((dto: TrackFunnelEventDto) => dto.eventType === FunnelEventType.PAYMENT)
+  @ValidateIf(
+    (dto: TrackFunnelEventDto) => dto.eventType === FunnelEventType.PAYMENT,
+  )
   @Type(() => Number)
   @IsInt()
   @Min(1)

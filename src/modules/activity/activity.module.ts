@@ -31,7 +31,9 @@ import { ActivityStatsQueueService } from './activity-stats-queue.service';
     AuthModule,
     CustomerActivityModule,
     SidebarUnreadModule,
-    forwardRef(() => require('../redemption/redemption.module').RedemptionModule),
+    forwardRef(
+      () => require('../redemption/redemption.module').RedemptionModule,
+    ),
   ],
   controllers: [ActivityController],
   providers: [

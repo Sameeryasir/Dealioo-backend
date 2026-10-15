@@ -20,9 +20,7 @@ export function isStrongEnoughPassword(password: string): boolean {
 }
 
 @ValidatorConstraint({ name: 'isStrongEnoughPassword', async: false })
-export class IsStrongEnoughPasswordConstraint
-  implements ValidatorConstraintInterface
-{
+export class IsStrongEnoughPasswordConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
     return typeof value === 'string' && isStrongEnoughPassword(value);
   }

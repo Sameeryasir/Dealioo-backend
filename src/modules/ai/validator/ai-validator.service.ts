@@ -89,7 +89,7 @@ export class AiValidatorService {
         throw new BadRequestException(
           `AI response failed schema validation: ${details}`,
         );
-      } 
+      }
 
       throw new BadRequestException(
         'AI response failed schema validation for an unknown reason.',

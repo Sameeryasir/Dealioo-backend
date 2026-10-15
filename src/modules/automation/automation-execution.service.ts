@@ -377,7 +377,8 @@ export class AutomationExecutionService {
       return byKind;
     }
 
-    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    const visitGateOrder =
+      await this.findCustomerVisitedGateOrder(automationId);
     const nodes = await this.nodeRepository.find({
       where: { automationId },
       order: { order: 'ASC', id: 'ASC' },
@@ -401,7 +402,8 @@ export class AutomationExecutionService {
   async findPrepaidVisitReminderLoopNode(
     automationId: number,
   ): Promise<AutomationNode | null> {
-    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    const visitGateOrder =
+      await this.findCustomerVisitedGateOrder(automationId);
     const nodes = await this.nodeRepository.find({
       where: { automationId },
       order: { order: 'ASC', id: 'ASC' },
@@ -427,7 +429,8 @@ export class AutomationExecutionService {
   async findPrepaidVisitReminderWaitLoopNode(
     automationId: number,
   ): Promise<AutomationNode | null> {
-    const reminderNode = await this.findPrepaidVisitReminderLoopNode(automationId);
+    const reminderNode =
+      await this.findPrepaidVisitReminderLoopNode(automationId);
     if (!reminderNode) {
       return null;
     }
@@ -460,18 +463,16 @@ export class AutomationExecutionService {
     ).trim();
 
     if (workflowKind === 'prepaid_visit_reminder_wait') {
-      const waitNode = await this.findPrepaidVisitReminderWaitLoopNode(
-        automationId,
-      );
+      const waitNode =
+        await this.findPrepaidVisitReminderWaitLoopNode(automationId);
       if (waitNode) {
         return waitNode;
       }
     }
 
     if (workflowKind === 'prepaid_visit_reminder') {
-      const reminderNode = await this.findPrepaidVisitReminderLoopNode(
-        automationId,
-      );
+      const reminderNode =
+        await this.findPrepaidVisitReminderLoopNode(automationId);
       if (reminderNode) {
         return reminderNode;
       }
@@ -518,7 +519,12 @@ export class AutomationExecutionService {
   async findById(id: number): Promise<AutomationExecution> {
     const execution = await this.executionRepository.findOne({
       where: { id },
-      relations: ['automation', 'automation.campaign', 'currentNode', 'customer'],
+      relations: [
+        'automation',
+        'automation.campaign',
+        'currentNode',
+        'customer',
+      ],
     });
     if (!execution) {
       throw new NotFoundException('Automation execution not found');
@@ -668,9 +674,7 @@ export class AutomationExecutionService {
     statuses: AutomationExecutionStatus[],
   ): Promise<Set<number>> {
     const uniqueIds = [
-      ...new Set(
-        customerIds.filter((id) => Number.isFinite(id) && id > 0),
-      ),
+      ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
     ];
     if (uniqueIds.length === 0) {
       return new Set();
@@ -698,9 +702,7 @@ export class AutomationExecutionService {
     customerIds: number[],
   ): Promise<{ created: AutomationExecution[]; skippedActive: number }> {
     const uniqueIds = [
-      ...new Set(
-        customerIds.filter((id) => Number.isFinite(id) && id > 0),
-      ),
+      ...new Set(customerIds.filter((id) => Number.isFinite(id) && id > 0)),
     ].sort((a, b) => a - b);
 
     if (uniqueIds.length === 0) {
@@ -789,7 +791,9 @@ export class AutomationExecutionService {
     });
   }
 
-  async hasActiveExecutionForAutomation(automationId: number): Promise<boolean> {
+  async hasActiveExecutionForAutomation(
+    automationId: number,
+  ): Promise<boolean> {
     return this.executionRepository.exist({
       where: {
         automationId,
@@ -803,10 +807,7 @@ export class AutomationExecutionService {
     options?: { excludeWaiting?: boolean },
   ): Promise<boolean> {
     const statuses = options?.excludeWaiting
-      ? [
-          AutomationExecutionStatus.QUEUED,
-          AutomationExecutionStatus.RUNNING,
-        ]
+      ? [AutomationExecutionStatus.QUEUED, AutomationExecutionStatus.RUNNING]
       : this.liveExecutionStatuses();
 
     return this.executionRepository.exist({
@@ -847,7 +848,7 @@ export class AutomationExecutionService {
 
     await this.executionRepository.update(executionId, {
       status: AutomationExecutionStatus.PAUSED,
-      executionContext: executionContext as object,
+      executionContext: executionContext,
     });
   }
 
@@ -875,7 +876,7 @@ export class AutomationExecutionService {
 
       await this.executionRepository.update(execution.id, {
         status: AutomationExecutionStatus.PAUSED,
-        executionContext: executionContext as object,
+        executionContext: executionContext,
       });
       pausedIds.push(execution.id);
     }
@@ -953,7 +954,8 @@ export class AutomationExecutionService {
   }
 
   async findPostVisitEntryNodeId(automationId: number): Promise<number | null> {
-    const visitGateOrder = await this.findCustomerVisitedGateOrder(automationId);
+    const visitGateOrder =
+      await this.findCustomerVisitedGateOrder(automationId);
     if (visitGateOrder == null) {
       return null;
     }
@@ -1058,7 +1060,9 @@ export class AutomationExecutionService {
     });
   }
 
-  async reopenForVisitResume(executionId: number): Promise<AutomationExecution> {
+  async reopenForVisitResume(
+    executionId: number,
+  ): Promise<AutomationExecution> {
     await this.executionRepository.update(executionId, {
       status: AutomationExecutionStatus.RUNNING,
       lastError: null,
@@ -1105,7 +1109,9 @@ export class AutomationExecutionService {
       throw new NotFoundException('Automation not found');
     }
     const nextVersion = (automation.version ?? 1) + 1;
-    await this.automationRepository.update(automationId, { version: nextVersion });
+    await this.automationRepository.update(automationId, {
+      version: nextVersion,
+    });
     return nextVersion;
   }
 
@@ -1143,7 +1149,9 @@ export class AutomationExecutionService {
       }
     }
 
-    const unlabeled = connections.filter((connection) => !connection.branch?.trim());
+    const unlabeled = connections.filter(
+      (connection) => !connection.branch?.trim(),
+    );
     const pool = unlabeled.length > 0 ? unlabeled : connections;
     return this.collectTargetNodeIds(pool, sourceNodeId);
   }
@@ -1283,7 +1291,8 @@ export class AutomationExecutionService {
       execution.startedAt = execution.createdAt;
     }
     execution.lastError =
-      error?.trim() || 'Execution timed out while stuck in a non-terminal state';
+      error?.trim() ||
+      'Execution timed out while stuck in a non-terminal state';
     return this.executionRepository.save(execution);
   }
 
@@ -1303,7 +1312,9 @@ export class AutomationExecutionService {
     return firstNode?.id ?? null;
   }
 
-  async findExecutionIdsByAutomationId(automationId: number): Promise<number[]> {
+  async findExecutionIdsByAutomationId(
+    automationId: number,
+  ): Promise<number[]> {
     const rows = await this.executionRepository.find({
       where: { automationId },
       select: ['id'],

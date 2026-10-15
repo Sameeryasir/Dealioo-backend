@@ -44,9 +44,7 @@ import {
   GoogleCampaignDraftStatus,
   type GoogleCampaignDraftStatusValue,
 } from './google-campaign-draft.constants';
-import {
-  createDefaultGoogleCampaignDraftData,
-} from './google-campaign-draft-defaults';
+import { createDefaultGoogleCampaignDraftData } from './google-campaign-draft-defaults';
 import {
   createGoogleAdsApiClient,
   createGoogleAdsCustomer,
@@ -93,7 +91,6 @@ export class GoogleCampaignDraftService {
     private readonly googleAdsTokenService: GoogleAdsTokenService,
   ) {}
 
-  
   async saveGoalStep(
     user: User,
     businessId: number,
@@ -108,7 +105,6 @@ export class GoogleCampaignDraftService {
 
     const now = new Date();
 
-    
     if (dto.draftId?.trim()) {
       if (dto.expectedVersion == null) {
         throw new BadRequestException(
@@ -162,9 +158,10 @@ export class GoogleCampaignDraftService {
                   ? String(draftData.dailyBudget)
                   : null,
               currentStep: Math.max(editable.currentStep, 2),
-              completedSteps: this.mergeCompletedSteps(editable.completedSteps, [
-                1,
-              ]),
+              completedSteps: this.mergeCompletedSteps(
+                editable.completedSteps,
+                [1],
+              ),
               lastSavedAt: now,
               status: GoogleCampaignDraftStatus.DRAFT,
               errorMessage: null,
@@ -178,7 +175,6 @@ export class GoogleCampaignDraftService {
       }
     }
 
-    
     return this.dataSource.transaction(async (manager) => {
       const draftData = this.applyGoalToDraftData(
         createDefaultGoogleCampaignDraftData(),
@@ -215,7 +211,6 @@ export class GoogleCampaignDraftService {
       const created = await manager.save(entity);
       const response = this.toGoalStepResponse(created);
 
-      
       if (idempotencyKey?.trim()) {
         created.lastIdempotencyKey = idempotencyKey.trim();
         created.lastIdempotencyResponse = response as unknown as Record<
@@ -229,7 +224,6 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  
   async saveGoalDetailsStep(
     user: User,
     businessId: number,
@@ -309,17 +303,13 @@ export class GoogleCampaignDraftService {
         dto.whatsAppMessage?.trim() ?? base.whatsAppMessage ?? '',
       bookingPageUrl: dto.bookingPageUrl?.trim() ?? base.bookingPageUrl ?? '',
       googleLeadFormHeadline:
-        dto.googleLeadFormHeadline?.trim() ??
-        base.googleLeadFormHeadline ??
-        '',
+        dto.googleLeadFormHeadline?.trim() ?? base.googleLeadFormHeadline ?? '',
       googleLeadFormDescription:
         dto.googleLeadFormDescription?.trim() ??
         base.googleLeadFormDescription ??
         '',
-      googleLeadFormFields:
-        dto.googleLeadFormFields ??
-        base.googleLeadFormFields ??
-        ['FULL_NAME', 'EMAIL', 'PHONE'],
+      googleLeadFormFields: dto.googleLeadFormFields ??
+        base.googleLeadFormFields ?? ['FULL_NAME', 'EMAIL', 'PHONE'],
       googleLeadFormCta:
         dto.googleLeadFormCta?.trim() ?? base.googleLeadFormCta ?? 'GET_QUOTE',
       googleLeadFormCtaDescription:
@@ -380,9 +370,10 @@ export class GoogleCampaignDraftService {
               ? String(draftData.dailyBudget)
               : null,
           currentStep: Math.max(draft.currentStep, 3),
-          completedSteps: this.mergeCompletedSteps(draft.completedSteps, [
-            1, 2,
-          ]),
+          completedSteps: this.mergeCompletedSteps(
+            draft.completedSteps,
+            [1, 2],
+          ),
           lastSavedAt: now,
           status: GoogleCampaignDraftStatus.DRAFT,
           errorMessage: null,
@@ -394,7 +385,6 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  
   async saveCampaignInfoStep(
     user: User,
     businessId: number,
@@ -491,9 +481,10 @@ export class GoogleCampaignDraftService {
               ? String(draftData.dailyBudget)
               : null,
           currentStep: Math.max(draft.currentStep, 4),
-          completedSteps: this.mergeCompletedSteps(draft.completedSteps, [
-            1, 2, 3,
-          ]),
+          completedSteps: this.mergeCompletedSteps(
+            draft.completedSteps,
+            [1, 2, 3],
+          ),
           lastSavedAt: now,
           status: GoogleCampaignDraftStatus.DRAFT,
           errorMessage: null,
@@ -616,7 +607,9 @@ export class GoogleCampaignDraftService {
     business: Business,
   ): Promise<Set<string>> {
     const credentials =
-      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(
+        business,
+      );
     const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
     const loginCustomerId = normalizeGoogleCustomerId(
       credentials.loginCustomerId || customerId,
@@ -646,7 +639,7 @@ export class GoogleCampaignDraftService {
       campaign?: { id?: string | number; status?: string | number };
     };
 
-    const rows = (await customer.query(query)) as Row[];
+    const rows = await customer.query(query);
     const live = new Set<string>();
     for (const row of rows) {
       const id = String(row.campaign?.id ?? '').replace(/\D/g, '');
@@ -675,7 +668,9 @@ export class GoogleCampaignDraftService {
     }
 
     const credentials =
-      await this.googleAdsTokenService.assertBusinessGoogleCredentials(business);
+      await this.googleAdsTokenService.assertBusinessGoogleCredentials(
+        business,
+      );
     const customerId = normalizeGoogleCustomerId(credentials.customerId ?? '');
     const loginCustomerId = normalizeGoogleCustomerId(
       credentials.loginCustomerId || customerId,
@@ -715,7 +710,7 @@ export class GoogleCampaignDraftService {
       };
     };
 
-    const campaignRows = (await customer.query(`
+    const campaignRows = await customer.query(`
       SELECT
         campaign.id,
         campaign.name,
@@ -727,7 +722,7 @@ export class GoogleCampaignDraftService {
       WHERE campaign.id = ${campaignId}
         AND campaign.status != 'REMOVED'
       LIMIT 1
-    `)) as CampaignRow[];
+    `);
 
     const campaignRow = campaignRows[0];
     if (!campaignRow?.campaign?.id) {
@@ -749,13 +744,13 @@ export class GoogleCampaignDraftService {
       ad_group?: { id?: string | number; name?: string };
       adGroup?: { id?: string | number; name?: string };
     };
-    const adGroupRows = (await customer.query(`
+    const adGroupRows = await customer.query(`
       SELECT ad_group.id, ad_group.name
       FROM ad_group
       WHERE campaign.id = ${campaignId}
         AND ad_group.status != 'REMOVED'
       LIMIT 1
-    `)) as AdGroupRow[];
+    `);
     const adGroup = adGroupRows[0]?.ad_group ?? adGroupRows[0]?.adGroup;
     const adGroupId = String(adGroup?.id ?? '').replace(/\D/g, '') || null;
 
@@ -808,7 +803,7 @@ export class GoogleCampaignDraftService {
     let finalUrl = '';
 
     if (adGroupId) {
-      const adRows = (await customer.query(`
+      const adRows = await customer.query(`
         SELECT
           ad_group_ad.ad.id,
           ad_group_ad.ad.final_urls,
@@ -821,10 +816,9 @@ export class GoogleCampaignDraftService {
           AND ad_group_ad.status != 'REMOVED'
           AND ad_group_ad.ad.type = 'RESPONSIVE_SEARCH_AD'
         LIMIT 1
-      `)) as AdRow[];
+      `);
 
-      const ad =
-        adRows[0]?.ad_group_ad?.ad ?? adRows[0]?.adGroupAd?.ad ?? null;
+      const ad = adRows[0]?.ad_group_ad?.ad ?? adRows[0]?.adGroupAd?.ad ?? null;
       if (ad?.id) {
         adId = String(ad.id).replace(/\D/g, '') || null;
         const rsa = ad.responsive_search_ad ?? ad.responsiveSearchAd;
@@ -834,7 +828,8 @@ export class GoogleCampaignDraftService {
         const d = (rsa?.descriptions ?? [])
           .map((row) => row.text?.trim() || '')
           .filter(Boolean);
-        headlines = h.length >= 3 ? h.slice(0, 15) : [...h, '', '', ''].slice(0, 3);
+        headlines =
+          h.length >= 3 ? h.slice(0, 15) : [...h, '', '', ''].slice(0, 3);
         descriptions =
           d.length >= 2 ? d.slice(0, 4) : [...d, '', ''].slice(0, 2);
         path1 = rsa?.path1?.trim() || '';
@@ -867,7 +862,7 @@ export class GoogleCampaignDraftService {
     let keywordMatchType: 'BROAD' | 'PHRASE' | 'EXACT' = 'BROAD';
 
     if (adGroupId) {
-      const keywordRows = (await customer.query(`
+      const keywordRows = await customer.query(`
         SELECT
           ad_group_criterion.criterion_id,
           ad_group_criterion.keyword.text,
@@ -878,7 +873,7 @@ export class GoogleCampaignDraftService {
           AND ad_group_criterion.type = 'KEYWORD'
           AND ad_group_criterion.status != 'REMOVED'
         LIMIT 100
-      `)) as KeywordRow[];
+      `);
 
       for (const row of keywordRows) {
         const criterion = row.ad_group_criterion ?? row.adGroupCriterion;
@@ -926,7 +921,8 @@ export class GoogleCampaignDraftService {
           : ('SEARCH' as const);
 
     const campaignName =
-      campaignRow.campaign.name?.trim() || `Imported Google campaign ${campaignId}`;
+      campaignRow.campaign.name?.trim() ||
+      `Imported Google campaign ${campaignId}`;
 
     const draftData: GoogleCampaignBuilderDraftData = {
       ...createDefaultGoogleCampaignDraftData(),
@@ -1205,7 +1201,11 @@ export class GoogleCampaignDraftService {
       );
     }
 
-    const baseName = (source.campaignName ?? source.draftData.campaignName ?? 'Campaign')
+    const baseName = (
+      source.campaignName ??
+      source.draftData.campaignName ??
+      'Campaign'
+    )
       .trim()
       .replace(/\s*\(Copy(?:\s+\d+)?\)\s*$/i, '');
     const copyName = `${baseName || 'Campaign'} (Copy)`.slice(0, 255);
@@ -1394,8 +1394,7 @@ export class GoogleCampaignDraftService {
     };
 
     const fallbackRadius = dto.radiusValue ?? 16;
-    const fallbackUnit =
-      dto.radiusUnit === 'MILES' ? 'MILES' : 'KILOMETERS';
+    const fallbackUnit = dto.radiusUnit === 'MILES' ? 'MILES' : 'KILOMETERS';
     const targetLocations = dto.targetLocations.map((row) =>
       normalizeLocation(row, fallbackRadius, fallbackUnit),
     );
@@ -1561,8 +1560,7 @@ export class GoogleCampaignDraftService {
           .map((row) => row.trim())
           .filter(Boolean),
         keywordMatchType: dto.keywordMatchType ?? base.keywordMatchType,
-        productsServices:
-          dto.productsServices ?? base.productsServices ?? [],
+        productsServices: dto.productsServices ?? base.productsServices ?? [],
       }),
       idempotencyKey,
     });
@@ -1649,7 +1647,6 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  
   private async commitWizardStep<T = GoogleCampaignStepSaveResponseDto>(
     user: User,
     businessId: number,
@@ -1698,7 +1695,7 @@ export class GoogleCampaignDraftService {
       goal: draftData.goal ?? draft.goal,
       campaignType: draftData.campaignType,
       currentStep: Math.max(draft.currentStep, options.nextStep),
-      
+
       completedSteps: this.mergeCompletedSteps(
         draft.completedSteps,
         Array.from({ length: options.completedStep }, (_, i) => i + 1),
@@ -1735,7 +1732,6 @@ export class GoogleCampaignDraftService {
     });
   }
 
-  
   private async updateDraftWithOcc<T>(
     manager: EntityManager,
     params: {
@@ -1762,14 +1758,13 @@ export class GoogleCampaignDraftService {
 
     const setPayload: Record<string, unknown> = {
       ...fields,
-      
+
       version: () => '"version" + 1',
       updatedAt: now,
       updatedBy: fields.updatedBy ?? userId,
     };
 
     if (idempotencyKey?.trim()) {
-      
       setPayload.lastIdempotencyKey = idempotencyKey.trim();
     }
 
@@ -1808,14 +1803,13 @@ export class GoogleCampaignDraftService {
 
     const response = mapResponse(reloaded);
 
-    
     if (idempotencyKey?.trim()) {
       await manager
         .createQueryBuilder()
         .update(GoogleCampaignDraft)
         .set({
           lastIdempotencyKey: idempotencyKey.trim(),
-          
+
           lastIdempotencyResponse: response as never,
         })
         .where('id = :id AND business_id = :businessId AND user_id = :userId', {
@@ -1949,15 +1943,11 @@ export class GoogleCampaignDraftService {
           'Publish is in progress. Wait for it to finish before editing this draft.',
         );
       }
-      
+
       return draft;
     }
 
-    if (
-      !GOOGLE_DRAFT_EDITABLE_STATUSES.includes(
-        status as (typeof GOOGLE_DRAFT_EDITABLE_STATUSES)[number],
-      )
-    ) {
+    if (!GOOGLE_DRAFT_EDITABLE_STATUSES.includes(status)) {
       throw new BadRequestException(
         `This draft cannot be edited while status is ${draft.status}.`,
       );
@@ -2059,7 +2049,8 @@ export class GoogleCampaignDraftService {
 
     if (goal === 'SALES') {
       if (data?.salesChannel) response.salesChannel = data.salesChannel;
-      if (data?.websiteUrl?.trim()) response.websiteUrl = data.websiteUrl.trim();
+      if (data?.websiteUrl?.trim())
+        response.websiteUrl = data.websiteUrl.trim();
       if (data?.businessLocation?.trim()) {
         response.businessLocation = data.businessLocation.trim();
       }
@@ -2075,14 +2066,16 @@ export class GoogleCampaignDraftService {
       if (data?.landingPageUrl?.trim()) {
         response.landingPageUrl = data.landingPageUrl.trim();
       }
-      if (data?.websiteUrl?.trim()) response.websiteUrl = data.websiteUrl.trim();
+      if (data?.websiteUrl?.trim())
+        response.websiteUrl = data.websiteUrl.trim();
       if (data?.businessPhone?.trim()) {
         response.businessPhone = data.businessPhone.trim();
       }
     }
 
     if (goal === 'WEBSITE_TRAFFIC') {
-      if (data?.websiteUrl?.trim()) response.websiteUrl = data.websiteUrl.trim();
+      if (data?.websiteUrl?.trim())
+        response.websiteUrl = data.websiteUrl.trim();
       if (data?.trafficAction) response.trafficAction = data.trafficAction;
     }
 

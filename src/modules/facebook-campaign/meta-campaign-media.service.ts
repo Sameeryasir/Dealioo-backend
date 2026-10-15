@@ -1,4 +1,1 @@
-export {
-  MediaService,
-  MetaCampaignMediaService,
-} from './media.service';
+export { MediaService, MetaCampaignMediaService } from './media.service';

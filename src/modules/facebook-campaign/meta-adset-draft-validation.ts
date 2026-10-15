@@ -1,6 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { AdSetPlacementsDto } from './dto/save-adset-step.dto';
-import { MetaCampaignObjective, MetaOptimizationGoal } from './meta-campaign.constants';
+import {
+  MetaCampaignObjective,
+  MetaOptimizationGoal,
+} from './meta-campaign.constants';
 import { isOptimizationGoalValidForObjective } from './meta-adset-objectives';
 
 export function budgetToMetaMinorUnits(dollars: number): string {
@@ -23,7 +26,9 @@ export function combineDateAndTime(
   const trimmedTz = timezone.trim();
 
   if (!trimmedDate || !trimmedTime || !trimmedTz) {
-    throw new BadRequestException('Schedule date, time, and timezone are required.');
+    throw new BadRequestException(
+      'Schedule date, time, and timezone are required.',
+    );
   }
 
   const isoCandidate = `${trimmedDate}T${trimmedTime}:00`;
@@ -47,11 +52,15 @@ export function assertScheduleOrder(
     throw new BadRequestException('Invalid schedule.');
   }
   if (end <= start) {
-    throw new BadRequestException('End date/time must be after start date/time.');
+    throw new BadRequestException(
+      'End date/time must be after start date/time.',
+    );
   }
 }
 
-export function assertAtLeastOnePlacement(placements: AdSetPlacementsDto): void {
+export function assertAtLeastOnePlacement(
+  placements: AdSetPlacementsDto,
+): void {
   if (placements.advantagePlusPlacements) {
     return;
   }
@@ -72,7 +81,11 @@ export function assertAtLeastOnePlacement(placements: AdSetPlacementsDto): void 
     placements.instagramPositions,
   ).some(([, enabled]) => enabled);
 
-  if (!hasDevice || !hasPublisher || (!hasFacebookPosition && !hasInstagramPosition)) {
+  if (
+    !hasDevice ||
+    !hasPublisher ||
+    (!hasFacebookPosition && !hasInstagramPosition)
+  ) {
     throw new BadRequestException(
       'Select at least one device, publisher platform, and ad position — or enable Advantage+ Placements.',
     );

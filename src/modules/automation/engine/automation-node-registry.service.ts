@@ -9,7 +9,10 @@ import type { NodeExecutionResult } from './automation-node-result.types';
 @Injectable()
 export class AutomationNodeRegistry {
   private readonly logger = new Logger(AutomationNodeRegistry.name);
-  private readonly handlers = new Map<AutomationNodeType, AutomationNodeHandler>();
+  private readonly handlers = new Map<
+    AutomationNodeType,
+    AutomationNodeHandler
+  >();
 
   register(handler: AutomationNodeHandler): void {
     this.handlers.set(handler.type, handler);

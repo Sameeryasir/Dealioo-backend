@@ -1,11 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  IsEnum,
-  IsInt,
-  IsObject,
-  IsOptional,
-  Min,
-} from 'class-validator';
+import { IsEnum, IsInt, IsObject, IsOptional, Min } from 'class-validator';
 import { AutomationNodeType } from '../../../db/entities/automation-node.entity';
 
 export class UpdateAutomationNodeDto {

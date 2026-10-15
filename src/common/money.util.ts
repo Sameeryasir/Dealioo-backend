@@ -10,7 +10,10 @@ export function dollarsEqualInCents(a: number, b: number): boolean {
   return dollarsToCents(a) === dollarsToCents(b);
 }
 
-export function assertNonNegativeCents(cents: number, label = 'Amount'): number {
+export function assertNonNegativeCents(
+  cents: number,
+  label = 'Amount',
+): number {
   const value = Math.round(Number(cents));
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer (cents).`);

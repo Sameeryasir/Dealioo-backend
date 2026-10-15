@@ -60,7 +60,9 @@ export class AutomationExecutionEventService {
     return saved;
   }
 
-  async findByExecutionId(executionId: number): Promise<AutomationExecutionEvent[]> {
+  async findByExecutionId(
+    executionId: number,
+  ): Promise<AutomationExecutionEvent[]> {
     return this.eventRepository.find({
       where: { executionId },
       order: { id: 'ASC' },
@@ -85,7 +87,9 @@ export class AutomationExecutionEventService {
     return null;
   }
 
-  buildSnapshotFromExecution(execution: AutomationExecution): AutomationExecutionSnapshot {
+  buildSnapshotFromExecution(
+    execution: AutomationExecution,
+  ): AutomationExecutionSnapshot {
     return buildExecutionSnapshot(execution);
   }
 

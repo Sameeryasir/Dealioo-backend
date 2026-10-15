@@ -65,17 +65,17 @@ type MetaSdkAdAccount = {
   ) => Promise<{ id?: string }>;
 };
 
-function createAdAccount(accessToken: string, adAccountId: string): MetaSdkAdAccount {
+function createAdAccount(
+  accessToken: string,
+  adAccountId: string,
+): MetaSdkAdAccount {
   const api = new bizSdk.FacebookAdsApi(accessToken, 'en_US', false);
-  return new bizSdk.AdAccount(
-    normalizeAdAccountId(adAccountId),
-    {},
-    null,
-    api,
-  );
+  return new bizSdk.AdAccount(normalizeAdAccountId(adAccountId), {}, null, api);
 }
 
-function extractObjectId(result: { id?: string } | null | undefined): string | null {
+function extractObjectId(
+  result: { id?: string } | null | undefined,
+): string | null {
   const id = result?.id;
   if (typeof id === 'string' && id.trim()) return id.trim();
   if (id != null && String(id).trim()) return String(id).trim();
@@ -121,11 +121,8 @@ function mapSdkError(err: unknown, step: MetaCreationStep): MetaApiStepError {
     nested?.error_user_title?.trim() ||
     flat?.error_user_title?.trim();
   const apiMsg =
-    nested?.message?.trim() ||
-    flat?.message?.trim() ||
-    anyErr.message?.trim();
-  const rawMessage =
-    userMsg || apiMsg || 'Facebook API request failed.';
+    nested?.message?.trim() || flat?.message?.trim() || anyErr.message?.trim();
+  const rawMessage = userMsg || apiMsg || 'Facebook API request failed.';
   const code = nested?.code ?? flat?.code ?? null;
   const message = mapMetaMarketingApiError(rawMessage, code ?? undefined);
   const raw = JSON.stringify(anyErr.response ?? { message: rawMessage });
@@ -149,9 +146,12 @@ async function runSdkCreate(
   body: Record<string, unknown>,
   action: () => Promise<{ id?: string } | Record<string, unknown>>,
   extractId: (result: Record<string, unknown>) => string | null = (r) =>
-    extractObjectId(r as { id?: string }),
+    extractObjectId(r),
 ): Promise<string> {
-  logMetaPublishStep(step, 'start', { path: pathHint, transport: 'business-sdk' });
+  logMetaPublishStep(step, 'start', {
+    path: pathHint,
+    transport: 'business-sdk',
+  });
   logMetaApiRequest(step, 'POST', pathHint, body);
 
   try {

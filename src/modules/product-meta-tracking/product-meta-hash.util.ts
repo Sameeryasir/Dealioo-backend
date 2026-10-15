@@ -12,12 +12,16 @@ export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function hashEmailForMeta(email: string | null | undefined): string | null {
+export function hashEmailForMeta(
+  email: string | null | undefined,
+): string | null {
   if (!email?.trim()) return null;
   return sha256Hex(normalizeEmail(email));
 }
 
-export function hashPhoneForMeta(phone: string | null | undefined): string | null {
+export function hashPhoneForMeta(
+  phone: string | null | undefined,
+): string | null {
   if (!phone?.trim()) return null;
   const digits = normalizePhone(phone);
   if (!digits) return null;

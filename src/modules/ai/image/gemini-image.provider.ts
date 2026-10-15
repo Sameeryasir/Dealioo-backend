@@ -21,7 +21,9 @@ export class GeminiImageProvider {
 
   constructor(private readonly config: ConfigService) {}
 
-  async generateImageBytes(prompt: string): Promise<GeneratedLandingImageBytes> {
+  async generateImageBytes(
+    prompt: string,
+  ): Promise<GeneratedLandingImageBytes> {
     const trimmed = prompt?.trim() ?? '';
     if (!trimmed) {
       throw new InternalServerErrorException('Image prompt is required.');

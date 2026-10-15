@@ -5,9 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Why: Color extraction is no longer used for campaigns.
  * Related: AddCampaignImagePaletteColors1788400000000
  */
-export class RemoveCampaignImagePaletteColors1786579200077
-  implements MigrationInterface
-{
+export class RemoveCampaignImagePaletteColors1786579200077 implements MigrationInterface {
   name = 'RemoveCampaignImagePaletteColors1786579200077';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

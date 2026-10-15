@@ -78,7 +78,9 @@ export class StripeService {
       throw new BadRequestException('Missing Stripe connected account id.');
     }
 
-    let account: Awaited<ReturnType<InstanceType<typeof Stripe>['accounts']['retrieve']>>;
+    let account: Awaited<
+      ReturnType<InstanceType<typeof Stripe>['accounts']['retrieve']>
+    >;
     try {
       account = await this.stripe.accounts.retrieve(accountId);
     } catch (err) {
@@ -321,11 +323,7 @@ export class StripeService {
     idempotencyKey: string;
     metadata: Record<string, string>;
   }): Promise<
-    Awaited<
-      ReturnType<
-        InstanceType<typeof Stripe>['paymentIntents']['create']
-      >
-    >
+    Awaited<ReturnType<InstanceType<typeof Stripe>['paymentIntents']['create']>>
   > {
     await this.validateConnectedAccount(opts.stripeAccountId);
 
@@ -341,9 +339,7 @@ export class StripeService {
       paymentId: opts.metadata.paymentId
         ? Number(opts.metadata.paymentId)
         : null,
-      funnelId: opts.metadata.funnelId
-        ? Number(opts.metadata.funnelId)
-        : null,
+      funnelId: opts.metadata.funnelId ? Number(opts.metadata.funnelId) : null,
       businessId: opts.metadata.businessId
         ? Number(opts.metadata.businessId)
         : null,
@@ -404,14 +400,12 @@ export class StripeService {
     paymentIntentId: string,
   ): Promise<
     Awaited<
-      ReturnType<
-        InstanceType<typeof Stripe>['paymentIntents']['retrieve']
-      >
+      ReturnType<InstanceType<typeof Stripe>['paymentIntents']['retrieve']>
     >
   > {
-    return this.clientForConnectedAccount(stripeAccountId).paymentIntents.retrieve(
-      paymentIntentId,
-    );
+    return this.clientForConnectedAccount(
+      stripeAccountId,
+    ).paymentIntents.retrieve(paymentIntentId);
   }
 
   async createCheckoutSessionOnConnectedAccount(opts: {
@@ -494,7 +488,7 @@ export class StripeService {
         paymentIntentId:
           typeof session.payment_intent === 'string'
             ? session.payment_intent
-            : session.payment_intent?.id ?? null,
+            : (session.payment_intent?.id ?? null),
       });
 
       return session;
@@ -889,10 +883,7 @@ export class StripeService {
         periodEndUnix: item.current_period_end ?? null,
       };
     } catch (err) {
-      this.rethrowStripeApiError(
-        err,
-        'Unable to preview this plan change.',
-      );
+      this.rethrowStripeApiError(err, 'Unable to preview this plan change.');
     }
   }
 
@@ -1050,8 +1041,9 @@ export class StripeService {
       throw err;
     }
 
-    const paymentIntentClientSecret =
-      this.extractPaymentIntentClientSecret(updated.latest_invoice);
+    const paymentIntentClientSecret = this.extractPaymentIntentClientSecret(
+      updated.latest_invoice,
+    );
 
     return {
       subscription: updated,
@@ -1176,7 +1168,10 @@ export class StripeService {
     }
 
     const invoice = latestInvoice as {
-      payment_intent?: string | { status?: string; client_secret?: string | null } | null;
+      payment_intent?:
+        | string
+        | { status?: string; client_secret?: string | null }
+        | null;
     };
     const paymentIntent = invoice.payment_intent;
     if (!paymentIntent || typeof paymentIntent === 'string') {
@@ -1193,7 +1188,9 @@ export class StripeService {
     return null;
   }
 
-  async retrievePlatformCustomer(stripeCustomerId: string): Promise<
+  async retrievePlatformCustomer(
+    stripeCustomerId: string,
+  ): Promise<
     Awaited<ReturnType<InstanceType<typeof Stripe>['customers']['retrieve']>>
   > {
     const customerId = stripeCustomerId.trim();
@@ -1213,7 +1210,9 @@ export class StripeService {
   async retrievePlatformSubscription(opts: {
     stripeSubscriptionId: string;
   }): Promise<
-    Awaited<ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>>
+    Awaited<
+      ReturnType<InstanceType<typeof Stripe>['subscriptions']['retrieve']>
+    >
   > {
     const subscriptionId = opts.stripeSubscriptionId.trim();
     if (!subscriptionId) {
@@ -1225,11 +1224,16 @@ export class StripeService {
         expand: ['items.data.price', 'default_payment_method'],
       });
     } catch (err) {
-      this.rethrowStripeApiError(err, 'Unable to load the Stripe subscription.');
+      this.rethrowStripeApiError(
+        err,
+        'Unable to load the Stripe subscription.',
+      );
     }
   }
 
-  async listPlatformCardPaymentMethods(stripeCustomerId: string): Promise<
+  async listPlatformCardPaymentMethods(
+    stripeCustomerId: string,
+  ): Promise<
     Awaited<ReturnType<InstanceType<typeof Stripe>['paymentMethods']['list']>>
   > {
     const customerId = stripeCustomerId.trim();
@@ -1248,7 +1252,9 @@ export class StripeService {
     }
   }
 
-  async listPlatformInvoices(stripeCustomerId: string): Promise<
+  async listPlatformInvoices(
+    stripeCustomerId: string,
+  ): Promise<
     Awaited<ReturnType<InstanceType<typeof Stripe>['invoices']['list']>>
   > {
     const customerId = stripeCustomerId.trim();
@@ -1316,7 +1322,9 @@ export class StripeService {
     }
   }
 
-  async retrievePlatformSetupIntent(setupIntentId: string): Promise<
+  async retrievePlatformSetupIntent(
+    setupIntentId: string,
+  ): Promise<
     Awaited<ReturnType<InstanceType<typeof Stripe>['setupIntents']['retrieve']>>
   > {
     const id = setupIntentId.trim();
@@ -1454,10 +1462,7 @@ export class StripeService {
         cancel_at_period_end: false,
       });
     } catch (err) {
-      this.rethrowStripeApiError(
-        err,
-        'Unable to resume this subscription.',
-      );
+      this.rethrowStripeApiError(err, 'Unable to resume this subscription.');
     }
   }
 
@@ -1483,9 +1488,7 @@ export class StripeService {
     throw err;
   }
 
-  async createOAuthConnectUrl(
-    businessId: number,
-  ): Promise<{ url: string }> {
+  async createOAuthConnectUrl(businessId: number): Promise<{ url: string }> {
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
     });
@@ -1628,11 +1631,9 @@ export class StripeService {
   ): Promise<void> {
     const peeked = this.resolveOAuthStateBusinessId(stateOrBusinessId);
     const raw = stateOrBusinessId?.trim() ?? '';
-    const legacy =
-      /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+    const legacy = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
     const businessId =
-      peeked ??
-      (Number.isFinite(legacy) && legacy > 0 ? legacy : null);
+      peeked ?? (Number.isFinite(legacy) && legacy > 0 ? legacy : null);
     if (businessId == null) return;
 
     const business = await this.businessRepository.findOne({

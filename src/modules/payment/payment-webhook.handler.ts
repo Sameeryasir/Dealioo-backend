@@ -351,7 +351,11 @@ export class PaymentWebhookHandler {
       return;
     }
 
-    this.logPaymentContext('payment_intent_succeeded', payment, paymentIntent.id);
+    this.logPaymentContext(
+      'payment_intent_succeeded',
+      payment,
+      paymentIntent.id,
+    );
 
     if (payment.status === FunnelPaymentStatus.REFUNDED) {
       return;
@@ -438,7 +442,11 @@ export class PaymentWebhookHandler {
     );
     if (!payment) return;
 
-    this.logPaymentContext('payment_intent_canceled', payment, paymentIntent.id);
+    this.logPaymentContext(
+      'payment_intent_canceled',
+      payment,
+      paymentIntent.id,
+    );
 
     if (this.isTerminalPaidStatus(payment.status)) {
       warnStripePayment({
@@ -551,9 +559,7 @@ export class PaymentWebhookHandler {
     }
 
     const chargeId =
-      typeof dispute.charge === 'string'
-        ? dispute.charge
-        : dispute.charge?.id;
+      typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
 
     if (eventType === 'charge.dispute.closed' && dispute.status === 'won') {
       await this.paymentFinalizeService.finalizeSuccessfulPayment({
@@ -631,7 +637,10 @@ export class PaymentWebhookHandler {
     if (payment.status !== FunnelPaymentStatus.PENDING) return;
 
     await this.handlePaymentIntentSucceeded(
-      { id: paymentIntentId, metadata: charge.metadata } as PaymentIntentPayload,
+      {
+        id: paymentIntentId,
+        metadata: charge.metadata,
+      },
       connectedAccountId,
       receiptFromCharge,
       undefined,
@@ -645,7 +654,7 @@ export class PaymentWebhookHandler {
     if (!pm) return undefined;
     if (typeof pm === 'string') return pm;
     if (typeof pm === 'object' && pm && 'id' in pm) {
-      return (pm as { id?: string }).id;
+      return pm.id;
     }
     return undefined;
   }

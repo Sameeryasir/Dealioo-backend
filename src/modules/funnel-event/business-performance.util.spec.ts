@@ -21,9 +21,7 @@ describe('business-performance.util', () => {
       expect(window!.previousFrom.toISOString()).toBe(
         '2026-08-01T00:00:00.000Z',
       );
-      expect(window!.previousTo.toISOString()).toBe(
-        '2026-08-08T15:30:00.000Z',
-      );
+      expect(window!.previousTo.toISOString()).toBe('2026-08-08T15:30:00.000Z');
     });
 
     it('uses equal-length prior window for multi-month ranges', () => {
@@ -46,9 +44,7 @@ describe('business-performance.util', () => {
       expect(window!.previousFrom.toISOString()).toBe(
         '2026-08-01T00:00:00.000Z',
       );
-      expect(window!.previousTo.toISOString()).toBe(
-        '2026-08-01T23:59:59.999Z',
-      );
+      expect(window!.previousTo.toISOString()).toBe('2026-08-01T23:59:59.999Z');
     });
 
     it('maps a finished month to the full previous month', () => {
@@ -59,9 +55,7 @@ describe('business-performance.util', () => {
       expect(window!.previousFrom.toISOString()).toBe(
         '2026-08-01T00:00:00.000Z',
       );
-      expect(window!.previousTo.toISOString()).toBe(
-        '2026-08-31T23:59:59.999Z',
-      );
+      expect(window!.previousTo.toISOString()).toBe('2026-08-31T23:59:59.999Z');
     });
 
     it('returns null when to is before from', () => {

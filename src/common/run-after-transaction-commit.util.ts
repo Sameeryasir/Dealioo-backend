@@ -21,7 +21,7 @@ export function runAfterTransactionCommit(
 }
 
 function ensureCommitHook(runner: QueryRunner): AfterCommitBag {
-  const data = runner.data as Record<string, unknown>;
+  const data = runner.data;
   let bag = data[AFTER_COMMIT_KEY] as AfterCommitBag | undefined;
   if (bag?.patched) {
     return bag;
@@ -35,17 +35,16 @@ function ensureCommitHook(runner: QueryRunner): AfterCommitBag {
 
   runner.commitTransaction = async () => {
     await originalCommit();
-    const callbacks = bag!.callbacks.splice(0, bag!.callbacks.length);
+    const callbacks = bag.callbacks.splice(0, bag.callbacks.length);
     for (const cb of callbacks) {
       try {
         cb();
-      } catch {
-      }
+      } catch {}
     }
   };
 
   runner.rollbackTransaction = async () => {
-    bag!.callbacks.splice(0, bag!.callbacks.length);
+    bag.callbacks.splice(0, bag.callbacks.length);
     await originalRollback();
   };
 

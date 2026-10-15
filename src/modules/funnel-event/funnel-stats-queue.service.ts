@@ -26,10 +26,7 @@ export class FunnelStatsQueueService implements OnModuleDestroy {
     configService: ConfigService,
   ) {
     const host = configService.get<string>('REDIS_HOST', '127.0.0.1');
-    const port = parseInt(
-      configService.get<string>('REDIS_PORT', '6379'),
-      10,
-    );
+    const port = parseInt(configService.get<string>('REDIS_PORT', '6379'), 10);
     this.queueEvents = new QueueEvents(FUNNEL_STATS_QUEUE, {
       connection: { host, port },
     });

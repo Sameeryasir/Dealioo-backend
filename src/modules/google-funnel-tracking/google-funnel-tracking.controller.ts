@@ -6,9 +6,7 @@ import { GoogleFunnelTrackingService } from './google-funnel-tracking.service';
 
 @Controller('google-funnel-tracking')
 export class GoogleFunnelTrackingController {
-  constructor(
-    private readonly trackingService: GoogleFunnelTrackingService,
-  ) {}
+  constructor(private readonly trackingService: GoogleFunnelTrackingService) {}
 
   @SkipThrottle()
   @Post('events')

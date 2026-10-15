@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class HardenBusinessMemberRbac1786579200088
-  implements MigrationInterface
-{
+export class HardenBusinessMemberRbac1786579200088 implements MigrationInterface {
   name = 'HardenBusinessMemberRbac1786579200088';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

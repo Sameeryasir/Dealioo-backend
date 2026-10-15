@@ -88,7 +88,9 @@ export function assertMediaProvided(dto: CreateFacebookCampaignDto): void {
   const hasImage = Boolean(dto.imageUrl?.trim());
   const hasVideo = Boolean(dto.videoUrl?.trim());
   if (hasImage === hasVideo) {
-    throw new BadRequestException('Provide either an image URL or a video URL.');
+    throw new BadRequestException(
+      'Provide either an image URL or a video URL.',
+    );
   }
 }
 
@@ -98,7 +100,9 @@ export function genderToMetaGenders(gender: MetaGender): number[] | undefined {
   return undefined;
 }
 
-export function optimizationGoalForObjective(objective: MetaCampaignObjective): string {
+export function optimizationGoalForObjective(
+  objective: MetaCampaignObjective,
+): string {
   switch (objective) {
     case MetaCampaignObjective.OUTCOME_LEADS:
       return 'LEAD_GENERATION';
@@ -466,9 +470,9 @@ export function assertDirectMetaVideoUrl(videoUrl: string): void {
 function extractAdImageHashFromResponse(
   response: MetaAdImagesResponse,
 ): string {
-  const hash = Object.values(response.images ?? {}).find(
-    (row) => row.hash?.trim(),
-  )?.hash?.trim();
+  const hash = Object.values(response.images ?? {})
+    .find((row) => row.hash?.trim())
+    ?.hash?.trim();
 
   if (!hash) {
     throw new MetaApiStepError(
@@ -715,15 +719,15 @@ export type MetaAudienceSearchType =
 
 const COMMON_LOCALE_KEYS: Record<string, string> = {
   en: '6',
-  'en_us': '6',
-  'en_gb': '24',
+  en_us: '6',
+  en_gb: '24',
   es: '23',
-  'es_es': '23',
+  es_es: '23',
   fr: '16',
   de: '5',
   it: '10',
   pt: '9',
-  'pt_br': '16',
+  pt_br: '16',
   ar: '28',
   hi: '46',
   ur: '90',

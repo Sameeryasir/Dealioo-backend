@@ -65,7 +65,9 @@ export class AutomationRecipientsService {
     const paid = await this.funnelPaymentRepository
       .createQueryBuilder('payment')
       .where('payment.funnelId = :funnelId', { funnelId })
-      .andWhere('payment.status = :status', { status: FunnelPaymentStatus.PAID })
+      .andWhere('payment.status = :status', {
+        status: FunnelPaymentStatus.PAID,
+      })
       .andWhere('LOWER(payment.customerEmail) = LOWER(:email)', { email })
       .getExists();
 
@@ -312,7 +314,7 @@ export class AutomationRecipientsService {
         break;
       }
       merged.push(...page);
-      afterCustomerId = page[page.length - 1]!.customerId!;
+      afterCustomerId = page[page.length - 1].customerId!;
       if (page.length < AUTOMATION_RECIPIENT_PAGE_SIZE) {
         break;
       }

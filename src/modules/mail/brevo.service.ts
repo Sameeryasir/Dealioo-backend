@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Brevo, BrevoClient, BrevoError } from '@getbrevo/brevo';
 import { BrevoSendFailedError } from './brevo-mail.errors';
@@ -85,7 +81,10 @@ export class BrevoService implements OnModuleInit {
 
     const text =
       payload.text?.trim() ??
-      html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      html
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
     return this.dispatch({
       sender: this.getSender(),
@@ -188,7 +187,10 @@ export class BrevoService implements OnModuleInit {
     if (allShareSameBody && sharedHtml) {
       const sharedText =
         recipients[0]?.text?.trim() ??
-        sharedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        sharedHtml
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
 
       return {
         ...base,
@@ -211,14 +213,19 @@ export class BrevoService implements OnModuleInit {
       subject: options.subject,
       htmlContent: baseHtml,
       textContent: baseText,
-      messageVersions: this.buildHtmlMessageVersions(recipients, options.subject),
+      messageVersions: this.buildHtmlMessageVersions(
+        recipients,
+        options.subject,
+      ),
     };
   }
 
   private resolveBulkBaseHtml(
     recipients: BrevoBulkSendOptions['recipients'],
   ): string {
-    const html = recipients.find((recipient) => recipient.html?.trim())?.html?.trim();
+    const html = recipients
+      .find((recipient) => recipient.html?.trim())
+      ?.html?.trim();
     if (!html) {
       throw new BrevoSendFailedError(
         'Email HTML body is empty. Check automation email template rendering.',
@@ -232,10 +239,15 @@ export class BrevoService implements OnModuleInit {
     recipients: BrevoBulkSendOptions['recipients'],
     baseHtml: string,
   ): string {
-    const text = recipients.find((recipient) => recipient.text?.trim())?.text?.trim();
+    const text = recipients
+      .find((recipient) => recipient.text?.trim())
+      ?.text?.trim();
     return (
       text ??
-      baseHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      baseHtml
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
     );
   }
 
@@ -272,7 +284,10 @@ export class BrevoService implements OnModuleInit {
       }
       const text =
         recipient.text?.trim() ??
-        html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        html
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
 
       return {
         to: [

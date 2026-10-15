@@ -26,7 +26,8 @@ type AutomationEmailComponent = (
 ) => React.JSX.Element;
 
 const TEMPLATE_ALIASES: Record<string, AutomationEmailTemplateId> = {
-  abandoned_checkout_reminder: AUTOMATION_EMAIL_TEMPLATE_IDS.ABANDONED_CHECKOUT_REMINDER,
+  abandoned_checkout_reminder:
+    AUTOMATION_EMAIL_TEMPLATE_IDS.ABANDONED_CHECKOUT_REMINDER,
   abandoned_checkout: AUTOMATION_EMAIL_TEMPLATE_IDS.ABANDONED_CHECKOUT_REMINDER,
   funnel_signup_payment_reminder:
     AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_SIGNUP_PAYMENT_REMINDER,
@@ -42,7 +43,8 @@ const TEMPLATE_ALIASES: Record<string, AutomationEmailTemplateId> = {
   funnel_payment: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
   funnel_payment_confirmation:
     AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
-  payment_confirmation: AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
+  payment_confirmation:
+    AUTOMATION_EMAIL_TEMPLATE_IDS.FUNNEL_PAYMENT_CONFIRMATION,
   generic: AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC,
 };
 
@@ -74,9 +76,7 @@ export function resolveAutomationEmailTemplateId(
   rawTemplate: string,
 ): AutomationEmailTemplateId {
   const normalized = normalizeAutomationTemplateKey(rawTemplate);
-  return (
-    TEMPLATE_ALIASES[normalized] ?? AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC
-  );
+  return TEMPLATE_ALIASES[normalized] ?? AUTOMATION_EMAIL_TEMPLATE_IDS.GENERIC;
 }
 
 export function getAutomationEmailComponent(

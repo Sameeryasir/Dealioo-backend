@@ -19,7 +19,12 @@ export type ReplaceVisitAddonItemsParams = {
 };
 
 export function storedExtraItemsFromAddonRows(
-  rows: Array<Pick<VisitAddonItem, 'name' | 'unitPriceCents' | 'qty' | 'sortOrder'>> | null | undefined,
+  rows:
+    | Array<
+        Pick<VisitAddonItem, 'name' | 'unitPriceCents' | 'qty' | 'sortOrder'>
+      >
+    | null
+    | undefined,
 ): StoredExtraItem[] {
   if (!Array.isArray(rows) || rows.length === 0) {
     return [];

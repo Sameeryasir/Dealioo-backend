@@ -298,7 +298,8 @@ export class InvitationService {
       throw new NotFoundException('Business not found.');
     }
 
-    const { rawToken, acceptUrl } = await this.rotateInvitationToken(invitation);
+    const { rawToken, acceptUrl } =
+      await this.rotateInvitationToken(invitation);
 
     await this.sendInviteEmail({
       to: invitation.email,
@@ -476,7 +477,9 @@ export class InvitationService {
     };
   }
 
-  async validateInvitation(rawToken: string): Promise<ValidateInvitationResult> {
+  async validateInvitation(
+    rawToken: string,
+  ): Promise<ValidateInvitationResult> {
     const invitation = await this.findPendingInvitationByRawToken(rawToken);
 
     const existingUser = await this.userRepository

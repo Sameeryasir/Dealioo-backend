@@ -72,10 +72,7 @@ import {
 } from '../../common/payment-provenance.util';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
-import {
-  ScannerErrorCode,
-  ScannerErrorMessage,
-} from './scanner-error-codes';
+import { ScannerErrorCode, ScannerErrorMessage } from './scanner-error-codes';
 
 export type ScanAuditContext = {
   scannedBy: number | null;
@@ -230,7 +227,8 @@ export class RedemptionService {
     @Inject(
       forwardRef(
         () =>
-          require('../activity/activity.service').ActivityService as typeof ActivityService,
+          require('../activity/activity.service')
+            .ActivityService as typeof ActivityService,
       ),
     )
     private readonly activityService: ActivityService,
@@ -327,8 +325,10 @@ export class RedemptionService {
       customerId,
       businessId,
     );
-    const { activeDeals, occupiedFunnelIds } =
-      await this.getGuestActiveDeals(customerId, businessId);
+    const { activeDeals, occupiedFunnelIds } = await this.getGuestActiveDeals(
+      customerId,
+      businessId,
+    );
     const { deals: availableBusinessDeals, publishedCount } =
       await this.getAvailableBusinessDeals(businessId, occupiedFunnelIds);
 
@@ -453,7 +453,8 @@ export class RedemptionService {
       };
     }
 
-    const liveCoupon = await this.couponService.resolveLiveCouponForScan(coupon);
+    const liveCoupon =
+      await this.couponService.resolveLiveCouponForScan(coupon);
 
     if (!liveCoupon.customer) {
       await this.logAudit({
@@ -610,7 +611,8 @@ export class RedemptionService {
       };
     }
 
-    const liveCoupon = await this.couponService.resolveLiveCouponForScan(coupon);
+    const liveCoupon =
+      await this.couponService.resolveLiveCouponForScan(coupon);
 
     await this.couponService.syncPaymentStatusFromFunnelPayment(liveCoupon);
 
@@ -748,7 +750,7 @@ export class RedemptionService {
             success: false,
             message: ScannerErrorMessage.COUPON_NOT_FOUND,
             errorCode: ScannerErrorCode.COUPON_NOT_FOUND,
-          } as ScanResult;
+          };
         }
 
         lockedCoupons.push(locked);
@@ -774,7 +776,7 @@ export class RedemptionService {
           success: false,
           message: ScannerErrorMessage.INVALID_SELECTION,
           errorCode: ScannerErrorCode.INVALID_SELECTION,
-        } as ScanResult;
+        };
       }
 
       for (const coupon of lockedCoupons) {
@@ -800,7 +802,7 @@ export class RedemptionService {
           success: false,
           message: ScannerErrorMessage.MIXED_PAYMENT_TYPES,
           errorCode: ScannerErrorCode.MIXED_PAYMENT_TYPES,
-        } as ScanResult;
+        };
       }
 
       if (hasUnpaid) {
@@ -825,7 +827,7 @@ export class RedemptionService {
               success: false,
               message: ScannerErrorMessage.INVALID_AMOUNT,
               errorCode: ScannerErrorCode.INVALID_AMOUNT,
-            } as ScanResult;
+            };
           }
         } else {
           const campaignPrices = lockedCoupons.map((coupon) => {
@@ -836,7 +838,7 @@ export class RedemptionService {
           const hasAllPrices = campaignPrices.every((price) => price != null);
           if (hasAllPrices) {
             const expectedTotal = campaignPrices.reduce<number>(
-              (sum, price) => sum + (price as number),
+              (sum, price) => sum + price,
               0,
             );
             if (
@@ -855,7 +857,7 @@ export class RedemptionService {
                 success: false,
                 message: ScannerErrorMessage.INVALID_AMOUNT,
                 errorCode: ScannerErrorCode.INVALID_AMOUNT,
-              } as ScanResult;
+              };
             }
           }
         }
@@ -873,13 +875,14 @@ export class RedemptionService {
             businessId,
             audit,
             success: false,
-            failureReason: validation.redeemBlockedReason ?? 'Redemption blocked',
+            failureReason:
+              validation.redeemBlockedReason ?? 'Redemption blocked',
           });
           return {
             success: false,
             message: validation.redeemBlockedReason ?? 'Redemption blocked',
             errorCode: validation.errorCode ?? undefined,
-          } as ScanResult;
+          };
         }
       }
 
@@ -917,7 +920,7 @@ export class RedemptionService {
             success: false,
             message: ScannerErrorMessage.ALREADY_REDEEMED,
             errorCode: ScannerErrorCode.ALREADY_REDEEMED,
-          } as ScanResult;
+          };
         }
 
         if (walkInPayment) {
@@ -941,10 +944,8 @@ export class RedemptionService {
               customerId: coupon.customerId,
               occurredAt: redeemedAt,
               extraItemsCents,
-              extraItemNames:
-                extraItemsCents > 0 ? resolvedExtras.labels : [],
-              extraItems:
-                extraItemsCents > 0 ? resolvedExtras.items : [],
+              extraItemNames: extraItemsCents > 0 ? resolvedExtras.labels : [],
+              extraItems: extraItemsCents > 0 ? resolvedExtras.items : [],
               staffUserId: audit.scannedBy ?? null,
               manager,
             });
@@ -955,8 +956,7 @@ export class RedemptionService {
               amountCents: settled.amountCents,
               currency: settled.currency,
               funnelPaymentIds: [settled.paymentId],
-              funnelIds:
-                coupon.funnelId != null ? [coupon.funnelId] : [],
+              funnelIds: coupon.funnelId != null ? [coupon.funnelId] : [],
               campaignIds: [coupon.campaignId],
               staffUserId: audit.scannedBy,
               occurredAt: redeemedAt,
@@ -1026,9 +1026,7 @@ export class RedemptionService {
       }
 
       const visitOrderSubtotal =
-        resolvedExtras.cents > 0
-          ? centsToDollars(resolvedExtras.cents)
-          : null;
+        resolvedExtras.cents > 0 ? centsToDollars(resolvedExtras.cents) : null;
 
       if (
         hasPrepaid &&
@@ -1221,8 +1219,7 @@ export class RedemptionService {
     currency: string;
   } | null> {
     const { coupon, businessId, staffUserId, paidAt } = params;
-    const isPostpaid =
-      coupon.campaign?.campaignType === CampaignType.POSTPAID;
+    const isPostpaid = coupon.campaign?.campaignType === CampaignType.POSTPAID;
     const campaignPriceDollars =
       coupon.campaign?.price != null ? Number(coupon.campaign.price) : NaN;
     const campaignOfferCents =
@@ -1461,8 +1458,7 @@ export class RedemptionService {
       orderId: params.orderId ?? null,
       staffUserId: params.audit.scannedBy,
       visitedAt,
-      source:
-        params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION,
+      source: params.audit.visitSource ?? CustomerVisitSource.QR_REDEMPTION,
       orderSubtotal: params.orderSubtotal ?? null,
       extraItems,
       visitCampaigns: [{ campaignId: params.coupon.campaignId }],
@@ -1504,7 +1500,10 @@ export class RedemptionService {
         manager,
       });
     } catch (error) {
-      console.error('Failed to write visited activity from scanner redeem', error);
+      console.error(
+        'Failed to write visited activity from scanner redeem',
+        error,
+      );
     }
 
     if (visitSource !== CustomerVisitSource.STAFF_LOOKUP) {
@@ -1542,7 +1541,10 @@ export class RedemptionService {
       );
     } catch (error) {
       // Visit recording must succeed even if automation resume fails.
-      console.error('Failed to resume prepaid-offer automation after visit', error);
+      console.error(
+        'Failed to resume prepaid-offer automation after visit',
+        error,
+      );
     }
   }
 
@@ -1854,8 +1856,7 @@ export class RedemptionService {
         continue;
       }
 
-      const campaignName =
-        coupon.campaign?.campaignName?.trim() || 'Campaign';
+      const campaignName = coupon.campaign?.campaignName?.trim() || 'Campaign';
       const offerName =
         coupon.campaign?.offer?.trim() ||
         coupon.campaign?.campaignName?.trim() ||
