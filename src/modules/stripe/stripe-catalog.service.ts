@@ -41,18 +41,20 @@ export class StripeCatalogService {
     const stripeAccountId = opts.stripeAccountId.trim();
     const currency = (opts.currency?.trim() || 'usd').toLowerCase();
     const description = this.buildProductName(campaign);
+    const expectedUnitAmount = campaignPriceToStripeAmount(
+      campaign.price,
+      currency,
+    );
+    if (!Number.isFinite(expectedUnitAmount) || expectedUnitAmount < 1) {
+      throw new BadRequestException(
+        'Campaign price is missing or invalid for Stripe product creation.',
+      );
+    }
 
     let stripePriceId = campaign.stripePriceId?.trim() || null;
     let stripeProductId = campaign.stripeProductId?.trim() || null;
 
     if (!stripePriceId) {
-      const unitAmount = campaignPriceToStripeAmount(campaign.price, currency);
-      if (!Number.isFinite(unitAmount) || unitAmount < 1) {
-        throw new BadRequestException(
-          'Campaign price is missing or invalid for Stripe product creation.',
-        );
-      }
-
       const created =
         await this.stripeService.createProductAndPriceOnConnectedAccount({
           stripeAccountId,
@@ -60,7 +62,7 @@ export class StripeCatalogService {
           description: this.buildProductDescription(campaign),
           imageUrl: campaign.imageUrl,
           websiteUrl: campaign.websiteUrl,
-          unitAmount,
+          unitAmount: expectedUnitAmount,
           currency,
         });
 
@@ -71,12 +73,58 @@ export class StripeCatalogService {
         stripePriceId,
         stripeProductId,
       });
+      campaign.stripePriceId = stripePriceId;
+      campaign.stripeProductId = stripeProductId;
     }
 
-    const price = await this.stripeService.retrievePriceOnConnectedAccount(
+    let price = await this.stripeService.retrievePriceOnConnectedAccount(
       stripeAccountId,
       stripePriceId,
     );
+
+    const currentAmount = price.unit_amount;
+    const amountMismatch =
+      currentAmount == null ||
+      !Number.isFinite(currentAmount) ||
+      currentAmount !== expectedUnitAmount;
+
+    if (amountMismatch) {
+      const productIdFromPrice =
+        typeof price.product === 'string'
+          ? price.product
+          : price.product &&
+              typeof price.product === 'object' &&
+              'id' in price.product
+            ? String(price.product.id)
+            : stripeProductId;
+
+      if (!productIdFromPrice?.trim()) {
+        throw new NotFoundException(
+          'Stripe product id missing for this campaign catalog price.',
+        );
+      }
+
+      const rebuilt = await this.stripeService.createPriceOnConnectedProduct({
+        stripeAccountId,
+        stripeProductId: productIdFromPrice,
+        unitAmount: expectedUnitAmount,
+        currency,
+      });
+
+      stripePriceId = rebuilt.stripePriceId;
+      stripeProductId = productIdFromPrice;
+      await this.campaignRepository.update(campaign.id, {
+        stripePriceId,
+        stripeProductId,
+      });
+      campaign.stripePriceId = stripePriceId;
+      campaign.stripeProductId = stripeProductId;
+
+      price = await this.stripeService.retrievePriceOnConnectedAccount(
+        stripeAccountId,
+        stripePriceId,
+      );
+    }
 
     const priceCurrency = (price.currency || currency).trim().toLowerCase();
     if (opts.currency?.trim() && priceCurrency !== currency) {

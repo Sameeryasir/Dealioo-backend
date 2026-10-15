@@ -12,6 +12,7 @@ import {
   Min,
 } from 'class-validator';
 import {
+  CampaignDiscountType,
   CampaignPublicationStatus,
   CampaignType,
 } from '../../../db/entities/campaign.entity';
@@ -107,6 +108,23 @@ export class CreateCampaignDto {
   @Min(0)
   @Max(999_999.99)
   originalPrice?: number;
+
+  @IsOptional()
+  @IsEnum(CampaignDiscountType)
+  discountType?: CampaignDiscountType;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === '' || value === null || value === undefined) {
+      return undefined;
+    }
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : value;
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(999_999.99)
+  discountValue?: number;
 
   @IsOptional()
   @IsEnum(CampaignPublicationStatus)

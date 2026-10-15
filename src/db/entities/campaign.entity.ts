@@ -22,6 +22,11 @@ export enum CampaignType {
   POSTPAID = 'postpaid',
 }
 
+export enum CampaignDiscountType {
+  PERCENT = 'percent',
+  FIXED = 'fixed',
+}
+
 @Entity('campaigns')
 export class Campaign {
   @PrimaryGeneratedColumn()
@@ -96,6 +101,23 @@ export class Campaign {
     nullable: true,
   })
   originalPrice!: number | null;
+
+  @Column({
+    name: 'discount_type',
+    type: 'enum',
+    enum: CampaignDiscountType,
+    nullable: true,
+  })
+  discountType!: CampaignDiscountType | null;
+
+  @Column({
+    name: 'discount_value',
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+  })
+  discountValue!: number | null;
 
   @Column({
     type: 'enum',

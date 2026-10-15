@@ -12,6 +12,7 @@ import {
 } from '../../common/pagination';
 import {
   Campaign,
+  CampaignDiscountType,
   CampaignPublicationStatus,
   CampaignType,
 } from '../../db/entities/campaign.entity';
@@ -135,10 +136,17 @@ export class CampaignService {
       description,
       price,
       originalPrice,
+      discountType,
+      discountValue,
       status,
     } = createCampaignDto;
 
     this.assertDealPricing(price ?? null, originalPrice ?? null);
+    this.assertDiscountFields(
+      originalPrice ?? null,
+      discountType ?? null,
+      discountValue ?? null,
+    );
 
     await this.businessAccessService.assertAnyPermission(
       user,
@@ -187,6 +195,8 @@ export class CampaignService {
       description: createCampaignDto.description.trim(),
       price: price ?? null,
       originalPrice: originalPrice ?? null,
+      discountType: originalPrice != null ? (discountType ?? null) : null,
+      discountValue: originalPrice != null ? (discountValue ?? null) : null,
       status: status ?? CampaignPublicationStatus.PUBLISHED,
     });
     const savedCampaign = await this.campaignRepository.save(campaign);
@@ -439,16 +449,35 @@ export class CampaignService {
     if (updateCampaignDto.description !== undefined) {
       campaign.description = updateCampaignDto.description.trim();
     }
+    const previousPrice =
+      campaign.price != null ? Number(campaign.price) : null;
+
     if (updateCampaignDto.price !== undefined) {
       campaign.price = updateCampaignDto.price;
     }
     if (updateCampaignDto.originalPrice !== undefined) {
       campaign.originalPrice = updateCampaignDto.originalPrice;
     }
+    if (updateCampaignDto.discountType !== undefined) {
+      campaign.discountType = updateCampaignDto.discountType;
+    }
+    if (updateCampaignDto.discountValue !== undefined) {
+      campaign.discountValue = updateCampaignDto.discountValue;
+    }
+
+    if (campaign.originalPrice == null) {
+      campaign.discountType = null;
+      campaign.discountValue = null;
+    }
 
     this.assertDealPricing(
       campaign.price != null ? Number(campaign.price) : null,
       campaign.originalPrice != null ? Number(campaign.originalPrice) : null,
+    );
+    this.assertDiscountFields(
+      campaign.originalPrice != null ? Number(campaign.originalPrice) : null,
+      campaign.discountType,
+      campaign.discountValue != null ? Number(campaign.discountValue) : null,
     );
 
     const previousStatus = campaign.status;
@@ -479,6 +508,21 @@ export class CampaignService {
     }
 
     const saved = await this.campaignRepository.save(campaign);
+
+    const nextPrice = saved.price != null ? Number(saved.price) : null;
+    const priceChanged =
+      updateCampaignDto.price !== undefined &&
+      previousPrice !== nextPrice &&
+      (previousPrice == null ||
+        nextPrice == null ||
+        Math.abs(previousPrice - nextPrice) >= 0.005);
+    if (
+      priceChanged &&
+      saved.campaignType !== CampaignType.POSTPAID &&
+      nextPrice != null
+    ) {
+      void this.syncStripeCatalogAfterPriceChange(saved).catch(() => undefined);
+    }
 
     if (updateCampaignDto.offer !== undefined) {
       await this.funnelPagesService.ensureLandingEyebrowForCampaign(
@@ -787,5 +831,56 @@ export class CampaignService {
         'Original price must be higher than the deal price to show a discount.',
       );
     }
+  }
+
+  private assertDiscountFields(
+    originalPrice: number | null,
+    discountType: CampaignDiscountType | null,
+    discountValue: number | null,
+  ): void {
+    if (originalPrice == null) return;
+    if (discountType == null && discountValue == null) return;
+
+    if (
+      discountType !== CampaignDiscountType.PERCENT &&
+      discountType !== CampaignDiscountType.FIXED
+    ) {
+      throw new BadRequestException(
+        'Discount type must be percent or fixed when set.',
+      );
+    }
+
+    if (
+      discountValue == null ||
+      !Number.isFinite(discountValue) ||
+      discountValue <= 0
+    ) {
+      throw new BadRequestException('Enter a valid discount value.');
+    }
+
+    if (
+      discountType === CampaignDiscountType.PERCENT &&
+      (discountValue < 1 || discountValue >= 100)
+    ) {
+      throw new BadRequestException(
+        'Percent discount must be between 1 and 99.',
+      );
+    }
+  }
+
+  private async syncStripeCatalogAfterPriceChange(
+    campaign: Campaign,
+  ): Promise<void> {
+    const business = await this.businessRepository.findOne({
+      where: { id: campaign.businessId },
+    });
+    const stripeAccountId = business?.stripeAccountId?.trim();
+    if (!stripeAccountId || business?.deletedAt) return;
+
+    await this.stripeCatalogService.ensureCampaignCatalogOnConnectedAccount({
+      campaign,
+      stripeAccountId,
+      currency: (business.currency?.trim() || 'usd').toLowerCase(),
+    });
   }
 }

@@ -635,6 +635,69 @@ export class StripeService {
     );
   }
 
+  async createPriceOnConnectedProduct(opts: {
+    stripeAccountId: string;
+    stripeProductId: string;
+    unitAmount: number;
+    currency: string;
+  }): Promise<{ stripePriceId: string }> {
+    await this.validateConnectedAccount(opts.stripeAccountId);
+
+    if (!Number.isFinite(opts.unitAmount) || opts.unitAmount < 1) {
+      throw new BadRequestException('Stripe price amount is invalid.');
+    }
+
+    const productId = opts.stripeProductId.trim();
+    if (!productId) {
+      throw new BadRequestException('Stripe product id is required.');
+    }
+
+    const currency = opts.currency.trim().toLowerCase() || 'usd';
+    const stripeForConnectedAccount = this.clientForConnectedAccount(
+      opts.stripeAccountId,
+    );
+
+    logStripePayment({
+      phase: 'connect_price_create',
+      stripeAccountId: opts.stripeAccountId,
+      stripeProductId: productId,
+      unitAmount: opts.unitAmount,
+      currency,
+    });
+
+    try {
+      const price = await stripeForConnectedAccount.prices.create({
+        product: productId,
+        currency,
+        unit_amount: opts.unitAmount,
+        active: true,
+      });
+
+      await stripeForConnectedAccount.products.update(productId, {
+        default_price: price.id,
+      });
+
+      logStripePayment({
+        phase: 'connect_price_created',
+        outcome: 'success',
+        stripeAccountId: opts.stripeAccountId,
+        stripeProductId: productId,
+        stripePriceId: price.id,
+      });
+
+      return { stripePriceId: price.id };
+    } catch (err) {
+      errorStripePayment({
+        phase: 'connect_price_create',
+        outcome: 'stripe_api_error',
+        stripeAccountId: opts.stripeAccountId,
+        stripeProductId: productId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
   private stripeProductImages(imageUrl?: string | null): string[] {
     const url = imageUrl?.trim();
     if (!url || !/^https:\/\//i.test(url)) return [];
