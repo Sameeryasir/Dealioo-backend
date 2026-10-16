@@ -1636,7 +1636,7 @@ export class FunnelEventService {
     // --- Campaign dashboard perf ---
     // What: Inline compute + longer TTL (no Bull waitUntilFinished for Overview).
     // Why: Cold opens were waiting up to FUNNEL_STATS_WAIT_MS on the queue.
-    const cacheKey = `funnel-dashboard-summary-v4:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+    const cacheKey = `funnel-dashboard-summary-v7:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -1743,8 +1743,12 @@ export class FunnelEventService {
     };
     dropoff: {
       pageViews: number;
+      landingViews: number;
+      signupViews: number;
+      paymentViews: number;
       signups: number;
       payments: number;
+      earlierPayments: number;
     };
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
@@ -1834,15 +1838,7 @@ export class FunnelEventService {
         to,
         chartTz,
       }),
-      this.funnelAnalyticsRepository
-        .createQueryBuilder('e')
-        .where('e.funnel_id = :funnelId', { funnelId })
-        .andWhere('e.event_type = :pageView', {
-          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
-        })
-        .andWhere('e.created_at >= :from', { from })
-        .andWhere('e.created_at <= :to', { to })
-        .getCount(),
+      this.countDropoffPageViews(funnelId, from, to),
     ]);
 
     const mergeInStore = (
@@ -1929,9 +1925,12 @@ export class FunnelEventService {
           : null,
       charts,
       dropoff: {
-        pageViews,
-        signups: current.signups,
-        payments: current.payments,
+        pageViews:
+          pageViews.landingViews +
+          pageViews.signupViews +
+          pageViews.paymentViews,
+        ...pageViews,
+        ...(await this.countDropoffCohort(funnelId, from, to)),
       },
     };
   }
@@ -2741,13 +2740,17 @@ export class FunnelEventService {
   ): Promise<{
     funnelId: number;
     pageViews: number;
+    landingViews: number;
+    signupViews: number;
+    paymentViews: number;
     signups: number;
     payments: number;
+    earlierPayments: number;
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const cacheKey = `funnel-dropoff-counts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const cacheKey = `funnel-dropoff-counts-v4:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -2775,39 +2778,19 @@ export class FunnelEventService {
   ): Promise<{
     funnelId: number;
     pageViews: number;
+    landingViews: number;
+    signupViews: number;
+    paymentViews: number;
     signups: number;
     payments: number;
+    earlierPayments: number;
   }> {
-    const [exists, pageViews, signupRow] = await Promise.all([
+    const [exists, pageViews, cohort] = await Promise.all([
       this.funnelRepository.exist({
         where: { id: funnelId },
       }),
-      this.funnelAnalyticsRepository
-        .createQueryBuilder('e')
-        .where('e.funnel_id = :funnelId', { funnelId })
-        .andWhere('e.event_type = :pageView', {
-          pageView: FunnelAnalyticsEventType.PAGE_VIEW,
-        })
-        .andWhere('e.created_at >= :from', { from })
-        .andWhere('e.created_at <= :to', { to })
-        .getCount(),
-      this.applyCampaignPaidJoins(
-        this.funnelEventRepository
-          .createQueryBuilder('e')
-          .select(
-            `COUNT(*) FILTER (WHERE ${this.isSignupOnlyEventSql()})`,
-            'signups',
-          )
-          .addSelect(
-            `COUNT(*) FILTER (WHERE ${this.isPaidGuestEventSql()})`,
-            'payments',
-          )
-          .where('e.funnel_id = :funnelId', { funnelId })
-          .andWhere('e.created_at >= :from', { from })
-          .andWhere('e.created_at <= :to', { to }),
-        'e',
-        funnelId,
-      ).getRawOne<{ signups: string; payments: string }>(),
+      this.countDropoffPageViews(funnelId, from, to),
+      this.countDropoffCohort(funnelId, from, to),
     ]);
 
     if (!exists) {
@@ -2816,9 +2799,141 @@ export class FunnelEventService {
 
     return {
       funnelId,
-      pageViews,
-      signups: Number(signupRow?.signups ?? 0),
-      payments: Number(signupRow?.payments ?? 0),
+      pageViews:
+        pageViews.landingViews +
+        pageViews.signupViews +
+        pageViews.paymentViews,
+      ...pageViews,
+      signups: cohort.signups,
+      payments: cohort.payments,
+      earlierPayments: cohort.earlierPayments,
+    };
+  }
+
+  private async countDropoffPageViews(
+    funnelId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    landingViews: number;
+    signupViews: number;
+    paymentViews: number;
+  }> {
+    const rows = await this.dataSource.query<
+      Array<{
+        landingViews: string;
+        signupViews: string;
+        paymentViews: string;
+      }>
+    >(
+      `
+      SELECT
+        COUNT(*) FILTER (
+          WHERE lower(COALESCE(e.step_name, '')) = 'landing'
+             OR e.page_path ILIKE '%/landing%'
+        ) AS "landingViews",
+        COUNT(*) FILTER (
+          WHERE lower(COALESCE(e.step_name, '')) = 'signup'
+             OR e.page_path ILIKE '%/signup%'
+        ) AS "signupViews",
+        COUNT(*) FILTER (
+          WHERE lower(COALESCE(e.step_name, '')) IN ('checkout', 'payment')
+             OR e.page_path ILIKE '%/checkout%'
+             OR e.page_path ILIKE '%/payment%'
+        ) AS "paymentViews"
+      FROM funnel_analytics_event e
+      WHERE e.funnel_id = $1
+        AND e.deleted_at IS NULL
+        AND e.event_type = $2
+        AND e.created_at >= $3
+        AND e.created_at <= $4
+      `,
+      [funnelId, FunnelAnalyticsEventType.PAGE_VIEW, from, to],
+    );
+    const row = rows[0];
+    return {
+      landingViews: Number(row?.landingViews ?? 0),
+      signupViews: Number(row?.signupViews ?? 0),
+      paymentViews: Number(row?.paymentViews ?? 0),
+    };
+  }
+
+  private async countDropoffCohort(
+    funnelId: number,
+    from: Date,
+    to: Date,
+  ): Promise<{ signups: number; payments: number; earlierPayments: number }> {
+    if (
+      !Number.isFinite(funnelId) ||
+      funnelId <= 0 ||
+      Number.isNaN(from.getTime()) ||
+      Number.isNaN(to.getTime()) ||
+      from.getTime() > to.getTime()
+    ) {
+      return { signups: 0, payments: 0, earlierPayments: 0 };
+    }
+
+    const rows = await this.dataSource.query<
+      Array<{ signups: string; payments: string; earlierPayments: string }>
+    >(
+      `
+      WITH paid_customers AS (
+        SELECT DISTINCT p.customer_id
+        FROM funnel_payment p
+        WHERE p.funnel_id = $1
+          AND p.deleted_at IS NULL
+          AND p.status = $4
+          AND p.customer_id IS NOT NULL
+          AND COALESCE(p.paid_at, p.created_at) >= $2
+          AND COALESCE(p.paid_at, p.created_at) <= $3
+      ),
+      paid_signup AS (
+        SELECT
+          paid.customer_id,
+          BOOL_OR(
+            e.created_at >= $2 AND e.created_at <= $3
+          ) AS signed_up_in_range,
+          BOOL_OR(e.created_at < $2) AS signed_up_before
+        FROM paid_customers paid
+        INNER JOIN funnel_event e
+          ON e.funnel_id = $1
+         AND e.customer_id = paid.customer_id
+         AND e.event_type = $5
+         AND e.deleted_at IS NULL
+        GROUP BY paid.customer_id
+      )
+      SELECT
+        (
+          SELECT COUNT(DISTINCT signup.customer_id)
+          FROM funnel_event signup
+          WHERE signup.funnel_id = $1
+            AND signup.deleted_at IS NULL
+            AND signup.event_type = $5
+            AND signup.customer_id IS NOT NULL
+            AND signup.created_at >= $2
+            AND signup.created_at <= $3
+        ) AS signups,
+        COUNT(*) FILTER (WHERE paid_signup.signed_up_in_range) AS payments,
+        COUNT(*) FILTER (
+          WHERE paid_signup.signed_up_before
+            AND NOT paid_signup.signed_up_in_range
+        ) AS "earlierPayments"
+      FROM paid_signup
+      `,
+      [
+        funnelId,
+        from,
+        to,
+        FunnelPaymentStatus.PAID,
+        FunnelEventType.SIGNUP,
+      ],
+    );
+
+    const row = rows[0];
+    return {
+      signups: Number(row?.signups ?? 0),
+      payments: Number(row?.payments ?? 0),
+      earlierPayments: Number(row?.earlierPayments ?? 0),
     };
   }
 
