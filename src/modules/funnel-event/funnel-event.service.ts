@@ -19,6 +19,7 @@ import {
   CampaignPublicationStatus,
   CampaignType,
 } from '../../db/entities/campaign.entity';
+import { FunnelPageType } from '../../db/entities/funnel-page-type';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
 import {
   CustomerVisit,
@@ -1636,7 +1637,7 @@ export class FunnelEventService {
     // --- Campaign dashboard perf ---
     // What: Inline compute + longer TTL (no Bull waitUntilFinished for Overview).
     // Why: Cold opens were waiting up to FUNNEL_STATS_WAIT_MS on the queue.
-    const cacheKey = `funnel-dashboard-summary-v7:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+    const cacheKey = `funnel-dashboard-summary-v8:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -1745,10 +1746,10 @@ export class FunnelEventService {
       pageViews: number;
       landingViews: number;
       signupViews: number;
-      paymentViews: number;
+      paymentViews?: number;
       signups: number;
-      payments: number;
-      earlierPayments: number;
+      payments?: number;
+      earlierPayments?: number;
     };
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
@@ -1924,14 +1925,9 @@ export class FunnelEventService {
             }
           : null,
       charts,
-      dropoff: {
-        pageViews:
-          pageViews.landingViews +
-          pageViews.signupViews +
-          pageViews.paymentViews,
-        ...pageViews,
+      dropoff: await this.dropoffCountsForFunnel(funnelId, pageViews, {
         ...(await this.countDropoffCohort(funnelId, from, to)),
-      },
+      }),
     };
   }
 
@@ -2742,15 +2738,15 @@ export class FunnelEventService {
     pageViews: number;
     landingViews: number;
     signupViews: number;
-    paymentViews: number;
+    paymentViews?: number;
     signups: number;
-    payments: number;
-    earlierPayments: number;
+    payments?: number;
+    earlierPayments?: number;
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const cacheKey = `funnel-dropoff-counts-v4:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const cacheKey = `funnel-dropoff-counts-v5:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -2780,10 +2776,10 @@ export class FunnelEventService {
     pageViews: number;
     landingViews: number;
     signupViews: number;
-    paymentViews: number;
+    paymentViews?: number;
     signups: number;
-    payments: number;
-    earlierPayments: number;
+    payments?: number;
+    earlierPayments?: number;
   }> {
     const [exists, pageViews, cohort] = await Promise.all([
       this.funnelRepository.exist({
@@ -2799,11 +2795,51 @@ export class FunnelEventService {
 
     return {
       funnelId,
-      pageViews:
-        pageViews.landingViews +
-        pageViews.signupViews +
-        pageViews.paymentViews,
-      ...pageViews,
+      ...(await this.dropoffCountsForFunnel(funnelId, pageViews, cohort)),
+    };
+  }
+
+  private async funnelHasPaymentPage(funnelId: number): Promise<boolean> {
+    const rows = await this.dataSource.query<unknown[]>(
+      `SELECT 1 FROM funnel_pages WHERE funnel_id = $1 AND page_type = $2 LIMIT 1`,
+      [funnelId, FunnelPageType.PAYMENT],
+    );
+    return rows.length > 0;
+  }
+
+  private async dropoffCountsForFunnel(
+    funnelId: number,
+    pageViews: {
+      landingViews: number;
+      signupViews: number;
+      paymentViews: number;
+    },
+    cohort: { signups: number; payments: number; earlierPayments: number },
+  ): Promise<{
+    pageViews: number;
+    landingViews: number;
+    signupViews: number;
+    paymentViews?: number;
+    signups: number;
+    payments?: number;
+    earlierPayments?: number;
+  }> {
+    const hasPaymentPage = await this.funnelHasPaymentPage(funnelId);
+    const landingViews = pageViews.landingViews;
+    const signupViews = pageViews.signupViews;
+    if (!hasPaymentPage) {
+      return {
+        pageViews: landingViews + signupViews,
+        landingViews,
+        signupViews,
+        signups: cohort.signups,
+      };
+    }
+    return {
+      pageViews: landingViews + signupViews + pageViews.paymentViews,
+      landingViews,
+      signupViews,
+      paymentViews: pageViews.paymentViews,
       signups: cohort.signups,
       payments: cohort.payments,
       earlierPayments: cohort.earlierPayments,
