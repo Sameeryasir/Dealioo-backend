@@ -1953,7 +1953,7 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const previousFromIso = hasPrevious ? previousFrom.toISOString() : '';
     const previousToIso = hasPrevious ? previousTo.toISOString() : '';
-    const cacheKey = `funnel-dashboard-kpis-v1:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
+    const cacheKey = `funnel-dashboard-kpis-v3:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -2084,6 +2084,8 @@ export class FunnelEventService {
       payments: current.payments,
       revenue: current.revenue,
       uniqueVisitors: current.uniqueVisitors,
+      newVisitors: current.newVisitors,
+      repeatVisitors: current.repeatVisitors,
       adSources: {
         meta: signupTotals.meta,
         google: signupTotals.google,
@@ -2112,6 +2114,8 @@ export class FunnelEventService {
               payments: previousCore.payments,
               revenue: previousCore.revenue,
               uniqueVisitors: previousCore.uniqueVisitors,
+              newVisitors: previousCore.newVisitors,
+              repeatVisitors: previousCore.repeatVisitors,
             }
           : null,
     };
@@ -2126,7 +2130,7 @@ export class FunnelEventService {
     const chartTz = resolveSafeTimeZone(timeZone);
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
-    const cacheKey = `funnel-dashboard-charts-v1:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
+    const cacheKey = `funnel-dashboard-charts-v3:${funnelId}:${fromIso}:${toIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
       cacheKey,
@@ -2172,6 +2176,7 @@ export class FunnelEventService {
       paymentSeries,
       revenueSeries,
       inStoreSeries,
+      visitorAudience,
     ] = await Promise.all([
       this.countFunnelEventAdSources({
         funnelId,
@@ -2228,6 +2233,7 @@ export class FunnelEventService {
         to,
         chartTz,
       }),
+      this.computeVisitorAudienceSeries(funnelId, from, to, chartTz),
     ]);
 
     const mergeInStore = (
@@ -2274,6 +2280,101 @@ export class FunnelEventService {
       },
       payments: mergeInStore(paymentSeries, inStoreSeries.payments),
       revenue: mergeInStore(revenueSeries, inStoreSeries.revenue),
+      visitorAudience,
+    };
+  }
+
+  private async computeVisitorAudienceSeries(
+    funnelId: number,
+    from: Date,
+    to: Date,
+    chartTz: string,
+  ): Promise<{
+    newVisitors: number;
+    repeatVisitors: number;
+    data: Array<{ month: string; newVisitors: number; repeatVisitors: number }>;
+  }> {
+    const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
+    const firstBucket = overviewRangeBucketSql('first_at', sameDay, chartTz);
+    const eventBucket = overviewRangeBucketSql('e.created_at', sameDay, chartTz);
+
+    const [newRows, repeatRows, repeatTotalRow] = await Promise.all([
+      this.funnelEventRepository.query(
+        `
+          SELECT ${firstBucket} AS month, COUNT(*)::int AS "newVisitors"
+          FROM (
+            SELECT customer_id, MIN(created_at) AS first_at
+            FROM funnel_event
+            WHERE funnel_id = $1
+              AND customer_id IS NOT NULL
+              AND deleted_at IS NULL
+            GROUP BY customer_id
+          ) firsts
+          WHERE first_at >= $2 AND first_at <= $3
+          GROUP BY 1
+        `,
+        [funnelId, from, to],
+      ) as Promise<Array<{ month: string; newVisitors: number }>>,
+      this.funnelEventRepository.query(
+        `
+          SELECT ${eventBucket} AS month,
+                 COUNT(DISTINCT e.customer_id)::int AS "repeatVisitors"
+          FROM funnel_event e
+          WHERE e.funnel_id = $1
+            AND e.customer_id IS NOT NULL
+            AND e.deleted_at IS NULL
+            AND e.created_at >= $2
+            AND e.created_at <= $3
+            AND EXISTS (
+              SELECT 1
+              FROM funnel_event earlier
+              WHERE earlier.funnel_id = e.funnel_id
+                AND earlier.customer_id = e.customer_id
+                AND earlier.deleted_at IS NULL
+                AND earlier.created_at < $2
+            )
+          GROUP BY 1
+        `,
+        [funnelId, from, to],
+      ) as Promise<Array<{ month: string; repeatVisitors: number }>>,
+      this.funnelEventRepository.query(
+        `
+          SELECT COUNT(DISTINCT e.customer_id)::int AS "repeatVisitors"
+          FROM funnel_event e
+          WHERE e.funnel_id = $1
+            AND e.customer_id IS NOT NULL
+            AND e.deleted_at IS NULL
+            AND e.created_at >= $2
+            AND e.created_at <= $3
+            AND EXISTS (
+              SELECT 1
+              FROM funnel_event earlier
+              WHERE earlier.funnel_id = e.funnel_id
+                AND earlier.customer_id = e.customer_id
+                AND earlier.deleted_at IS NULL
+                AND earlier.created_at < $2
+            )
+        `,
+        [funnelId, from, to],
+      ) as Promise<Array<{ repeatVisitors: number }>>,
+    ]);
+
+    const newByMonth = new Map(
+      newRows.map((row) => [row.month, Number(row.newVisitors) || 0]),
+    );
+    const repeatByMonth = new Map(
+      repeatRows.map((row) => [row.month, Number(row.repeatVisitors) || 0]),
+    );
+    const data = keys.map((month) => ({
+      month,
+      newVisitors: newByMonth.get(month) ?? 0,
+      repeatVisitors: repeatByMonth.get(month) ?? 0,
+    }));
+
+    return {
+      newVisitors: data.reduce((sum, row) => sum + row.newVisitors, 0),
+      repeatVisitors: Number(repeatTotalRow[0]?.repeatVisitors) || 0,
+      data,
     };
   }
 
@@ -2558,6 +2659,8 @@ export class FunnelEventService {
     payments: number;
     revenue: number;
     uniqueVisitors: number;
+    newVisitors: number;
+    repeatVisitors: number;
     currency: string | null;
   }> {
     const [eventRow, revenueRow, uniqueRow, currencyRow] = await Promise.all([
@@ -2591,22 +2694,41 @@ export class FunnelEventService {
       this.funnelEventRepository
         .createQueryBuilder('e')
         .select('COUNT(DISTINCT e.customer_id)', 'uniqueVisitors')
+        .addSelect(
+          `COUNT(DISTINCT e.customer_id) FILTER (WHERE EXISTS (
+            SELECT 1
+            FROM funnel_event earlier
+            WHERE earlier.funnel_id = e.funnel_id
+              AND earlier.customer_id = e.customer_id
+              AND earlier.deleted_at IS NULL
+              AND earlier.created_at < :from
+          ))`,
+          'repeatVisitors',
+        )
         .where('e.funnel_id = :funnelId', { funnelId })
         .andWhere('e.customer_id IS NOT NULL')
         .andWhere('e.created_at >= :from', { from })
         .andWhere('e.created_at <= :to', { to })
-        .getRawOne<{ uniqueVisitors: string }>(),
+        .getRawOne<{ uniqueVisitors: string; repeatVisitors: string }>(),
       this.funnelPaymentRepository.findOne({
         where: { funnelId, status: FunnelPaymentStatus.PAID },
         select: ['currency'],
       }),
     ]);
 
+    const uniqueVisitors = Number(uniqueRow?.uniqueVisitors ?? 0);
+    const repeatVisitors = Math.min(
+      uniqueVisitors,
+      Number(uniqueRow?.repeatVisitors ?? 0),
+    );
+
     return {
       signups: Number(eventRow?.signups ?? 0),
       payments: Number(eventRow?.payments ?? 0),
       revenue: Number(revenueRow?.revenue ?? 0),
-      uniqueVisitors: Number(uniqueRow?.uniqueVisitors ?? 0),
+      uniqueVisitors,
+      newVisitors: uniqueVisitors - repeatVisitors,
+      repeatVisitors,
       currency: currencyRow?.currency ?? null,
     };
   }
