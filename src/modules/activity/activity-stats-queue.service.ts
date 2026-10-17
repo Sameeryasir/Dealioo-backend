@@ -3,6 +3,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { Job, Queue, QueueEvents } from 'bullmq';
+import { joinInflight } from '../../common/join-inflight';
 import { ActivityStatsCacheService } from './activity-stats-cache.service';
 import {
   ACTIVITY_STATS_FRESH_MS,
@@ -18,6 +19,7 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
   private readonly queueEvents: QueueEvents;
   private readonly freshMs: number;
   private readonly waitMs: number;
+  private readonly inflight = new Map<string, Promise<unknown>>();
 
   constructor(
     @InjectQueue(ACTIVITY_STATS_QUEUE)
@@ -70,6 +72,13 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
     payload: ActivityStatsJobPayload,
     fallback: () => Promise<T>,
   ): Promise<T> {
+    return this.getCachedOrComputeInline(payload, fallback);
+  }
+
+  async getCachedOrComputeInline<T>(
+    payload: ActivityStatsJobPayload,
+    compute: () => Promise<T>,
+  ): Promise<T> {
     const envelope = await this.cache.getEnvelope<T>(payload.cacheKey);
     if (envelope) {
       const ageMs = Date.now() - envelope.computedAt;
@@ -79,18 +88,46 @@ export class ActivityStatsQueueService implements OnModuleDestroy {
       return envelope.value;
     }
 
+    return joinInflight(this.inflight, payload.cacheKey, () =>
+      this.computeInlineSingleFlight(payload, compute),
+    ) as Promise<T>;
+  }
+
+  private async computeInlineSingleFlight<T>(
+    payload: ActivityStatsJobPayload,
+    compute: () => Promise<T>,
+  ): Promise<T> {
+    const again = await this.cache.getEnvelope<T>(payload.cacheKey);
+    if (again) return again.value;
+
+    const ownsLock = await this.cache.tryAcquireComputeLock(payload.cacheKey);
+    if (!ownsLock) {
+      const waited = await this.pollCachedValue<T>(payload.cacheKey, 10_000);
+      if (waited) return waited;
+    }
+
     try {
-      return await this.computeViaQueue<T>(payload);
-    } catch (error) {
-      this.logger.warn(
-        `Activity stats queue miss for ${payload.cacheKey}; inline fallback: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      const value = await fallback();
+      const value = await compute();
       await this.persistResult(payload.cacheKey, value);
       return value;
+    } finally {
+      if (ownsLock) {
+        await this.cache.releaseComputeLock(payload.cacheKey);
+      }
     }
+  }
+
+  private async pollCachedValue<T>(
+    cacheKey: string,
+    timeoutMs: number,
+  ): Promise<T | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const envelope = await this.cache.getEnvelope<T>(cacheKey);
+      if (envelope) return envelope.value;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return null;
   }
 
   async enqueueRefresh(payload: ActivityStatsJobPayload): Promise<void> {

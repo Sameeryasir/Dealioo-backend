@@ -1342,9 +1342,9 @@ export class ActivityService {
     data: ActivityMonthlyPoint[];
   }> {
     const monthCount = clampOverviewMonths(rawMonthCount);
-    const cacheKey = `activity-monthly-v5:${businessId}:${monthCount}`;
+    const cacheKey = `activity-monthly-v6:${businessId}:${monthCount}`;
 
-    return this.activityStatsQueueService.getOrCompute(
+    return this.activityStatsQueueService.getCachedOrComputeInline(
       {
         kind: ActivityStatsJobName.SUMMARY_MONTHLY,
         cacheKey,
@@ -1563,18 +1563,20 @@ export class ActivityService {
     } | null;
   }> {
     const chartTz = resolveSafeTimeZone(timeZone);
-    const cacheKey = `activity-range-v15:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
-    const currentPromise = this.activityStatsQueueService.getOrCompute(
-      {
-        kind: ActivityStatsJobName.SUMMARY_RANGE,
-        cacheKey,
-        businessId,
-        fromIso: from.toISOString(),
-        toIso: to.toISOString(),
-        timeZone: chartTz,
-      },
-      () => this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
-    );
+    const cacheKey = `activity-range-v16:${businessId}:${from.toISOString()}:${to.toISOString()}:${chartTz}`;
+    const currentPromise =
+      this.activityStatsQueueService.getCachedOrComputeInline(
+        {
+          kind: ActivityStatsJobName.SUMMARY_RANGE,
+          cacheKey,
+          businessId,
+          fromIso: from.toISOString(),
+          toIso: to.toISOString(),
+          timeZone: chartTz,
+        },
+        () =>
+          this.computeBusinessSummaryForRange(businessId, from, to, chartTz),
+      );
 
     const hasPrevious =
       previousFrom != null &&
@@ -1585,10 +1587,10 @@ export class ActivityService {
       return currentPromise;
     }
 
-    const previousCacheKey = `activity-range-v15:${businessId}:${previousFrom.toISOString()}:${previousTo.toISOString()}:${chartTz}`;
+    const previousCacheKey = `activity-range-v16:${businessId}:${previousFrom.toISOString()}:${previousTo.toISOString()}:${chartTz}`;
     const [current, previous] = await Promise.all([
       currentPromise,
-      this.activityStatsQueueService.getOrCompute(
+      this.activityStatsQueueService.getCachedOrComputeInline(
         {
           kind: ActivityStatsJobName.SUMMARY_RANGE,
           cacheKey: previousCacheKey,

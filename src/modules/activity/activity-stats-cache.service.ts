@@ -79,6 +79,31 @@ export class ActivityStatsCacheService implements OnModuleDestroy {
     }
   }
 
+  async tryAcquireComputeLock(key: string, ttlSeconds = 45): Promise<boolean> {
+    if (!this.client) return true;
+    try {
+      const result = await this.client.set(
+        `activity-stats-lock:${key}`,
+        '1',
+        'EX',
+        ttlSeconds,
+        'NX',
+      );
+      return result === 'OK';
+    } catch {
+      return true;
+    }
+  }
+
+  async releaseComputeLock(key: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      await this.client.del(`activity-stats-lock:${key}`);
+    } catch {
+      return;
+    }
+  }
+
   async set<T>(key: string, value: T): Promise<void> {
     if (!this.client) return;
     const envelope: CachedActivityStatsEnvelope<T> = {

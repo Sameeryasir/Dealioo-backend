@@ -110,9 +110,9 @@ const PLANS: PlanSeed[] = [
     description: {
       badge: 'Best ROI',
       tagline: 'AI plus a dedicated marketing expert.',
-      summary: 'Everything in Growth AI—with a dedicated marketing expert.',
+      // Landing Expert card: no "Everything in Growth AI" summary / Included group.
+      summary: '',
       featureGroups: [
-        { label: 'Included', items: ['Everything in Growth AI'] },
         {
           label: 'Expert Services',
           items: [
@@ -134,15 +134,15 @@ const PLANS: PlanSeed[] = [
       monthly: {
         price: '$299',
         period: '/ month',
-        originalPrice: '$500',
-        promo: null,
+        originalPrice: '$997',
+        promo: '70% OFF',
         subline: 'Billed monthly',
       },
       annual: {
-        price: '$249',
+        price: '$299',
         period: '/ mo',
-        originalPrice: null,
-        promo: null,
+        originalPrice: '$997',
+        promo: '70% OFF',
         subline: 'Billed annually ($2,990/year)',
       },
     },

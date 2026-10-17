@@ -3627,7 +3627,7 @@ export class FunnelEventService {
     const limit = Math.min(50, Math.max(1, Math.round(params.limit ?? 10)));
     const chartTz = resolveSafeTimeZone(params.timeZone);
     const cacheKey = [
-      'perf-top-campaigns-v7',
+      'perf-top-campaigns-v8',
       params.businessId,
       stabilizePerformanceCacheInstant(params.from),
       stabilizePerformanceCacheInstant(params.to),
@@ -3757,7 +3757,9 @@ export class FunnelEventService {
     }> = [];
 
     const [
-      pairRows,
+      campaignRows,
+      campaignRepeatRows,
+      businessTotalsRow,
       previousRow,
       viewRows,
       signupRows,
@@ -3774,28 +3776,96 @@ export class FunnelEventService {
         .addSelect('c.campaign_type', 'campaignType')
         .addSelect('c.image_url', 'imageUrl')
         .addSelect('c.price', 'price')
-        .addSelect('p.customer_id', 'customerId')
-        .addSelect('COUNT(*)', 'paymentCount')
+        .addSelect('COUNT(*)', 'orderCount')
         .addSelect(
           `COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`,
           'earningsCents',
+        )
+        .addSelect('COUNT(DISTINCT p.customer_id)', 'uniqueCustomerCount')
+        .addSelect(
+          'COUNT(*) FILTER (WHERE p.customer_id IS NULL)',
+          'guestOrderCount',
         )
         .groupBy('p.campaign_id')
         .addGroupBy('c.campaign_name')
         .addGroupBy('c.campaign_type')
         .addGroupBy('c.image_url')
         .addGroupBy('c.price')
-        .addGroupBy('p.customer_id')
         .getRawMany<{
           campaignId: string | number;
           campaignName: string | null;
           campaignType: string | null;
           imageUrl: string | null;
           price: string | number | null;
-          customerId: string | number | null;
-          paymentCount: string | number;
+          orderCount: string | number;
           earningsCents: string | number;
+          uniqueCustomerCount: string | number;
+          guestOrderCount: string | number;
         }>(),
+      applyFilters(
+        this.funnelPaymentRepository.createQueryBuilder('p'),
+        params.from,
+        params.to,
+      )
+        .select('p.campaign_id', 'campaignId')
+        .addSelect('COUNT(*)', 'repeatedCustomerCount')
+        .andWhere('p.customer_id IS NOT NULL')
+        .groupBy('p.campaign_id')
+        .addGroupBy('p.customer_id')
+        .having('COUNT(*) >= 2')
+        .getRawMany<{
+          campaignId: string | number;
+          repeatedCustomerCount: string | number;
+        }>()
+        .then((rows) => {
+          const byCampaign = new Map<number, number>();
+          for (const row of rows) {
+            const campaignId = Number(row.campaignId);
+            if (!Number.isFinite(campaignId) || campaignId <= 0) continue;
+            byCampaign.set(campaignId, (byCampaign.get(campaignId) ?? 0) + 1);
+          }
+          return [...byCampaign.entries()].map(([campaignId, count]) => ({
+            campaignId,
+            repeatedCustomerCount: count,
+          }));
+        }),
+      applyFilters(
+        this.funnelPaymentRepository.createQueryBuilder('p'),
+        params.from,
+        params.to,
+      )
+        .select(
+          `COALESCE(SUM(${PERFORMANCE_NET_EARNINGS_CENTS_SQL}), 0)`,
+          'totalEarningsCents',
+        )
+        .addSelect('COUNT(*)', 'totalOrderCount')
+        .addSelect(
+          `COUNT(DISTINCT p.customer_id)`,
+          'totalUniqueCustomerCount',
+        )
+        .getRawOne<{
+          totalEarningsCents: string | number;
+          totalOrderCount: string | number;
+          totalUniqueCustomerCount: string | number;
+        }>()
+        .then(async (totals) => {
+          const repeatRow = await applyFilters(
+            this.funnelPaymentRepository.createQueryBuilder('p'),
+            params.from,
+            params.to,
+          )
+            .select('p.customer_id', 'customerId')
+            .andWhere('p.customer_id IS NOT NULL')
+            .groupBy('p.customer_id')
+            .having('COUNT(*) >= 2')
+            .getRawMany<{ customerId: string | number }>();
+          return {
+            totalEarningsCents: totals?.totalEarningsCents ?? 0,
+            totalOrderCount: totals?.totalOrderCount ?? 0,
+            totalUniqueCustomerCount: totals?.totalUniqueCustomerCount ?? 0,
+            totalRepeatedCustomerCount: repeatRow.length,
+          };
+        }),
       previousWindow
         ? applyFilters(
             this.funnelPaymentRepository.createQueryBuilder('p'),
@@ -3932,103 +4002,84 @@ export class FunnelEventService {
       customerIds: Set<number>;
     };
 
+    const repeatedByCampaign = new Map(
+      campaignRepeatRows.map((row) => [
+        Number(row.campaignId),
+        Math.max(0, Math.round(Number(row.repeatedCustomerCount) || 0)),
+      ]),
+    );
+
     const byCampaign = new Map<number, CampaignAgg>();
-    const businessCustomerPayments = new Map<number, number>();
     let totalEarningsCents = 0;
 
-    for (const row of pairRows) {
+    for (const row of campaignRows) {
       const campaignId = Number(row.campaignId);
       if (!Number.isFinite(campaignId) || campaignId <= 0) continue;
 
-      const paymentCount = Math.max(
-        0,
-        Math.round(Number(row.paymentCount) || 0),
-      );
+      const orderCount = Math.max(0, Math.round(Number(row.orderCount) || 0));
       const earningsCents = Math.max(
         0,
         Math.round(Number(row.earningsCents) || 0),
       );
       totalEarningsCents += earningsCents;
 
-      const customerIdRaw =
-        row.customerId != null && row.customerId !== ''
-          ? Number(row.customerId)
-          : null;
-      const hasCustomer =
-        customerIdRaw != null &&
-        Number.isFinite(customerIdRaw) &&
-        customerIdRaw > 0;
+      const campaignTypeRaw = String(row.campaignType ?? '')
+        .trim()
+        .toLowerCase();
+      const campaignType =
+        campaignTypeRaw === CampaignType.POSTPAID
+          ? CampaignType.POSTPAID
+          : campaignTypeRaw === CampaignType.PREPAID
+            ? CampaignType.PREPAID
+            : null;
+      const priceRaw =
+        row.price != null && row.price !== '' ? Number(row.price) : null;
 
-      if (hasCustomer) {
-        businessCustomerPayments.set(
-          customerIdRaw,
-          (businessCustomerPayments.get(customerIdRaw) ?? 0) + paymentCount,
-        );
-      }
-
-      let agg = byCampaign.get(campaignId);
-      if (!agg) {
-        const campaignTypeRaw = String(row.campaignType ?? '')
-          .trim()
-          .toLowerCase();
-        const campaignType =
-          campaignTypeRaw === CampaignType.POSTPAID
-            ? CampaignType.POSTPAID
-            : campaignTypeRaw === CampaignType.PREPAID
-              ? CampaignType.PREPAID
-              : null;
-        const priceRaw =
-          row.price != null && row.price !== '' ? Number(row.price) : null;
-
-        agg = {
-          campaignId,
-          campaignName: row.campaignName?.trim() || 'Campaign',
-          campaignType,
-          imageUrl:
-            String(
-              row.imageUrl ??
-                (row as { imageurl?: string | null }).imageurl ??
-                '',
-            ).trim() || null,
-          price:
-            priceRaw != null && Number.isFinite(priceRaw) && priceRaw >= 0
-              ? Math.round(priceRaw * 100) / 100
-              : null,
-          earningsCents: 0,
-          orderCount: 0,
-          uniqueCustomerCount: 0,
-          guestOrderCount: 0,
-          repeatedCustomerCount: 0,
-          customerIds: new Set<number>(),
-        };
-        byCampaign.set(campaignId, agg);
-      }
-
-      agg.earningsCents += earningsCents;
-      agg.orderCount += paymentCount;
-      if (hasCustomer) {
-        agg.uniqueCustomerCount += 1;
-        agg.customerIds.add(customerIdRaw);
-        if (paymentCount >= 2) {
-          agg.repeatedCustomerCount += 1;
-        }
-      } else {
-        agg.guestOrderCount += paymentCount;
-      }
+      byCampaign.set(campaignId, {
+        campaignId,
+        campaignName: row.campaignName?.trim() || 'Campaign',
+        campaignType,
+        imageUrl:
+          String(
+            row.imageUrl ??
+              (row as { imageurl?: string | null }).imageurl ??
+              '',
+          ).trim() || null,
+        price:
+          priceRaw != null && Number.isFinite(priceRaw) && priceRaw >= 0
+            ? Math.round(priceRaw * 100) / 100
+            : null,
+        earningsCents,
+        orderCount,
+        uniqueCustomerCount: Math.max(
+          0,
+          Math.round(Number(row.uniqueCustomerCount) || 0),
+        ),
+        guestOrderCount: Math.max(
+          0,
+          Math.round(Number(row.guestOrderCount) || 0),
+        ),
+        repeatedCustomerCount: repeatedByCampaign.get(campaignId) ?? 0,
+        customerIds: new Set<number>(),
+      });
     }
 
-    let totalUniqueCustomerCount = 0;
-    let totalRepeatedCustomerCount = 0;
-    let totalOrderCount = 0;
-    for (const paymentCount of businessCustomerPayments.values()) {
-      totalUniqueCustomerCount += 1;
-      if (paymentCount >= 2) {
-        totalRepeatedCustomerCount += 1;
-      }
-    }
-    for (const agg of byCampaign.values()) {
-      totalOrderCount += agg.orderCount;
-    }
+    const totalUniqueCustomerCount = Math.max(
+      0,
+      Math.round(Number(businessTotalsRow.totalUniqueCustomerCount) || 0),
+    );
+    const totalRepeatedCustomerCount = Math.max(
+      0,
+      Math.round(Number(businessTotalsRow.totalRepeatedCustomerCount) || 0),
+    );
+    const totalOrderCount = Math.max(
+      0,
+      Math.round(Number(businessTotalsRow.totalOrderCount) || 0),
+    );
+    totalEarningsCents = Math.max(
+      0,
+      Math.round(Number(businessTotalsRow.totalEarningsCents) || 0),
+    );
 
     const previousPeriod = previousWindow
       ? {
@@ -4058,6 +4109,41 @@ export class FunnelEventService {
     });
 
     const limitedCampaigns = rankedCampaigns.slice(0, limit);
+    const limitedCampaignIds = limitedCampaigns.map((agg) => agg.campaignId);
+
+    if (limitedCampaignIds.length > 0) {
+      const customerRows = await applyFilters(
+        this.funnelPaymentRepository.createQueryBuilder('p'),
+        params.from,
+        params.to,
+      )
+        .select('p.campaign_id', 'campaignId')
+        .addSelect('p.customer_id', 'customerId')
+        .andWhere('p.campaign_id IN (:...limitedCampaignIds)', {
+          limitedCampaignIds,
+        })
+        .andWhere('p.customer_id IS NOT NULL')
+        .groupBy('p.campaign_id')
+        .addGroupBy('p.customer_id')
+        .getRawMany<{
+          campaignId: string | number;
+          customerId: string | number;
+        }>();
+
+      for (const row of customerRows) {
+        const campaignId = Number(row.campaignId);
+        const customerId = Number(row.customerId);
+        const agg = byCampaign.get(campaignId);
+        if (
+          !agg ||
+          !Number.isFinite(customerId) ||
+          customerId <= 0
+        ) {
+          continue;
+        }
+        agg.customerIds.add(customerId);
+      }
+    }
 
     const viewCountByCampaign = new Map<number, number>();
     const signupCountByCampaign = new Map<number, number>();
