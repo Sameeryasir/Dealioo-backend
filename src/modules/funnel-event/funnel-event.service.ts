@@ -1634,9 +1634,6 @@ export class FunnelEventService {
     const toIso = to.toISOString();
     const previousFromIso = hasPrevious ? previousFrom.toISOString() : '';
     const previousToIso = hasPrevious ? previousTo.toISOString() : '';
-    // --- Campaign dashboard perf ---
-    // What: Inline compute + longer TTL (no Bull waitUntilFinished for Overview).
-    // Why: Cold opens were waiting up to FUNNEL_STATS_WAIT_MS on the queue.
     const cacheKey = `funnel-dashboard-summary-v8:${funnelId}:${fromIso}:${toIso}:${previousFromIso}:${previousToIso}:${chartTz}`;
 
     return dashboardTtlCache.getOrSet(
@@ -2298,14 +2295,23 @@ export class FunnelEventService {
         `
           SELECT ${firstBucket} AS month, COUNT(*)::int AS "newVisitors"
           FROM (
-            SELECT customer_id, MIN(created_at) AS first_at
-            FROM funnel_event
-            WHERE funnel_id = $1
-              AND customer_id IS NOT NULL
-              AND deleted_at IS NULL
-            GROUP BY customer_id
+            SELECT e.customer_id, MIN(e.created_at) AS first_at
+            FROM funnel_event e
+            WHERE e.funnel_id = $1
+              AND e.customer_id IS NOT NULL
+              AND e.deleted_at IS NULL
+              AND e.created_at >= $2
+              AND e.created_at <= $3
+              AND NOT EXISTS (
+                SELECT 1
+                FROM funnel_event earlier
+                WHERE earlier.funnel_id = e.funnel_id
+                  AND earlier.customer_id = e.customer_id
+                  AND earlier.deleted_at IS NULL
+                  AND earlier.created_at < $2
+              )
+            GROUP BY e.customer_id
           ) firsts
-          WHERE first_at >= $2 AND first_at <= $3
           GROUP BY 1
         `,
         [funnelId, from, to],

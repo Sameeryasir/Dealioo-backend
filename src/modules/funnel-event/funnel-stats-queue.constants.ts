@@ -82,10 +82,6 @@ export const FUNNEL_STATS_JOB_OPTIONS = {
   removeOnFail: 50,
 };
 
-// --- Campaign dashboard perf ---
-// What: Longer Redis TTL + fresher window so Overview reopen/tab switches stay warm.
-// Why: Cold overview felt slow; operators revisit the same funnel + date range often.
-// NOTE: Interactive paths use getCachedOrComputeInline (no 25s queue wait).
 export const FUNNEL_STATS_CACHE_TTL_SECONDS = 900;
 export const FUNNEL_STATS_FRESH_MS = 300_000;
 export const FUNNEL_STATS_WAIT_MS = 25_000;

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { Job, Queue, QueueEvents } from 'bullmq';
 import { FunnelStatsCacheService } from './funnel-stats-cache.service';
+import { joinInflight } from './funnel-stats-inflight';
 import {
   FUNNEL_STATS_FRESH_MS,
   FUNNEL_STATS_JOB_OPTIONS,
@@ -18,6 +19,7 @@ export class FunnelStatsQueueService implements OnModuleDestroy {
   private readonly queueEvents: QueueEvents;
   private readonly freshMs: number;
   private readonly waitMs: number;
+  private readonly inflight = new Map<string, Promise<unknown>>();
 
   constructor(
     @InjectQueue(FUNNEL_STATS_QUEUE)
@@ -104,9 +106,46 @@ export class FunnelStatsQueueService implements OnModuleDestroy {
       return envelope.value;
     }
 
-    const value = await compute();
-    await this.persistResult(payload.cacheKey, value);
-    return value;
+    return joinInflight(this.inflight, payload.cacheKey, () =>
+      this.computeInlineSingleFlight(payload, compute),
+    ) as Promise<T>;
+  }
+
+  private async computeInlineSingleFlight<T>(
+    payload: FunnelStatsJobPayload,
+    compute: () => Promise<T>,
+  ): Promise<T> {
+    const again = await this.cache.getEnvelope<T>(payload.cacheKey);
+    if (again) return again.value;
+
+    const ownsLock = await this.cache.tryAcquireComputeLock(payload.cacheKey);
+    if (!ownsLock) {
+      const waited = await this.pollCachedValue<T>(payload.cacheKey, 10_000);
+      if (waited) return waited;
+    }
+
+    try {
+      const value = await compute();
+      await this.persistResult(payload.cacheKey, value);
+      return value;
+    } finally {
+      if (ownsLock) {
+        await this.cache.releaseComputeLock(payload.cacheKey);
+      }
+    }
+  }
+
+  private async pollCachedValue<T>(
+    cacheKey: string,
+    timeoutMs: number,
+  ): Promise<T | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const envelope = await this.cache.getEnvelope<T>(cacheKey);
+      if (envelope) return envelope.value;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return null;
   }
 
   async enqueueRefresh(payload: FunnelStatsJobPayload): Promise<void> {
