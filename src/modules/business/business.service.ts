@@ -694,19 +694,19 @@ export class BusinessService {
       );
     }
 
-    const integration = await this.getOrCreateTwilioIntegration(business.id);
-    const ownCredentials =
-      this.resolveTwilioCredentialsFromIntegration(integration);
-    const numbers = ownCredentials
-      ? await this.twilioService.listIncomingPhoneNumbers(ownCredentials)
+    const platformReady = this.twilioService.isPlatformAccountConfigured();
+    const numbers = platformReady
+      ? await this.twilioService.listIncomingPhoneNumbers(
+          this.twilioService.requirePlatformCredentials(),
+        )
       : [];
 
     return {
       numbers,
       selectedPhoneSid: business.twilioPhoneSid?.trim() || null,
       selectedPhoneNumber: business.twilioPhoneNumber?.trim() || null,
-      credentialsConnected: Boolean(ownCredentials),
-      accountSidMasked: maskTwilioAccountSid(integration.twilioAccountSid),
+      credentialsConnected: platformReady,
+      accountSidMasked: null,
     };
   }
 
@@ -737,48 +737,11 @@ export class BusinessService {
       );
     }
 
-    const accountSid = dto.accountSid.trim();
-    const authToken = dto.authToken.trim();
-
-    await this.twilioService.assertCredentialsWork({ accountSid, authToken });
-
-    const integration = await this.getOrCreateTwilioIntegration(business.id);
-    const previousSid = integration.twilioAccountSid?.trim() || null;
-
-    integration.twilioAccountSid = accountSid;
-    integration.twilioAuthToken = encryptSecret(authToken);
-    integration.twilioConnectedAt = new Date();
-
-    if (previousSid && previousSid !== accountSid) {
-      business.twilioPhoneSid = null;
-      business.twilioPhoneNumber = null;
-      integration.twilioPhoneSid = null;
-      integration.twilioPhoneNumber = null;
-      await this.businessRepository.save(business);
-    } else {
-      integration.twilioPhoneSid = business.twilioPhoneSid;
-      integration.twilioPhoneNumber = business.twilioPhoneNumber;
-    }
-
-    await this.businessTwilioIntegrationRepository.save(integration);
-
-    await this.adminNotificationWriter.notifyIntegrationConnected({
-      provider: 'twilio',
-      businessId: business.id,
-      businessName: business.name,
-      actorUserId: user.id,
-      idempotencyKey: `twilio_credentials:${business.id}:${accountSid}`,
-      metadata: {
-        twilioAccountSidMasked: maskTwilioAccountSid(accountSid),
-      },
-    });
-
-    return {
-      credentialsConnected: true,
-      accountSidMasked: maskTwilioAccountSid(accountSid),
-      selectedPhoneSid: business.twilioPhoneSid?.trim() || null,
-      selectedPhoneNumber: business.twilioPhoneNumber?.trim() || null,
-    };
+    void dto;
+    void business;
+    throw new BadRequestException(
+      "SMS uses Dealioo's Twilio account. Choose a phone number instead of connecting your own Twilio account.",
+    );
   }
 
   async disconnectTwilioCredentials(
@@ -807,8 +770,9 @@ export class BusinessService {
     });
 
     let inboundWebhookCleared = false;
-    const ownCredentials =
-      this.resolveTwilioCredentialsFromIntegration(integration);
+    const ownCredentials = this.twilioService.isPlatformAccountConfigured()
+      ? this.twilioService.requirePlatformCredentials()
+      : null;
     const phoneSid =
       integration?.twilioPhoneSid?.trim() ||
       business.twilioPhoneSid?.trim() ||
@@ -883,18 +847,11 @@ export class BusinessService {
       );
     }
 
-    const integration = await this.getOrCreateTwilioIntegration(business.id);
-    const ownCredentials =
-      this.resolveTwilioCredentialsFromIntegration(integration);
-    if (!ownCredentials) {
-      throw new BadRequestException(
-        'Connect your Twilio Account SID and Auth Token before searching numbers.',
-      );
-    }
+    const platform = this.twilioService.requirePlatformCredentials();
 
     const numbers = await this.twilioService.searchAvailablePhoneNumbers({
-      accountSid: ownCredentials.accountSid,
-      authToken: ownCredentials.authToken,
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
       countryCode: dto.country?.trim() || dto.countryCode,
       areaCode: dto.areaCode,
       areaName: dto.areaName,
@@ -936,19 +893,13 @@ export class BusinessService {
     }
 
     const integration = await this.getOrCreateTwilioIntegration(business.id);
-    const ownCredentials =
-      this.resolveTwilioCredentialsFromIntegration(integration);
-    if (!ownCredentials) {
-      throw new BadRequestException(
-        'Connect your Twilio Account SID and Auth Token before buying a number.',
-      );
-    }
+    const platform = this.twilioService.requirePlatformCredentials();
 
     this.twilioService.assertInboundSmsConfigured();
 
     const purchased = await this.twilioService.purchasePhoneNumber({
-      accountSid: ownCredentials.accountSid,
-      authToken: ownCredentials.authToken,
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
       phoneNumber: dto.phoneNumber,
     });
 
@@ -964,8 +915,8 @@ export class BusinessService {
     await this.businessTwilioIntegrationRepository.save(integration);
 
     await this.twilioService.syncInboundWebhookForNumber({
-      accountSid: ownCredentials.accountSid,
-      authToken: ownCredentials.authToken,
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
       phoneSid: purchased.sid,
       phoneNumber: purchased.phoneNumber,
     });
@@ -1023,18 +974,12 @@ export class BusinessService {
     }
 
     const integration = await this.getOrCreateTwilioIntegration(business.id);
-    const ownCredentials =
-      this.resolveTwilioCredentialsFromIntegration(integration);
-    if (!ownCredentials) {
-      throw new BadRequestException(
-        'Connect your Twilio Account SID and Auth Token before selecting a number.',
-      );
-    }
+    const platform = this.twilioService.requirePlatformCredentials();
 
     this.twilioService.assertInboundSmsConfigured();
 
     const available =
-      await this.twilioService.listIncomingPhoneNumbers(ownCredentials);
+      await this.twilioService.listIncomingPhoneNumbers(platform);
     const match = available.find(
       (n) =>
         n.sid === phoneSid ||
@@ -1050,7 +995,7 @@ export class BusinessService {
         actorUserId: user.id,
       });
       throw new BadRequestException(
-        'That phone number was not found on your Twilio account.',
+        "That phone number was not found on Dealioo's Twilio account.",
       );
     }
 
@@ -1066,8 +1011,8 @@ export class BusinessService {
     await this.businessTwilioIntegrationRepository.save(integration);
 
     await this.twilioService.syncInboundWebhookForNumber({
-      accountSid: ownCredentials.accountSid,
-      authToken: ownCredentials.authToken,
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
       phoneSid: match.sid,
       phoneNumber: match.phoneNumber,
     });

@@ -17,7 +17,6 @@ import {
   ConversationMessageDirection,
 } from '../../db/entities/conversation-message.entity';
 import { TwilioService } from '../sms/twilio.service';
-import { decryptSecret } from '../../utils/token-encryption.util';
 import type { ConversationMessageDto } from './chat.dto';
 import type { RecordOutboundMessageDto } from './chat-message.dto';
 import {
@@ -388,35 +387,24 @@ export class ChatMessageService {
       }
     | undefined
   > {
-    const [business, integration] = await Promise.all([
-      this.businessRepository.findOne({ where: { id: businessId } }),
-      this.businessTwilioIntegrationRepository.findOne({
-        where: { businessId },
-      }),
-    ]);
-    if (!business || !integration) {
+    const business = await this.businessRepository.findOne({
+      where: { id: businessId },
+    });
+    if (!business) {
       return undefined;
     }
 
-    const accountSid = integration.twilioAccountSid?.trim() || '';
-    const storedToken = integration.twilioAuthToken?.trim() || '';
     const fromPhoneNumber = business.twilioPhoneNumber?.trim() || '';
-    if (!accountSid || !storedToken || !fromPhoneNumber) {
+    const accountSid =
+      process.env.TWILIO_ACCOUNT_SID?.trim() ||
+      process.env.ACCOUNT_SID?.trim() ||
+      '';
+    const authToken = process.env.TWILIO_AUTH_TOKEN?.trim() || '';
+    if (!accountSid || !authToken || !fromPhoneNumber) {
       return undefined;
     }
 
-    try {
-      const authToken = decryptSecret(storedToken).trim();
-      if (!authToken) return undefined;
-      return { accountSid, authToken, fromPhoneNumber };
-    } catch (error) {
-      this.logger.warn(
-        `Could not decrypt Twilio credentials for business ${businessId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return undefined;
-    }
+    return { accountSid, authToken, fromPhoneNumber };
   }
 
   private isIdempotencyConflict(error: unknown): boolean {

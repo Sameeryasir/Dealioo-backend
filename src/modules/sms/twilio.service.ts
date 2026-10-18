@@ -50,6 +50,21 @@ export class TwilioService implements OnModuleInit {
     return this.client != null && this.fromPhoneNumber != null;
   }
 
+  isPlatformAccountConfigured(): boolean {
+    return Boolean(resolveAccountSid() && envTrim('TWILIO_AUTH_TOKEN'));
+  }
+
+  requirePlatformCredentials(): TwilioAccountCredentials {
+    const accountSid = resolveAccountSid();
+    const authToken = envTrim('TWILIO_AUTH_TOKEN');
+    if (!accountSid || !authToken) {
+      throw new ServiceUnavailableException(
+        'Dealioo Twilio is not configured on the server.',
+      );
+    }
+    return { accountSid, authToken };
+  }
+
   assertInboundSmsConfigured(): void {
     requireInboundWebhookUrl();
   }
