@@ -36,6 +36,30 @@ export class MeetingRequest {
   @Column({ name: 'city_location', type: 'varchar', length: 255 })
   cityLocation: string;
 
+  @Column({ name: 'business_phone', type: 'varchar', length: 40, nullable: true })
+  businessPhone: string | null;
+
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  currency: string | null;
+
+  @Column({ name: 'business_email', type: 'varchar', length: 255, nullable: true })
+  businessEmail: string | null;
+
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  description: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  website: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  state: string | null;
+
+  @Column({ name: 'postal_code', type: 'varchar', length: 20, nullable: true })
+  postalCode: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  country: string | null;
+
   @Column({ name: 'monthly_revenue', type: 'varchar', length: 32 })
   monthlyRevenue: string;
 
@@ -50,6 +74,18 @@ export class MeetingRequest {
 
   @Column({ name: 'meeting_commitment', type: 'varchar', length: 64 })
   meetingCommitment: string;
+
+  @Column({ name: 'scheduled_date', type: 'varchar', length: 10, nullable: true })
+  scheduledDate: string | null;
+
+  @Column({ name: 'scheduled_time', type: 'varchar', length: 5, nullable: true })
+  scheduledTime: string | null;
+
+  @Column({ name: 'scheduled_duration', type: 'int', nullable: true })
+  scheduledDuration: number | null;
+
+  @Column({ name: 'scheduled_time_zone', type: 'varchar', length: 64, nullable: true })
+  scheduledTimeZone: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

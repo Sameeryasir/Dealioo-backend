@@ -60,7 +60,10 @@ export class BusinessAccessService {
         return {
           access: cached.access,
           role: cached.role,
-          permissions: cached.permissions,
+          permissions:
+            cached.role === 'Manager'
+              ? [...ALL_BUSINESS_MEMBER_PERMISSIONS]
+              : cached.permissions,
           businessId,
         };
       }
@@ -302,7 +305,7 @@ export class BusinessAccessService {
   private async resolveMemberPermissions(
     member: BusinessMember,
   ): Promise<BusinessMemberPermissionKey[]> {
-    if (member.role === 'Owner') {
+    if (member.role === 'Owner' || member.role === 'Manager') {
       return [...ALL_BUSINESS_MEMBER_PERMISSIONS];
     }
 

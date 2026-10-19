@@ -3,9 +3,13 @@ import {
   IsArray,
   IsEmail,
   IsIn,
+  IsInt,
+  IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 export const MEETING_BUSINESS_ROLES = [
@@ -61,8 +65,10 @@ export class CreateMeetingRequestDto {
   @MaxLength(255)
   email: string;
 
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_BUSINESS_ROLES])
-  businessRole: (typeof MEETING_BUSINESS_ROLES)[number];
+  businessRole?: (typeof MEETING_BUSINESS_ROLES)[number];
 
   @IsString()
   @MinLength(1)
@@ -79,22 +85,92 @@ export class CreateMeetingRequestDto {
   @MaxLength(255)
   cityLocation: string;
 
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_MONTHLY_REVENUE])
-  monthlyRevenue: (typeof MEETING_MONTHLY_REVENUE)[number];
+  monthlyRevenue?: (typeof MEETING_MONTHLY_REVENUE)[number];
 
+  @IsOptional()
+  @ValidateIf((_, value) => Array.isArray(value) && value.length > 0)
   @IsArray()
   @ArrayMinSize(1)
   @IsIn([...MEETING_MARKETING_ACTIVITIES], { each: true })
-  marketingActivities: (typeof MEETING_MARKETING_ACTIVITIES)[number][];
+  marketingActivities?: (typeof MEETING_MARKETING_ACTIVITIES)[number][];
 
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.trim().length > 0)
   @IsString()
   @MinLength(10)
   @MaxLength(5000)
-  currentSituation: string;
+  currentSituation?: string;
 
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_START_TIMELINES])
-  startTimeline: (typeof MEETING_START_TIMELINES)[number];
+  startTimeline?: (typeof MEETING_START_TIMELINES)[number];
 
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_COMMITMENTS])
-  meetingCommitment: (typeof MEETING_COMMITMENTS)[number];
+  meetingCommitment?: (typeof MEETING_COMMITMENTS)[number];
+
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  scheduledDate?: string;
+
+  @IsOptional()
+  @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
+  @Matches(/^\d{2}:\d{2}$/)
+  scheduledTime?: string;
+
+  @IsOptional()
+  @IsInt()
+  @IsIn([15, 30])
+  scheduledDuration?: 15 | 30;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  scheduledTimeZone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  businessPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(8)
+  currency?: string;
+
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(255)
+  businessEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  website?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  postalCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  country?: string;
 }
