@@ -1,7 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
@@ -10,6 +12,13 @@ import { User } from '../../db/entities/user.entity';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { GoogleCalendarService } from '../google-calendar/google-calendar.service';
 import { CreateMeetingRequestDto } from './meetingRequestDto/create-meeting-request.dto';
+
+function isTakenSlot(error: unknown): boolean {
+  if (!(error instanceof QueryFailedError)) return false;
+  const code = (error as QueryFailedError & { driverError?: { code?: string } })
+    .driverError?.code;
+  return code === '23505';
+}
 
 @Injectable()
 export class MeetingRequestService {
@@ -52,31 +61,43 @@ export class MeetingRequestService {
       scheduledTimeZone: dto.scheduledTimeZone?.trim() || null,
     });
 
-    const event = await this.googleCalendarService.createMeetingEvent(draft);
-    if (event) {
-      draft.googleEventId = event.eventId;
-      draft.googleEventLink = event.htmlLink;
-      draft.googleMeetLink = event.meetLink;
-    }
-
     let saved: MeetingRequest;
     try {
       saved = await this.meetingRequestRepo.save(draft);
     } catch (error) {
-      const code =
-        error instanceof QueryFailedError
-          ? (error as QueryFailedError & { driverError?: { code?: string } })
-              .driverError?.code
-          : undefined;
-      if (code === '23505') {
-        if (event?.created) {
-          await this.googleCalendarService.deleteEvent(event.eventId);
-        }
+      if (isTakenSlot(error)) {
         throw new ConflictException(
           'That time was just taken. Please pick another time.',
         );
       }
       throw error;
+    }
+
+    let event: Awaited<
+      ReturnType<GoogleCalendarService['createMeetingEvent']>
+    > = null;
+    try {
+      event = await this.googleCalendarService.createMeetingEvent(saved);
+      if (event) {
+        saved.googleEventId = event.eventId;
+        saved.googleEventLink = event.htmlLink;
+        saved.googleMeetLink = event.meetLink;
+        saved = await this.meetingRequestRepo.save(saved);
+      }
+    } catch (error) {
+      if (event?.created) {
+        await this.googleCalendarService.deleteEvent(event.eventId);
+      }
+      await this.meetingRequestRepo.delete(saved.id);
+      if (isTakenSlot(error)) {
+        throw new ConflictException(
+          'That time was just taken. Please pick another time.',
+        );
+      }
+      if (error instanceof HttpException) throw error;
+      throw new ServiceUnavailableException(
+        'This meeting could not be saved. Please try again.',
+      );
     }
 
     const actor = await this.userRepository.findOne({
@@ -114,7 +135,16 @@ export class MeetingRequestService {
       throw new BadRequestException('That time zone is not recognized.');
     }
 
-    const slots = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00'];
+    const slots = [
+      '09:00',
+      '10:00',
+      '11:00',
+      '12:00',
+      '13:00',
+      '14:00',
+      '15:00',
+      '16:00',
+    ];
     if (!slots.includes(time)) {
       throw new BadRequestException('Pick one of the open meeting times.');
     }
@@ -128,9 +158,7 @@ export class MeetingRequestService {
     const today = this.calendarDate(new Date(), zone);
     const last = this.addCalendarDays(today, 60);
     if (date < today || date > last) {
-      throw new BadRequestException(
-        'Pick a weekday within the next 60 days.',
-      );
+      throw new BadRequestException('Pick a weekday within the next 60 days.');
     }
     if (date === today) {
       const nowMinutes = this.minutesInZone(new Date(), zone);
@@ -168,8 +196,12 @@ export class MeetingRequestService {
       minute: '2-digit',
       hourCycle: 'h23',
     }).formatToParts(date);
-    const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? '0');
-    const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? '0');
+    const hour = Number(
+      parts.find((part) => part.type === 'hour')?.value ?? '0',
+    );
+    const minute = Number(
+      parts.find((part) => part.type === 'minute')?.value ?? '0',
+    );
     return hour * 60 + minute;
   }
 }

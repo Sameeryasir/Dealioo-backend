@@ -23,6 +23,10 @@ import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { isSuperAdmin } from '../../utils/user-roles';
 import {
+  addMinutes,
+  zonedDateTime,
+} from '../google-calendar/google-calendar.util';
+import {
   buildZonedRangeBucketKeys,
   overviewRangeBucketSql,
   resolveSafeTimeZone,
@@ -164,15 +168,31 @@ export class PlatformAdminService {
       currentSituation: string;
       startTimeline: string;
       meetingCommitment: string;
+      scheduledDate: string | null;
+      scheduledTime: string | null;
+      scheduledDuration: number | null;
+      scheduledTimeZone: string | null;
+      businessPhone: string | null;
+      businessEmail: string | null;
+      website: string | null;
+      description: string | null;
+      state: string | null;
+      postalCode: string | null;
+      country: string | null;
+      currency: string | null;
+      googleEventLink: string | null;
+      googleMeetLink: string | null;
       createdAt: Date;
     }>;
   }> {
     this.assertSuperAdmin(actor);
 
-    const [items, total] = await this.meetingRequestRepository.findAndCount({
+    const rows = await this.meetingRequestRepository.find({
       order: { createdAt: 'DESC' },
-      take: 200,
     });
+    const upcoming = rows.filter((row) => isFutureMeeting(row));
+    const items = upcoming.slice(0, 200);
+    const total = upcoming.length;
 
     return {
       total,
@@ -193,6 +213,20 @@ export class PlatformAdminService {
         currentSituation: row.currentSituation,
         startTimeline: row.startTimeline,
         meetingCommitment: row.meetingCommitment,
+        scheduledDate: row.scheduledDate,
+        scheduledTime: row.scheduledTime,
+        scheduledDuration: row.scheduledDuration,
+        scheduledTimeZone: row.scheduledTimeZone,
+        businessPhone: row.businessPhone,
+        businessEmail: row.businessEmail,
+        website: row.website,
+        description: row.description,
+        state: row.state,
+        postalCode: row.postalCode,
+        country: row.country,
+        currency: row.currency,
+        googleEventLink: row.googleEventLink,
+        googleMeetLink: row.googleMeetLink,
         createdAt: row.createdAt,
       })),
     };
@@ -630,5 +664,20 @@ export class PlatformAdminService {
           };
         }),
     };
+  }
+}
+
+function isFutureMeeting(row: MeetingRequest, now = Date.now()): boolean {
+  if (!row.scheduledDate || !row.scheduledTime) return false;
+  const zone = row.scheduledTimeZone?.trim() || 'UTC';
+  const duration = row.scheduledDuration ?? 0;
+  const end =
+    duration > 0
+      ? addMinutes(row.scheduledDate, row.scheduledTime, duration)
+      : { date: row.scheduledDate, time: row.scheduledTime };
+  try {
+    return Date.parse(zonedDateTime(end.date, end.time, zone)) > now;
+  } catch {
+    return false;
   }
 }

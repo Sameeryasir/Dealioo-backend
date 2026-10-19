@@ -10,10 +10,17 @@ import { google } from 'googleapis';
 import { Repository } from 'typeorm';
 import { GoogleCalendarConnection } from '../../db/entities/google-calendar-connection.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
-import { decryptSecret, encryptSecret } from '../../utils/token-encryption.util';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../../utils/token-encryption.util';
+import {
+  buildMeetingCalendarEvent,
+  type CreatedCalendarEvent,
+  upsertCalendarEvent,
+} from './google-calendar-event';
 import { CreateCalendarEventDto } from './create-calendar-event.dto';
 import {
-  addMinutes,
   assertCalendarState,
   assertIsoRange,
   bookingKey,
@@ -22,14 +29,9 @@ import {
   toPublicCalendarError,
 } from './google-calendar.util';
 
-const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+export type { CreatedCalendarEvent };
 
-export type CreatedCalendarEvent = {
-  eventId: string;
-  htmlLink: string | null;
-  meetLink: string | null;
-  created: boolean;
-};
+const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 
 @Injectable()
 export class GoogleCalendarService {
@@ -86,7 +88,9 @@ export class GoogleCalendarService {
       email = profile.data.email?.trim() || '';
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
-      this.logger.error(`Google Calendar connect failed with status ${readStatus(error) ?? 'unknown'}`);
+      this.logger.error(
+        `Google Calendar connect failed with status ${readStatus(error) ?? 'unknown'}`,
+      );
       throw new BadRequestException(
         'Google Calendar was not connected. Start the connection again.',
       );
@@ -105,26 +109,51 @@ export class GoogleCalendarService {
     return email;
   }
 
-  async createEvent(input: CreateCalendarEventDto): Promise<CreatedCalendarEvent> {
+  async createEvent(
+    input: CreateCalendarEventDto,
+  ): Promise<CreatedCalendarEvent> {
     assertIsoRange(input.start, input.end);
     try {
-      Intl.DateTimeFormat('en-US', { timeZone: input.timeZone }).format(new Date());
+      Intl.DateTimeFormat('en-US', { timeZone: input.timeZone }).format(
+        new Date(),
+      );
     } catch {
       throw new BadRequestException('That time zone is not recognized.');
     }
-    return this.insertEvent({
-      title: input.title.trim(),
-      description: input.description?.trim() || '',
+    const timeZone = input.timeZone.trim();
+    const key = bookingKey({
+      email: input.attendeeEmail?.trim() || input.title.trim(),
       start: input.start,
       end: input.end,
-      timeZone: input.timeZone.trim(),
-      attendeeEmail: input.attendeeEmail?.trim().toLowerCase(),
-      bookingKey: bookingKey({
-        email: input.attendeeEmail?.trim() || input.title.trim(),
-        start: input.start,
-        end: input.end,
-        timeZone: input.timeZone.trim(),
-      }),
+      timeZone,
+    });
+    const visitor = input.attendeeEmail?.trim().toLowerCase() || '';
+    const attendees = [organizerEmail(), visitor]
+      .map((email) => email.trim())
+      .filter(Boolean);
+    return this.insertEvent({
+      summary: input.title.trim(),
+      description: input.description?.trim() || '',
+      start: { dateTime: input.start, timeZone },
+      end: { dateTime: input.end, timeZone },
+      attendees: [...new Set(attendees)].map((email) => ({ email })),
+      reminders: {
+        useDefault: false,
+        overrides: [{ method: 'popup', minutes: 10 }],
+      },
+      extendedProperties: {
+        private: {
+          source: 'dealioo',
+          bookingKey: key,
+          bookingVersion: '1',
+        },
+      },
+      conferenceData: {
+        createRequest: {
+          requestId: key,
+          conferenceSolutionKey: { type: 'hangoutsMeet' },
+        },
+      },
     });
   }
 
@@ -133,10 +162,9 @@ export class GoogleCalendarService {
   ): Promise<CreatedCalendarEvent | null> {
     const refreshToken = await this.refreshToken();
     if (!refreshToken) {
-      this.logger.warn(
-        'Google Calendar is not connected. The meeting will be saved without a calendar event.',
+      throw new ServiceUnavailableException(
+        'Google Calendar is not connected, so this meeting was not added and no Meet link was created. An admin needs to connect the calendar, then book again.',
       );
-      return null;
     }
     if (
       !meeting.scheduledDate ||
@@ -146,47 +174,20 @@ export class GoogleCalendarService {
     ) {
       throw new BadRequestException('Pick an open meeting day and time.');
     }
-    const end = addMinutes(
-      meeting.scheduledDate,
-      meeting.scheduledTime,
-      meeting.scheduledDuration,
-    );
-    const start = `${meeting.scheduledDate}T${meeting.scheduledTime}:00`;
-    const endValue = `${end.date}T${end.time}:00`;
-    const visitorName = `${meeting.firstName} ${meeting.lastName}`.trim();
-    const place = [meeting.cityLocation, meeting.state, meeting.country]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(', ');
-    return this.insertEvent({
-      title: `${visitorName} · ${meeting.businessName}`.trim(),
-      location: place,
-      description: [
-        visitorName,
-        meeting.email,
-        meeting.phone,
-        meeting.businessName,
-        meeting.businessCategory ? `Business type: ${meeting.businessCategory}` : '',
-        meeting.businessPhone ? `Business phone: ${meeting.businessPhone}` : '',
-        meeting.businessEmail ? `Business email: ${meeting.businessEmail}` : '',
-        meeting.website ? `Website: ${meeting.website}` : '',
-        place ? `Location: ${place}` : '',
-        meeting.description ? meeting.description : '',
-        `Host: ${organizerEmail()}`,
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      start,
-      end: endValue,
-      timeZone: meeting.scheduledTimeZone,
-      attendeeEmail: meeting.email.trim().toLowerCase(),
-      bookingKey: bookingKey({
-        email: meeting.email,
-        start,
-        end: endValue,
-        timeZone: meeting.scheduledTimeZone,
-      }),
-    });
+    try {
+      return await this.insertEvent(buildMeetingCalendarEvent(meeting));
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
+      if (error instanceof RangeError) {
+        throw new BadRequestException('That time zone is not recognized.');
+      }
+      throw error;
+    }
   }
 
   async deleteEvent(eventId: string): Promise<void> {
@@ -204,86 +205,21 @@ export class GoogleCalendarService {
     }
   }
 
-  private async insertEvent(input: {
-    title: string;
-    description: string;
-    location?: string;
-    start: string;
-    end: string;
-    timeZone: string;
-    attendeeEmail?: string;
-    bookingKey: string;
-  }): Promise<CreatedCalendarEvent> {
+  private async insertEvent(
+    request: Parameters<typeof upsertCalendarEvent>[2],
+  ): Promise<CreatedCalendarEvent> {
     try {
       const calendar = await this.calendarClient();
-      const calendarId = readCalendarOAuthSettings().calendarId;
-      const existing = await calendar.events.list({
-        calendarId,
-        privateExtendedProperty: [`bookingKey=${input.bookingKey}`],
-        maxResults: 1,
-        singleEvents: true,
-      });
-      const found = existing.data.items?.[0];
-      if (found?.id) {
-        const existingMeetLink = meetLinkFromEvent(found);
-        if (existingMeetLink) {
-          return {
-            eventId: found.id,
-            htmlLink: found.htmlLink ?? null,
-            meetLink: existingMeetLink,
-            created: false,
-          };
-        }
-        const patched = await calendar.events.patch({
-          calendarId,
-          eventId: found.id,
-          conferenceDataVersion: 1,
-          sendUpdates: 'all',
-          requestBody: {
-            conferenceData: meetConference(input.bookingKey),
-          },
-        });
-        return {
-          eventId: found.id,
-          htmlLink: patched.data.htmlLink ?? found.htmlLink ?? null,
-          meetLink: requireMeetLink(patched.data),
-          created: false,
-        };
-      }
-      const inserted = await calendar.events.insert({
-        calendarId,
-        conferenceDataVersion: 1,
-        sendUpdates: 'all',
-        requestBody: {
-          summary: input.title,
-          description: input.description,
-          location: input.location || undefined,
-          start: { dateTime: input.start, timeZone: input.timeZone },
-          end: { dateTime: input.end, timeZone: input.timeZone },
-          attendees: meetingAttendees(input.attendeeEmail),
-          reminders: {
-            useDefault: false,
-            overrides: [{ method: 'popup', minutes: 10 }],
-          },
-          extendedProperties: {
-            private: { bookingKey: input.bookingKey },
-          },
-          conferenceData: meetConference(input.bookingKey),
-        },
-      });
-      if (!inserted.data.id) {
-        throw new ServiceUnavailableException(
-          'This meeting could not be added to the calendar. Please try again.',
-        );
-      }
-      return {
-        eventId: inserted.data.id,
-        htmlLink: inserted.data.htmlLink ?? null,
-        meetLink: requireMeetLink(inserted.data),
-        created: true,
-      };
+      return await upsertCalendarEvent(
+        calendar.events,
+        readCalendarOAuthSettings().calendarId,
+        request,
+      );
     } catch (error) {
-      if (error instanceof BadRequestException || error instanceof ServiceUnavailableException) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof ServiceUnavailableException
+      ) {
         throw error;
       }
       this.logger.error(
@@ -351,53 +287,11 @@ export class GoogleCalendarService {
   }
 }
 
-function meetingAttendees(visitorEmail?: string) {
-  const emails = [organizerEmail(), visitorEmail?.trim().toLowerCase() || '']
-    .map((email) => email.trim())
-    .filter(Boolean);
-  return [...new Set(emails)].map((email) => ({ email }));
-}
-
-function meetConference(bookingKey: string) {
-  return {
-    createRequest: {
-      requestId: bookingKey,
-      conferenceSolutionKey: { type: 'hangoutsMeet' },
-    },
-  };
-}
-
-function meetLinkFromEvent(event: {
-  hangoutLink?: string | null;
-  conferenceData?: {
-    entryPoints?: Array<{ entryPointType?: string | null; uri?: string | null }> | null;
-  } | null;
-}): string | null {
-  const hangout = event.hangoutLink?.trim();
-  if (hangout) return hangout;
-  const video = event.conferenceData?.entryPoints?.find(
-    (entry) => entry.entryPointType === 'video' && entry.uri?.trim(),
-  );
-  return video?.uri?.trim() || null;
-}
-
-function requireMeetLink(event: {
-  hangoutLink?: string | null;
-  conferenceData?: {
-    entryPoints?: Array<{ entryPointType?: string | null; uri?: string | null }> | null;
-  } | null;
-}): string {
-  const link = meetLinkFromEvent(event);
-  if (!link) {
-    throw new ServiceUnavailableException(
-      'The Google Meet link could not be created. Please try again.',
-    );
-  }
-  return link;
-}
-
 function readStatus(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   const record = error as { response?: { status?: number }; code?: number };
-  return record.response?.status ?? (typeof record.code === 'number' ? record.code : null);
+  return (
+    record.response?.status ??
+    (typeof record.code === 'number' ? record.code : null)
+  );
 }
