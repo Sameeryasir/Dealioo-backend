@@ -12,8 +12,7 @@ import { Business } from '../../db/entities/business.entity';
 import { User } from '../../db/entities/user.entity';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
-import { requireAdminRole } from '../../utils/require-admin-role';
-import { businessAccessWhere } from '../../utils/business-access';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { StripeIntegrationAuditService } from './stripe-integration-audit.service';
 import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import {
@@ -47,6 +46,7 @@ export class StripeService {
     private readonly businessRepository: Repository<Business>,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     private readonly auditService: StripeIntegrationAuditService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {
     this.platformSecretKey =
       this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
@@ -118,20 +118,11 @@ export class StripeService {
   }
 
   async connect(user: User, businessId: number): Promise<{ url: string }> {
-    requireAdminRole(
+    await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to connect Stripe for this account.',
     );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     return this.createOAuthConnectUrl(businessId);
   }
@@ -168,20 +159,11 @@ export class StripeService {
     user: User,
     businessId: number,
   ): Promise<{ restored: true }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to connect Stripe for this account.',
     );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     if (business.stripeAccountId?.trim()) {
       return { restored: true };
@@ -198,20 +180,11 @@ export class StripeService {
     user: User,
     businessId: number,
   ): Promise<{ disconnected: true }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to disconnect Stripe for this account.',
     );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     const stripeAccountId = business.stripeAccountId?.trim();
     if (!stripeAccountId) {

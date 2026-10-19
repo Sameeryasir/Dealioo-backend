@@ -153,14 +153,26 @@ export class GoogleCalendarService {
     );
     const start = `${meeting.scheduledDate}T${meeting.scheduledTime}:00`;
     const endValue = `${end.date}T${end.time}:00`;
+    const visitorName = `${meeting.firstName} ${meeting.lastName}`.trim();
+    const place = [meeting.cityLocation, meeting.state, meeting.country]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(', ');
     return this.insertEvent({
-      title: `Dealioo meeting with ${meeting.firstName} ${meeting.lastName}`.trim(),
+      title: `${visitorName} · ${meeting.businessName}`.trim(),
+      location: place,
       description: [
-        `Business: ${meeting.businessName}`,
-        `Email: ${meeting.email}`,
-        `Phone: ${meeting.phone}`,
+        visitorName,
+        meeting.email,
+        meeting.phone,
+        meeting.businessName,
+        meeting.businessCategory ? `Business type: ${meeting.businessCategory}` : '',
+        meeting.businessPhone ? `Business phone: ${meeting.businessPhone}` : '',
+        meeting.businessEmail ? `Business email: ${meeting.businessEmail}` : '',
+        meeting.website ? `Website: ${meeting.website}` : '',
+        place ? `Location: ${place}` : '',
+        meeting.description ? meeting.description : '',
         `Host: ${organizerEmail()}`,
-        meeting.cityLocation ? `Location: ${meeting.cityLocation}` : '',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -195,6 +207,7 @@ export class GoogleCalendarService {
   private async insertEvent(input: {
     title: string;
     description: string;
+    location?: string;
     start: string;
     end: string;
     timeZone: string;
@@ -244,9 +257,14 @@ export class GoogleCalendarService {
         requestBody: {
           summary: input.title,
           description: input.description,
+          location: input.location || undefined,
           start: { dateTime: input.start, timeZone: input.timeZone },
           end: { dateTime: input.end, timeZone: input.timeZone },
           attendees: meetingAttendees(input.attendeeEmail),
+          reminders: {
+            useDefault: false,
+            overrides: [{ method: 'popup', minutes: 10 }],
+          },
           extendedProperties: {
             private: { bookingKey: input.bookingKey },
           },

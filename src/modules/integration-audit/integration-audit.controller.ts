@@ -2,7 +2,6 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
-  NotFoundException,
   Param,
   ParseIntPipe,
   Query,
@@ -11,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-import { requireAdminRole } from '../../utils/require-admin-role';
 import { BusinessAccessService } from '../business-access/business-access.service';
 import { IntegrationAuditService } from './integration-audit.service';
 
@@ -39,20 +37,11 @@ export class IntegrationAuditController {
     @Query('to') to?: string,
     @Query('tzOffset') tzOffsetRaw?: string,
   ) {
-    requireAdminRole(
-      req.user,
-      'Only the account owner can view integration logs.',
-    );
-
-    const business = await this.businessAccessService.findAccessibleBusiness(
+    await this.businessAccessService.assertCanOperateBusiness(
       req.user,
       businessId,
+      'Only the business owner or an admin can view integration logs.',
     );
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not have access to this business.',
-      );
-    }
 
     const tzOffset = Number(tzOffsetRaw);
     return this.integrationAuditService.listForBusiness(businessId, {

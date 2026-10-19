@@ -14,7 +14,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { getFrontendBaseUrl } from '../../utils/frontend-base-url';
-import { requireAdminRole } from '../../utils/require-admin-role';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { BusinessService } from '../business/business.service';
 import { StripeConnectionStatusDto } from './dto/stripe-connection-status.dto';
 import { StripeService } from './stripe.service';
@@ -24,6 +24,7 @@ export class StripeController {
   constructor(
     private readonly stripeService: StripeService,
     private readonly businessService: BusinessService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   @Get('callback/oauth')
@@ -111,21 +112,11 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ): Promise<{ url: string }> {
-    requireAdminRole(
-      req.user,
-      'You do not have permission to open the Stripe dashboard for this account.',
-    );
-
-    const business = await this.businessService.findBusinessForUser(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       req.user,
       businessId,
+      'You do not have permission to open the Stripe dashboard for this account.',
     );
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     if (!business.stripeAccountId) {
       throw new BadRequestException('Stripe account not connected');
@@ -162,21 +153,11 @@ export class StripeController {
     @Req() req,
     @Param('businessId', ParseIntPipe) businessId: number,
   ) {
-    requireAdminRole(
-      req.user,
-      'You do not have permission to connect Stripe for this account.',
-    );
-
-    const business = await this.businessService.findBusinessForUser(
+    await this.businessAccessService.assertCanOperateBusiness(
       req.user,
       businessId,
+      'You do not have permission to connect Stripe for this account.',
     );
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     return this.stripeService.createOAuthConnectUrl(businessId);
   }

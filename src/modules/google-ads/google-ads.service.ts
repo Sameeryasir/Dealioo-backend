@@ -17,7 +17,7 @@ import { DealioCampaignGoogleSpendDto } from './dto/dealio-campaign-google-spend
 import { encryptSecret } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessHistoryService } from '../business-history/business-history.service';
-import { requireAdminRole } from '../../utils/require-admin-role';
+import { BusinessAccessService } from '../business-access/business-access.service';
 import { businessAccessWhere } from '../../utils/business-access';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import {
@@ -249,6 +249,7 @@ export class GoogleAdsService {
     private readonly tokenService: GoogleAdsTokenService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly businessAccessService: BusinessAccessService,
   ) {}
 
   private readonly campaignStatsRefreshInFlight = new Map<
@@ -257,20 +258,11 @@ export class GoogleAdsService {
   >();
 
   async connect(user: User, businessId: number): Promise<{ url: string }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to connect Google Ads for this account.',
     );
-
-    const business = await this.businessRepository.findOne({
-      where: businessAccessWhere(user, businessId),
-    });
-
-    if (!business) {
-      throw new NotFoundException(
-        'Business not found or you do not own this business.',
-      );
-    }
 
     if (!business.googleRefreshToken?.trim()) {
       await this.businessRepository.update(businessId, {
@@ -289,12 +281,11 @@ export class GoogleAdsService {
     user: User,
     businessId: number,
   ): Promise<{ restored: true }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to update Google Ads for this account.',
     );
-
-    const business = await this.loadOwnedBusiness(user, businessId);
 
     if (
       business.googleConnectionStatus !== GoogleAdsConnectionStatus.INITIATED
@@ -594,12 +585,11 @@ export class GoogleAdsService {
     user: User,
     businessId: number,
   ): Promise<GoogleAdsCustomerDto[]> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to list Google Ads accounts.',
     );
-
-    const business = await this.loadOwnedBusiness(user, businessId);
     const { refreshToken } =
       await this.tokenService.assertBusinessGoogleToken(business);
 
@@ -623,12 +613,11 @@ export class GoogleAdsService {
     user: User,
     businessId: number,
   ): Promise<GoogleTagManagerContainerDto[]> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to list Google Tag Manager containers.',
     );
-
-    const business = await this.loadOwnedBusiness(user, businessId);
     const { accessToken } =
       await this.tokenService.assertBusinessGoogleToken(business);
 
@@ -662,12 +651,11 @@ export class GoogleAdsService {
     customerId: string,
     managerCustomerId?: string,
   ): Promise<{ googleCustomerId: string }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to set the Google Ads account.',
     );
-
-    const business = await this.loadOwnedBusiness(user, businessId);
     const { refreshToken } =
       await this.tokenService.assertBusinessGoogleToken(business);
 
@@ -719,12 +707,11 @@ export class GoogleAdsService {
     user: User,
     businessId: number,
   ): Promise<{ disconnected: true }> {
-    requireAdminRole(
+    const business = await this.businessAccessService.assertCanOperateBusiness(
       user,
+      businessId,
       'You do not have permission to disconnect Google Ads.',
     );
-
-    const business = await this.loadOwnedBusiness(user, businessId);
 
     const hadConnection = Boolean(
       business.googleUserId?.trim() || business.googleRefreshToken?.trim(),

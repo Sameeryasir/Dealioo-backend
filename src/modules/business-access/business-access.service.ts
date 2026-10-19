@@ -192,6 +192,29 @@ export class BusinessAccessService {
     }
   }
 
+  async assertCanOperateBusiness(
+    user: BusinessAccessUser,
+    businessId: number,
+    forbiddenMessage: string,
+  ): Promise<Business> {
+    const business = await this.findAccessibleBusiness(user, businessId);
+    if (!business || business.deletedAt) {
+      throw new NotFoundException(
+        'Business not found or you do not have access to this business.',
+      );
+    }
+    if (isSuperAdmin(user)) {
+      return business;
+    }
+
+    const context = await this.getAccessContext(user, businessId);
+    if (context?.access === 'owner' || context?.role === 'Admin') {
+      return business;
+    }
+
+    throw new ForbiddenException(forbiddenMessage);
+  }
+
   async findAccessibleBusiness(
     user: BusinessAccessUser,
     businessId: number,
