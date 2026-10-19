@@ -87,6 +87,15 @@ export class MeetingRequest {
   @Column({ name: 'scheduled_time_zone', type: 'varchar', length: 64, nullable: true })
   scheduledTimeZone: string | null;
 
+  @Column({ name: 'google_event_id', type: 'varchar', length: 255, nullable: true })
+  googleEventId: string | null;
+
+  @Column({ name: 'google_event_link', type: 'varchar', length: 512, nullable: true })
+  googleEventLink: string | null;
+
+  @Column({ name: 'google_meet_link', type: 'varchar', length: 512, nullable: true })
+  googleMeetLink: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

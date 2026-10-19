@@ -13,6 +13,10 @@ export function normalizeMemberPermissions(
   permissions: string[] | undefined,
   role: BusinessMemberRole,
 ): BusinessMemberPermissionKey[] {
+  if (role === 'Admin' || role === 'Owner') {
+    return [...BUSINESS_MEMBER_PERMISSIONS];
+  }
+
   const allowed = new Set<string>(BUSINESS_MEMBER_PERMISSIONS);
 
   const source =

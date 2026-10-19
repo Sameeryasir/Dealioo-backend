@@ -226,7 +226,9 @@ export class MemberService {
           status:
             member.role === 'Owner' ? ('owner' as const) : ('active' as const),
           permissions:
-            member.role === 'Owner' || isAdminOrSuperAdmin(member.user)
+            member.role === 'Owner' ||
+            member.role === 'Admin' ||
+            isAdminOrSuperAdmin(member.user)
               ? [FULL_ACCESS_PERMISSION]
               : permissionList,
           joinedAt: member.createdAt?.toISOString(),
@@ -261,7 +263,9 @@ export class MemberService {
     const stats: MembersListStats = {
       activeCount: allMembers.filter((m) => m.status !== 'pending').length,
       pendingCount: allMembers.filter((m) => m.status === 'pending').length,
-      fullAccessCount: allMembers.filter((m) => m.status === 'owner').length,
+      fullAccessCount: allMembers.filter(
+        (m) => m.status === 'owner' || m.role === 'Admin',
+      ).length,
       roleCount: new Set(
         allMembers.map((m) => m.role.trim().toLowerCase()).filter(Boolean),
       ).size,
@@ -375,7 +379,7 @@ export class MemberService {
     });
     if (!memberRole) {
       throw new InternalServerErrorException(
-        `Role '${role}' does not exist. Seed Manager, Staff, and Scanner roles first.`,
+        `Role '${role}' does not exist. Seed the team roles first.`,
       );
     }
 

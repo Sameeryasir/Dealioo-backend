@@ -1,5 +1,6 @@
 export const BUSINESS_MEMBER_ROLES = [
   'Owner',
+  'Admin',
   'Manager',
   'Staff',
   'Scanner',
@@ -8,6 +9,7 @@ export const BUSINESS_MEMBER_ROLES = [
 export type BusinessMemberRole = (typeof BUSINESS_MEMBER_ROLES)[number];
 
 export const INVITABLE_BUSINESS_MEMBER_ROLES = [
+  'Admin',
   'Manager',
   'Staff',
   'Scanner',
@@ -16,7 +18,8 @@ export const INVITABLE_BUSINESS_MEMBER_ROLES = [
 export type InvitableBusinessMemberRole =
   (typeof INVITABLE_BUSINESS_MEMBER_ROLES)[number];
 
-export const INVITABLE_ROLE_ERROR = 'Role must be Manager, Staff, or Scanner.';
+export const INVITABLE_ROLE_ERROR =
+  'Role must be Admin, Manager, Staff, or Scanner.';
 
 export const CAMPAIGN_ACTION_PERMISSIONS = [
   'campaigns_create',
@@ -99,7 +102,29 @@ export const DEFAULT_PERMISSIONS_BY_ROLE: Record<
   BusinessMemberPermission[]
 > = {
   Owner: [...BUSINESS_MEMBER_PERMISSIONS],
-  Manager: [...BUSINESS_MEMBER_PERMISSIONS],
+  Admin: [...BUSINESS_MEMBER_PERMISSIONS],
+  Manager: [
+    'campaigns_create',
+    'campaigns_edit',
+    'campaigns_delete',
+    'campaigns_guests',
+    'campaigns_orders',
+    'campaigns_reviews',
+    'meta_campaigns_create',
+    'meta_campaigns_delete',
+    'google_campaigns_create',
+    'google_campaigns_delete',
+    'automations',
+    'automations_create',
+    'automations_edit',
+    'automations_delete',
+    'funnels_edit',
+    'orders',
+    'activity',
+    'history',
+    'chats',
+    'scanning',
+  ],
   Staff: ['orders', 'activity', 'history', 'chats', 'scanning'],
   Scanner: ['scanning', 'orders'],
 };

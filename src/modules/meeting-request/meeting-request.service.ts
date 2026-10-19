@@ -8,6 +8,7 @@ import { QueryFailedError, Repository } from 'typeorm';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { User } from '../../db/entities/user.entity';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
+import { GoogleCalendarService } from '../google-calendar/google-calendar.service';
 import { CreateMeetingRequestDto } from './meetingRequestDto/create-meeting-request.dto';
 
 @Injectable()
@@ -18,11 +19,12 @@ export class MeetingRequestService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly adminNotificationWriter: AdminNotificationWriter,
+    private readonly googleCalendarService: GoogleCalendarService,
   ) {}
 
   async create(dto: CreateMeetingRequestDto): Promise<MeetingRequest> {
     this.assertOpenSlot(dto);
-    const record = this.meetingRequestRepo.create({
+    const draft = this.meetingRequestRepo.create({
       firstName: dto.firstName.trim(),
       lastName: dto.lastName.trim(),
       phone: dto.phone.trim(),
@@ -50,9 +52,16 @@ export class MeetingRequestService {
       scheduledTimeZone: dto.scheduledTimeZone?.trim() || null,
     });
 
+    const event = await this.googleCalendarService.createMeetingEvent(draft);
+    if (event) {
+      draft.googleEventId = event.eventId;
+      draft.googleEventLink = event.htmlLink;
+      draft.googleMeetLink = event.meetLink;
+    }
+
     let saved: MeetingRequest;
     try {
-      saved = await this.meetingRequestRepo.save(record);
+      saved = await this.meetingRequestRepo.save(draft);
     } catch (error) {
       const code =
         error instanceof QueryFailedError
@@ -60,6 +69,9 @@ export class MeetingRequestService {
               .driverError?.code
           : undefined;
       if (code === '23505') {
+        if (event?.created) {
+          await this.googleCalendarService.deleteEvent(event.eventId);
+        }
         throw new ConflictException(
           'That time was just taken. Please pick another time.',
         );

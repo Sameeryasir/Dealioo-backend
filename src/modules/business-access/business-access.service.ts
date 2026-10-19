@@ -60,10 +60,7 @@ export class BusinessAccessService {
         return {
           access: cached.access,
           role: cached.role,
-          permissions:
-            cached.role === 'Manager'
-              ? [...ALL_BUSINESS_MEMBER_PERMISSIONS]
-              : cached.permissions,
+          permissions: cached.permissions,
           businessId,
         };
       }
@@ -80,16 +77,20 @@ export class BusinessAccessService {
 
     const member = await this.getAcceptedMembership(user.id, businessId);
 
-    if (member?.role === 'Owner' || business.owner?.id === user.id) {
+    if (
+      member?.role === 'Owner' ||
+      member?.role === 'Admin' ||
+      business.owner?.id === user.id
+    ) {
       const context: BusinessAccessContext = {
         access: 'owner',
-        role: 'Owner',
+        role: member?.role === 'Admin' ? 'Admin' : 'Owner',
         permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
         businessId,
       };
       await this.membershipCache.set(businessId, user.id, {
         access: 'owner',
-        role: 'Owner',
+        role: context.role,
         status: BUSINESS_MEMBER_STATUS.ACTIVE,
         permissions: context.permissions,
       });
@@ -305,7 +306,7 @@ export class BusinessAccessService {
   private async resolveMemberPermissions(
     member: BusinessMember,
   ): Promise<BusinessMemberPermissionKey[]> {
-    if (member.role === 'Owner' || member.role === 'Manager') {
+    if (member.role === 'Owner' || member.role === 'Admin') {
       return [...ALL_BUSINESS_MEMBER_PERMISSIONS];
     }
 

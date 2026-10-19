@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { User } from '../../db/entities/user.entity';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
+import { GoogleCalendarModule } from '../google-calendar/google-calendar.module';
 import { MeetingRequestController } from './meeting-request.controller';
 import { MeetingRequestService } from './meeting-request.service';
 
@@ -10,6 +11,7 @@ import { MeetingRequestService } from './meeting-request.service';
   imports: [
     TypeOrmModule.forFeature([MeetingRequest, User]),
     AdminNotificationsModule,
+    GoogleCalendarModule,
   ],
   controllers: [MeetingRequestController],
   providers: [MeetingRequestService],
