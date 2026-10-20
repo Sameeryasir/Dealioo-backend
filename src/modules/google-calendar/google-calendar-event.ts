@@ -69,42 +69,6 @@ type CalendarEventsApi = {
   }) => Promise<{ data: CalendarEventResource }>;
 };
 
-const ROLE_LABELS: Record<string, string> = {
-  business_owner: 'Business owner',
-  in_house_marketer: 'In-house marketer',
-  marketing_agency: 'Marketing agency',
-  consultant_partner: 'Consultant or partner',
-};
-
-const REVENUE_LABELS: Record<string, string> = {
-  under_50k: 'Under $50,000',
-  '50k_100k': '$50,000 to $100,000',
-  '100k_250k': '$100,000 to $250,000',
-  '250k_plus': 'Over $250,000',
-  '1m_plus': 'Over $1 million',
-  '10m_plus': 'Over $10 million',
-};
-
-const ACTIVITY_LABELS: Record<string, string> = {
-  paid_ads: 'Paid ads on Meta, Google, or TikTok',
-  organic_social: 'Organic social content',
-  influencer: 'Influencer marketing',
-  sms_email: 'SMS or email marketing',
-  loyalty_program: 'Loyalty program',
-  other: 'Other',
-};
-
-const TIMELINE_LABELS: Record<string, string> = {
-  immediately: 'Start right away',
-  one_to_three_months: 'Start in 1 to 3 months',
-  just_exploring: 'Just exploring',
-};
-
-const COMMITMENT_LABELS: Record<string, string> = {
-  yes: 'Yes, I will come prepared',
-  not_sure: 'No, I am not sure yet',
-};
-
 export function buildMeetingCalendarEvent(
   meeting: MeetingRequest,
 ): CalendarEventRequest {
@@ -249,15 +213,6 @@ function meetingDescription(
   schedule: { start: string; end: string; timeZone: string },
 ): string {
   const fullName = `${meeting.firstName} ${meeting.lastName}`.trim();
-  const activities = (meeting.marketingActivities ?? [])
-    .map((item) => labeled(ACTIVITY_LABELS, item))
-    .filter(Boolean)
-    .join(', ');
-  const revenue = labeled(REVENUE_LABELS, meeting.monthlyRevenue);
-  const revenueLine = [revenue, text(meeting.currency)]
-    .filter(Boolean)
-    .join(' ');
-
   const sections = [
     section('Meeting information', [
       field('Booking ID', meeting.id),
@@ -275,29 +230,6 @@ function meetingDescription(
       field('Last name', meeting.lastName),
       field('Full name', fullName),
       field('Email', meeting.email),
-    ]),
-    section('Business information', [
-      field('Business name', meeting.businessName),
-      field('Business category', meeting.businessCategory),
-      field('Business phone', meeting.businessPhone),
-      field('Business email', meeting.businessEmail),
-      field('Website', meeting.website),
-      field('City', meeting.cityLocation),
-      field('State', meeting.state),
-      field('Country', meeting.country),
-      field('Postal code', meeting.postalCode),
-    ]),
-    section('Consultation context', [
-      field('Business role', labeled(ROLE_LABELS, meeting.businessRole)),
-      field('Monthly revenue', revenueLine),
-      field('Current marketing', activities),
-      field('Current situation', meeting.currentSituation),
-      field('Start timeline', labeled(TIMELINE_LABELS, meeting.startTimeline)),
-      field(
-        'Meeting commitment',
-        labeled(COMMITMENT_LABELS, meeting.meetingCommitment),
-      ),
-      field('Notes', meeting.description),
     ]),
   ].filter((part): part is string => Boolean(part));
 
@@ -322,15 +254,6 @@ function field(
 function text(value: string | number | null | undefined): string {
   if (value == null) return '';
   return String(value).trim();
-}
-
-function labeled(
-  labels: Record<string, string>,
-  value: string | null | undefined,
-): string {
-  const raw = text(value);
-  if (!raw) return '';
-  return labels[raw] ?? raw;
 }
 
 function meetingAttendees(visitorEmail?: string | null) {
