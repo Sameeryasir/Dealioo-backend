@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { PlatformAdminAuditLog } from '../../db/entities/platform-admin-audit-log.entity';
 import { Role } from '../../db/entities/role.entity';
@@ -24,6 +25,7 @@ import { SuperAdminGuard } from './super-admin.guard';
       UserSubscription,
       AdminNotification,
       MeetingRequest,
+      CustomerOnboarding,
       PlatformAdminAuditLog,
     ]),
   ],

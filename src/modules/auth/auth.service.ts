@@ -19,6 +19,7 @@ import { JwtService } from '@nestjs/jwt';
 import { render } from '@react-email/render';
 import * as React from 'react';
 import { OtpEmail } from '../../templates/otp-email';
+import { SetPasswordEmail } from '../../templates/set-password-email';
 import { Business } from '../../db/entities/business.entity';
 import {
   BusinessInvitation,
@@ -923,6 +924,45 @@ export class AuthService {
     await this.sendOtpForUser(user);
 
     return { message: 'OTP sent successfully.' };
+  }
+
+  async sendSetPasswordSetupEmail(
+    user: User,
+    options?: { businessName?: string | null },
+  ): Promise<{ setPasswordUrl: string }> {
+    const email = user.email.trim().toLowerCase();
+    const setPasswordUrl = `${getFrontendBaseUrl()}/auth/login?setPassword=1&email=${encodeURIComponent(email)}`;
+    const subject =
+      process.env.MAIL_SET_PASSWORD_SUBJECT ?? 'Set your Dealioo password';
+    const html = await render(
+      React.createElement(SetPasswordEmail, {
+        name: user.name,
+        email,
+        setPasswordUrl,
+        businessName: options?.businessName ?? null,
+      }),
+    );
+    const text = [
+      `Hi ${user.name?.trim() || email},`,
+      '',
+      options?.businessName?.trim()
+        ? `Your business (${options.businessName.trim()}) is ready on Dealioo.`
+        : 'Your Dealioo account is ready.',
+      '',
+      'Set your password here:',
+      setPasswordUrl,
+      '',
+      'You will receive a verification code on the next step, then choose your password.',
+    ].join('\n');
+
+    await this.sendMail({
+      to: email,
+      subject,
+      html,
+      text,
+    });
+
+    return { setPasswordUrl };
   }
 
   private async sendOtpForUser(user: User): Promise<void> {

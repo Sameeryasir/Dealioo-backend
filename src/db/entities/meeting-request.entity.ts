@@ -96,6 +96,24 @@ export class MeetingRequest {
   @Column({ name: 'google_meet_link', type: 'varchar', length: 512, nullable: true })
   googleMeetLink: string | null;
 
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  attendance: string | null;
+
+  @Column({ name: 'sales_outcome', type: 'varchar', length: 32, nullable: true })
+  salesOutcome: string | null;
+
+  @Column({ name: 'meeting_notes', type: 'text', nullable: true })
+  meetingNotes: string | null;
+
+  @Column({ name: 'follow_up_notes', type: 'text', nullable: true })
+  followUpNotes: string | null;
+
+  @Column({ name: 'outcome_updated_at', type: 'timestamptz', nullable: true })
+  outcomeUpdatedAt: Date | null;
+
+  @Column({ name: 'outcome_updated_by', type: 'int', nullable: true })
+  outcomeUpdatedBy: number | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

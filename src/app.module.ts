@@ -48,6 +48,7 @@ import { SmsModule } from './modules/sms/sms.module';
 import { SpacesModule } from './modules/spaces/spaces.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { AiModule } from './modules/ai/ai.module';
+import { CustomerOnboardingModule } from './modules/customer-onboarding/customer-onboarding.module';
 import { PlatformAdminModule } from './modules/platform-admin/platform-admin.module';
 
 @Module({
@@ -120,6 +121,7 @@ import { PlatformAdminModule } from './modules/platform-admin/platform-admin.mod
     BillingModule,
     IntegrationAuditModule,
     PlatformAdminModule,
+    CustomerOnboardingModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

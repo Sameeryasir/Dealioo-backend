@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, MoreThanOrEqual, Repository } from 'typeorm';
+import { Between, In, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -15,10 +15,12 @@ import {
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
+import { CUSTOMER_ONBOARDING_STATUS } from '../customer-onboarding/customer-onboarding.constants';
 import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { ALL_BUSINESS_MEMBER_PERMISSIONS } from '../member/member.constants';
 import * as bcrypt from 'bcrypt';
@@ -216,6 +218,8 @@ export class PlatformAdminService {
     private readonly adminNotificationRepository: Repository<AdminNotification>,
     @InjectRepository(MeetingRequest)
     private readonly meetingRequestRepository: Repository<MeetingRequest>,
+    @InjectRepository(CustomerOnboarding)
+    private readonly customerOnboardingRepository: Repository<CustomerOnboarding>,
     @InjectRepository(PlatformAdminAuditLog)
     private readonly auditLogRepository: Repository<PlatformAdminAuditLog>,
     private readonly jwtStrategy: JwtStrategy,
@@ -332,7 +336,61 @@ export class PlatformAdminService {
     return qb.getCount();
   }
 
-  async getMeetingRequests(actor: User): Promise<{
+  async getMeetingRequestsSummary(actor: User): Promise<{
+    total: number;
+    upcoming: number;
+    past: number;
+    attended: number;
+    onboardingStarted: number;
+    createdThisWeek: number;
+  }> {
+    this.assertSuperAdmin(actor);
+    const rows = await this.meetingRequestRepository.find({
+      select: [
+        'id',
+        'scheduledDate',
+        'scheduledTime',
+        'scheduledDuration',
+        'scheduledTimeZone',
+        'attendance',
+        'salesOutcome',
+        'createdAt',
+      ],
+      order: { id: 'DESC' },
+      take: 2000,
+    });
+    const now = Date.now();
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    let upcoming = 0;
+    let attended = 0;
+    let createdThisWeek = 0;
+    for (const row of rows) {
+      const dealWon = row.salesOutcome === 'DEAL_WON';
+      if (isUpcomingMeeting(row, now) && !dealWon) upcoming += 1;
+      if (row.attendance === 'ATTENDED') attended += 1;
+      if (row.createdAt.getTime() >= weekAgo) createdThisWeek += 1;
+    }
+    const onboardingStarted = await this.customerOnboardingRepository.count({
+      where: { status: Not(CUSTOMER_ONBOARDING_STATUS.CANCELLED) },
+    });
+    return {
+      total: rows.length,
+      upcoming,
+      past: rows.length - upcoming,
+      attended,
+      onboardingStarted,
+      createdThisWeek,
+    };
+  }
+
+  async getMeetingRequests(
+    actor: User,
+    scope: 'upcoming' | 'past' | 'deal_won' | 'all' = 'all',
+    page?: number,
+    limit?: number,
+    searchRaw?: string,
+    sort: 'meeting_asc' | 'meeting_desc' | 'newest' | 'oldest' = 'meeting_asc',
+  ): Promise<{
     total: number;
     items: Array<{
       id: number;
@@ -363,54 +421,237 @@ export class PlatformAdminService {
       currency: string | null;
       googleEventLink: string | null;
       googleMeetLink: string | null;
+      attendance: string | null;
+      salesOutcome: string | null;
+      meetingNotes: string | null;
+      followUpNotes: string | null;
+      outcomeUpdatedAt: Date | null;
+      outcomeUpdatedBy: number | null;
+      onboardingId: number | null;
+      onboardingStatus: string | null;
+      businessId: number | null;
+      userId: number | null;
       createdAt: Date;
     }>;
+    meta: PaginationMeta;
+    counts: {
+      upcoming: number;
+      past: number;
+      dealWon: number;
+      all: number;
+    };
   }> {
     this.assertSuperAdmin(actor);
+    const pagination = normalizePagination(page, limit);
+    const search = searchRaw?.trim().toLowerCase() ?? '';
 
     const rows = await this.meetingRequestRepository.find({
       order: { createdAt: 'DESC' },
+      take: 2000,
     });
-    const upcoming = rows.filter((row) => isFutureMeeting(row));
-    const items = upcoming.slice(0, 200);
-    const total = upcoming.length;
+
+    const now = Date.now();
+    let upcomingCount = 0;
+    let pastCount = 0;
+    let dealWonCount = 0;
+    const scoped = rows.filter((row) => {
+      const upcoming = isUpcomingMeeting(row, now);
+      const dealWon = row.salesOutcome === 'DEAL_WON';
+      if (upcoming && !dealWon) upcomingCount += 1;
+      else if (!dealWon) pastCount += 1;
+      if (dealWon) dealWonCount += 1;
+      if (scope === 'upcoming') return upcoming && !dealWon;
+      if (scope === 'past') return !upcoming && !dealWon;
+      if (scope === 'deal_won') return dealWon;
+      return true;
+    });
+
+    const searched = search
+      ? scoped.filter((row) => {
+          const haystack = [
+            row.firstName,
+            row.lastName,
+            row.email,
+            row.phone,
+            row.businessName,
+            row.businessCategory,
+            String(row.id),
+          ]
+            .join(' ')
+            .toLowerCase();
+          return haystack.includes(search);
+        })
+      : scoped;
+
+    searched.sort((a, b) => {
+      if (sort === 'oldest') {
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      }
+      if (sort === 'newest') {
+        return b.createdAt.getTime() - a.createdAt.getTime();
+      }
+      const aKey = `${a.scheduledDate ?? ''}T${a.scheduledTime ?? ''}`;
+      const bKey = `${b.scheduledDate ?? ''}T${b.scheduledTime ?? ''}`;
+      if (aKey !== bKey) {
+        return sort === 'meeting_desc'
+          ? bKey.localeCompare(aKey)
+          : aKey.localeCompare(bKey);
+      }
+      return b.id - a.id;
+    });
+
+    const total = searched.length;
+    const pageRows = searched.slice(
+      pagination.skip,
+      pagination.skip + pagination.limit,
+    );
+
+    const onboardingLinks =
+      pageRows.length === 0
+        ? []
+        : await this.customerOnboardingRepository.find({
+            where: {
+              meetingId: In(pageRows.map((row) => row.id)),
+              status: Not(CUSTOMER_ONBOARDING_STATUS.CANCELLED),
+            },
+            select: ['id', 'meetingId', 'status', 'businessId', 'userId'],
+          });
+
+    const onboardingByMeeting = new Map(
+      onboardingLinks.map((row) => [row.meetingId, row]),
+    );
+
+    const businessIds = [
+      ...new Set(
+        onboardingLinks
+          .map((row) => row.businessId)
+          .filter((id): id is number => typeof id === 'number' && id > 0),
+      ),
+    ];
+    const activeBusinessIds = new Set<number>();
+    if (businessIds.length > 0) {
+      const activeBusinesses = await this.businessRepository.find({
+        where: { id: In(businessIds) },
+        select: ['id'],
+      });
+      for (const business of activeBusinesses) {
+        activeBusinessIds.add(business.id);
+      }
+    }
 
     return {
       total,
-      items: items.map((row) => ({
-        id: row.id,
-        firstName: row.firstName,
-        lastName: row.lastName,
-        email: row.email,
-        phone: row.phone,
-        businessName: row.businessName,
-        businessRole: row.businessRole,
-        businessCategory: row.businessCategory,
-        cityLocation: row.cityLocation,
-        monthlyRevenue: row.monthlyRevenue,
-        marketingActivities: Array.isArray(row.marketingActivities)
-          ? row.marketingActivities
-          : [],
-        currentSituation: row.currentSituation,
-        startTimeline: row.startTimeline,
-        meetingCommitment: row.meetingCommitment,
-        scheduledDate: row.scheduledDate,
-        scheduledTime: row.scheduledTime,
-        scheduledDuration: row.scheduledDuration,
-        scheduledTimeZone: row.scheduledTimeZone,
-        businessPhone: row.businessPhone,
-        businessEmail: row.businessEmail,
-        website: row.website,
-        description: row.description,
-        state: row.state,
-        postalCode: row.postalCode,
-        country: row.country,
-        currency: row.currency,
-        googleEventLink: row.googleEventLink,
-        googleMeetLink: row.googleMeetLink,
-        createdAt: row.createdAt,
-      })),
+      items: pageRows.map((row) => {
+        const onboarding = onboardingByMeeting.get(row.id);
+        const linkedBusinessId = onboarding?.businessId ?? null;
+        const activeBusinessId =
+          linkedBusinessId != null && activeBusinessIds.has(linkedBusinessId)
+            ? linkedBusinessId
+            : null;
+        return {
+          id: row.id,
+          firstName: row.firstName,
+          lastName: row.lastName,
+          email: row.email,
+          phone: row.phone,
+          businessName: row.businessName,
+          businessRole: row.businessRole,
+          businessCategory: row.businessCategory,
+          cityLocation: row.cityLocation,
+          monthlyRevenue: row.monthlyRevenue,
+          marketingActivities: Array.isArray(row.marketingActivities)
+            ? row.marketingActivities
+            : [],
+          currentSituation: row.currentSituation,
+          startTimeline: row.startTimeline,
+          meetingCommitment: row.meetingCommitment,
+          scheduledDate: row.scheduledDate,
+          scheduledTime: row.scheduledTime,
+          scheduledDuration: row.scheduledDuration,
+          scheduledTimeZone: row.scheduledTimeZone,
+          businessPhone: row.businessPhone,
+          businessEmail: row.businessEmail,
+          website: row.website,
+          description: row.description,
+          state: row.state,
+          postalCode: row.postalCode,
+          country: row.country,
+          currency: row.currency,
+          googleEventLink: row.googleEventLink,
+          googleMeetLink: row.googleMeetLink,
+          attendance: row.attendance,
+          salesOutcome: row.salesOutcome,
+          meetingNotes: row.meetingNotes,
+          followUpNotes: row.followUpNotes,
+          outcomeUpdatedAt: row.outcomeUpdatedAt,
+          outcomeUpdatedBy: row.outcomeUpdatedBy,
+          onboardingId: onboarding?.id ?? null,
+          onboardingStatus: onboarding?.status ?? null,
+          businessId: activeBusinessId,
+          userId: activeBusinessId ? (onboarding?.userId ?? null) : null,
+          createdAt: row.createdAt,
+        };
+      }),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      counts: {
+        upcoming: upcomingCount,
+        past: pastCount,
+        dealWon: dealWonCount,
+        all: rows.length,
+      },
     };
+  }
+
+  async exportMeetingRequestsCsv(
+    actor: User,
+    scope: 'upcoming' | 'past' | 'deal_won' | 'all' = 'all',
+    search?: string,
+  ): Promise<string> {
+    const result = await this.getMeetingRequests(
+      actor,
+      scope,
+      1,
+      2000,
+      search,
+      'meeting_asc',
+    );
+    const header = [
+      'id',
+      'visitor',
+      'email',
+      'phone',
+      'business',
+      'category',
+      'scheduledDate',
+      'scheduledTime',
+      'timeZone',
+      'attendance',
+      'salesOutcome',
+      'onboardingId',
+      'onboardingStatus',
+      'createdAt',
+    ];
+    const lines = result.items.map((row) =>
+      [
+        row.id,
+        `${row.firstName} ${row.lastName}`.trim(),
+        row.email,
+        row.phone,
+        row.businessName,
+        row.businessCategory,
+        row.scheduledDate ?? '',
+        row.scheduledTime ?? '',
+        row.scheduledTimeZone ?? '',
+        row.attendance ?? '',
+        row.salesOutcome ?? '',
+        row.onboardingId ?? '',
+        row.onboardingStatus ?? '',
+        row.createdAt.toISOString(),
+      ]
+        .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+        .join(','),
+    );
+    return [header.join(','), ...lines].join('\n');
   }
 
   async getNotifications(
@@ -2065,4 +2306,15 @@ function isFutureMeeting(row: MeetingRequest, now = Date.now()): boolean {
   } catch {
     return false;
   }
+}
+
+function isUpcomingMeeting(row: MeetingRequest, now = Date.now()): boolean {
+  if (
+    row.attendance === 'CANCELLED' ||
+    row.attendance === 'NO_SHOW' ||
+    row.attendance === 'ATTENDED'
+  ) {
+    return false;
+  }
+  return isFutureMeeting(row, now);
 }

@@ -3,6 +3,7 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
@@ -10,8 +11,10 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { User } from '../../db/entities/user.entity';
@@ -162,8 +165,70 @@ export class PlatformAdminController {
     return this.platformAdminService.markNotificationRead(req.user, id);
   }
 
+  @Get('meeting-requests/summary')
+  getMeetingRequestsSummary(@Req() req: { user: User }) {
+    return this.platformAdminService.getMeetingRequestsSummary(req.user);
+  }
+
+  @Get('meeting-requests/export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportMeetingRequests(
+    @Req() req: { user: User },
+    @Res() res: Response,
+    @Query('scope') scopeRaw?: string,
+    @Query('search') search?: string,
+  ) {
+    const normalized = scopeRaw?.trim().toLowerCase();
+    const scope =
+      normalized === 'upcoming' ||
+      normalized === 'past' ||
+      normalized === 'deal_won' ||
+      normalized === 'all'
+        ? normalized
+        : 'all';
+    const csv = await this.platformAdminService.exportMeetingRequestsCsv(
+      req.user,
+      scope,
+      search,
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="meeting-requests-${scope}.csv"`,
+    );
+    res.send(csv);
+  }
+
   @Get('meeting-requests')
-  getMeetingRequests(@Req() req: { user: User }) {
-    return this.platformAdminService.getMeetingRequests(req.user);
+  getMeetingRequests(
+    @Req() req: { user: User },
+    @Query('scope') scopeRaw?: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page?: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit?: number,
+    @Query('search') search?: string,
+    @Query('sort') sortRaw?: string,
+  ) {
+    const normalized = scopeRaw?.trim().toLowerCase();
+    const scope =
+      normalized === 'upcoming' ||
+      normalized === 'past' ||
+      normalized === 'deal_won' ||
+      normalized === 'all'
+        ? normalized
+        : 'upcoming';
+    const sort =
+      sortRaw === 'meeting_desc' ||
+      sortRaw === 'newest' ||
+      sortRaw === 'oldest' ||
+      sortRaw === 'meeting_asc'
+        ? sortRaw
+        : 'meeting_asc';
+    return this.platformAdminService.getMeetingRequests(
+      req.user,
+      scope,
+      page,
+      limit,
+      search,
+      sort,
+    );
   }
 }

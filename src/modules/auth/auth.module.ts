@@ -55,6 +55,6 @@ import { AdminNotification } from '../../db/entities/admin-notification.entity';
   ],
   providers: [AuthService, JwtStrategy, GoogleOAuthService],
   controllers: [AuthController],
-  exports: [PassportModule, JwtModule, JwtStrategy],
+  exports: [PassportModule, JwtModule, JwtStrategy, AuthService],
 })
 export class AuthModule {}
