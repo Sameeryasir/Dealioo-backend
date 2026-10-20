@@ -8,7 +8,7 @@ import { User } from '../../../db/entities/user.entity';
 import { ACCESS_TOKEN_COOKIE, readCookie } from '../auth-cookies';
 import { JwtAccessPayload } from './jwt-access-payload.interface';
 
-const USER_VALIDATE_CACHE_TTL_MS = 60_000;
+const USER_VALIDATE_CACHE_TTL_MS = 10_000;
 
 type CachedAuthUser = {
   id: number;
@@ -82,5 +82,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
 
     return authUser;
+  }
+
+  invalidateUserCache(userId: number): void {
+    this.validateCache.delete(userId);
   }
 }

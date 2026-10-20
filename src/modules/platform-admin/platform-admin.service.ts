@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,15 +14,60 @@ import {
 } from '../../common/pagination';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessMember } from '../../db/entities/business-member.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
-import {
-  FunnelPayment,
-  FunnelPaymentStatus,
-} from '../../db/entities/funnel-payment.entity';
-import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
+import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
-import { isSuperAdmin } from '../../utils/user-roles';
+import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
+import { ALL_BUSINESS_MEMBER_PERMISSIONS } from '../member/member.constants';
+import * as bcrypt from 'bcrypt';
+import {
+  isValidBusinessSlug,
+  slugifyBusinessName,
+} from '../../utils/business-slug';
+import {
+  ADMIN_ROLE,
+  isSuperAdmin,
+  isSuperAdminRole,
+  PLATFORM_ROLES,
+  SUPER_ADMIN_ROLE,
+} from '../../utils/user-roles';
+import { computeBusinessSetupProgressFromEntity } from '../business/business-setup-progress';
+import { PlatformAdminAuditLog } from '../../db/entities/platform-admin-audit-log.entity';
+import { JwtStrategy } from '../auth/jwt/jwt.strategy';
+import { CreateAdminBusinessDto } from './dto/create-admin-business.dto';
+import { CreateAdminUserDto } from './dto/create-admin-user.dto';
+import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
+
+export type AdminUsersTab =
+  | 'all'
+  | 'active'
+  | 'inactive'
+  | 'admins'
+  | 'managers'
+  | 'viewers';
+
+export type AdminUsersSort = 'newest' | 'oldest' | 'name_asc' | 'name_desc';
+
+export type AdminUsersSummary = {
+  total: number;
+  newUsers: number;
+  active: number;
+  inactive: number;
+  totalChangePct: number;
+  newUsersChangePct: number;
+  activeSharePct: number;
+  inactiveSharePct: number;
+  tabs: {
+    all: number;
+    active: number;
+    inactive: number;
+    admins: number;
+    managers: number;
+    viewers: number;
+  };
+};
 import {
   addMinutes,
   zonedDateTime,
@@ -31,6 +77,37 @@ import {
   overviewRangeBucketSql,
   resolveSafeTimeZone,
 } from '../funnel-event/overview-monthly.util';
+import { buildRegionBreakdownFromCountryCounts } from './platform-admin-regions';
+
+export type PlatformDashboardPeriod = 'today' | 'week' | 'month' | 'year';
+
+export type PlatformDashboardKpi = {
+  value: number;
+  changePct: number;
+  sparkline: number[];
+  hint: string;
+};
+
+export type PlatformDashboardPanel = {
+  period: PlatformDashboardPeriod;
+  label: string;
+  from: string;
+  to: string;
+  kpis: {
+    mrr: PlatformDashboardKpi;
+    planEarnings: PlatformDashboardKpi;
+    platformUsers: PlatformDashboardKpi;
+    payingSubscriptions: PlatformDashboardKpi;
+    newPlans: PlatformDashboardKpi;
+  };
+  charts: {
+    planEarnings: Array<{ label: string; value: number }>;
+    subscriptions: Array<{ label: string; value: number }>;
+    users: Array<{ label: string; value: number }>;
+    businesses: Array<{ label: string; value: number }>;
+  };
+  regions: Array<{ region: string; count: number; sharePct: number }>;
+};
 
 function startOfDay(d: Date): Date {
   const x = new Date(d);
@@ -71,6 +148,7 @@ export type PlatformAdminOverview = {
       planSlug: string;
       planName: string;
       count: number;
+      mrrCents: number;
     }>;
   };
   businesses: Array<{
@@ -81,12 +159,16 @@ export type PlatformAdminOverview = {
     city: string | null;
     state: string | null;
     country: string | null;
+    postalCode: string | null;
     email: string | null;
     phoneNumber: string | null;
     onboardingCompleted: boolean;
     stripeConnected: boolean;
     metaConnected: boolean;
+    googleAdsConnected: boolean;
     twilioConnected: boolean;
+    setupProgressPercent: number;
+    setupComplete: boolean;
     createdAt: Date;
     ownerName: string | null;
     ownerEmail: string | null;
@@ -108,6 +190,12 @@ export type PlatformAdminOverview = {
     lastLoginAt: Date | null;
     planName: string | null;
     planSlug: string | null;
+    businesses: Array<{
+      id: number;
+      name: string;
+      role: string;
+      logoUrl: string | null;
+    }>;
   }>;
 };
 
@@ -116,16 +204,21 @@ export class PlatformAdminService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Role)
+    private readonly roleRepository: Repository<Role>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    @InjectRepository(FunnelPayment)
-    private readonly funnelPaymentRepository: Repository<FunnelPayment>,
+    @InjectRepository(BusinessMember)
+    private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(UserSubscription)
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(AdminNotification)
     private readonly adminNotificationRepository: Repository<AdminNotification>,
     @InjectRepository(MeetingRequest)
     private readonly meetingRequestRepository: Repository<MeetingRequest>,
+    @InjectRepository(PlatformAdminAuditLog)
+    private readonly auditLogRepository: Repository<PlatformAdminAuditLog>,
+    private readonly jwtStrategy: JwtStrategy,
   ) {}
 
   private assertSuperAdmin(user: User): void {
@@ -136,19 +229,107 @@ export class PlatformAdminService {
     }
   }
 
-  private paidPaymentQuery(from: Date, toExclusive?: Date) {
-    const qb = this.funnelPaymentRepository
-      .createQueryBuilder('payment')
-      .where('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
-      .andWhere('COALESCE(payment.paidAt, payment.createdAt) >= :from', {
-        from,
-      });
-    if (toExclusive) {
-      qb.andWhere('COALESCE(payment.paidAt, payment.createdAt) < :to', {
-        to: toExclusive,
-      });
+  private async writeAudit(input: {
+    actorUserId: number;
+    action: string;
+    targetType: string;
+    targetId?: string | number | null;
+    metadata?: Record<string, unknown> | null;
+  }): Promise<void> {
+    try {
+      await this.auditLogRepository.save(
+        this.auditLogRepository.create({
+          actorUserId: input.actorUserId,
+          action: input.action,
+          targetType: input.targetType,
+          targetId:
+            input.targetId == null ? null : String(input.targetId),
+          metadata: input.metadata ?? null,
+        }),
+      );
+    } catch {
+      return;
     }
-    return qb;
+  }
+
+  private toAdminUserItem(
+    user: User,
+    plan: { planName: string; planSlug: string } | null = null,
+    businesses: PlatformAdminOverview['users'][number]['businesses'] = [],
+  ): PlatformAdminOverview['users'][number] {
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      avatar: user.avatar ?? null,
+      roleName: user.role?.name ?? null,
+      isActive: user.isActive,
+      emailVerified: user.emailVerified,
+      provider: user.provider,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt,
+      planName: plan?.planName ?? null,
+      planSlug: plan?.planSlug ?? null,
+      businesses,
+    };
+  }
+
+  private async loadBusinessMapForUserIds(
+    userIds: number[],
+  ): Promise<Map<number, PlatformAdminOverview['users'][number]['businesses']>> {
+    const map = new Map<
+      number,
+      PlatformAdminOverview['users'][number]['businesses']
+    >();
+    if (userIds.length === 0) return map;
+
+    const memberships = await this.businessMemberRepository
+      .createQueryBuilder('bm')
+      .innerJoinAndSelect('bm.business', 'business')
+      .innerJoinAndSelect('bm.user', 'memberUser')
+      .where('memberUser.id IN (:...userIds)', { userIds })
+      .andWhere('bm.status = :status', {
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
+      })
+      .orderBy('business.name', 'ASC')
+      .getMany();
+
+    for (const membership of memberships) {
+      const memberUserId = membership.user?.id;
+      const business = membership.business;
+      if (!memberUserId || !business) continue;
+      const list = map.get(memberUserId) ?? [];
+      list.push({
+        id: business.id,
+        name: business.name,
+        role: membership.role,
+        logoUrl: business.logoUrl ?? null,
+      });
+      map.set(memberUserId, list);
+    }
+
+    return map;
+  }
+
+  private readonly usersWithBusinessRolesSql = `EXISTS (
+    SELECT 1
+    FROM business_members bm
+    WHERE bm.user_id = u.id
+      AND bm.status = :bmStatus
+      AND bm.role IN (:...bmRoles)
+  )`;
+
+  private async countSuperAdmins(excludeUserId?: number): Promise<number> {
+    const qb = this.userRepository
+      .createQueryBuilder('u')
+      .innerJoin('u.role', 'role')
+      .where('role.name = :roleName', { roleName: SUPER_ADMIN_ROLE })
+      .andWhere('u.isActive = true');
+    if (excludeUserId != null) {
+      qb.andWhere('u.id != :excludeUserId', { excludeUserId });
+    }
+    return qb.getCount();
   }
 
   async getMeetingRequests(actor: User): Promise<{
@@ -369,10 +550,14 @@ export class PlatformAdminService {
     to: string;
     totalRevenueCents: number;
     newBusinesses: number;
+    newUsers: number;
+    newSubscriptions: number;
     points: Array<{
       bucket: string;
       revenueCents: number;
       businesses: number;
+      users: number;
+      subscriptions: number;
     }>;
   }> {
     this.assertSuperAdmin(actor);
@@ -393,22 +578,40 @@ export class PlatformAdminService {
 
     const chartTz = resolveSafeTimeZone(timeZoneRaw);
     const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
-    const paymentTime = 'COALESCE(payment.paid_at, payment.created_at)';
-    const paymentBucket = overviewRangeBucketSql(paymentTime, sameDay, chartTz);
+    const startedAt = 'COALESCE(sub.started_at, sub.created_at)';
+    const subscriptionBucket = overviewRangeBucketSql(
+      startedAt,
+      sameDay,
+      chartTz,
+    );
     const businessBucket = overviewRangeBucketSql(
       'b.created_at',
       sameDay,
       chartTz,
     );
+    const userBucket = overviewRangeBucketSql(
+      'u.created_at',
+      sameDay,
+      chartTz,
+    );
+    const subscriptionAmountSql = `
+      CASE
+        WHEN sub.billing_cycle = 'annual'
+          THEN COALESCE(plan."yearlyPrice", 0) * 100
+        ELSE COALESCE(plan."monthlyPrice", 0) * 100
+      END
+    `;
 
-    const [revenueRows, businessRows] = await Promise.all([
-      this.paidPaymentQuery(from)
-        .select(paymentBucket, 'bucket')
-        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
-        .andWhere('COALESCE(payment.paidAt, payment.createdAt) <= :rangeEnd', {
-          rangeEnd: to,
-        })
-        .groupBy(paymentBucket)
+    const [revenueRows, businessRows, userRows] = await Promise.all([
+      this.subscriptionRepository
+        .createQueryBuilder('sub')
+        .innerJoin('sub.plan', 'plan')
+        .select(subscriptionBucket, 'bucket')
+        .addSelect(`COALESCE(SUM(${subscriptionAmountSql}), 0)`, 'total')
+        .addSelect('COUNT(*)', 'count')
+        .where(`${startedAt} >= :from`, { from })
+        .andWhere(`${startedAt} <= :to`, { to })
+        .groupBy(subscriptionBucket)
         .getRawMany<Record<string, string>>(),
       this.businessRepository
         .createQueryBuilder('b')
@@ -418,21 +621,43 @@ export class PlatformAdminService {
         .andWhere('b.created_at <= :to', { to })
         .groupBy(businessBucket)
         .getRawMany<{ bucket: string; count: string }>(),
+      this.userRepository
+        .createQueryBuilder('u')
+        .select(userBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('u.created_at >= :from', { from })
+        .andWhere('u.created_at <= :to', { to })
+        .groupBy(userBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
     ]);
 
     const revenueMap = new Map(
       revenueRows.map((row) => [
         String(row.bucket ?? ''),
-        Number(row.total) || 0,
+        Math.round(Number(row.total) || 0),
+      ]),
+    );
+    const subscriptionMap = new Map(
+      revenueRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
       ]),
     );
     const businessMap = new Map(
-      businessRows.map((row) => [row.bucket, Number(row.count) || 0]),
+      businessRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
+      ]),
+    );
+    const userMap = new Map(
+      userRows.map((row) => [String(row.bucket ?? ''), Number(row.count) || 0]),
     );
     const points = keys.map((bucket) => ({
       bucket,
       revenueCents: revenueMap.get(bucket) ?? 0,
       businesses: businessMap.get(bucket) ?? 0,
+      users: userMap.get(bucket) ?? 0,
+      subscriptions: subscriptionMap.get(bucket) ?? 0,
     }));
 
     return {
@@ -443,6 +668,11 @@ export class PlatformAdminService {
         0,
       ),
       newBusinesses: points.reduce((sum, point) => sum + point.businesses, 0),
+      newUsers: points.reduce((sum, point) => sum + point.users, 0),
+      newSubscriptions: points.reduce(
+        (sum, point) => sum + point.subscriptions,
+        0,
+      ),
       points,
     };
   }
@@ -452,12 +682,1064 @@ export class PlatformAdminService {
     return this.computeKpis();
   }
 
+  async getDashboardPanel(
+    actor: User,
+    periodRaw?: string,
+    monthKeyRaw?: string,
+    timeZoneRaw?: string,
+  ): Promise<PlatformDashboardPanel> {
+    this.assertSuperAdmin(actor);
+
+    const period = normalizeDashboardPeriod(periodRaw);
+    const chartTz = resolveSafeTimeZone(timeZoneRaw);
+    const { from, to, label, priorFrom, priorTo, useMonthBuckets } =
+      resolveDashboardWindow(period, monthKeyRaw, chartTz);
+
+    const day30Ago = addDays(startOfDay(new Date()), -29);
+    const day60Ago = addDays(startOfDay(new Date()), -59);
+
+    const [
+      trendCurrent,
+      trendPrior,
+      mrrNow,
+      mrrAtPeriodStart,
+      totalUsers,
+      usersLast30,
+      usersPrev30,
+      countryCounts,
+    ] = await Promise.all([
+      this.computeTrendWindow(from, to, chartTz, useMonthBuckets),
+      this.computeTrendWindow(priorFrom, priorTo, chartTz, useMonthBuckets),
+      this.computePlatformMrrSnapshot(),
+      this.computePlatformMrrSnapshot(from),
+      this.userRepository.count(),
+      this.userRepository.count({
+        where: { createdAt: MoreThanOrEqual(day30Ago) },
+      }),
+      this.userRepository.count({
+        where: { createdAt: Between(day60Ago, day30Ago) },
+      }),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .select('b.country', 'country')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('b.country')
+        .getRawMany<{ country: string | null; count: string }>(),
+    ]);
+
+    const spark = (points: number[]) =>
+      points.length > 0 ? points.slice(-12) : [0];
+
+    const earningsSpark = spark(
+      trendCurrent.points.map((point) => point.revenueCents / 100),
+    );
+    const subsSpark = spark(
+      trendCurrent.points.map((point) => point.subscriptions),
+    );
+    const usersSpark = spark(trendCurrent.points.map((point) => point.users));
+
+    const chartLabel = (bucket: string) =>
+      formatDashboardBucketLabel(bucket, useMonthBuckets);
+
+    return {
+      period,
+      label,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      kpis: {
+        mrr: {
+          value: mrrNow.mrrCents,
+          changePct: pctChange(mrrNow.mrrCents, mrrAtPeriodStart.mrrCents),
+          sparkline: earningsSpark,
+          hint: 'Monthly earnings from active plans',
+        },
+        planEarnings: {
+          value: trendCurrent.totalRevenueCents,
+          changePct: pctChange(
+            trendCurrent.totalRevenueCents,
+            trendPrior.totalRevenueCents,
+          ),
+          sparkline: earningsSpark,
+          hint: `${label} · new subscriptions`,
+        },
+        platformUsers: {
+          value: totalUsers,
+          changePct: pctChange(usersLast30, usersPrev30),
+          sparkline: usersSpark,
+          hint: 'vs prior 30 days',
+        },
+        payingSubscriptions: {
+          value: mrrNow.payingCount,
+          changePct: pctChange(
+            mrrNow.payingCount,
+            mrrAtPeriodStart.payingCount,
+          ),
+          sparkline: subsSpark,
+          hint: 'Active Dealioo plans · vs start of period',
+        },
+        newPlans: {
+          value: trendCurrent.newSubscriptions,
+          changePct: pctChange(
+            trendCurrent.newSubscriptions,
+            trendPrior.newSubscriptions,
+          ),
+          sparkline: subsSpark,
+          hint: `${label} · subscriptions started`,
+        },
+      },
+      charts: {
+        planEarnings: trendCurrent.points.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.revenueCents / 100,
+        })),
+        subscriptions: trendCurrent.points.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.subscriptions,
+        })),
+        users: trendCurrent.points.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.users,
+        })),
+        businesses: trendCurrent.points.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.businesses,
+        })),
+      },
+      regions: buildRegionBreakdownFromCountryCounts(
+        countryCounts.map((row) => ({
+          country: row.country,
+          count: Number(row.count) || 0,
+        })),
+      ),
+    };
+  }
+
+  private async computePlatformMrrSnapshot(startedBefore?: Date): Promise<{
+    mrrCents: number;
+    payingCount: number;
+  }> {
+    const qb = this.subscriptionRepository
+      .createQueryBuilder('sub')
+      .innerJoin('sub.plan', 'plan')
+      .select(
+        `COALESCE(SUM(
+          CASE
+            WHEN sub.billing_cycle = 'annual'
+              THEN COALESCE(plan."yearlyPrice", 0) * 100 / 12.0
+            ELSE COALESCE(plan."monthlyPrice", 0) * 100
+          END
+        ), 0)`,
+        'mrr',
+      )
+      .addSelect('COUNT(*)', 'count')
+      .where('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing'],
+      });
+
+    if (startedBefore) {
+      qb.andWhere('COALESCE(sub.started_at, sub.created_at) < :startedBefore', {
+        startedBefore,
+      });
+    }
+
+    const row = await qb.getRawOne<{ mrr: string; count: string }>();
+    return {
+      mrrCents: Math.round(Number(row?.mrr) || 0),
+      payingCount: Number(row?.count) || 0,
+    };
+  }
+
+  private parseUsersTab(raw?: string): AdminUsersTab {
+    const value = (raw ?? 'all').trim().toLowerCase();
+    if (
+      value === 'active' ||
+      value === 'inactive' ||
+      value === 'admins' ||
+      value === 'managers' ||
+      value === 'viewers'
+    ) {
+      return value;
+    }
+    return 'all';
+  }
+
+  private parseUsersSort(raw?: string): AdminUsersSort {
+    const value = (raw ?? 'newest').trim().toLowerCase();
+    if (
+      value === 'oldest' ||
+      value === 'name_asc' ||
+      value === 'name_desc'
+    ) {
+      return value;
+    }
+    return 'newest';
+  }
+
+  private applyUsersTabFilter(
+    qb: {
+      andWhere: (where: string, params?: Record<string, unknown>) => unknown;
+    },
+    tab: AdminUsersTab,
+  ): void {
+    if (tab === 'active') {
+      qb.andWhere('u.isActive = true');
+    } else if (tab === 'inactive') {
+      qb.andWhere('u.isActive = false');
+    } else if (tab === 'admins') {
+      qb.andWhere(
+        `(role.name IN (:...adminRoles) OR ${this.usersWithBusinessRolesSql})`,
+        {
+          adminRoles: [ADMIN_ROLE, SUPER_ADMIN_ROLE],
+          bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+          bmRoles: ['Owner', 'Admin'],
+        },
+      );
+    } else if (tab === 'managers') {
+      qb.andWhere(this.usersWithBusinessRolesSql, {
+        bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+        bmRoles: ['Manager'],
+      });
+    } else if (tab === 'viewers') {
+      qb.andWhere(this.usersWithBusinessRolesSql, {
+        bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+        bmRoles: ['Staff', 'Scanner'],
+      });
+    }
+  }
+
+  private async buildUsersSummary(
+    actorId: number,
+  ): Promise<AdminUsersSummary> {
+    const now = new Date();
+    const last30Start = addDays(startOfDay(now), -29);
+    const prev30Start = addDays(last30Start, -30);
+
+    const base = () =>
+      this.userRepository
+        .createQueryBuilder('u')
+        .leftJoin('u.role', 'role')
+        .where('u.id != :actorId', { actorId });
+
+    const countWithBusinessRoles = (roles: string[]) =>
+      base()
+        .andWhere(this.usersWithBusinessRolesSql, {
+          bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+          bmRoles: roles,
+        })
+        .getCount();
+
+    const [
+      total,
+      active,
+      inactive,
+      admins,
+      managers,
+      viewers,
+      newUsers,
+      prevNewUsers,
+      totalPrev,
+    ] = await Promise.all([
+      base().getCount(),
+      base().andWhere('u.isActive = true').getCount(),
+      base().andWhere('u.isActive = false').getCount(),
+      base()
+        .andWhere(
+          `(role.name IN (:...adminRoles) OR ${this.usersWithBusinessRolesSql})`,
+          {
+            adminRoles: [ADMIN_ROLE, SUPER_ADMIN_ROLE],
+            bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+            bmRoles: ['Owner', 'Admin'],
+          },
+        )
+        .getCount(),
+      countWithBusinessRoles(['Manager']),
+      countWithBusinessRoles(['Staff', 'Scanner']),
+      base()
+        .andWhere('u.createdAt >= :from', { from: last30Start })
+        .getCount(),
+      base()
+        .andWhere('u.createdAt >= :from AND u.createdAt < :to', {
+          from: prev30Start,
+          to: last30Start,
+        })
+        .getCount(),
+      base()
+        .andWhere('u.createdAt < :cutoff', { cutoff: last30Start })
+        .getCount(),
+    ]);
+
+    const totalAtPrevEnd = totalPrev;
+    const totalChangePct = pctChange(total, totalAtPrevEnd);
+    const newUsersChangePct = pctChange(newUsers, prevNewUsers);
+    const activeSharePct =
+      total > 0 ? Math.round((active / total) * 1000) / 10 : 0;
+    const inactiveSharePct =
+      total > 0 ? Math.round((inactive / total) * 1000) / 10 : 0;
+
+    return {
+      total,
+      newUsers,
+      active,
+      inactive,
+      totalChangePct,
+      newUsersChangePct,
+      activeSharePct,
+      inactiveSharePct,
+      tabs: {
+        all: total,
+        active,
+        inactive,
+        admins,
+        managers,
+        viewers,
+      },
+    };
+  }
+
+  async listUsers(
+    actor: User,
+    page?: number,
+    limit?: number,
+    searchRaw?: string,
+    tabRaw?: string,
+    sortRaw?: string,
+  ): Promise<{
+    items: PlatformAdminOverview['users'];
+    meta: PaginationMeta;
+    summary: AdminUsersSummary;
+  }> {
+    this.assertSuperAdmin(actor);
+    const pagination = normalizePagination(page, limit);
+    const search = searchRaw?.trim() ?? '';
+    const tab = this.parseUsersTab(tabRaw);
+    const sort = this.parseUsersSort(sortRaw);
+
+    const qb = this.userRepository
+      .createQueryBuilder('u')
+      .leftJoinAndSelect('u.role', 'role')
+      .where('u.id != :actorId', { actorId: actor.id });
+
+    this.applyUsersTabFilter(qb, tab);
+
+    if (search) {
+      qb.andWhere(
+        `(
+          u.name ILIKE :q
+          OR u.email ILIKE :q
+          OR CAST(u.id AS text) ILIKE :q
+          OR role.name ILIKE :q
+          OR EXISTS (
+            SELECT 1
+            FROM business_members bm_search
+            INNER JOIN businesses b_search ON b_search.id = bm_search.business_id
+            WHERE bm_search.user_id = u.id
+              AND bm_search.status = :searchBmStatus
+              AND (
+                b_search.name ILIKE :q
+                OR bm_search.role ILIKE :q
+              )
+          )
+        )`,
+        {
+          q: `%${search}%`,
+          searchBmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+        },
+      );
+    }
+
+    if (sort === 'oldest') {
+      qb.orderBy('u.createdAt', 'ASC');
+    } else if (sort === 'name_asc') {
+      qb.orderBy('u.name', 'ASC');
+    } else if (sort === 'name_desc') {
+      qb.orderBy('u.name', 'DESC');
+    } else {
+      qb.orderBy('u.createdAt', 'DESC');
+    }
+
+    qb.skip(pagination.skip).take(pagination.limit);
+
+    const [[users, total], summary] = await Promise.all([
+      qb.getManyAndCount(),
+      this.buildUsersSummary(actor.id),
+    ]);
+    const userIds = users.map((user) => user.id);
+    const [planByUserId, businessByUserId] = await Promise.all([
+      this.loadPlanMapForUserIds(userIds),
+      this.loadBusinessMapForUserIds(userIds),
+    ]);
+
+    return {
+      items: users.map((user) =>
+        this.toAdminUserItem(
+          user,
+          planByUserId.get(user.id) ?? null,
+          businessByUserId.get(user.id) ?? [],
+        ),
+      ),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      summary,
+    };
+  }
+
+  async createUser(
+    actor: User,
+    dto: CreateAdminUserDto,
+  ): Promise<PlatformAdminOverview['users'][number]> {
+    this.assertSuperAdmin(actor);
+
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.userRepository.findOne({ where: { email } });
+    if (existing) {
+      throw new ConflictException('An account with this email already exists.');
+    }
+
+    const roleName = dto.roleName.trim();
+    if (!PLATFORM_ROLES.includes(roleName as (typeof PLATFORM_ROLES)[number])) {
+      throw new BadRequestException(
+        'That role cannot be assigned from Super Admin.',
+      );
+    }
+    if (
+      isSuperAdminRole(roleName) &&
+      dto.confirmElevateToSuperAdmin !== true
+    ) {
+      throw new BadRequestException(
+        'Confirm Super Admin assignment to create another Super Admin.',
+      );
+    }
+    const role = await this.roleRepository.findOne({
+      where: { name: roleName },
+    });
+    if (!role) {
+      throw new NotFoundException(`Role '${roleName}' does not exist.`);
+    }
+
+    const phone = dto.phone?.trim() ?? '';
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const created = this.userRepository.create({
+      name: dto.name.trim(),
+      email,
+      phone: phone.length > 0 ? phone : null,
+      passwordHash,
+      role,
+      createdBy: actor,
+      isActive: true,
+      emailVerified: true,
+      provider: 'LOCAL',
+    });
+    const saved = await this.userRepository.save(created);
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'user.create',
+      targetType: 'user',
+      targetId: saved.id,
+      metadata: {
+        email: saved.email,
+        roleName,
+        elevatedToSuperAdmin: isSuperAdminRole(roleName),
+      },
+    });
+    const withRole = await this.userRepository.findOne({
+      where: { id: saved.id },
+      relations: ['role'],
+    });
+    return this.toAdminUserItem(withRole ?? saved, null, []);
+  }
+
+  async listAssignableRoles(
+    actor: User,
+  ): Promise<{ items: Array<{ name: string }> }> {
+    this.assertSuperAdmin(actor);
+    const roles = await this.roleRepository.find({
+      where: { name: In([...PLATFORM_ROLES]) },
+      order: { name: 'ASC' },
+    });
+    return {
+      items: roles.map((role) => ({ name: role.name })),
+    };
+  }
+
+  async updateUser(
+    actor: User,
+    userId: number,
+    dto: UpdateAdminUserDto,
+  ): Promise<PlatformAdminOverview['users'][number]> {
+    this.assertSuperAdmin(actor);
+
+    const hasChange =
+      dto.name !== undefined ||
+      dto.email !== undefined ||
+      dto.phone !== undefined ||
+      dto.isActive !== undefined;
+    if (!hasChange) {
+      throw new BadRequestException('No changes were provided.');
+    }
+
+    const target = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['role'],
+    });
+    if (!target) {
+      throw new NotFoundException('User not found.');
+    }
+
+    const wasSuperAdmin = isSuperAdminRole(target.role?.name);
+    const isSelf = actor.id === target.id;
+    const before = {
+      name: target.name,
+      email: target.email,
+      phone: target.phone,
+      isActive: target.isActive,
+    };
+
+    if (dto.name !== undefined) {
+      target.name = dto.name.trim();
+    }
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+      if (email !== target.email.toLowerCase()) {
+        const existing = await this.userRepository.findOne({
+          where: { email },
+        });
+        if (existing && existing.id !== target.id) {
+          throw new ConflictException(
+            'An account with this email already exists.',
+          );
+        }
+        target.email = email;
+      }
+    }
+
+    if (dto.phone !== undefined) {
+      const phone = dto.phone.trim();
+      target.phone = phone.length > 0 ? phone : null;
+    }
+
+    if (dto.isActive !== undefined) {
+      if (isSelf && dto.isActive === false) {
+        throw new BadRequestException('You cannot deactivate your own account.');
+      }
+
+      if (
+        wasSuperAdmin &&
+        target.isActive &&
+        dto.isActive === false &&
+        (await this.countSuperAdmins(target.id)) < 1
+      ) {
+        throw new BadRequestException(
+          'At least one active Super Admin must remain.',
+        );
+      }
+
+      target.isActive = dto.isActive;
+    }
+
+    const saved = await this.userRepository.save(target);
+    this.jwtStrategy.invalidateUserCache(saved.id);
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'user.update',
+      targetType: 'user',
+      targetId: saved.id,
+      metadata: {
+        before,
+        after: {
+          name: saved.name,
+          email: saved.email,
+          phone: saved.phone,
+          isActive: saved.isActive,
+        },
+      },
+    });
+    const withRole = await this.userRepository.findOne({
+      where: { id: saved.id },
+      relations: ['role'],
+    });
+    const [planByUserId, businessByUserId] = await Promise.all([
+      this.loadPlanMapForUserIds([saved.id]),
+      this.loadBusinessMapForUserIds([saved.id]),
+    ]);
+    return this.toAdminUserItem(
+      withRole ?? saved,
+      planByUserId.get(saved.id) ?? null,
+      businessByUserId.get(saved.id) ?? [],
+    );
+  }
+
+  private resolveBusinessIntegrationFlags(business: Business): {
+    stripeConnected: boolean;
+    metaConnected: boolean;
+    googleAdsConnected: boolean;
+    twilioConnected: boolean;
+  } {
+    const stripeConnected = Boolean(business.stripeAccountId?.trim());
+
+    const metaStatus = (business.metaConnectionStatus ?? '').trim().toUpperCase();
+    const metaReadyStatus =
+      metaStatus === 'AD_ACCOUNT_SELECTED' ||
+      metaStatus === 'ACTIVE' ||
+      metaStatus === 'SYNCING';
+    const metaConnected = Boolean(
+      business.metaUserId?.trim() &&
+        business.metaAdAccountId?.trim() &&
+        metaReadyStatus,
+    );
+
+    const googleStatus = (business.googleConnectionStatus ?? '')
+      .trim()
+      .toUpperCase();
+    const googleReadyStatus =
+      googleStatus === 'CUSTOMER_SELECTED' ||
+      googleStatus === 'ACTIVE' ||
+      googleStatus === 'SYNCING' ||
+      googleStatus === 'TOKEN_EXCHANGED';
+    const googleAdsConnected = Boolean(
+      business.googleUserId?.trim() && googleReadyStatus,
+    );
+
+    const twilioConnected = Boolean(
+      business.twilioPhoneSid?.trim() && business.twilioPhoneNumber?.trim(),
+    );
+
+    return {
+      stripeConnected,
+      metaConnected,
+      googleAdsConnected,
+      twilioConnected,
+    };
+  }
+
+  private toAdminBusinessItem(
+    business: Business,
+  ): PlatformAdminOverview['businesses'][number] {
+    const flags = this.resolveBusinessIntegrationFlags(business);
+    const setupProgressPercent = computeBusinessSetupProgressFromEntity(
+      business,
+      flags,
+    );
+    return {
+      id: business.id,
+      name: business.name,
+      slug: business.slug,
+      logoUrl: business.logoUrl,
+      city: business.city,
+      state: business.state,
+      country: business.country,
+      postalCode: business.postalCode,
+      email: business.email,
+      phoneNumber: business.phoneNumber,
+      onboardingCompleted: business.onboardingCompleted,
+      stripeConnected: flags.stripeConnected,
+      metaConnected: flags.metaConnected,
+      googleAdsConnected: flags.googleAdsConnected,
+      twilioConnected: flags.twilioConnected,
+      setupProgressPercent,
+      setupComplete: setupProgressPercent === 100,
+      createdAt: business.createdAt,
+      ownerName: business.owner?.name ?? null,
+      ownerEmail: business.owner?.email ?? null,
+      ownerAvatar: business.owner?.avatar ?? null,
+      planName: null,
+      planSlug: null,
+    };
+  }
+
+  private async resolveUniqueBusinessSlug(source: string): Promise<string> {
+    const base = slugifyBusinessName(source) || 'business';
+    const root = isValidBusinessSlug(base) ? base : 'business';
+
+    let candidate = root;
+    let suffix = 2;
+
+    while (
+      await this.businessRepository.exists({ where: { slug: candidate } })
+    ) {
+      candidate = `${root}-${suffix}`;
+      suffix += 1;
+    }
+
+    return candidate;
+  }
+
+  async createBusiness(
+    actor: User,
+    dto: CreateAdminBusinessDto,
+  ): Promise<PlatformAdminOverview['businesses'][number]> {
+    this.assertSuperAdmin(actor);
+
+    const name = dto.name.trim();
+    if (!name) {
+      throw new BadRequestException('Business name is required.');
+    }
+
+    const ownerEmail = dto.ownerEmail.trim().toLowerCase();
+    const owner = await this.userRepository.findOne({
+      where: { email: ownerEmail },
+    });
+    if (!owner) {
+      throw new NotFoundException(
+        'No user found with that owner email. Create the user first.',
+      );
+    }
+    if (!owner.isActive) {
+      throw new BadRequestException('The selected owner account is inactive.');
+    }
+
+    const phoneNumber = dto.phoneNumber?.trim() || '';
+    if (!phoneNumber) {
+      throw new BadRequestException('Phone number is required.');
+    }
+    const businessType = dto.businessType?.trim() || '';
+    if (!businessType) {
+      throw new BadRequestException('Business type is required.');
+    }
+    const currency = (dto.currency?.trim() || '').toUpperCase();
+    if (!currency) {
+      throw new BadRequestException('Currency is required.');
+    }
+
+    const slugSource = dto.slug?.trim() || name;
+    const slug = await this.resolveUniqueBusinessSlug(slugSource);
+    const createdAt = new Date();
+
+    const business = this.businessRepository.create({
+      name,
+      slug,
+      description: dto.description?.trim() || null,
+      logoUrl: null,
+      businessType,
+      currency,
+      websiteUrl: dto.websiteUrl?.trim() || null,
+      email: dto.email?.trim() || null,
+      phoneNumber,
+      city: dto.city?.trim() || null,
+      state: dto.state?.trim() || null,
+      country: dto.country?.trim() || null,
+      postalCode: dto.postalCode?.trim() || null,
+      branchCount: 0,
+      owner,
+      onboardingCompleted: true,
+      onboardingCompletedAt: createdAt,
+    });
+    const saved = await this.businessRepository.save(business);
+
+    const ownerRole = await this.roleRepository.findOne({
+      where: { name: ADMIN_ROLE },
+    });
+    await this.businessMemberRepository.save(
+      this.businessMemberRepository.create({
+        business: saved,
+        user: owner,
+        role: 'Owner',
+        memberRole: ownerRole,
+        status: BUSINESS_MEMBER_STATUS.ACTIVE,
+        invitedBy: null,
+        joinedAt: createdAt,
+        permissions: [...ALL_BUSINESS_MEMBER_PERMISSIONS],
+      }),
+    );
+
+    const withOwner = await this.businessRepository
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.owner', 'owner')
+      .select([
+        'b.id',
+        'b.name',
+        'b.slug',
+        'b.logoUrl',
+        'b.city',
+        'b.state',
+        'b.country',
+        'b.postalCode',
+        'b.email',
+        'b.phoneNumber',
+        'b.onboardingCompleted',
+        'b.createdAt',
+        'b.stripeAccountId',
+        'b.metaUserId',
+        'b.metaAdAccountId',
+        'b.metaConnectionStatus',
+        'b.googleUserId',
+        'b.googleConnectionStatus',
+        'b.twilioPhoneSid',
+        'b.twilioPhoneNumber',
+        'owner.id',
+        'owner.name',
+        'owner.email',
+        'owner.avatar',
+      ])
+      .where('b.id = :id', { id: saved.id })
+      .getOne();
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'business.create',
+      targetType: 'business',
+      targetId: saved.id,
+      metadata: {
+        name: saved.name,
+        slug: saved.slug,
+        ownerEmail,
+      },
+    });
+    return this.toAdminBusinessItem(withOwner ?? saved);
+  }
+
+  async listBusinesses(
+    actor: User,
+    page?: number,
+    limit?: number,
+    searchRaw?: string,
+    onboardingRaw?: string,
+  ): Promise<{
+    items: PlatformAdminOverview['businesses'];
+    meta: PaginationMeta;
+    counts: { all: number; onboarded: number; notOnboarded: number };
+  }> {
+    this.assertSuperAdmin(actor);
+    const pagination = normalizePagination(page, limit);
+    const search = searchRaw?.trim() ?? '';
+    const setupFilter = (onboardingRaw ?? 'all').trim().toLowerCase();
+
+    const qb = this.businessRepository
+      .createQueryBuilder('b')
+      .leftJoinAndSelect('b.owner', 'owner')
+      .select([
+        'b.id',
+        'b.name',
+        'b.slug',
+        'b.logoUrl',
+        'b.city',
+        'b.state',
+        'b.country',
+        'b.postalCode',
+        'b.email',
+        'b.phoneNumber',
+        'b.onboardingCompleted',
+        'b.createdAt',
+        'b.stripeAccountId',
+        'b.metaUserId',
+        'b.metaAdAccountId',
+        'b.metaConnectionStatus',
+        'b.googleUserId',
+        'b.googleConnectionStatus',
+        'b.twilioPhoneSid',
+        'b.twilioPhoneNumber',
+        'owner.id',
+        'owner.name',
+        'owner.email',
+        'owner.avatar',
+      ])
+      .orderBy('b.createdAt', 'DESC');
+
+    if (search) {
+      qb.andWhere(
+        `(b.name ILIKE :q OR b.slug ILIKE :q OR owner.name ILIKE :q OR owner.email ILIKE :q OR CAST(b.id AS text) ILIKE :q)`,
+        { q: `%${search}%` },
+      );
+    }
+
+    const businesses = await qb.getMany();
+    const mapped = businesses.map((business) =>
+      this.toAdminBusinessItem(business),
+    );
+    const completed = mapped.filter((item) => item.setupComplete);
+    const inProgress = mapped.filter((item) => !item.setupComplete);
+
+    const filtered =
+      setupFilter === 'onboarded'
+        ? completed
+        : setupFilter === 'not_onboarded'
+          ? inProgress
+          : mapped;
+
+    const total = filtered.length;
+    const items = filtered.slice(
+      pagination.skip,
+      pagination.skip + pagination.limit,
+    );
+
+    return {
+      items,
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      counts: {
+        all: mapped.length,
+        onboarded: completed.length,
+        notOnboarded: inProgress.length,
+      },
+    };
+  }
+
+  private async loadPlanMapForUserIds(
+    userIds: number[],
+  ): Promise<Map<number, { planName: string; planSlug: string }>> {
+    const planByUserId = new Map<
+      number,
+      { planName: string; planSlug: string }
+    >();
+    if (userIds.length === 0) return planByUserId;
+
+    const userSubs = await this.subscriptionRepository
+      .createQueryBuilder('sub')
+      .innerJoinAndSelect('sub.plan', 'plan')
+      .where('sub.userId IN (:...userIds)', { userIds })
+      .andWhere('sub.status IN (:...statuses)', {
+        statuses: ['active', 'trialing', 'past_due'],
+      })
+      .orderBy('sub.createdAt', 'DESC')
+      .getMany();
+
+    for (const sub of userSubs) {
+      if (!planByUserId.has(sub.userId)) {
+        planByUserId.set(sub.userId, {
+          planName: sub.plan?.name ?? '—',
+          planSlug: sub.plan?.slug ?? 'unknown',
+        });
+      }
+    }
+    return planByUserId;
+  }
+
+  private async computeTrendWindow(
+    from: Date,
+    to: Date,
+    chartTz: string,
+    useMonthBuckets: boolean,
+  ): Promise<{
+    totalRevenueCents: number;
+    newBusinesses: number;
+    newUsers: number;
+    newSubscriptions: number;
+    points: Array<{
+      bucket: string;
+      revenueCents: number;
+      businesses: number;
+      users: number;
+      subscriptions: number;
+    }>;
+  }> {
+    const startedAt = 'COALESCE(sub.started_at, sub.created_at)';
+    const subscriptionAmountSql = `
+      CASE
+        WHEN sub.billing_cycle = 'annual'
+          THEN COALESCE(plan."yearlyPrice", 0) * 100
+        ELSE COALESCE(plan."monthlyPrice", 0) * 100
+      END
+    `;
+
+    let keys: string[];
+    let subscriptionBucket: string;
+    let businessBucket: string;
+    let userBucket: string;
+
+    if (useMonthBuckets) {
+      keys = buildMonthBucketKeys(from, to, chartTz);
+      const tz = chartTz.replace(/'/g, "''");
+      subscriptionBucket = `TO_CHAR(DATE_TRUNC('month', ${startedAt} AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+      businessBucket = `TO_CHAR(DATE_TRUNC('month', b.created_at AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+      userBucket = `TO_CHAR(DATE_TRUNC('month', u.created_at AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+    } else {
+      const built = buildZonedRangeBucketKeys(from, to, chartTz);
+      keys = built.keys;
+      subscriptionBucket = overviewRangeBucketSql(
+        startedAt,
+        built.sameDay,
+        chartTz,
+      );
+      businessBucket = overviewRangeBucketSql(
+        'b.created_at',
+        built.sameDay,
+        chartTz,
+      );
+      userBucket = overviewRangeBucketSql(
+        'u.created_at',
+        built.sameDay,
+        chartTz,
+      );
+    }
+
+    const [revenueRows, businessRows, userRows] = await Promise.all([
+      this.subscriptionRepository
+        .createQueryBuilder('sub')
+        .innerJoin('sub.plan', 'plan')
+        .select(subscriptionBucket, 'bucket')
+        .addSelect(`COALESCE(SUM(${subscriptionAmountSql}), 0)`, 'total')
+        .addSelect('COUNT(*)', 'count')
+        .where(`${startedAt} >= :from`, { from })
+        .andWhere(`${startedAt} <= :to`, { to })
+        .groupBy(subscriptionBucket)
+        .getRawMany<Record<string, string>>(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .select(businessBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('b.created_at >= :from', { from })
+        .andWhere('b.created_at <= :to', { to })
+        .groupBy(businessBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+      this.userRepository
+        .createQueryBuilder('u')
+        .select(userBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('u.created_at >= :from', { from })
+        .andWhere('u.created_at <= :to', { to })
+        .groupBy(userBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+    ]);
+
+    const revenueMap = new Map(
+      revenueRows.map((row) => [
+        String(row.bucket ?? ''),
+        Math.round(Number(row.total) || 0),
+      ]),
+    );
+    const subscriptionMap = new Map(
+      revenueRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
+      ]),
+    );
+    const businessMap = new Map(
+      businessRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
+      ]),
+    );
+    const userMap = new Map(
+      userRows.map((row) => [String(row.bucket ?? ''), Number(row.count) || 0]),
+    );
+
+    const points = keys.map((bucket) => ({
+      bucket,
+      revenueCents: revenueMap.get(bucket) ?? 0,
+      businesses: businessMap.get(bucket) ?? 0,
+      users: userMap.get(bucket) ?? 0,
+      subscriptions: subscriptionMap.get(bucket) ?? 0,
+    }));
+
+    return {
+      totalRevenueCents: points.reduce(
+        (sum, point) => sum + point.revenueCents,
+        0,
+      ),
+      newBusinesses: points.reduce((sum, point) => sum + point.businesses, 0),
+      newUsers: points.reduce((sum, point) => sum + point.users, 0),
+      newSubscriptions: points.reduce(
+        (sum, point) => sum + point.subscriptions,
+        0,
+      ),
+      points,
+    };
+  }
+
   private async computeKpis(): Promise<PlatformAdminOverview['kpis']> {
     const now = new Date();
     const todayStart = startOfDay(now);
     const yesterdayStart = addDays(todayStart, -1);
     const day30Ago = addDays(todayStart, -29);
     const day60Ago = addDays(todayStart, -59);
+    const payingStatuses = ['active', 'trialing'] as const;
 
     const [
       totalUsers,
@@ -465,13 +1747,14 @@ export class PlatformAdminService {
       activeBusinesses,
       newUsersToday,
       newUsersYesterday,
-      ordersToday,
-      ordersYesterday,
-      allTimeRevenue,
+      activeSubscriptions,
+      newSubscriptionsToday,
+      newSubscriptionsYesterday,
       businessesLast30,
       businessesPrev30,
       usersLast30,
       usersPrev30,
+      payingSubs,
     ] = await Promise.all([
       this.userRepository.count(),
       this.businessRepository.count(),
@@ -482,19 +1765,24 @@ export class PlatformAdminService {
       this.userRepository.count({
         where: { createdAt: Between(yesterdayStart, todayStart) },
       }),
-      this.paidPaymentQuery(todayStart)
-        .select('COUNT(*)', 'count')
-        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
-        .getRawOne<{ count: string; total: string }>(),
-      this.paidPaymentQuery(yesterdayStart, todayStart)
-        .select('COUNT(*)', 'count')
-        .addSelect('COALESCE(SUM(payment.amount), 0)', 'total')
-        .getRawOne<{ count: string; total: string }>(),
-      this.funnelPaymentRepository
-        .createQueryBuilder('payment')
-        .select('COALESCE(SUM(payment.amount), 0)', 'total')
-        .where('payment.status = :paid', { paid: FunnelPaymentStatus.PAID })
-        .getRawOne<{ total: string }>(),
+      this.subscriptionRepository.count({
+        where: { status: In([...payingStatuses]) },
+      }),
+      this.subscriptionRepository
+        .createQueryBuilder('sub')
+        .where('COALESCE(sub.started_at, sub.created_at) >= :from', {
+          from: todayStart,
+        })
+        .getCount(),
+      this.subscriptionRepository
+        .createQueryBuilder('sub')
+        .where('COALESCE(sub.started_at, sub.created_at) >= :from', {
+          from: yesterdayStart,
+        })
+        .andWhere('COALESCE(sub.started_at, sub.created_at) < :to', {
+          to: todayStart,
+        })
+        .getCount(),
       this.businessRepository.count({
         where: { createdAt: MoreThanOrEqual(day30Ago) },
       }),
@@ -506,20 +1794,31 @@ export class PlatformAdminService {
       }),
       this.userRepository.count({
         where: { createdAt: Between(day60Ago, day30Ago) },
+      }),
+      this.subscriptionRepository.find({
+        where: { status: In([...payingStatuses]) },
+        relations: ['plan'],
       }),
     ]);
 
-    const ordersTodayCount = Number(ordersToday?.count) || 0;
-    const ordersYesterdayCount = Number(ordersYesterday?.count) || 0;
-    const revenueTodayCents = Number(allTimeRevenue?.total) || 0;
+    let platformMrrCents = 0;
+    for (const sub of payingSubs) {
+      const monthly = Number(sub.plan?.monthlyPrice ?? 0);
+      const yearly = Number(sub.plan?.yearlyPrice ?? 0);
+      if (sub.billingCycle === 'annual') {
+        platformMrrCents += Math.round((yearly * 100) / 12);
+      } else {
+        platformMrrCents += Math.round(monthly * 100);
+      }
+    }
 
     return {
       totalBusinesses,
       activeBusinesses,
       totalUsers,
       newUsersToday,
-      ordersToday: ordersTodayCount,
-      revenueTodayCents,
+      ordersToday: activeSubscriptions,
+      revenueTodayCents: platformMrrCents,
       businessesChangePct: pctChange(businessesLast30, businessesPrev30),
       activeBusinessesChangePct: pctChange(
         activeBusinesses,
@@ -527,7 +1826,10 @@ export class PlatformAdminService {
       ),
       usersChangePct: pctChange(usersLast30, usersPrev30),
       newUsersChangePct: pctChange(newUsersToday, newUsersYesterday),
-      ordersChangePct: pctChange(ordersTodayCount, ordersYesterdayCount),
+      ordersChangePct: pctChange(
+        newSubscriptionsToday,
+        newSubscriptionsYesterday,
+      ),
       revenueChangePct: 0,
     };
   }
@@ -535,136 +1837,219 @@ export class PlatformAdminService {
   async getOverview(actor: User): Promise<PlatformAdminOverview> {
     this.assertSuperAdmin(actor);
 
-    const [kpis, businesses, users] = await Promise.all([
+    const [kpis, breakdownRows] = await Promise.all([
       this.computeKpis(),
-      this.businessRepository.find({
-        relations: ['owner'],
-        order: { createdAt: 'DESC' },
-      }),
-      this.userRepository.find({
-        relations: ['role'],
-        order: { createdAt: 'DESC' },
-      }),
+      this.subscriptionRepository
+        .createQueryBuilder('sub')
+        .innerJoin('sub.plan', 'plan')
+        .select('plan.slug', 'planSlug')
+        .addSelect('plan.name', 'planName')
+        .addSelect('COUNT(*)', 'count')
+        .addSelect(
+          `COALESCE(SUM(
+            CASE
+              WHEN sub.billing_cycle = 'annual'
+                THEN COALESCE(plan."yearlyPrice", 0) * 100 / 12.0
+              ELSE COALESCE(plan."monthlyPrice", 0) * 100
+            END
+          ), 0)`,
+          'mrrCents',
+        )
+        .where('sub.status IN (:...statuses)', {
+          statuses: ['active', 'trialing'],
+        })
+        .groupBy('plan.slug')
+        .addGroupBy('plan.name')
+        .orderBy('"mrrCents"', 'DESC')
+        .getRawMany<{
+          planSlug: string;
+          planName: string;
+          count: string;
+          mrrCents: string;
+        }>(),
     ]);
 
-    const userIds = users.map((user) => user.id);
-    const planByUserId = new Map<
-      number,
-      { planName: string; planSlug: string }
-    >();
-    if (userIds.length > 0) {
-      const userSubs = await this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .innerJoinAndSelect('sub.plan', 'plan')
-        .where('sub.user_id IN (:...userIds)', { userIds })
-        .andWhere('sub.status IN (:...statuses)', {
-          statuses: ['active', 'trialing', 'past_due'],
-        })
-        .orderBy('sub.created_at', 'DESC')
-        .getMany();
-      for (const sub of userSubs) {
-        if (!planByUserId.has(sub.userId)) {
-          planByUserId.set(sub.userId, {
-            planName: sub.plan?.name ?? '—',
-            planSlug: sub.plan?.slug ?? 'unknown',
-          });
-        }
-      }
-    }
-
-    const planFitSlugs = [
-      ...new Set(
-        users
-          .map(
-            (user) =>
-              user.planFitSelectedPlan?.trim() ||
-              user.planFitRecommendedPlan?.trim() ||
-              '',
-          )
-          .filter(Boolean),
-      ),
-    ];
-    const planNameBySlug = new Map<string, string>();
-    if (planFitSlugs.length > 0) {
-      const planRows = await this.subscriptionRepository.manager
-        .getRepository(SubscriptionPlan)
-        .find({
-          where: { slug: In(planFitSlugs) },
-          select: ['slug', 'name'],
-        });
-      for (const row of planRows) {
-        planNameBySlug.set(row.slug, row.name);
-      }
-    }
-
-    for (const user of users) {
-      if (planByUserId.has(user.id)) continue;
-      const slug =
-        user.planFitSelectedPlan?.trim() ||
-        user.planFitRecommendedPlan?.trim() ||
-        '';
-      if (!slug) continue;
-      planByUserId.set(user.id, {
-        planSlug: slug,
-        planName: planNameBySlug.get(slug) ?? slug,
-      });
-    }
+    const subscriptionBreakdown = breakdownRows.map((row) => ({
+      planSlug: String(row.planSlug ?? 'unknown'),
+      planName: String(row.planName ?? 'Unknown plan'),
+      count: Number(row.count) || 0,
+      mrrCents: Math.round(Number(row.mrrCents) || 0),
+    }));
 
     return {
       kpis,
       charts: {
         revenueLast30Days: [],
         businessesLast30Days: [],
-        subscriptionBreakdown: [],
+        subscriptionBreakdown,
       },
-      businesses: businesses.map((business) => ({
-        id: business.id,
-        name: business.name,
-        slug: business.slug,
-        logoUrl: business.logoUrl,
-        city: business.city,
-        state: business.state,
-        country: business.country,
-        email: business.email,
-        phoneNumber: business.phoneNumber,
-        onboardingCompleted: business.onboardingCompleted,
-        stripeConnected: Boolean(business.stripeAccountId?.trim()),
-        metaConnected: Boolean(
-          business.metaUserId?.trim() ||
-          business.metaConnectionStatus?.trim() === 'ACTIVE',
-        ),
-        twilioConnected: Boolean(
-          business.twilioPhoneSid?.trim() || business.twilioPhoneNumber?.trim(),
-        ),
-        createdAt: business.createdAt,
-        ownerName: business.owner?.name ?? null,
-        ownerEmail: business.owner?.email ?? null,
-        ownerAvatar: business.owner?.avatar ?? null,
-        planName: null,
-        planSlug: null,
-      })),
-      users: users
-        .filter((user) => user.id !== actor.id)
-        .map((user) => {
-          const plan = planByUserId.get(user.id) ?? null;
-          return {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            avatar: user.avatar ?? null,
-            roleName: user.role?.name ?? null,
-            isActive: user.isActive,
-            emailVerified: user.emailVerified,
-            provider: user.provider,
-            createdAt: user.createdAt,
-            lastLoginAt: user.lastLoginAt,
-            planName: plan?.planName ?? null,
-            planSlug: plan?.planSlug ?? null,
-          };
-        }),
+      businesses: [],
+      users: [],
     };
   }
+}
+
+function normalizeDashboardPeriod(raw?: string): PlatformDashboardPeriod {
+  const value = (raw ?? 'month').trim().toLowerCase();
+  if (value === 'today' || value === 'week' || value === 'year') return value;
+  return 'month';
+}
+
+function resolveDashboardWindow(
+  period: PlatformDashboardPeriod,
+  monthKeyRaw: string | undefined,
+  timeZone: string,
+): {
+  from: Date;
+  to: Date;
+  label: string;
+  priorFrom: Date;
+  priorTo: Date;
+  useMonthBuckets: boolean;
+} {
+  const now = new Date();
+  const tz = resolveSafeTimeZone(timeZone);
+
+  if (period === 'today') {
+    const from = startOfDay(now);
+    const to = now;
+    const priorTo = new Date(from.getTime() - 1);
+    const priorFrom = startOfDay(addDays(from, -1));
+    return {
+      from,
+      to,
+      label: 'Today',
+      priorFrom,
+      priorTo,
+      useMonthBuckets: false,
+    };
+  }
+
+  if (period === 'week') {
+    const to = now;
+    const from = addDays(startOfDay(now), -6);
+    const priorTo = new Date(from.getTime() - 1);
+    const priorFrom = addDays(startOfDay(priorTo), -6);
+    return {
+      from,
+      to,
+      label: 'This week',
+      priorFrom,
+      priorTo,
+      useMonthBuckets: false,
+    };
+  }
+
+  if (period === 'year') {
+    const to = now;
+    const from = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1),
+    );
+    const priorTo = new Date(from.getTime() - 1);
+    const priorFrom = new Date(
+      Date.UTC(priorTo.getUTCFullYear(), priorTo.getUTCMonth() - 11, 1),
+    );
+    return {
+      from,
+      to,
+      label: String(now.getUTCFullYear()),
+      priorFrom,
+      priorTo,
+      useMonthBuckets: true,
+    };
+  }
+
+  const monthKey = (monthKeyRaw ?? '').trim();
+  let year: number;
+  let month: number;
+  if (/^\d{4}-\d{2}$/.test(monthKey)) {
+    year = Number(monthKey.slice(0, 4));
+    month = Number(monthKey.slice(5, 7));
+  } else {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+    }).formatToParts(now);
+    year = Number(parts.find((part) => part.type === 'year')?.value);
+    month = Number(parts.find((part) => part.type === 'month')?.value);
+  }
+
+  const from = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
+  const to = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const clampedTo = to.getTime() > now.getTime() ? now : to;
+  const priorFrom = new Date(Date.UTC(year, month - 2, 1, 0, 0, 0));
+  const priorTo = new Date(Date.UTC(year, month - 1, 0, 23, 59, 59, 999));
+  const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(
+    'en-US',
+    { month: 'long', year: 'numeric', timeZone: 'UTC' },
+  );
+
+  return {
+    from,
+    to: clampedTo,
+    label,
+    priorFrom,
+    priorTo,
+    useMonthBuckets: false,
+  };
+}
+
+function buildMonthBucketKeys(from: Date, to: Date, timeZone: string): string[] {
+  const tz = resolveSafeTimeZone(timeZone);
+  const startParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(from);
+  const endParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(to);
+  let year = Number(startParts.find((part) => part.type === 'year')?.value);
+  let month = Number(startParts.find((part) => part.type === 'month')?.value);
+  const endYear = Number(endParts.find((part) => part.type === 'year')?.value);
+  const endMonth = Number(endParts.find((part) => part.type === 'month')?.value);
+  const keys: string[] = [];
+  for (let guard = 0; guard < 36; guard += 1) {
+    keys.push(`${year}-${String(month).padStart(2, '0')}`);
+    if (year === endYear && month === endMonth) break;
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return keys;
+}
+
+function formatDashboardBucketLabel(
+  bucket: string,
+  useMonthBuckets: boolean,
+): string {
+  if (useMonthBuckets && /^\d{4}-\d{2}$/.test(bucket)) {
+    const [y, m] = bucket.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-US', {
+      month: 'short',
+      timeZone: 'UTC',
+    });
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(bucket)) {
+    const hour = Number(bucket.slice(11, 13));
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    const h12 = hour % 12 === 0 ? 12 : hour % 12;
+    return `${h12}${suffix}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(bucket)) {
+    const day = Number(bucket.slice(8, 10));
+    const month = Number(bucket.slice(5, 7));
+    return new Date(Date.UTC(2000, month - 1, day)).toLocaleDateString(
+      'en-US',
+      { month: 'short', day: 'numeric', timeZone: 'UTC' },
+    );
+  }
+  return bucket;
 }
 
 function isFutureMeeting(row: MeetingRequest, now = Date.now()): boolean {
