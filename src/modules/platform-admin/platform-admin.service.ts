@@ -2031,7 +2031,19 @@ export class PlatformAdminService {
     const safeLimit = Math.min(50, limit);
 
     const existingCount = await this.platformTwilioPhoneNumberRepository.count();
-    if (options?.sync || existingCount === 0) {
+    const newestInventorySync = await this.platformTwilioPhoneNumberRepository
+      .createQueryBuilder('n')
+      .select('MAX(n.lastSyncedAt)', 'max')
+      .getRawOne<{ max: Date | string | null }>();
+    const newestSyncAt = newestInventorySync?.max
+      ? new Date(newestInventorySync.max).getTime()
+      : 0;
+    const inventoryStale =
+      !newestSyncAt || Date.now() - newestSyncAt > 60 * 60 * 1000;
+    const shouldSyncInventory =
+      Boolean(options?.sync) || existingCount === 0 || inventoryStale;
+
+    if (shouldSyncInventory) {
       try {
         await this.syncPlatformTwilioNumbersFromTwilio();
       } catch (error) {
