@@ -108,7 +108,7 @@ export class TwilioService implements OnModuleInit {
 
     if (!accountSid || !authToken) {
       throw new ServiceUnavailableException(
-        'Twilio is not configured. Add Twilio credentials for this business or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in .env.',
+        'Twilio is not configured on the server.',
       );
     }
 
@@ -475,8 +475,12 @@ export class TwilioService implements OnModuleInit {
     authToken: string;
     phoneSid: string;
     phoneNumber: string;
-  }): Promise<void> {
-    const webhookUrl = requireInboundWebhookUrl();
+    smsUrl?: string | null;
+  }): Promise<{ smsUrl: string }> {
+    // Reject private/localhost targets so Super Admin cannot point SMS at an internal host.
+    const webhookUrl = assertSafePublicHttpsWebhookUrl(
+      params.smsUrl?.trim() || requireInboundWebhookUrl(),
+    );
 
     try {
       const client = Twilio(params.accountSid.trim(), params.authToken.trim());
@@ -487,6 +491,7 @@ export class TwilioService implements OnModuleInit {
       this.logger.log(
         `Twilio inbound webhook synced for ${params.phoneNumber} → ${webhookUrl}`,
       );
+      return { smsUrl: webhookUrl };
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
@@ -496,8 +501,9 @@ export class TwilioService implements OnModuleInit {
       this.logger.warn(
         `Twilio inbound webhook sync failed for ${params.phoneNumber} → ${detail}`,
       );
+      // Do not leak Twilio/API internals to the client.
       throw new BadRequestException(
-        `Number saved, but inbound SMS webhook could not be set: ${detail}. Replies may not appear in Guest Chats until this is fixed.`,
+        'Inbound SMS webhook could not be set. Check the URL and try again.',
       );
     }
   }
@@ -530,6 +536,408 @@ export class TwilioService implements OnModuleInit {
         `Twilio inbound webhook clear failed for ${params.phoneNumber} → ${detail}`,
       );
       return false;
+    }
+  }
+
+  /**
+   * Super Admin Twilio basic overview (server-side).
+   * Returns account owner name, balance, and owned numbers.
+   * SIDs stay internal for assignment matching — not meant for the public API shape.
+   * Related: platform-admin.service getTwilioDashboard
+   */
+  async getPlatformCreditsAndNumbers(): Promise<{
+    configured: boolean;
+    accountOwnerName: string | null;
+    balance: {
+      amount: number | null;
+      currency: string | null;
+    } | null;
+    defaultWebhookUrl: string | null;
+    phoneNumbers: Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+      status: string | null;
+      addressRequirement: string | null;
+      dateCreated: string | null;
+      webhookUrl: string | null;
+      webhookConfigured: boolean;
+      capabilities: {
+        sms: boolean;
+        mms: boolean;
+        voice: boolean;
+        fax: boolean;
+      };
+    }>;
+    error: string | null;
+  }> {
+    const accountSid = resolveAccountSid() || null;
+    const authToken = envTrim('TWILIO_AUTH_TOKEN') || null;
+    const configured = Boolean(accountSid && authToken);
+    const defaultWebhookUrl = envTrim('TWILIO_WEBHOOK_PUBLIC_URL') || null;
+
+    const base = {
+      configured,
+      accountOwnerName: null as string | null,
+      defaultWebhookUrl,
+      balance: null as {
+        amount: number | null;
+        currency: string | null;
+      } | null,
+      phoneNumbers: [] as Array<{
+        sid: string;
+        phoneNumber: string;
+        friendlyName: string | null;
+        status: string | null;
+        addressRequirement: string | null;
+        dateCreated: string | null;
+        webhookUrl: string | null;
+        webhookConfigured: boolean;
+        capabilities: {
+          sms: boolean;
+          mms: boolean;
+          voice: boolean;
+          fax: boolean;
+        };
+      }>,
+      error: null as string | null,
+    };
+
+    if (!accountSid || !authToken) {
+      // Keep this message non-technical — no env key names on the client.
+      base.error = 'Twilio is not connected on this server yet.';
+      return base;
+    }
+
+    try {
+      const client = this.client ?? Twilio(accountSid, authToken);
+      const [account, balance, numbers] = await Promise.all([
+        client.api
+          .accounts(accountSid)
+          .fetch()
+          .catch(() => null),
+        client.balance.fetch().catch(() => null),
+        client.incomingPhoneNumbers.list({ limit: 200 }),
+      ]);
+
+      base.accountOwnerName =
+        account?.friendlyName?.trim() ||
+        envTrim('TWILIO_SMS_SENDER_NAME') ||
+        null;
+
+      if (balance) {
+        const amount = Number(balance.balance);
+        base.balance = {
+          amount: Number.isFinite(amount) ? amount : null,
+          currency: balance.currency?.trim() || null,
+        };
+      }
+
+      // sid kept only for server-side business matching; stripped before API response.
+      base.phoneNumbers = numbers
+        .map((n) => {
+          const caps = n.capabilities as
+            | {
+                sms?: boolean;
+                mms?: boolean;
+                voice?: boolean;
+                fax?: boolean;
+              }
+            | undefined;
+          // Some Twilio SDK builds omit `status` on IncomingPhoneNumber — read safely.
+          const statusRaw = (n as { status?: string | null }).status;
+          const webhookUrl = n.smsUrl?.trim() || null;
+          return {
+            sid: n.sid,
+            phoneNumber: n.phoneNumber,
+            friendlyName: n.friendlyName?.trim() || null,
+            status: statusRaw?.trim() || null,
+            addressRequirement: n.addressRequirements?.trim() || null,
+            dateCreated: n.dateCreated
+              ? new Date(n.dateCreated).toISOString()
+              : null,
+            webhookUrl,
+            webhookConfigured: Boolean(webhookUrl),
+            capabilities: {
+              sms: Boolean(caps?.sms),
+              mms: Boolean(caps?.mms),
+              voice: Boolean(caps?.voice),
+              fax: Boolean(caps?.fax),
+            },
+          };
+        })
+        .filter((n) => Boolean(n.sid && n.phoneNumber));
+
+      return base;
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(`Twilio credits/numbers view failed → ${detail}`);
+      // Do not forward raw Twilio/API details to the dashboard client.
+      base.error = 'Could not load Twilio account overview right now.';
+      return base;
+    }
+  }
+
+  async getPlatformAccountView(): Promise<{
+    configured: boolean;
+    smsReady: boolean;
+    accountSidMasked: string | null;
+    defaultFromNumber: string | null;
+    senderName: string | null;
+    webhookUrl: string | null;
+    account: {
+      friendlyName: string | null;
+      status: string | null;
+      type: string | null;
+    } | null;
+    balance: {
+      amount: number | null;
+      currency: string | null;
+    } | null;
+    usage: {
+      smsThisMonth: number | null;
+      smsSpendThisMonth: number | null;
+      totalSpendThisMonth: number | null;
+      currency: string | null;
+      dailySms: Array<{ date: string; count: number }>;
+    };
+    recentMessages: Array<{
+      sid: string;
+      from: string | null;
+      to: string | null;
+      body: string | null;
+      status: string | null;
+      direction: string | null;
+      dateSent: string | null;
+      price: string | null;
+      priceUnit: string | null;
+      errorCode: string | null;
+    }>;
+    phoneNumbers: Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+      smsUrl: string | null;
+      capabilities: {
+        sms: boolean;
+        mms: boolean;
+        voice: boolean;
+      };
+    }>;
+    error: string | null;
+  }> {
+    const accountSid = resolveAccountSid() || null;
+    const authToken = envTrim('TWILIO_AUTH_TOKEN') || null;
+    const defaultFromNumber =
+      this.fromPhoneNumber ||
+      normalizeTwilioPhoneNumber(envTrim('TWILIO_PHONE_NUMBER'));
+    const senderName = envTrim('TWILIO_SMS_SENDER_NAME') || null;
+    const webhookUrl = envTrim('TWILIO_WEBHOOK_PUBLIC_URL') || null;
+    const configured = Boolean(accountSid && authToken);
+
+    const emptyUsage = {
+      smsThisMonth: null as number | null,
+      smsSpendThisMonth: null as number | null,
+      totalSpendThisMonth: null as number | null,
+      currency: null as string | null,
+      dailySms: [] as Array<{ date: string; count: number }>,
+    };
+
+    const base = {
+      configured,
+      smsReady: this.isConfigured(),
+      accountSidMasked: maskTwilioAccountSid(accountSid),
+      defaultFromNumber,
+      senderName,
+      webhookUrl,
+      account: null as {
+        friendlyName: string | null;
+        status: string | null;
+        type: string | null;
+      } | null,
+      balance: null as {
+        amount: number | null;
+        currency: string | null;
+      } | null,
+      usage: emptyUsage,
+      recentMessages: [] as Array<{
+        sid: string;
+        from: string | null;
+        to: string | null;
+        body: string | null;
+        status: string | null;
+        direction: string | null;
+        dateSent: string | null;
+        price: string | null;
+        priceUnit: string | null;
+        errorCode: string | null;
+      }>,
+      phoneNumbers: [] as Array<{
+        sid: string;
+        phoneNumber: string;
+        friendlyName: string | null;
+        smsUrl: string | null;
+        capabilities: {
+          sms: boolean;
+          mms: boolean;
+          voice: boolean;
+        };
+      }>,
+      error: null as string | null,
+    };
+
+    if (!accountSid || !authToken) {
+      base.error = 'Twilio is not connected on this server yet.';
+      return base;
+    }
+
+    try {
+      const client = this.client ?? Twilio(accountSid, authToken);
+      const now = new Date();
+      const monthStart = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+      );
+      const dayStart = new Date(now);
+      dayStart.setUTCDate(dayStart.getUTCDate() - 6);
+      dayStart.setUTCHours(0, 0, 0, 0);
+
+      const [
+        account,
+        balance,
+        numbers,
+        smsMonth,
+        totalMonth,
+        smsDaily,
+        messages,
+      ] = await Promise.all([
+        client.api.accounts(accountSid).fetch(),
+        client.balance.fetch().catch(() => null),
+        client.incomingPhoneNumbers.list({ limit: 200 }),
+        client.usage.records
+          .list({
+            category: 'sms',
+            startDate: monthStart,
+            endDate: now,
+            limit: 1,
+          })
+          .catch(() => []),
+        client.usage.records
+          .list({
+            category: 'totalprice',
+            startDate: monthStart,
+            endDate: now,
+            limit: 1,
+          })
+          .catch(() => []),
+        client.usage.records.daily
+          .list({
+            category: 'sms',
+            startDate: dayStart,
+            endDate: now,
+            limit: 14,
+          })
+          .catch(() => []),
+        client.messages.list({ limit: 40 }).catch(() => []),
+      ]);
+
+      base.account = {
+        friendlyName: account.friendlyName?.trim() || null,
+        status: account.status?.trim() || null,
+        type: account.type?.trim() || null,
+      };
+
+      if (balance) {
+        const amount = Number(balance.balance);
+        base.balance = {
+          amount: Number.isFinite(amount) ? amount : null,
+          currency: balance.currency?.trim() || null,
+        };
+      }
+
+      const smsMonthRow = smsMonth[0];
+      const totalMonthRow = totalMonth[0];
+      const smsCount = Number(smsMonthRow?.count ?? smsMonthRow?.usage);
+      const smsPrice = Number(smsMonthRow?.price);
+      const totalPrice = Number(totalMonthRow?.price);
+
+      base.usage = {
+        smsThisMonth: Number.isFinite(smsCount) ? smsCount : null,
+        smsSpendThisMonth: Number.isFinite(smsPrice) ? smsPrice : null,
+        totalSpendThisMonth: Number.isFinite(totalPrice) ? totalPrice : null,
+        currency:
+          smsMonthRow?.priceUnit?.trim() ||
+          totalMonthRow?.priceUnit?.trim() ||
+          balance?.currency?.trim() ||
+          null,
+        dailySms: [...smsDaily]
+          .map((row) => {
+            const dateValue = row.startDate
+              ? new Date(row.startDate).toISOString().slice(0, 10)
+              : '';
+            const count = Number(row.count ?? row.usage);
+            return {
+              date: dateValue,
+              count: Number.isFinite(count) ? count : 0,
+            };
+          })
+          .filter((row) => Boolean(row.date))
+          .sort((a, b) => a.date.localeCompare(b.date)),
+      };
+
+      // `.catch(() => [])` widens Twilio MessageInstance[] — normalize safely.
+      base.recentMessages = (
+        messages as Array<{
+          sid?: string;
+          from?: string | null;
+          to?: string | null;
+          body?: string | null;
+          status?: string | null;
+          direction?: string | null;
+          dateSent?: string | Date | null;
+          dateCreated?: string | Date | null;
+          price?: string | null;
+          priceUnit?: string | null;
+          errorCode?: string | number | null;
+        }>
+      ).map((message) => ({
+        sid: String(message.sid ?? ''),
+        from: message.from?.trim() || null,
+        to: message.to?.trim() || null,
+        body: message.body?.trim() || null,
+        status: message.status?.trim() || null,
+        direction: message.direction?.trim() || null,
+        dateSent: message.dateSent
+          ? new Date(message.dateSent).toISOString()
+          : message.dateCreated
+            ? new Date(message.dateCreated).toISOString()
+            : null,
+        price: message.price?.trim() || null,
+        priceUnit: message.priceUnit?.trim() || null,
+        errorCode: message.errorCode == null ? null : String(message.errorCode),
+      }));
+
+      base.phoneNumbers = numbers
+        .map((n) => ({
+          sid: n.sid,
+          phoneNumber: n.phoneNumber,
+          friendlyName: n.friendlyName?.trim() || null,
+          smsUrl: n.smsUrl?.trim() || null,
+          capabilities: {
+            sms: Boolean(n.capabilities?.sms),
+            mms: Boolean(n.capabilities?.mms),
+            voice: Boolean(n.capabilities?.voice),
+          },
+        }))
+        .filter((n) => Boolean(n.sid && n.phoneNumber));
+
+      return base;
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(`Twilio platform account view failed → ${detail}`);
+      base.error = detail;
+      return base;
     }
   }
 
@@ -586,10 +994,76 @@ function requireInboundWebhookUrl(): string {
   const webhookUrl = envTrim('TWILIO_WEBHOOK_PUBLIC_URL');
   if (!webhookUrl) {
     throw new BadRequestException(
-      'Inbound SMS is not configured on the server (TWILIO_WEBHOOK_PUBLIC_URL). Connect cannot finish until this is set so replies can reach Dealioo.',
+      'Inbound SMS is not configured on the server yet. Connect cannot finish until the webhook URL is set so replies can reach Dealioo.',
     );
   }
-  return webhookUrl;
+  return assertSafePublicHttpsWebhookUrl(webhookUrl);
+}
+
+/**
+ * Ensure webhook targets are public HTTPS only (blocks localhost / private IPs).
+ * Used before writing smsUrl onto a Twilio phone number.
+ */
+function assertSafePublicHttpsWebhookUrl(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    throw new BadRequestException('Webhook URL is required.');
+  }
+  if (value.length > 500) {
+    throw new BadRequestException('Webhook URL is too long.');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new BadRequestException('Webhook URL is not valid.');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new BadRequestException('Webhook URL must use https.');
+  }
+  if (parsed.username || parsed.password) {
+    throw new BadRequestException(
+      'Webhook URL must not include username or password.',
+    );
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal')
+  ) {
+    throw new BadRequestException(
+      'Webhook URL cannot point to a local or internal host.',
+    );
+  }
+
+  // Block common private / link-local IPv4 ranges (SSRF hygiene).
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const parts = ipv4.slice(1).map((part) => Number(part));
+    const [a, b] = parts;
+    const isPrivate =
+      a === 10 ||
+      a === 127 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168);
+    if (isPrivate || parts.some((n) => n > 255)) {
+      throw new BadRequestException(
+        'Webhook URL cannot point to a private network address.',
+      );
+    }
+  }
+
+  return parsed.toString();
 }
 
 function resolveAccountSid(): string | undefined {

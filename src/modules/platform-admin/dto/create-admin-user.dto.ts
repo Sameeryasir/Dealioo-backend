@@ -5,15 +5,18 @@ import {
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
 } from 'class-validator';
-import { IsStrongEnoughPassword } from '../../auth/auth-password.util';
 
 export class CreateAdminUserDto {
   @IsString()
   @IsNotEmpty()
-  @MaxLength(120)
-  name: string;
+  @MaxLength(60)
+  firstName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  lastName: string;
 
   @IsString()
   @IsNotEmpty()
@@ -25,13 +28,6 @@ export class CreateAdminUserDto {
   @IsString()
   @MaxLength(40)
   phone?: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @MinLength(8)
-  @MaxLength(128)
-  @IsStrongEnoughPassword()
-  password: string;
 
   @IsString()
   @IsNotEmpty()

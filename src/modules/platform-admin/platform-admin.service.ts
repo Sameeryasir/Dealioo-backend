@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,15 +16,19 @@ import {
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
+import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
+import {
+  SubscriptionPlan,
+  type SubscriptionPlanDescription,
+} from '../../db/entities/subscription-plan.entity';
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { CUSTOMER_ONBOARDING_STATUS } from '../customer-onboarding/customer-onboarding.constants';
 import { BUSINESS_MEMBER_STATUS } from '../member/business-member-status';
 import { ALL_BUSINESS_MEMBER_PERMISSIONS } from '../member/member.constants';
-import * as bcrypt from 'bcrypt';
 import {
   isValidBusinessSlug,
   slugifyBusinessName,
@@ -37,18 +42,26 @@ import {
 } from '../../utils/user-roles';
 import { computeBusinessSetupProgressFromEntity } from '../business/business-setup-progress';
 import { PlatformAdminAuditLog } from '../../db/entities/platform-admin-audit-log.entity';
+import { AuthService } from '../auth/auth.service';
 import { JwtStrategy } from '../auth/jwt/jwt.strategy';
+import { StripeService } from '../stripe/stripe.service';
+import { TwilioService } from '../sms/twilio.service';
 import { CreateAdminBusinessDto } from './dto/create-admin-business.dto';
+import { CreateAdminPlanDto } from './dto/create-admin-plan.dto';
 import { CreateAdminUserDto } from './dto/create-admin-user.dto';
+import { AssignAdminTwilioNumberDto } from './dto/assign-admin-twilio-number.dto';
+import { PurchaseAdminTwilioNumberDto } from './dto/purchase-admin-twilio-number.dto';
+import { SearchAdminTwilioNumbersDto } from './dto/search-admin-twilio-numbers.dto';
+import { SetAdminTwilioWebhookDto } from './dto/set-admin-twilio-webhook.dto';
+import { UpdateAdminPlanDto } from './dto/update-admin-plan.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 
 export type AdminUsersTab =
-  | 'all'
   | 'active'
   | 'inactive'
-  | 'admins'
   | 'managers'
-  | 'viewers';
+  | 'staff'
+  | 'scanners';
 
 export type AdminUsersSort = 'newest' | 'oldest' | 'name_asc' | 'name_desc';
 
@@ -62,12 +75,11 @@ export type AdminUsersSummary = {
   activeSharePct: number;
   inactiveSharePct: number;
   tabs: {
-    all: number;
     active: number;
     inactive: number;
-    admins: number;
     managers: number;
-    viewers: number;
+    staff: number;
+    scanners: number;
   };
 };
 import {
@@ -203,6 +215,8 @@ export type PlatformAdminOverview = {
 
 @Injectable()
 export class PlatformAdminService {
+  private readonly logger = new Logger(PlatformAdminService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -212,6 +226,8 @@ export class PlatformAdminService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(BusinessMember)
     private readonly businessMemberRepository: Repository<BusinessMember>,
+    @InjectRepository(BusinessTwilioIntegration)
+    private readonly businessTwilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
     @InjectRepository(UserSubscription)
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(AdminNotification)
@@ -222,7 +238,12 @@ export class PlatformAdminService {
     private readonly customerOnboardingRepository: Repository<CustomerOnboarding>,
     @InjectRepository(PlatformAdminAuditLog)
     private readonly auditLogRepository: Repository<PlatformAdminAuditLog>,
+    @InjectRepository(SubscriptionPlan)
+    private readonly subscriptionPlanRepository: Repository<SubscriptionPlan>,
     private readonly jwtStrategy: JwtStrategy,
+    private readonly authService: AuthService,
+    private readonly stripeService: StripeService,
+    private readonly twilioService: TwilioService,
   ) {}
 
   private assertSuperAdmin(user: User): void {
@@ -1091,17 +1112,18 @@ export class PlatformAdminService {
   }
 
   private parseUsersTab(raw?: string): AdminUsersTab {
-    const value = (raw ?? 'all').trim().toLowerCase();
+    const value = (raw ?? 'active').trim().toLowerCase();
     if (
       value === 'active' ||
       value === 'inactive' ||
-      value === 'admins' ||
       value === 'managers' ||
-      value === 'viewers'
+      value === 'staff' ||
+      value === 'scanners' ||
+      value === 'scanner'
     ) {
-      return value;
+      return value === 'scanner' ? 'scanners' : value;
     }
-    return 'all';
+    return 'active';
   }
 
   private parseUsersSort(raw?: string): AdminUsersSort {
@@ -1126,24 +1148,20 @@ export class PlatformAdminService {
       qb.andWhere('u.isActive = true');
     } else if (tab === 'inactive') {
       qb.andWhere('u.isActive = false');
-    } else if (tab === 'admins') {
-      qb.andWhere(
-        `(role.name IN (:...adminRoles) OR ${this.usersWithBusinessRolesSql})`,
-        {
-          adminRoles: [ADMIN_ROLE, SUPER_ADMIN_ROLE],
-          bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
-          bmRoles: ['Owner', 'Admin'],
-        },
-      );
     } else if (tab === 'managers') {
       qb.andWhere(this.usersWithBusinessRolesSql, {
         bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
         bmRoles: ['Manager'],
       });
-    } else if (tab === 'viewers') {
+    } else if (tab === 'staff') {
       qb.andWhere(this.usersWithBusinessRolesSql, {
         bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
-        bmRoles: ['Staff', 'Scanner'],
+        bmRoles: ['Staff'],
+      });
+    } else if (tab === 'scanners') {
+      qb.andWhere(this.usersWithBusinessRolesSql, {
+        bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
+        bmRoles: ['Scanner'],
       });
     }
   }
@@ -1173,9 +1191,9 @@ export class PlatformAdminService {
       total,
       active,
       inactive,
-      admins,
       managers,
-      viewers,
+      staff,
+      scanners,
       newUsers,
       prevNewUsers,
       totalPrev,
@@ -1183,18 +1201,9 @@ export class PlatformAdminService {
       base().getCount(),
       base().andWhere('u.isActive = true').getCount(),
       base().andWhere('u.isActive = false').getCount(),
-      base()
-        .andWhere(
-          `(role.name IN (:...adminRoles) OR ${this.usersWithBusinessRolesSql})`,
-          {
-            adminRoles: [ADMIN_ROLE, SUPER_ADMIN_ROLE],
-            bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
-            bmRoles: ['Owner', 'Admin'],
-          },
-        )
-        .getCount(),
       countWithBusinessRoles(['Manager']),
-      countWithBusinessRoles(['Staff', 'Scanner']),
+      countWithBusinessRoles(['Staff']),
+      countWithBusinessRoles(['Scanner']),
       base()
         .andWhere('u.createdAt >= :from', { from: last30Start })
         .getCount(),
@@ -1227,12 +1236,11 @@ export class PlatformAdminService {
       activeSharePct,
       inactiveSharePct,
       tabs: {
-        all: total,
         active,
         inactive,
-        admins,
         managers,
-        viewers,
+        staff,
+        scanners,
       },
     };
   }
@@ -1357,19 +1365,35 @@ export class PlatformAdminService {
     }
 
     const phone = dto.phone?.trim() ?? '';
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const firstName = dto.firstName.trim();
+    const lastName = dto.lastName.trim();
+    const fullName = `${firstName} ${lastName}`.trim();
     const created = this.userRepository.create({
-      name: dto.name.trim(),
+      name: fullName,
+      firstName,
+      lastName,
       email,
       phone: phone.length > 0 ? phone : null,
-      passwordHash,
+      passwordHash: null,
       role,
       createdBy: actor,
       isActive: true,
-      emailVerified: true,
+      emailVerified: false,
       provider: 'LOCAL',
     });
     const saved = await this.userRepository.save(created);
+
+    let passwordSetupEmailSent = false;
+    try {
+      await this.authService.sendSetPasswordSetupEmail(saved);
+      passwordSetupEmailSent = true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send set-password email for user ${saved.id}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+
     await this.writeAudit({
       actorUserId: actor.id,
       action: 'user.create',
@@ -1379,6 +1403,7 @@ export class PlatformAdminService {
         email: saved.email,
         roleName,
         elevatedToSuperAdmin: isSuperAdminRole(roleName),
+        passwordSetupEmailSent,
       },
     });
     const withRole = await this.userRepository.findOne({
@@ -2126,6 +2151,691 @@ export class PlatformAdminService {
       },
       businesses: [],
       users: [],
+    };
+  }
+
+  /**
+   * Super Admin Twilio overview for the UI.
+   * Returns: owner name, credits, numbers (+ webhook URL for editing), business name.
+   * Never returns Account SID, Auth Token, or phone SIDs.
+   * Related: twilio.service getPlatformCreditsAndNumbers
+   */
+  async getTwilioDashboard(actor: User) {
+    this.assertSuperAdmin(actor);
+
+    const [platform, connectedBusinesses] = await Promise.all([
+      this.twilioService.getPlatformCreditsAndNumbers(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .select([
+          'b.id',
+          'b.name',
+          'b.twilioPhoneSid',
+          'b.twilioPhoneNumber',
+          'b.twilioConnectedAt',
+        ])
+        .where('b.twilioPhoneSid IS NOT NULL')
+        .andWhere("TRIM(b.twilioPhoneSid) <> ''")
+        .andWhere('b.twilioPhoneNumber IS NOT NULL')
+        .andWhere("TRIM(b.twilioPhoneNumber) <> ''")
+        .orderBy('b.name', 'ASC')
+        .getMany(),
+    ]);
+
+    const bySid = new Map(
+      connectedBusinesses
+        .filter((b) => b.twilioPhoneSid?.trim())
+        .map((b) => [b.twilioPhoneSid!.trim(), b]),
+    );
+    const byNumber = new Map(
+      connectedBusinesses
+        .filter((b) => b.twilioPhoneNumber?.trim())
+        .map((b) => [b.twilioPhoneNumber!.trim(), b]),
+    );
+
+    // Number detail for the UI — includes webhook URL so Super Admin can edit it.
+    // SIDs and auth tokens stay off this payload.
+    const numbers = platform.phoneNumbers.map((number) => {
+      const assigned =
+        bySid.get(number.sid) || byNumber.get(number.phoneNumber) || null;
+      return {
+        phoneNumber: number.phoneNumber,
+        label: number.friendlyName,
+        status: number.status,
+        addressRequirement: number.addressRequirement,
+        dateCreated: number.dateCreated,
+        webhookUrl: number.webhookUrl,
+        webhookConfigured: number.webhookConfigured,
+        capabilities: number.capabilities,
+        businessName: assigned?.name?.trim() || null,
+        connectedAt: assigned?.twilioConnectedAt
+          ? new Date(assigned.twilioConnectedAt).toISOString()
+          : null,
+      };
+    });
+
+    return {
+      configured: platform.configured,
+      accountOwnerName: platform.accountOwnerName,
+      defaultWebhookUrl: platform.defaultWebhookUrl,
+      balance: platform.balance,
+      numbers,
+      counts: {
+        phoneNumbers: numbers.length,
+        assigned: numbers.filter((row) => row.businessName).length,
+        unassigned: numbers.filter((row) => !row.businessName).length,
+      },
+      error: platform.error,
+    };
+  }
+
+  async searchTwilioAvailableNumbers(
+    actor: User,
+    dto: SearchAdminTwilioNumbersDto,
+  ) {
+    this.assertSuperAdmin(actor);
+    const platform = this.twilioService.requirePlatformCredentials();
+    const numbers = await this.twilioService.searchAvailablePhoneNumbers({
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
+      countryCode: dto.country?.trim() || dto.countryCode,
+      areaCode: dto.areaCode,
+      areaName: dto.areaName,
+      contains: dto.contains,
+      voice: dto.voice,
+      sms: dto.sms ?? true,
+      limit: dto.limit,
+    });
+    return { numbers };
+  }
+
+  async purchaseTwilioNumber(actor: User, dto: PurchaseAdminTwilioNumberDto) {
+    this.assertSuperAdmin(actor);
+    const platform = this.twilioService.requirePlatformCredentials();
+    this.twilioService.assertInboundSmsConfigured();
+
+    const purchased = await this.twilioService.purchasePhoneNumber({
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
+      phoneNumber: dto.phoneNumber,
+    });
+
+    await this.twilioService.syncInboundWebhookForNumber({
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
+      phoneSid: purchased.sid,
+      phoneNumber: purchased.phoneNumber,
+    });
+
+    let assignedBusiness: {
+      id: number;
+      name: string;
+      twilioConnectedAt: Date;
+    } | null = null;
+
+    if (dto.businessId != null) {
+      const business = await this.businessRepository.findOne({
+        where: { id: dto.businessId },
+      });
+      if (!business) {
+        throw new NotFoundException('Business not found.');
+      }
+
+      const connectedAt = new Date();
+      business.twilioPhoneSid = purchased.sid;
+      business.twilioPhoneNumber = purchased.phoneNumber;
+      business.twilioConnectedAt = connectedAt;
+      await this.businessRepository.save(business);
+
+      let integration = await this.businessTwilioIntegrationRepository.findOne({
+        where: { businessId: business.id },
+      });
+      if (!integration) {
+        integration = this.businessTwilioIntegrationRepository.create({
+          businessId: business.id,
+        });
+      }
+      integration.twilioPhoneSid = purchased.sid;
+      integration.twilioPhoneNumber = purchased.phoneNumber;
+      integration.twilioConnectedAt = connectedAt;
+      await this.businessTwilioIntegrationRepository.save(integration);
+
+      assignedBusiness = {
+        id: business.id,
+        name: business.name,
+        twilioConnectedAt: connectedAt,
+      };
+    }
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'twilio_number_purchased',
+      targetType: 'twilio_phone_number',
+      targetId: purchased.phoneNumber,
+      metadata: {
+        phoneNumber: purchased.phoneNumber,
+        businessId: assignedBusiness?.id ?? null,
+      },
+    });
+
+    // Safe client payload — no SID / confidential Twilio ids.
+    return {
+      phoneNumber: purchased.phoneNumber,
+      friendlyName: purchased.friendlyName,
+      assignedBusiness: assignedBusiness
+        ? { name: assignedBusiness.name }
+        : null,
+    };
+  }
+
+  /**
+   * Attach the platform inbound SMS webhook to a specific owned number.
+   * Resolves the Twilio phone SID server-side from the phone number.
+   */
+  async setTwilioWebhook(actor: User, dto: SetAdminTwilioWebhookDto) {
+    this.assertSuperAdmin(actor);
+    const platform = this.twilioService.requirePlatformCredentials();
+    const phoneNumber = dto.phoneNumber.trim();
+    const smsUrl = dto.smsUrl?.trim() || undefined;
+
+    // Resolve SID server-side — never require the client to send it.
+    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
+    const match = owned.find((row) => row.phoneNumber === phoneNumber);
+    if (!match?.sid) {
+      throw new NotFoundException(
+        'That phone number was not found on the Twilio account.',
+      );
+    }
+
+    const result = await this.twilioService.syncInboundWebhookForNumber({
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
+      phoneSid: match.sid,
+      phoneNumber,
+      smsUrl,
+    });
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'twilio_webhook_set',
+      targetType: 'twilio_phone_number',
+      targetId: phoneNumber,
+      metadata: {
+        phoneNumber,
+        // Store host only in audit — full URL can be reconstructed from Twilio.
+        webhookHost: (() => {
+          try {
+            return new URL(result.smsUrl).host;
+          } catch {
+            return null;
+          }
+        })(),
+      },
+    });
+
+    return {
+      phoneNumber,
+      webhookUrl: result.smsUrl,
+      ok: true,
+    };
+  }
+
+  async syncAllTwilioWebhooks(actor: User) {
+    this.assertSuperAdmin(actor);
+    const platform = this.twilioService.requirePlatformCredentials();
+    this.twilioService.assertInboundSmsConfigured();
+    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
+    const results: Array<{
+      phoneNumber: string;
+      ok: boolean;
+      error: string | null;
+    }> = [];
+
+    for (const number of owned) {
+      try {
+        await this.twilioService.syncInboundWebhookForNumber({
+          accountSid: platform.accountSid,
+          authToken: platform.authToken,
+          phoneSid: number.sid,
+          phoneNumber: number.phoneNumber,
+        });
+        results.push({
+          phoneNumber: number.phoneNumber,
+          ok: true,
+          error: null,
+        });
+      } catch {
+        results.push({
+          phoneNumber: number.phoneNumber,
+          ok: false,
+          error: 'Webhook sync failed for this number.',
+        });
+      }
+    }
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'twilio_webhook_sync_all',
+      targetType: 'twilio_account',
+      targetId: 'platform',
+      metadata: {
+        total: results.length,
+        ok: results.filter((item) => item.ok).length,
+      },
+    });
+
+    // No phone SIDs in the client payload.
+    return {
+      total: results.length,
+      ok: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      results,
+    };
+  }
+
+  async assignTwilioNumber(actor: User, dto: AssignAdminTwilioNumberDto) {
+    this.assertSuperAdmin(actor);
+    const platform = this.twilioService.requirePlatformCredentials();
+    this.twilioService.assertInboundSmsConfigured();
+
+    const business = await this.businessRepository.findOne({
+      where: { id: dto.businessId },
+    });
+    if (!business) {
+      throw new NotFoundException('Business not found.');
+    }
+
+    const phoneNumber = dto.phoneNumber.trim();
+    const phoneSid = dto.phoneSid?.trim() || '';
+    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
+    const match = owned.find(
+      (item) =>
+        item.phoneNumber === phoneNumber ||
+        (phoneSid ? item.sid === phoneSid : false),
+    );
+    if (!match) {
+      throw new BadRequestException(
+        'That phone number is not on the Dealioo Twilio account.',
+      );
+    }
+
+    const connectedAt = new Date();
+    business.twilioPhoneSid = match.sid;
+    business.twilioPhoneNumber = match.phoneNumber;
+    business.twilioConnectedAt = connectedAt;
+    await this.businessRepository.save(business);
+
+    let integration = await this.businessTwilioIntegrationRepository.findOne({
+      where: { businessId: business.id },
+    });
+    if (!integration) {
+      integration = this.businessTwilioIntegrationRepository.create({
+        businessId: business.id,
+      });
+    }
+    integration.twilioPhoneSid = match.sid;
+    integration.twilioPhoneNumber = match.phoneNumber;
+    integration.twilioConnectedAt = connectedAt;
+    await this.businessTwilioIntegrationRepository.save(integration);
+
+    await this.twilioService.syncInboundWebhookForNumber({
+      accountSid: platform.accountSid,
+      authToken: platform.authToken,
+      phoneSid: match.sid,
+      phoneNumber: match.phoneNumber,
+    });
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'twilio_number_assigned',
+      targetType: 'business',
+      targetId: business.id,
+      metadata: {
+        phoneNumber: match.phoneNumber,
+      },
+    });
+
+    // Safe client payload — no phone SID.
+    return {
+      businessId: business.id,
+      businessName: business.name,
+      twilioPhoneNumber: match.phoneNumber,
+      twilioConnectedAt: connectedAt,
+    };
+  }
+
+  async listSubscriptionPlans(actor: User) {
+    this.assertSuperAdmin(actor);
+    const plans = await this.subscriptionPlanRepository.find({
+      order: { sortOrder: 'ASC', createdAt: 'ASC' },
+    });
+    return {
+      items: plans.map((plan) => this.toAdminPlanItem(plan)),
+      counts: {
+        all: plans.length,
+        active: plans.filter((plan) => plan.isActive).length,
+        inactive: plans.filter((plan) => !plan.isActive).length,
+      },
+    };
+  }
+
+  async createSubscriptionPlan(actor: User, dto: CreateAdminPlanDto) {
+    this.assertSuperAdmin(actor);
+    const slug = dto.slug.trim().toLowerCase();
+    const existing = await this.subscriptionPlanRepository.findOne({
+      where: { slug },
+    });
+    if (existing) {
+      throw new ConflictException('A plan with this slug already exists.');
+    }
+
+    let sortOrder = dto.sortOrder;
+    if (sortOrder == null) {
+      const maxRow = await this.subscriptionPlanRepository
+        .createQueryBuilder('plan')
+        .select('MAX(plan.sortOrder)', 'max')
+        .getRawOne<{ max: string | null }>();
+      const maxValue = Number(maxRow?.max);
+      sortOrder = Number.isFinite(maxValue) ? maxValue + 1 : 0;
+    }
+
+    const plan = this.subscriptionPlanRepository.create({
+      slug,
+      name: dto.name.trim(),
+      monthlyPrice: dto.monthlyPrice === undefined ? null : dto.monthlyPrice,
+      yearlyPrice: dto.yearlyPrice === undefined ? null : dto.yearlyPrice,
+      currency: (dto.currency?.trim() || 'USD').toUpperCase(),
+      isActive: dto.isActive ?? true,
+      sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+      stripeMonthlyPriceId: null,
+      stripeYearlyPriceId: null,
+      description: this.buildPlanDescription(null, dto),
+    });
+
+    await this.syncPlanPricesWithStripe(plan, {
+      syncMonthly: plan.monthlyPrice != null,
+      syncYearly: plan.yearlyPrice != null,
+    });
+
+    const saved = await this.subscriptionPlanRepository.save(plan);
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'subscription_plan_created',
+      targetType: 'subscription_plan',
+      targetId: saved.id,
+      metadata: { slug: saved.slug, name: saved.name },
+    });
+
+    return this.toAdminPlanItem(saved);
+  }
+
+  async updateSubscriptionPlan(
+    actor: User,
+    planId: string,
+    dto: UpdateAdminPlanDto,
+  ) {
+    this.assertSuperAdmin(actor);
+    const plan = await this.subscriptionPlanRepository.findOne({
+      where: { id: planId },
+    });
+    if (!plan) {
+      throw new NotFoundException('Subscription plan not found.');
+    }
+
+    const previousMonthly = this.parsePlanDecimal(plan.monthlyPrice);
+    const previousYearly = this.parsePlanDecimal(plan.yearlyPrice);
+    const previousCurrency = (plan.currency || 'USD').toUpperCase();
+
+    if (dto.slug != null) {
+      const nextSlug = dto.slug.trim().toLowerCase();
+      if (nextSlug !== plan.slug) {
+        const clash = await this.subscriptionPlanRepository.findOne({
+          where: { slug: nextSlug },
+        });
+        if (clash) {
+          throw new ConflictException('A plan with this slug already exists.');
+        }
+        plan.slug = nextSlug;
+      }
+    }
+
+    if (dto.name != null) plan.name = dto.name.trim();
+    if (dto.monthlyPrice !== undefined) plan.monthlyPrice = dto.monthlyPrice;
+    if (dto.yearlyPrice !== undefined) plan.yearlyPrice = dto.yearlyPrice;
+    if (dto.currency != null) {
+      plan.currency = dto.currency.trim().toUpperCase() || plan.currency;
+    }
+    if (dto.isActive !== undefined) plan.isActive = dto.isActive;
+    if (dto.sortOrder !== undefined) plan.sortOrder = dto.sortOrder;
+
+    const touchesDescription =
+      dto.badge !== undefined ||
+      dto.tagline !== undefined ||
+      dto.summary !== undefined ||
+      dto.cta !== undefined ||
+      dto.highlighted !== undefined ||
+      dto.color !== undefined ||
+      dto.features !== undefined ||
+      dto.monthlyPrice !== undefined ||
+      dto.yearlyPrice !== undefined ||
+      dto.monthlyOriginalPrice !== undefined ||
+      dto.yearlyOriginalPrice !== undefined ||
+      dto.promo !== undefined;
+
+    if (touchesDescription) {
+      plan.description = this.buildPlanDescription(plan.description, dto);
+    }
+
+    const nextMonthly = this.parsePlanDecimal(plan.monthlyPrice);
+    const nextYearly = this.parsePlanDecimal(plan.yearlyPrice);
+    const nextCurrency = (plan.currency || 'USD').toUpperCase();
+    const currencyChanged = nextCurrency !== previousCurrency;
+
+    await this.syncPlanPricesWithStripe(plan, {
+      syncMonthly:
+        currencyChanged ||
+        (dto.monthlyPrice !== undefined && nextMonthly !== previousMonthly),
+      syncYearly:
+        currencyChanged ||
+        (dto.yearlyPrice !== undefined && nextYearly !== previousYearly),
+    });
+
+    const saved = await this.subscriptionPlanRepository.save(plan);
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'subscription_plan_updated',
+      targetType: 'subscription_plan',
+      targetId: saved.id,
+      metadata: {
+        slug: saved.slug,
+        name: saved.name,
+        monthlyPrice: nextMonthly,
+        yearlyPrice: nextYearly,
+      },
+    });
+
+    return this.toAdminPlanItem(saved);
+  }
+
+  private async syncPlanPricesWithStripe(
+    plan: SubscriptionPlan,
+    opts: { syncMonthly: boolean; syncYearly: boolean },
+  ): Promise<void> {
+    const monthly = this.parsePlanDecimal(plan.monthlyPrice);
+    const yearly = this.parsePlanDecimal(plan.yearlyPrice);
+    const currency = plan.currency || 'USD';
+
+    if (opts.syncMonthly) {
+      if (monthly != null && monthly > 0) {
+        const created = await this.stripeService.createPlatformPlanRecurringPrice(
+          {
+            planSlug: plan.slug,
+            planName: plan.name,
+            amountDollars: monthly,
+            currency,
+            interval: 'month',
+            existingPriceId: plan.stripeMonthlyPriceId,
+          },
+        );
+        plan.stripeMonthlyPriceId = created.stripePriceId;
+      } else {
+        plan.stripeMonthlyPriceId = null;
+      }
+    }
+
+    if (opts.syncYearly) {
+      if (yearly != null && yearly > 0) {
+        const created = await this.stripeService.createPlatformPlanRecurringPrice(
+          {
+            planSlug: plan.slug,
+            planName: plan.name,
+            amountDollars: yearly,
+            currency,
+            interval: 'year',
+            existingPriceId: plan.stripeYearlyPriceId,
+          },
+        );
+        plan.stripeYearlyPriceId = created.stripePriceId;
+      } else {
+        plan.stripeYearlyPriceId = null;
+      }
+    }
+  }
+
+  private toAdminPlanItem(plan: SubscriptionPlan) {
+    return {
+      id: plan.id,
+      slug: plan.slug,
+      name: plan.name,
+      monthlyPrice: this.parsePlanDecimal(plan.monthlyPrice),
+      yearlyPrice: this.parsePlanDecimal(plan.yearlyPrice),
+      currency: plan.currency,
+      isActive: plan.isActive,
+      sortOrder: plan.sortOrder,
+      description: plan.description,
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt,
+    };
+  }
+
+  private parsePlanDecimal(value: unknown): number | null {
+    if (value == null) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private buildPlanDescription(
+    existing: SubscriptionPlanDescription | null,
+    input: {
+      badge?: string | null;
+      tagline?: string;
+      summary?: string;
+      cta?: string;
+      highlighted?: boolean;
+      color?: string;
+      features?: string[];
+      monthlyPrice?: number | null;
+      yearlyPrice?: number | null;
+      monthlyOriginalPrice?: number | null;
+      yearlyOriginalPrice?: number | null;
+      promo?: string | null;
+    },
+  ): SubscriptionPlanDescription {
+    const formatPrice = (value: number | null | undefined) => {
+      if (value == null) return 'Custom';
+      if (Number.isInteger(value)) return `$${value}`;
+      return `$${value.toFixed(2)}`;
+    };
+
+    const formatOptionalPrice = (value: number | null | undefined) => {
+      if (value == null) return null;
+      return formatPrice(value);
+    };
+
+    const nextMonthlyPrice =
+      input.monthlyPrice !== undefined
+        ? formatPrice(input.monthlyPrice)
+        : (existing?.monthly?.price ?? 'Custom');
+    const nextAnnualPrice =
+      input.yearlyPrice !== undefined
+        ? input.yearlyPrice == null
+          ? 'Custom'
+          : formatPrice(Math.round((input.yearlyPrice / 12) * 100) / 100)
+        : (existing?.annual?.price ?? 'Custom');
+    const nextAnnualSubline =
+      input.yearlyPrice !== undefined
+        ? input.yearlyPrice == null
+          ? null
+          : `Billed annually ($${input.yearlyPrice}/year)`
+        : (existing?.annual?.subline ?? null);
+
+    const features =
+      input.features !== undefined
+        ? input.features.map((item) => item.trim()).filter(Boolean)
+        : existing?.features;
+
+    const nextPromo =
+      input.promo !== undefined
+        ? input.promo?.trim() || null
+        : (existing?.monthly?.promo ?? existing?.annual?.promo ?? null);
+
+    const nextMonthlyOriginal =
+      input.monthlyOriginalPrice !== undefined
+        ? formatOptionalPrice(input.monthlyOriginalPrice)
+        : (existing?.monthly?.originalPrice ?? null);
+
+    const nextYearlyOriginal =
+      input.yearlyOriginalPrice !== undefined
+        ? formatOptionalPrice(input.yearlyOriginalPrice)
+        : (existing?.annual?.originalPrice ?? null);
+
+    return {
+      badge:
+        input.badge !== undefined
+          ? input.badge?.trim() || null
+          : (existing?.badge ?? null),
+      tagline:
+        input.tagline !== undefined
+          ? input.tagline.trim()
+          : (existing?.tagline ?? ''),
+      summary:
+        input.summary !== undefined
+          ? input.summary.trim()
+          : (existing?.summary ?? ''),
+      features: features && features.length > 0 ? features : undefined,
+      featureGroups: existing?.featureGroups,
+      cta:
+        input.cta !== undefined
+          ? input.cta.trim() || 'Continue'
+          : (existing?.cta ?? 'Continue'),
+      highlighted:
+        input.highlighted !== undefined
+          ? input.highlighted
+          : (existing?.highlighted ?? false),
+      salesEmail: existing?.salesEmail ?? null,
+      color:
+        input.color !== undefined
+          ? input.color.trim() || existing?.color || '#1877F2'
+          : (existing?.color ?? '#1877F2'),
+      monthly: {
+        price: nextMonthlyPrice,
+        period: nextMonthlyPrice === 'Custom' ? '' : '/ month',
+        originalPrice: nextMonthlyOriginal,
+        promo: nextPromo,
+        subline:
+          nextMonthlyPrice === 'Custom'
+            ? null
+            : (existing?.monthly?.subline ?? 'Billed monthly'),
+      },
+      annual: {
+        price: nextAnnualPrice,
+        period: nextAnnualPrice === 'Custom' ? '' : '/ mo',
+        originalPrice: nextYearlyOriginal,
+        promo: nextPromo,
+        subline: nextAnnualSubline,
+      },
     };
   }
 }

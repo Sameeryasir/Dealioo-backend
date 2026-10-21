@@ -19,7 +19,13 @@ import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { User } from '../../db/entities/user.entity';
 import { CreateAdminBusinessDto } from './dto/create-admin-business.dto';
+import { CreateAdminPlanDto } from './dto/create-admin-plan.dto';
 import { CreateAdminUserDto } from './dto/create-admin-user.dto';
+import { AssignAdminTwilioNumberDto } from './dto/assign-admin-twilio-number.dto';
+import { PurchaseAdminTwilioNumberDto } from './dto/purchase-admin-twilio-number.dto';
+import { SearchAdminTwilioNumbersDto } from './dto/search-admin-twilio-numbers.dto';
+import { SetAdminTwilioWebhookDto } from './dto/set-admin-twilio-webhook.dto';
+import { UpdateAdminPlanDto } from './dto/update-admin-plan.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { PlatformAdminService } from './platform-admin.service';
 import { SuperAdminGuard } from './super-admin.guard';
@@ -130,6 +136,83 @@ export class PlatformAdminController {
     return this.platformAdminService.createBusiness(req.user, body);
   }
 
+  @Get('twilio/dashboard')
+  getTwilioDashboard(@Req() req: { user: User }) {
+    return this.platformAdminService.getTwilioDashboard(req.user);
+  }
+
+  @Get('twilio/available-numbers')
+  searchTwilioAvailableNumbers(
+    @Req() req: { user: User },
+    @Query() query: SearchAdminTwilioNumbersDto,
+  ) {
+    return this.platformAdminService.searchTwilioAvailableNumbers(
+      req.user,
+      query,
+    );
+  }
+
+  @Post('twilio/phone-numbers/purchase')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  purchaseTwilioNumber(
+    @Req() req: { user: User },
+    @Body() body: PurchaseAdminTwilioNumberDto,
+  ) {
+    return this.platformAdminService.purchaseTwilioNumber(req.user, body);
+  }
+
+  @Post('twilio/webhook')
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  setTwilioWebhook(
+    @Req() req: { user: User },
+    @Body() body: SetAdminTwilioWebhookDto,
+  ) {
+    return this.platformAdminService.setTwilioWebhook(req.user, body);
+  }
+
+  @Post('twilio/webhook/sync-all')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  syncAllTwilioWebhooks(@Req() req: { user: User }) {
+    return this.platformAdminService.syncAllTwilioWebhooks(req.user);
+  }
+
+  @Post('twilio/phone-numbers/assign')
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  assignTwilioNumber(
+    @Req() req: { user: User },
+    @Body() body: AssignAdminTwilioNumberDto,
+  ) {
+    return this.platformAdminService.assignTwilioNumber(req.user, body);
+  }
+
+  @Get('subscription-plans')
+  listSubscriptionPlans(@Req() req: { user: User }) {
+    return this.platformAdminService.listSubscriptionPlans(req.user);
+  }
+
+  @Post('subscription-plans')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  createSubscriptionPlan(
+    @Req() req: { user: User },
+    @Body() body: CreateAdminPlanDto,
+  ) {
+    return this.platformAdminService.createSubscriptionPlan(req.user, body);
+  }
+
+  @Patch('subscription-plans/:id')
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  updateSubscriptionPlan(
+    @Req() req: { user: User },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: UpdateAdminPlanDto,
+  ) {
+    return this.platformAdminService.updateSubscriptionPlan(
+      req.user,
+      id,
+      body,
+    );
+  }
+
   @Get('notifications/unread-count')
   getNotificationsUnreadCount(@Req() req: { user: User }) {
     return this.platformAdminService.getNotificationsUnreadCount(req.user);
@@ -214,7 +297,7 @@ export class PlatformAdminController {
       normalized === 'deal_won' ||
       normalized === 'all'
         ? normalized
-        : 'upcoming';
+        : 'all';
     const sort =
       sortRaw === 'meeting_desc' ||
       sortRaw === 'newest' ||

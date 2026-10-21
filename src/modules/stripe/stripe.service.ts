@@ -791,6 +791,139 @@ export class StripeService {
     }
   }
 
+  async createPlatformPlanRecurringPrice(opts: {
+    planSlug: string;
+    planName: string;
+    amountDollars: number;
+    currency: string;
+    interval: 'month' | 'year';
+    existingPriceId?: string | null;
+  }): Promise<{ stripePriceId: string }> {
+    const amountDollars = Number(opts.amountDollars);
+    if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
+      throw new BadRequestException(
+        'Plan price must be greater than zero to sync with Stripe.',
+      );
+    }
+
+    const unitAmount = Math.round(amountDollars * 100);
+    if (!Number.isFinite(unitAmount) || unitAmount < 1) {
+      throw new BadRequestException('Stripe price amount is invalid.');
+    }
+
+    const currency = opts.currency.trim().toLowerCase() || 'usd';
+    const planSlug = opts.planSlug.trim().toLowerCase();
+    const planName = opts.planName.trim() || planSlug || 'Dealioo plan';
+    const existingPriceId = opts.existingPriceId?.trim() || null;
+
+    let productId: string | null = null;
+
+    if (existingPriceId) {
+      try {
+        const existing = await this.stripe.prices.retrieve(existingPriceId, {
+          expand: ['product'],
+        });
+        const product = existing.product;
+        productId =
+          typeof product === 'string'
+            ? product
+            : product && typeof product === 'object' && 'id' in product
+              ? String((product as { id?: string }).id ?? '')
+              : null;
+        productId = productId?.trim() || null;
+
+        const sameAmount = existing.unit_amount === unitAmount;
+        const sameCurrency = existing.currency === currency;
+        const sameInterval = existing.recurring?.interval === opts.interval;
+        if (
+          existing.active &&
+          sameAmount &&
+          sameCurrency &&
+          sameInterval
+        ) {
+          return { stripePriceId: existing.id };
+        }
+      } catch (err) {
+        warnStripePayment({
+          phase: 'platform_plan_price_lookup',
+          outcome: 'reuse_failed',
+          existingPriceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        productId = null;
+      }
+    }
+
+    logStripePayment({
+      phase: 'platform_plan_price_create',
+      planSlug,
+      interval: opts.interval,
+      unitAmount,
+      currency,
+      existingPriceId,
+      productId,
+    });
+
+    try {
+      const price = await this.stripe.prices.create({
+        currency,
+        unit_amount: unitAmount,
+        recurring: { interval: opts.interval },
+        metadata: {
+          dealiooPlanSlug: planSlug,
+          billingInterval: opts.interval,
+        },
+        ...(productId
+          ? { product: productId }
+          : {
+              product_data: {
+                name: planName,
+                metadata: {
+                  dealiooPlanSlug: planSlug,
+                },
+              },
+            }),
+      });
+
+      if (existingPriceId && existingPriceId !== price.id) {
+        try {
+          await this.stripe.prices.update(existingPriceId, { active: false });
+        } catch (err) {
+          warnStripePayment({
+            phase: 'platform_plan_price_archive',
+            outcome: 'archive_failed',
+            existingPriceId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      logStripePayment({
+        phase: 'platform_plan_price_created',
+        outcome: 'success',
+        planSlug,
+        interval: opts.interval,
+        stripePriceId: price.id,
+        productId: typeof price.product === 'string' ? price.product : null,
+      });
+
+      return { stripePriceId: price.id };
+    } catch (err) {
+      errorStripePayment({
+        phase: 'platform_plan_price_create',
+        outcome: 'stripe_api_error',
+        planSlug,
+        interval: opts.interval,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new BadRequestException(
+        err instanceof Error
+          ? `Could not sync plan price to Stripe: ${err.message}`
+          : 'Could not sync plan price to Stripe. Check STRIPE_SECRET_KEY.',
+      );
+    }
+  }
+
   async previewPlatformSubscriptionPriceChange(opts: {
     stripeCustomerId: string;
     stripeSubscriptionId: string;
