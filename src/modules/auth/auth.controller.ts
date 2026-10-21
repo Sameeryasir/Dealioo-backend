@@ -21,6 +21,10 @@ import { VerifyOtpDto } from './authDto/verify-otp.dto';
 import { RefreshTokenDto } from './authDto/refresh-token.dto';
 import { ResendOtpDto } from './authDto/resend-otp.dto';
 import { ResetPasswordDto } from './authDto/reset-password.dto';
+import {
+  PasswordSetupCompleteDto,
+  PasswordSetupTokenDto,
+} from './authDto/password-setup.dto';
 import type { GoogleAuthMode } from './interfaces/google-auth.interface';
 import { AcceptInvitationDto } from '../invitation/invitationDto/accept-invitation.dto';
 import {
@@ -210,6 +214,23 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.resetPassword(dto);
+    setAuthCookies(res, result.token, result.refreshToken);
+    return withoutAuthTokens(result);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('password-setup/start')
+  async startPasswordSetup(@Body() dto: PasswordSetupTokenDto) {
+    return this.authService.startPasswordSetup(dto.token);
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('password-setup/complete')
+  async completePasswordSetup(
+    @Body() dto: PasswordSetupCompleteDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.completePasswordSetup(dto);
     setAuthCookies(res, result.token, result.refreshToken);
     return withoutAuthTokens(result);
   }

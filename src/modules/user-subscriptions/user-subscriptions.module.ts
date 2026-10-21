@@ -1,6 +1,8 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillingOverviewCache } from '../../db/entities/billing-overview-cache.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
+import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
@@ -18,6 +20,8 @@ import { UserSubscriptionsService } from './user-subscriptions.service';
       SubscriptionPlan,
       User,
       BillingOverviewCache,
+      CustomerOnboarding,
+      MeetingRequest,
     ]),
     StripeModule,
     AdminNotificationsModule,

@@ -27,6 +27,9 @@ export type OnboardingStatusResponse = {
   onboardingVersion: string;
   nextStep: OnboardingNextStep;
   redirectPath: string;
+  pendingPlanSlug: string | null;
+  pendingBillingCycle: 'monthly' | 'annual' | null;
+  forcePlanCheckout: boolean;
   progress: number;
   checklist: OnboardingChecklistItem[];
 };

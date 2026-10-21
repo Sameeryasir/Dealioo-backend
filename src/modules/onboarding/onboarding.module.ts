@@ -5,6 +5,8 @@ import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessInvitation } from '../../db/entities/business-invitation.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
+import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { PlanFitAssessment } from '../../db/entities/plan-fit-assessment.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
@@ -27,6 +29,8 @@ import { PlanFitRecommendationService } from './plan-fit/plan-fit-recommendation
       BusinessInvitation,
       Campaign,
       BusinessCustomer,
+      CustomerOnboarding,
+      MeetingRequest,
     ]),
     forwardRef(
       () =>

@@ -15,6 +15,7 @@ import { InvitationModule } from '../invitation/invitation.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { Otp } from '../../db/entities/otp.entity';
+import { PasswordSetupToken } from '../../db/entities/password-setup-token.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
@@ -26,6 +27,7 @@ import { AdminNotification } from '../../db/entities/admin-notification.entity';
       User,
       Role,
       Otp,
+      PasswordSetupToken,
       RefreshToken,
       UserSubscription,
       BusinessMember,

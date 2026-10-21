@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import Stripe from 'stripe';
 import { Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
@@ -700,6 +701,7 @@ export class StripeService {
     priceId: string;
     planSlug: string;
     billingCycle: 'monthly' | 'annual';
+    checkoutAttemptId?: string | null;
   }): Promise<{ url: string; sessionId: string; stripeCustomerId: string }> {
     const frontendBase = getFrontendBaseUrl();
     let stripeCustomerId = opts.stripeCustomerId?.trim() || null;
@@ -716,7 +718,19 @@ export class StripeService {
       stripeCustomerId = customer.id;
     }
 
-    const idempotencyKey = `platform_sub_checkout:${opts.userId}:${opts.planSlug}:${opts.billingCycle}:${opts.priceId}`;
+    // Include customer + attempt so monthly/yearly switches and retries never
+    // reuse a Stripe idempotency key with different session parameters.
+    const attemptId = (opts.checkoutAttemptId ?? '').trim() || randomUUID();
+    const idempotencyKey = [
+      'platform_sub_checkout',
+      'v2',
+      opts.userId,
+      opts.planSlug,
+      opts.billingCycle,
+      opts.priceId,
+      stripeCustomerId,
+      attemptId,
+    ].join(':');
 
     const session = await this.stripe.checkout.sessions.create(
       {
@@ -724,7 +738,7 @@ export class StripeService {
         customer: stripeCustomerId,
         line_items: [{ price: opts.priceId, quantity: 1 }],
         success_url: `${frontendBase}/auth/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${frontendBase}/auth/select-plan?cancelled=1`,
+        cancel_url: `${frontendBase}/auth/select-plan`,
         client_reference_id: String(opts.userId),
         metadata: {
           userId: String(opts.userId),

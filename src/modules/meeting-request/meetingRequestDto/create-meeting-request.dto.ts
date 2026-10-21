@@ -65,6 +65,11 @@ export class CreateMeetingRequestDto {
   @MaxLength(255)
   email: string;
 
+  @IsString()
+  @MinLength(16)
+  @MaxLength(128)
+  emailVerificationToken: string;
+
   @IsOptional()
   @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_BUSINESS_ROLES])
@@ -113,6 +118,19 @@ export class CreateMeetingRequestDto {
   @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)
   @IsIn([...MEETING_COMMITMENTS])
   meetingCommitment?: (typeof MEETING_COMMITMENTS)[number];
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  selectedPlanSlug: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  selectedPlanName: string;
+
+  @IsIn(['monthly', 'annual'])
+  selectedBillingCycle: 'monthly' | 'annual';
 
   @IsOptional()
   @ValidateIf((_, value) => typeof value === 'string' && value.length > 0)

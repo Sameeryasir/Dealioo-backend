@@ -21,6 +21,7 @@ import { BusinessController } from './business.controller';
 import { BusinessService } from './business.service';
 import { BUSINESS_ONBOARDING_QUEUE } from './business-onboarding-queue.constants';
 import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.processor';
+import { RequireActiveSubscriptionGuard } from '../billing/require-active-subscription.guard';
 
 @Module({
   imports: [
@@ -45,7 +46,11 @@ import { BusinessOnboardingQueueProcessor } from './business-onboarding-queue.pr
     BullModule.registerQueue({ name: BUSINESS_ONBOARDING_QUEUE }),
   ],
   controllers: [BusinessController],
-  providers: [BusinessService, BusinessOnboardingQueueProcessor],
+  providers: [
+    BusinessService,
+    BusinessOnboardingQueueProcessor,
+    RequireActiveSubscriptionGuard,
+  ],
   exports: [BusinessService],
 })
 export class BusinessModule {}

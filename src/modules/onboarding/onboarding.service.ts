@@ -14,6 +14,8 @@ import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessInvitation } from '../../db/entities/business-invitation.entity';
 import { BusinessOnboardingDraft } from '../../db/entities/business-onboarding-draft.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
+import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { OnboardingEvent } from '../../db/entities/onboarding-event.entity';
 import { PlanFitAssessment } from '../../db/entities/plan-fit-assessment.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
@@ -112,6 +114,10 @@ export class OnboardingService {
     private readonly campaignRepository: Repository<Campaign>,
     @InjectRepository(BusinessCustomer)
     private readonly businessCustomerRepository: Repository<BusinessCustomer>,
+    @InjectRepository(CustomerOnboarding)
+    private readonly customerOnboardingRepository: Repository<CustomerOnboarding>,
+    @InjectRepository(MeetingRequest)
+    private readonly meetingRequestRepository: Repository<MeetingRequest>,
     @Inject(
       forwardRef(
         () =>
@@ -558,7 +564,12 @@ export class OnboardingService {
 
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: { id: true, onboardingVersion: true, isTwoFactorVerified: true },
+      select: {
+        id: true,
+        onboardingVersion: true,
+        isTwoFactorVerified: true,
+        planFitSelectedPlan: true,
+      },
     });
 
     if (!user) {
@@ -654,12 +665,23 @@ export class OnboardingService {
       customersImported = customerCount > 0;
     }
 
-    const nextStep = this.resolveNextStep({
-      subscriptionSelected: subscriptionCompleted,
-      businessCreated,
-    });
-    const onboardingCompleted = businessCreated;
-    const redirectPath = this.buildRedirectPath(nextStep, onboardingCompleted);
+    const pendingPlanSlug =
+      user.planFitSelectedPlan?.trim().toLowerCase() || null;
+    const needsPlanCheckout = !subscriptionCompleted;
+    const pendingBillingCycle = needsPlanCheckout
+      ? await this.resolvePendingBillingCycle(userId)
+      : null;
+
+    const nextStep = needsPlanCheckout
+      ? 'plan_selection'
+      : this.resolveNextStep({
+          subscriptionSelected: subscriptionCompleted,
+          businessCreated,
+        });
+    const onboardingCompleted = businessCreated && !needsPlanCheckout;
+    const redirectPath = needsPlanCheckout
+      ? '/auth/select-plan'
+      : this.buildRedirectPath(nextStep, onboardingCompleted);
 
     const checklist = this.buildChecklist({
       subscriptionCompleted,
@@ -729,9 +751,39 @@ export class OnboardingService {
       onboardingVersion: user.onboardingVersion || ONBOARDING_VERSION,
       nextStep,
       redirectPath,
+      pendingPlanSlug: needsPlanCheckout ? pendingPlanSlug : null,
+      pendingBillingCycle: needsPlanCheckout ? pendingBillingCycle : null,
+      forcePlanCheckout: needsPlanCheckout && Boolean(pendingPlanSlug),
       progress,
       checklist,
     };
+  }
+
+  private async resolvePendingBillingCycle(
+    userId: number,
+  ): Promise<'monthly' | 'annual' | null> {
+    const onboarding = await this.customerOnboardingRepository.findOne({
+      where: { userId },
+      order: { id: 'DESC' },
+      select: { id: true, meetingId: true, draftPayload: true },
+    });
+    if (!onboarding) return null;
+
+    const fromDraft = onboarding.draftPayload?.meetingSelectedBillingCycle;
+    if (fromDraft === 'monthly' || fromDraft === 'annual') {
+      return fromDraft;
+    }
+
+    if (!onboarding.meetingId) return null;
+    const meeting = await this.meetingRequestRepository.findOne({
+      where: { id: onboarding.meetingId },
+      select: { id: true, selectedBillingCycle: true },
+    });
+    const cycle = meeting?.selectedBillingCycle?.trim().toLowerCase();
+    if (cycle === 'monthly' || cycle === 'annual') {
+      return cycle;
+    }
+    return null;
   }
 
   resolveRedirectPathFromStatus(status: OnboardingStatusResponse): string {
@@ -761,6 +813,9 @@ export class OnboardingService {
       onboardingVersion: ONBOARDING_VERSION,
       nextStep: null,
       redirectPath: input.redirectPath,
+      pendingPlanSlug: null,
+      pendingBillingCycle: null,
+      forcePlanCheckout: false,
       progress: 100,
       checklist: this.buildChecklist({
         subscriptionCompleted: true,

@@ -9,6 +9,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { BillingOverviewCache } from '../../db/entities/billing-overview-cache.entity';
+import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
+import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import {
@@ -107,6 +109,10 @@ export class UserSubscriptionsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(BillingOverviewCache)
     private readonly billingOverviewCacheRepository: Repository<BillingOverviewCache>,
+    @InjectRepository(CustomerOnboarding)
+    private readonly customerOnboardingRepository: Repository<CustomerOnboarding>,
+    @InjectRepository(MeetingRequest)
+    private readonly meetingRequestRepository: Repository<MeetingRequest>,
     private readonly stripeService: StripeService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     @Inject(
@@ -232,7 +238,13 @@ export class UserSubscriptionsService {
   ): Promise<UserSubscriptionCheckoutResponse> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      select: { id: true, email: true, name: true, stripeCustomerId: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        stripeCustomerId: true,
+        planFitSelectedPlan: true,
+      },
     });
 
     if (!user) {
@@ -251,18 +263,27 @@ export class UserSubscriptionsService {
       );
     }
 
+    // Locked meeting/admin plan: ignore client-supplied plan/billing (URL/API tampering).
+    const lockedPlan = user.planFitSelectedPlan?.trim().toLowerCase() || null;
+    const lockedBilling = lockedPlan
+      ? await this.resolveLockedBillingCycle(userId)
+      : null;
+    const planSlug = lockedPlan ?? dto.planSlug.trim().toLowerCase();
+    const billingCycle: UserSubscriptionBillingCycle =
+      lockedBilling ?? dto.billingCycle;
+
     const plan = await this.planRepository.findOne({
-      where: { slug: dto.planSlug.trim().toLowerCase(), isActive: true },
+      where: { slug: planSlug, isActive: true },
     });
 
     if (!plan) {
       throw new NotFoundException('Subscription plan not found.');
     }
 
-    const priceId = this.resolveStripePriceId(plan, dto.billingCycle);
+    const priceId = this.resolveStripePriceId(plan, billingCycle);
     if (!priceId) {
       throw new BadRequestException(
-        dto.billingCycle === 'annual'
+        billingCycle === 'annual'
           ? 'Annual billing is not available for this plan yet. Choose monthly or contact sales.'
           : 'This plan is not available for online checkout. Please contact sales.',
       );
@@ -271,8 +292,12 @@ export class UserSubscriptionsService {
     await this.onboardingService.trackEvent({
       userId,
       eventName: 'checkout_started',
-      idempotencyKey: `checkout_started:${userId}:${plan.slug}:${dto.billingCycle}`,
-      metadata: { planSlug: plan.slug, billingCycle: dto.billingCycle },
+      idempotencyKey: `checkout_started:${userId}:${plan.slug}:${billingCycle}`,
+      metadata: {
+        planSlug: plan.slug,
+        billingCycle,
+        lockedPlan: Boolean(lockedPlan),
+      },
     });
 
     const checkout =
@@ -283,7 +308,8 @@ export class UserSubscriptionsService {
         stripeCustomerId: user.stripeCustomerId,
         priceId,
         planSlug: plan.slug,
-        billingCycle: dto.billingCycle,
+        billingCycle,
+        checkoutAttemptId: dto.checkoutAttemptId ?? null,
       });
 
     if (
@@ -298,6 +324,33 @@ export class UserSubscriptionsService {
     void this.onboardingService.recordPlanSelection(userId, plan.slug);
 
     return { checkoutUrl: checkout.url, sessionId: checkout.sessionId };
+  }
+
+  private async resolveLockedBillingCycle(
+    userId: number,
+  ): Promise<UserSubscriptionBillingCycle | null> {
+    const onboarding = await this.customerOnboardingRepository.findOne({
+      where: { userId },
+      order: { id: 'DESC' },
+      select: { id: true, meetingId: true, draftPayload: true },
+    });
+    if (!onboarding) return null;
+
+    const fromDraft = onboarding.draftPayload?.meetingSelectedBillingCycle;
+    if (fromDraft === 'monthly' || fromDraft === 'annual') {
+      return fromDraft;
+    }
+
+    if (!onboarding.meetingId) return null;
+    const meeting = await this.meetingRequestRepository.findOne({
+      where: { id: onboarding.meetingId },
+      select: { id: true, selectedBillingCycle: true },
+    });
+    const cycle = meeting?.selectedBillingCycle?.trim().toLowerCase();
+    if (cycle === 'monthly' || cycle === 'annual') {
+      return cycle;
+    }
+    return null;
   }
 
   async completeCheckout(

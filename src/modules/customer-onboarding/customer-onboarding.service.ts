@@ -139,6 +139,8 @@ export class CustomerOnboardingService {
       currentSituation: row.currentSituation,
       startTimeline: row.startTimeline,
       meetingCommitment: row.meetingCommitment,
+      selectedPlanSlug: row.selectedPlanSlug,
+      selectedPlanName: row.selectedPlanName,
       scheduledDate: row.scheduledDate,
       scheduledTime: row.scheduledTime,
       scheduledDuration: row.scheduledDuration,
@@ -557,8 +559,10 @@ export class CustomerOnboardingService {
               role,
               createdBy: actor,
               isActive: true,
-              emailVerified: false,
+              emailVerified: true,
               provider: 'LOCAL',
+              planFitSelectedPlan:
+                meeting.selectedPlanSlug?.trim().toLowerCase() || null,
             }),
           );
           createdNewUser = true;
@@ -572,9 +576,28 @@ export class CustomerOnboardingService {
           if (!withPassword?.passwordHash) {
             shouldSendPasswordSetup = true;
           }
+          const meetingPlan = meeting.selectedPlanSlug?.trim().toLowerCase();
+          if (meetingPlan && !user.planFitSelectedPlan) {
+            user.planFitSelectedPlan = meetingPlan;
+            await userRepo.save(user);
+          }
         }
 
         onboarding.userId = user.id;
+        if (meeting.selectedPlanSlug?.trim()) {
+          onboarding.draftPayload = {
+            ...(onboarding.draftPayload ?? {}),
+            meetingSelectedPlanSlug: meeting.selectedPlanSlug
+              .trim()
+              .toLowerCase(),
+            meetingSelectedPlanName: meeting.selectedPlanName?.trim() || null,
+            meetingSelectedBillingCycle:
+              meeting.selectedBillingCycle === 'monthly' ||
+              meeting.selectedBillingCycle === 'annual'
+                ? meeting.selectedBillingCycle
+                : 'monthly',
+          };
+        }
 
         if (
           dto.existingUserAction === 'link_existing_business' &&
@@ -914,7 +937,7 @@ export class CustomerOnboardingService {
           role,
           createdBy: actor,
           isActive: true,
-          emailVerified: false,
+          emailVerified: true,
           provider: 'LOCAL',
         }),
       );

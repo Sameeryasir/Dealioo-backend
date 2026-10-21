@@ -4,14 +4,25 @@ import {
   HttpException,
   Injectable,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash, randomBytes, randomInt } from 'crypto';
+import { render } from '@react-email/render';
+import * as React from 'react';
 import { QueryFailedError, Repository } from 'typeorm';
+import { MeetingEmailChallenge } from '../../db/entities/meeting-email-challenge.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { User } from '../../db/entities/user.entity';
+import { OtpEmail } from '../../templates/otp-email';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { GoogleCalendarService } from '../google-calendar/google-calendar.service';
+import { MailDeliveryService } from '../mail/mail-delivery.service';
 import { CreateMeetingRequestDto } from './meetingRequestDto/create-meeting-request.dto';
+import {
+  ConfirmMeetingEmailOtpDto,
+  SendMeetingEmailOtpDto,
+} from './meetingRequestDto/verify-meeting-email.dto';
 
 function isTakenSlot(error: unknown): boolean {
   if (!(error instanceof QueryFailedError)) return false;
@@ -25,19 +36,94 @@ export class MeetingRequestService {
   constructor(
     @InjectRepository(MeetingRequest)
     private readonly meetingRequestRepo: Repository<MeetingRequest>,
+    @InjectRepository(MeetingEmailChallenge)
+    private readonly emailChallengeRepo: Repository<MeetingEmailChallenge>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly adminNotificationWriter: AdminNotificationWriter,
     private readonly googleCalendarService: GoogleCalendarService,
+    private readonly mailDelivery: MailDeliveryService,
   ) {}
+
+  async sendEmailOtp(
+    dto: SendMeetingEmailOtpDto,
+  ): Promise<{ message: string }> {
+    const email = dto.email.trim().toLowerCase();
+    const code = String(randomInt(100_000, 1_000_000));
+    const expiresInMinutes = 10;
+    const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
+
+    await this.emailChallengeRepo.save(
+      this.emailChallengeRepo.create({
+        email,
+        code,
+        expiresAt,
+        isUsed: false,
+        proofTokenHash: null,
+        proofExpiresAt: null,
+        proofUsedAt: null,
+      }),
+    );
+
+    const html = await render(
+      React.createElement(OtpEmail, {
+        name: email.split('@')[0] || 'there',
+        email,
+        code,
+        expiresInMinutes,
+      }),
+    );
+    await this.mailDelivery.sendHtmlEmail({
+      to: email,
+      subject: process.env.MAIL_OTP_SUBJECT ?? 'Your verification code',
+      html,
+      text: `Your Dealioo verification code is ${code}. It expires in ${expiresInMinutes} minutes.`,
+      tags: ['meeting', 'email-otp'],
+    });
+
+    return { message: 'Verification code sent.' };
+  }
+
+  async confirmEmailOtp(
+    dto: ConfirmMeetingEmailOtpDto,
+  ): Promise<{ message: string; emailVerificationToken: string }> {
+    const email = dto.email.trim().toLowerCase();
+    const code = String(dto.otp);
+    const challenge = await this.emailChallengeRepo.findOne({
+      where: { email, isUsed: false },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (
+      !challenge ||
+      challenge.code !== code ||
+      challenge.expiresAt.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException('Invalid or expired verification code.');
+    }
+
+    const proofToken = randomBytes(32).toString('base64url');
+    challenge.isUsed = true;
+    challenge.proofTokenHash = this.hashToken(proofToken);
+    challenge.proofExpiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    challenge.proofUsedAt = null;
+    await this.emailChallengeRepo.save(challenge);
+
+    return {
+      message: 'Email verified.',
+      emailVerificationToken: proofToken,
+    };
+  }
 
   async create(dto: CreateMeetingRequestDto): Promise<MeetingRequest> {
     this.assertOpenSlot(dto);
+    const email = dto.email.trim().toLowerCase();
+    await this.consumeEmailProof(email, dto.emailVerificationToken);
     const draft = this.meetingRequestRepo.create({
       firstName: dto.firstName.trim(),
       lastName: dto.lastName.trim(),
       phone: dto.phone.trim(),
-      email: dto.email.trim().toLowerCase(),
+      email,
       businessRole: dto.businessRole || '',
       businessCategory: dto.businessCategory.trim(),
       businessName: dto.businessName.trim(),
@@ -55,6 +141,13 @@ export class MeetingRequestService {
       currentSituation: dto.currentSituation?.trim() || '',
       startTimeline: dto.startTimeline || '',
       meetingCommitment: dto.meetingCommitment || '',
+      selectedPlanSlug: (dto.selectedPlanSlug ?? '').trim().toLowerCase() || null,
+      selectedPlanName: (dto.selectedPlanName ?? '').trim() || null,
+      selectedBillingCycle:
+        dto.selectedBillingCycle === 'monthly' ||
+        dto.selectedBillingCycle === 'annual'
+          ? dto.selectedBillingCycle
+          : null,
       scheduledDate: dto.scheduledDate || null,
       scheduledTime: dto.scheduledTime || null,
       scheduledDuration: dto.scheduledDuration ?? null,
@@ -110,10 +203,47 @@ export class MeetingRequestService {
       lastName: saved.lastName,
       email: saved.email,
       businessName: saved.businessName,
+      selectedPlanName: saved.selectedPlanName,
+      selectedPlanSlug: saved.selectedPlanSlug,
       actorUserId: actor?.id ?? null,
     });
 
     return saved;
+  }
+
+  private async consumeEmailProof(
+    email: string,
+    rawToken: string,
+  ): Promise<void> {
+    const token = rawToken?.trim() ?? '';
+    if (token.length < 16) {
+      throw new UnauthorizedException(
+        'Please verify your email before booking.',
+      );
+    }
+
+    const challenge = await this.emailChallengeRepo.findOne({
+      where: { proofTokenHash: this.hashToken(token) },
+    });
+
+    if (
+      !challenge ||
+      challenge.email !== email ||
+      challenge.proofUsedAt != null ||
+      !challenge.proofExpiresAt ||
+      challenge.proofExpiresAt.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException(
+        'Please verify your email before booking.',
+      );
+    }
+
+    challenge.proofUsedAt = new Date();
+    await this.emailChallengeRepo.save(challenge);
+  }
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private assertOpenSlot(dto: CreateMeetingRequestDto): void {

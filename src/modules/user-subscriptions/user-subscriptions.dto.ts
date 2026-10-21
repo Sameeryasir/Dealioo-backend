@@ -13,6 +13,11 @@ export class SelectUserPlanDto {
 
   @IsIn(['monthly', 'annual'])
   billingCycle!: 'monthly' | 'annual';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  checkoutAttemptId?: string;
 }
 
 export class CancelSubscriptionDto {

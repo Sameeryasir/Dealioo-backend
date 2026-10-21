@@ -26,7 +26,7 @@ export function SetPasswordEmail({
       customerName={greetingName}
       paragraphs={[
         businessLine,
-        'Use the button below to choose a password and sign in. You will receive a short verification code on the next step — the same secure flow used when resetting a password.',
+        'Use the button below to choose a password and sign in. This secure link is unique to your account and can only be used once.',
         'If you did not expect this email, you can safely ignore it.',
       ]}
       ctaLabel="Set password"

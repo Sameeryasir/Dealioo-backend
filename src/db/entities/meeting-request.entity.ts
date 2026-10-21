@@ -75,6 +75,15 @@ export class MeetingRequest {
   @Column({ name: 'meeting_commitment', type: 'varchar', length: 64 })
   meetingCommitment: string;
 
+  @Column({ name: 'selected_plan_slug', type: 'varchar', length: 64, nullable: true })
+  selectedPlanSlug: string | null;
+
+  @Column({ name: 'selected_plan_name', type: 'varchar', length: 128, nullable: true })
+  selectedPlanName: string | null;
+
+  @Column({ name: 'selected_billing_cycle', type: 'varchar', length: 16, nullable: true })
+  selectedBillingCycle: string | null;
+
   @Column({ name: 'scheduled_date', type: 'varchar', length: 10, nullable: true })
   scheduledDate: string | null;
 

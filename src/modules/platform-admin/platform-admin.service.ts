@@ -407,6 +407,9 @@ export class PlatformAdminService {
       currentSituation: string;
       startTimeline: string;
       meetingCommitment: string;
+      selectedPlanSlug: string | null;
+      selectedPlanName: string | null;
+      selectedBillingCycle: string | null;
       scheduledDate: string | null;
       scheduledTime: string | null;
       scheduledDuration: number | null;
@@ -475,6 +478,8 @@ export class PlatformAdminService {
             row.phone,
             row.businessName,
             row.businessCategory,
+            row.selectedPlanName,
+            row.selectedPlanSlug,
             String(row.id),
           ]
             .join(' ')
@@ -565,6 +570,9 @@ export class PlatformAdminService {
           currentSituation: row.currentSituation,
           startTimeline: row.startTimeline,
           meetingCommitment: row.meetingCommitment,
+          selectedPlanSlug: row.selectedPlanSlug,
+          selectedPlanName: row.selectedPlanName,
+          selectedBillingCycle: row.selectedBillingCycle,
           scheduledDate: row.scheduledDate,
           scheduledTime: row.scheduledTime,
           scheduledDuration: row.scheduledDuration,
@@ -622,6 +630,8 @@ export class PlatformAdminService {
       'phone',
       'business',
       'category',
+      'selectedPlan',
+      'selectedPlanSlug',
       'scheduledDate',
       'scheduledTime',
       'timeZone',
@@ -639,6 +649,8 @@ export class PlatformAdminService {
         row.phone,
         row.businessName,
         row.businessCategory,
+        row.selectedPlanName ?? '',
+        row.selectedPlanSlug ?? '',
         row.scheduledDate ?? '',
         row.scheduledTime ?? '',
         row.scheduledTimeZone ?? '',
@@ -1259,7 +1271,7 @@ export class PlatformAdminService {
       role,
       createdBy: actor,
       isActive: true,
-      emailVerified: false,
+      emailVerified: true,
       provider: 'LOCAL',
     });
     const saved = await this.userRepository.save(created);

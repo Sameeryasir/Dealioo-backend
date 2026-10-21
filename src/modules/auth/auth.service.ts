@@ -30,6 +30,7 @@ import { BusinessMemberPermission } from '../../db/entities/business-member-perm
 import { Role } from '../../db/entities/role.entity';
 import { User } from '../../db/entities/user.entity';
 import { Otp } from '../../db/entities/otp.entity';
+import { PasswordSetupToken } from '../../db/entities/password-setup-token.entity';
 import { RefreshToken } from '../../db/entities/refresh-token.entity';
 import { AdminNotification } from '../../db/entities/admin-notification.entity';
 import { InvitationService } from '../invitation/invitation.service';
@@ -92,6 +93,8 @@ export class AuthService {
     private readonly roleRepository: Repository<Role>,
     @InjectRepository(Otp)
     private readonly otpRepository: Repository<Otp>,
+    @InjectRepository(PasswordSetupToken)
+    private readonly passwordSetupTokenRepository: Repository<PasswordSetupToken>,
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
     @InjectRepository(UserSubscription)
@@ -931,7 +934,8 @@ export class AuthService {
     options?: { businessName?: string | null },
   ): Promise<{ setPasswordUrl: string }> {
     const email = user.email.trim().toLowerCase();
-    const setPasswordUrl = `${getFrontendBaseUrl()}/auth/login?setPassword=1&email=${encodeURIComponent(email)}`;
+    const rawToken = await this.issuePasswordSetupToken(user);
+    const setPasswordUrl = `${getFrontendBaseUrl()}/auth/set-password?token=${encodeURIComponent(rawToken)}`;
     const subject =
       process.env.MAIL_SET_PASSWORD_SUBJECT ?? 'Set your Dealioo password';
     const html = await render(
@@ -952,7 +956,7 @@ export class AuthService {
       'Set your password here:',
       setPasswordUrl,
       '',
-      'You will receive a verification code on the next step, then choose your password.',
+      'This link expires and can only be used once.',
     ].join('\n');
 
     await this.sendMail({
@@ -963,6 +967,112 @@ export class AuthService {
     });
 
     return { setPasswordUrl };
+  }
+
+  async startPasswordSetup(
+    rawToken: string,
+  ): Promise<{ message: string; maskedEmail: string }> {
+    const record = await this.requireValidPasswordSetupToken(rawToken);
+    return {
+      message: 'Setup link is valid.',
+      maskedEmail: this.maskEmail(record.user.email),
+    };
+  }
+
+  async completePasswordSetup(params: {
+    token: string;
+    password: string;
+  }): Promise<{
+    message: string;
+    token: string;
+    refreshToken: string;
+    user: AuthUserPayload;
+  }> {
+    const record = await this.requireValidPasswordSetupToken(params.token);
+    const user = record.user;
+
+    user.passwordHash = await bcrypt.hash(params.password, 10);
+    user.emailVerified = true;
+    user.lastLoginAt = new Date();
+    await this.userRepository.save(user);
+
+    record.usedAt = new Date();
+    await this.passwordSetupTokenRepository.save(record);
+
+    return {
+      message: 'Password set successfully.',
+      ...(await this.buildAuthSession(user)),
+    };
+  }
+
+  private async issuePasswordSetupToken(user: User): Promise<string> {
+    await this.passwordSetupTokenRepository
+      .createQueryBuilder()
+      .update(PasswordSetupToken)
+      .set({ revokedAt: new Date() })
+      .where('user_id = :userId', { userId: user.id })
+      .andWhere('used_at IS NULL')
+      .andWhere('revoked_at IS NULL')
+      .execute();
+
+    const rawToken = randomBytes(32).toString('base64url');
+    const hours = Number(process.env.PASSWORD_SETUP_TOKEN_TTL_HOURS ?? '48');
+    const ttlMs =
+      (Number.isFinite(hours) && hours > 0 ? hours : 48) * 60 * 60 * 1000;
+
+    await this.passwordSetupTokenRepository.save(
+      this.passwordSetupTokenRepository.create({
+        tokenHash: this.hashOpaqueToken(rawToken),
+        expiresAt: new Date(Date.now() + ttlMs),
+        usedAt: null,
+        revokedAt: null,
+        user: { id: user.id } as User,
+      }),
+    );
+
+    return rawToken;
+  }
+
+  private async requireValidPasswordSetupToken(
+    rawToken: string,
+  ): Promise<PasswordSetupToken> {
+    const trimmed = rawToken?.trim() ?? '';
+    const invalid = () =>
+      new UnauthorizedException('Invalid or expired setup link.');
+
+    if (trimmed.length < 16) {
+      throw invalid();
+    }
+
+    const record = await this.passwordSetupTokenRepository.findOne({
+      where: { tokenHash: this.hashOpaqueToken(trimmed) },
+      relations: ['user', 'user.role'],
+    });
+
+    if (
+      !record ||
+      record.usedAt != null ||
+      record.revokedAt != null ||
+      record.expiresAt.getTime() < Date.now() ||
+      !record.user?.isActive
+    ) {
+      throw invalid();
+    }
+
+    return record;
+  }
+
+  private maskEmail(email: string): string {
+    const normalized = email.trim().toLowerCase();
+    const at = normalized.indexOf('@');
+    if (at <= 0) return '••••';
+    const local = normalized.slice(0, at);
+    const domain = normalized.slice(at + 1);
+    return `${local[0] ?? '•'}••••@${domain}`;
+  }
+
+  private hashOpaqueToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private async sendOtpForUser(user: User): Promise<void> {

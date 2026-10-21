@@ -32,12 +32,13 @@ import { ConnectTwilioCredentialsDto } from './businessDto/connect-twilio-creden
 import { PurchaseTwilioPhoneNumberDto } from './businessDto/purchase-twilio-phone-number.dto';
 import { SearchTwilioAvailableNumbersDto } from './businessDto/search-twilio-available-numbers.dto';
 import { User } from '../../db/entities/user.entity';
+import { RequireActiveSubscriptionGuard } from '../billing/require-active-subscription.guard';
 
 @Controller('business')
+@UseGuards(AuthGuard('jwt'), RequireActiveSubscriptionGuard)
 export class BusinessController {
   constructor(private readonly businessService: BusinessService) {}
 
-  @UseGuards(AuthGuard('jwt'))
   @Post('create')
   @UseInterceptors(
     FileInterceptor(
@@ -59,7 +60,6 @@ export class BusinessController {
     const user = req.user;
     return this.businessService.createBusiness(createBusinessDto, user, file);
   }
-  @UseGuards(AuthGuard('jwt'))
   @Get('all')
   async getAllBusinesses(
     @Req() req,
@@ -71,7 +71,6 @@ export class BusinessController {
     return this.businessService.getAllBusinesses(user, page, limit, search);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Get(':id/twilio/phone-numbers')
   async listTwilioPhoneNumbers(
     @Param('id', ParseIntPipe) id: number,
@@ -80,7 +79,6 @@ export class BusinessController {
     return this.businessService.listTwilioPhoneNumbers(id, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Post(':id/twilio/connect')
   async connectTwilioCredentials(
     @Param('id', ParseIntPipe) id: number,
@@ -90,7 +88,6 @@ export class BusinessController {
     return this.businessService.connectTwilioCredentials(id, dto, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Delete(':id/twilio/disconnect')
   async disconnectTwilioCredentials(
     @Param('id', ParseIntPipe) id: number,
@@ -99,7 +96,6 @@ export class BusinessController {
     return this.businessService.disconnectTwilioCredentials(id, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Get(':id/twilio/available-to-buy')
   async searchAvailableTwilioPhoneNumbers(
     @Param('id', ParseIntPipe) id: number,
@@ -113,7 +109,6 @@ export class BusinessController {
     );
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Post(':id/twilio/purchase-number')
   async purchaseTwilioPhoneNumber(
     @Param('id', ParseIntPipe) id: number,
@@ -123,7 +118,6 @@ export class BusinessController {
     return this.businessService.purchaseTwilioPhoneNumber(id, dto, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Post(':id/twilio/phone-number')
   async associateTwilioPhoneNumber(
     @Param('id', ParseIntPipe) id: number,
@@ -133,13 +127,11 @@ export class BusinessController {
     return this.businessService.associateTwilioPhoneNumber(id, dto, req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
   @Get(':id')
   async getBusinessById(@Param('id', ParseIntPipe) id: number, @Req() req) {
     const user = req.user;
     return this.businessService.getBusinessById(id, user);
   }
-  @UseGuards(AuthGuard('jwt'))
   @Put(':id')
   @UseInterceptors(
     FileInterceptor(
@@ -167,7 +159,6 @@ export class BusinessController {
       file,
     );
   }
-  @UseGuards(AuthGuard('jwt'))
   @Delete(':id')
   async deleteBusiness(
     @Param('id', ParseIntPipe) id: number,

@@ -4,10 +4,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
+import { Brackets, In, Repository, SelectQueryBuilder } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
 import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessMemberPermission } from '../../db/entities/business-member-permission.entity';
+import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import {
   ALL_BUSINESS_MEMBER_PERMISSIONS,
   type BusinessMemberPermission as BusinessMemberPermissionKey,
@@ -38,6 +39,8 @@ export class BusinessAccessService {
     private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(BusinessMemberPermission)
     private readonly permissionRepository: Repository<BusinessMemberPermission>,
+    @InjectRepository(UserSubscription)
+    private readonly userSubscriptionRepository: Repository<UserSubscription>,
     private readonly membershipCache: BusinessMembershipCacheService,
   ) {}
 
@@ -82,6 +85,9 @@ export class BusinessAccessService {
       member?.role === 'Admin' ||
       business.owner?.id === user.id
     ) {
+      if (business.owner?.id === user.id) {
+        await this.assertAccountOwnerHasActiveSubscription(user.id);
+      }
       const context: BusinessAccessContext = {
         access: 'owner',
         role: member?.role === 'Admin' ? 'Admin' : 'Owner',
@@ -122,6 +128,22 @@ export class BusinessAccessService {
     userId: number,
   ): Promise<void> {
     await this.membershipCache.invalidate(businessId, userId);
+  }
+
+  private async assertAccountOwnerHasActiveSubscription(
+    userId: number,
+  ): Promise<void> {
+    const paid = await this.userSubscriptionRepository.count({
+      where: {
+        userId,
+        status: In(['active', 'trialing']),
+      },
+    });
+    if (paid < 1) {
+      throw new ForbiddenException(
+        'An active subscription is required before you can continue.',
+      );
+    }
   }
 
   async assertPermission(

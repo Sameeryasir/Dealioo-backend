@@ -108,6 +108,8 @@ export class AdminNotificationWriter {
     lastName: string;
     email: string;
     businessName: string;
+    selectedPlanName?: string | null;
+    selectedPlanSlug?: string | null;
     actorUserId?: number | null;
   }): Promise<void> {
     const fullName =
@@ -115,13 +117,18 @@ export class AdminNotificationWriter {
       input.email.trim() ||
       'Someone';
     const businessName = input.businessName.trim();
+    const planName =
+      input.selectedPlanName?.trim() ||
+      input.selectedPlanSlug?.trim() ||
+      '';
+    const base = businessName
+      ? `${fullName} requested a meeting for ${businessName}`
+      : `${fullName} requested a meeting`;
     await this.create({
       type: 'user',
       eventKey: 'meeting_requested',
       title: 'New meeting request',
-      body: businessName
-        ? `${fullName} requested a meeting for ${businessName}.`
-        : `${fullName} requested a meeting.`,
+      body: planName ? `${base} · ${planName}.` : `${base}.`,
       severity: 'info',
       actionUrl: '/admin/meeting-requests',
       resourceType: 'meeting_request',
@@ -131,6 +138,8 @@ export class AdminNotificationWriter {
       metadata: {
         email: input.email.trim().toLowerCase(),
         businessName,
+        selectedPlanName: planName || null,
+        selectedPlanSlug: input.selectedPlanSlug?.trim() || null,
       },
       source: 'user',
     });
