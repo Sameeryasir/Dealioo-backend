@@ -99,6 +99,13 @@ export function buildMeetingCalendarEvent(
   if (Number.isInteger(meeting.id) && meeting.id > 0) {
     privateProps.meetingRequestId = String(meeting.id);
   }
+  const firstName = text(meeting.firstName);
+  const lastName = text(meeting.lastName);
+  const visitorEmail = text(meeting.email)?.toLowerCase() || '';
+  if (firstName) privateProps.visitorFirstName = firstName;
+  if (lastName) privateProps.visitorLastName = lastName;
+  if (visitorName) privateProps.visitorFullName = visitorName;
+  if (visitorEmail) privateProps.visitorEmail = visitorEmail;
 
   return {
     summary:
@@ -212,7 +219,6 @@ function meetingDescription(
   meeting: MeetingRequest,
   schedule: { start: string; end: string; timeZone: string },
 ): string {
-  const fullName = `${meeting.firstName} ${meeting.lastName}`.trim();
   const sections = [
     section('Meeting information', [
       field('Booking ID', meeting.id),
@@ -224,12 +230,6 @@ function meetingDescription(
         meeting.scheduledDuration ? `${meeting.scheduledDuration} minutes` : '',
       ),
       field('Host email', organizerEmail()),
-    ]),
-    section('Visitor information', [
-      field('First name', meeting.firstName),
-      field('Last name', meeting.lastName),
-      field('Full name', fullName),
-      field('Email', meeting.email),
     ]),
   ].filter((part): part is string => Boolean(part));
 
