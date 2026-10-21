@@ -19,6 +19,7 @@ import { BusinessMember } from '../../db/entities/business-member.entity';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
+import { PlatformTwilioPhoneNumber } from '../../db/entities/platform-twilio-phone-number.entity';
 import {
   SubscriptionPlan,
   type SubscriptionPlanDescription,
@@ -204,6 +205,8 @@ export class PlatformAdminService {
     private readonly businessMemberRepository: Repository<BusinessMember>,
     @InjectRepository(BusinessTwilioIntegration)
     private readonly businessTwilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
+    @InjectRepository(PlatformTwilioPhoneNumber)
+    private readonly platformTwilioPhoneNumberRepository: Repository<PlatformTwilioPhoneNumber>,
     @InjectRepository(UserSubscription)
     private readonly subscriptionRepository: Repository<UserSubscription>,
     @InjectRepository(AdminNotification)
@@ -1877,33 +1880,99 @@ export class PlatformAdminService {
     };
   }
 
-  /**
-   * Super Admin Twilio overview for the UI.
-   * Returns: owner name, credits, numbers (+ webhook URL for editing), business name.
-   * Never returns Account SID, Auth Token, or phone SIDs.
-   * Related: twilio.service getPlatformCreditsAndNumbers
-   */
-  async getTwilioDashboard(actor: User) {
-    this.assertSuperAdmin(actor);
+  private async upsertPlatformTwilioNumber(input: {
+    phoneSid: string;
+    phoneNumber: string;
+    friendlyName?: string | null;
+    status?: string | null;
+    addressRequirement?: string | null;
+    dateCreated?: string | Date | null;
+    webhookUrl?: string | null;
+    webhookConfigured?: boolean;
+    capabilities?: {
+      sms?: boolean;
+      mms?: boolean;
+      voice?: boolean;
+      fax?: boolean;
+    };
+    businessId?: number | null;
+    connectedAt?: Date | null;
+  }): Promise<PlatformTwilioPhoneNumber> {
+    const phoneSid = input.phoneSid.trim();
+    const phoneNumber = input.phoneNumber.trim();
+    let row =
+      (await this.platformTwilioPhoneNumberRepository.findOne({
+        where: { phoneSid },
+      })) ||
+      (await this.platformTwilioPhoneNumberRepository.findOne({
+        where: { phoneNumber },
+      }));
 
-    const [platform, connectedBusinesses] = await Promise.all([
-      this.twilioService.getPlatformCreditsAndNumbers(),
-      this.businessRepository
-        .createQueryBuilder('b')
-        .select([
-          'b.id',
-          'b.name',
-          'b.twilioPhoneSid',
-          'b.twilioPhoneNumber',
-          'b.twilioConnectedAt',
-        ])
-        .where('b.twilioPhoneSid IS NOT NULL')
-        .andWhere("TRIM(b.twilioPhoneSid) <> ''")
-        .andWhere('b.twilioPhoneNumber IS NOT NULL')
-        .andWhere("TRIM(b.twilioPhoneNumber) <> ''")
-        .orderBy('b.name', 'ASC')
-        .getMany(),
-    ]);
+    if (!row) {
+      row = this.platformTwilioPhoneNumberRepository.create({
+        phoneSid,
+        phoneNumber,
+      });
+    }
+
+    row.phoneSid = phoneSid;
+    row.phoneNumber = phoneNumber;
+    if (input.friendlyName !== undefined) {
+      row.friendlyName = input.friendlyName?.trim() || null;
+    }
+    if (input.status !== undefined) {
+      row.status = input.status?.trim() || null;
+    }
+    if (input.addressRequirement !== undefined) {
+      row.addressRequirement = input.addressRequirement?.trim() || null;
+    }
+    if (input.dateCreated !== undefined) {
+      row.dateCreated = input.dateCreated
+        ? new Date(input.dateCreated)
+        : null;
+    }
+    if (input.webhookUrl !== undefined) {
+      row.webhookUrl = input.webhookUrl?.trim() || null;
+      row.webhookConfigured =
+        input.webhookConfigured ?? Boolean(row.webhookUrl);
+    } else if (input.webhookConfigured !== undefined) {
+      row.webhookConfigured = input.webhookConfigured;
+    }
+    if (input.capabilities) {
+      row.capSms = Boolean(input.capabilities.sms);
+      row.capMms = Boolean(input.capabilities.mms);
+      row.capVoice = Boolean(input.capabilities.voice);
+      row.capFax = Boolean(input.capabilities.fax);
+    }
+    if (input.businessId !== undefined) {
+      row.businessId = input.businessId;
+    }
+    if (input.connectedAt !== undefined) {
+      row.connectedAt = input.connectedAt;
+    }
+    row.lastSyncedAt = new Date();
+    return this.platformTwilioPhoneNumberRepository.save(row);
+  }
+
+  private async syncPlatformTwilioNumbersFromTwilio(): Promise<void> {
+    const platform = this.twilioService.requirePlatformCredentials();
+    const remote =
+      await this.twilioService.listAllIncomingPhoneNumbersDetailed(platform);
+
+    const connectedBusinesses = await this.businessRepository
+      .createQueryBuilder('b')
+      .select([
+        'b.id',
+        'b.name',
+        'b.twilioPhoneSid',
+        'b.twilioPhoneNumber',
+        'b.twilioConnectedAt',
+      ])
+      .where('b.twilioPhoneSid IS NOT NULL')
+      .andWhere("TRIM(b.twilioPhoneSid) <> ''")
+      .andWhere('b.twilioPhoneNumber IS NOT NULL')
+      .andWhere("TRIM(b.twilioPhoneNumber) <> ''")
+      .getMany();
 
     const bySid = new Map(
       connectedBusinesses
@@ -1916,39 +1985,132 @@ export class PlatformAdminService {
         .map((b) => [b.twilioPhoneNumber!.trim(), b]),
     );
 
-    // Number detail for the UI — includes webhook URL so Super Admin can edit it.
-    // SIDs and auth tokens stay off this payload.
-    const numbers = platform.phoneNumbers.map((number) => {
+    const seenSids = new Set<string>();
+    for (const number of remote) {
+      seenSids.add(number.sid);
       const assigned =
         bySid.get(number.sid) || byNumber.get(number.phoneNumber) || null;
-      return {
+      await this.upsertPlatformTwilioNumber({
+        phoneSid: number.sid,
         phoneNumber: number.phoneNumber,
-        label: number.friendlyName,
+        friendlyName: number.friendlyName,
         status: number.status,
         addressRequirement: number.addressRequirement,
         dateCreated: number.dateCreated,
         webhookUrl: number.webhookUrl,
         webhookConfigured: number.webhookConfigured,
         capabilities: number.capabilities,
-        businessName: assigned?.name?.trim() || null,
-        connectedAt: assigned?.twilioConnectedAt
-          ? new Date(assigned.twilioConnectedAt).toISOString()
-          : null,
-      };
-    });
+        businessId: assigned?.id ?? null,
+        connectedAt: assigned?.twilioConnectedAt ?? null,
+      });
+    }
+
+    if (seenSids.size > 0) {
+      const stale = await this.platformTwilioPhoneNumberRepository.find({
+        select: ['id', 'phoneSid'],
+      });
+      const staleIds = stale
+        .filter((row) => !seenSids.has(row.phoneSid))
+        .map((row) => row.id);
+      if (staleIds.length > 0) {
+        await this.platformTwilioPhoneNumberRepository.delete(staleIds);
+      }
+    }
+  }
+
+  async getTwilioDashboard(
+    actor: User,
+    options?: { page?: number; limit?: number; sync?: boolean },
+  ) {
+    this.assertSuperAdmin(actor);
+
+    const { page, limit } = normalizePagination(
+      options?.page,
+      options?.limit,
+    );
+    const safeLimit = Math.min(50, limit);
+
+    const existingCount = await this.platformTwilioPhoneNumberRepository.count();
+    if (options?.sync || existingCount === 0) {
+      try {
+        await this.syncPlatformTwilioNumbersFromTwilio();
+      } catch (error) {
+        if (existingCount === 0) {
+          const summary = await this.twilioService.getPlatformAccountSummary();
+          return {
+            configured: summary.configured,
+            accountOwnerName: summary.accountOwnerName,
+            defaultWebhookUrl: summary.defaultWebhookUrl,
+            balance: summary.balance,
+            numbers: [],
+            counts: {
+              phoneNumbers: 0,
+              assigned: 0,
+              unassigned: 0,
+            },
+            meta: buildPaginationMeta(0, page, safeLimit),
+            error:
+              summary.error ||
+              (error instanceof Error
+                ? error.message
+                : 'Could not sync Twilio numbers.'),
+          };
+        }
+      }
+    }
+
+    const [summary, total, assignedCount, rows] = await Promise.all([
+      this.twilioService.getPlatformAccountSummary(),
+      this.platformTwilioPhoneNumberRepository.count(),
+      this.platformTwilioPhoneNumberRepository
+        .createQueryBuilder('n')
+        .where('n.businessId IS NOT NULL')
+        .getCount(),
+      this.platformTwilioPhoneNumberRepository
+        .createQueryBuilder('n')
+        .leftJoinAndSelect('n.business', 'business')
+        .orderBy('n.dateCreated', 'DESC', 'NULLS LAST')
+        .addOrderBy('n.id', 'DESC')
+        .skip((page - 1) * safeLimit)
+        .take(safeLimit)
+        .getMany(),
+    ]);
+
+    const numbers = rows.map((row) => ({
+      phoneNumber: row.phoneNumber,
+      label: row.friendlyName,
+      status: row.status,
+      addressRequirement: row.addressRequirement,
+      dateCreated: row.dateCreated
+        ? new Date(row.dateCreated).toISOString()
+        : null,
+      webhookUrl: row.webhookUrl,
+      webhookConfigured: row.webhookConfigured,
+      capabilities: {
+        sms: row.capSms,
+        mms: row.capMms,
+        voice: row.capVoice,
+        fax: row.capFax,
+      },
+      businessName: row.business?.name?.trim() || null,
+      connectedAt: row.connectedAt
+        ? new Date(row.connectedAt).toISOString()
+        : null,
+    }));
 
     return {
-      configured: platform.configured,
-      accountOwnerName: platform.accountOwnerName,
-      defaultWebhookUrl: platform.defaultWebhookUrl,
-      balance: platform.balance,
+      configured: summary.configured,
+      accountOwnerName: summary.accountOwnerName,
+      defaultWebhookUrl: summary.defaultWebhookUrl,
+      balance: summary.balance,
       numbers,
       counts: {
-        phoneNumbers: numbers.length,
-        assigned: numbers.filter((row) => row.businessName).length,
-        unassigned: numbers.filter((row) => !row.businessName).length,
+        phoneNumbers: total,
+        assigned: assignedCount,
+        unassigned: Math.max(0, total - assignedCount),
       },
-      error: platform.error,
+      meta: buildPaginationMeta(total, page, safeLimit),
+      error: summary.error,
     };
   }
 
@@ -1983,7 +2145,7 @@ export class PlatformAdminService {
       phoneNumber: dto.phoneNumber,
     });
 
-    await this.twilioService.syncInboundWebhookForNumber({
+    const webhook = await this.twilioService.syncInboundWebhookForNumber({
       accountSid: platform.accountSid,
       authToken: platform.authToken,
       phoneSid: purchased.sid,
@@ -2030,6 +2192,17 @@ export class PlatformAdminService {
       };
     }
 
+    await this.upsertPlatformTwilioNumber({
+      phoneSid: purchased.sid,
+      phoneNumber: purchased.phoneNumber,
+      friendlyName: purchased.friendlyName,
+      webhookUrl: webhook.smsUrl,
+      webhookConfigured: Boolean(webhook.smsUrl),
+      businessId: assignedBusiness?.id ?? null,
+      connectedAt: assignedBusiness?.twilioConnectedAt ?? null,
+      dateCreated: new Date(),
+    });
+
     await this.writeAudit({
       actorUserId: actor.id,
       action: 'twilio_number_purchased',
@@ -2041,7 +2214,6 @@ export class PlatformAdminService {
       },
     });
 
-    // Safe client payload — no SID / confidential Twilio ids.
     return {
       phoneNumber: purchased.phoneNumber,
       friendlyName: purchased.friendlyName,
@@ -2051,19 +2223,23 @@ export class PlatformAdminService {
     };
   }
 
-  /**
-   * Attach the platform inbound SMS webhook to a specific owned number.
-   * Resolves the Twilio phone SID server-side from the phone number.
-   */
   async setTwilioWebhook(actor: User, dto: SetAdminTwilioWebhookDto) {
     this.assertSuperAdmin(actor);
     const platform = this.twilioService.requirePlatformCredentials();
     const phoneNumber = dto.phoneNumber.trim();
     const smsUrl = dto.smsUrl?.trim() || undefined;
 
-    // Resolve SID server-side — never require the client to send it.
-    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
-    const match = owned.find((row) => row.phoneNumber === phoneNumber);
+    const cached = await this.platformTwilioPhoneNumberRepository.findOne({
+      where: { phoneNumber },
+    });
+    const match =
+      cached?.phoneSid
+        ? { sid: cached.phoneSid, phoneNumber: cached.phoneNumber }
+        : await this.twilioService.findIncomingPhoneNumberByPhone({
+            accountSid: platform.accountSid,
+            authToken: platform.authToken,
+            phoneNumber,
+          });
     if (!match?.sid) {
       throw new NotFoundException(
         'That phone number was not found on the Twilio account.',
@@ -2078,6 +2254,13 @@ export class PlatformAdminService {
       smsUrl,
     });
 
+    await this.upsertPlatformTwilioNumber({
+      phoneSid: match.sid,
+      phoneNumber,
+      webhookUrl: result.smsUrl,
+      webhookConfigured: Boolean(result.smsUrl),
+    });
+
     await this.writeAudit({
       actorUserId: actor.id,
       action: 'twilio_webhook_set',
@@ -2085,7 +2268,6 @@ export class PlatformAdminService {
       targetId: phoneNumber,
       metadata: {
         phoneNumber,
-        // Store host only in audit — full URL can be reconstructed from Twilio.
         webhookHost: (() => {
           try {
             return new URL(result.smsUrl).host;
@@ -2107,7 +2289,19 @@ export class PlatformAdminService {
     this.assertSuperAdmin(actor);
     const platform = this.twilioService.requirePlatformCredentials();
     this.twilioService.assertInboundSmsConfigured();
-    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
+
+    let owned = await this.platformTwilioPhoneNumberRepository.find({
+      select: ['phoneSid', 'phoneNumber'],
+      order: { id: 'ASC' },
+    });
+    if (owned.length === 0) {
+      await this.syncPlatformTwilioNumbersFromTwilio();
+      owned = await this.platformTwilioPhoneNumberRepository.find({
+        select: ['phoneSid', 'phoneNumber'],
+        order: { id: 'ASC' },
+      });
+    }
+
     const results: Array<{
       phoneNumber: string;
       ok: boolean;
@@ -2116,11 +2310,17 @@ export class PlatformAdminService {
 
     for (const number of owned) {
       try {
-        await this.twilioService.syncInboundWebhookForNumber({
+        const result = await this.twilioService.syncInboundWebhookForNumber({
           accountSid: platform.accountSid,
           authToken: platform.authToken,
-          phoneSid: number.sid,
+          phoneSid: number.phoneSid,
           phoneNumber: number.phoneNumber,
+        });
+        await this.upsertPlatformTwilioNumber({
+          phoneSid: number.phoneSid,
+          phoneNumber: number.phoneNumber,
+          webhookUrl: result.smsUrl,
+          webhookConfigured: Boolean(result.smsUrl),
         });
         results.push({
           phoneNumber: number.phoneNumber,
@@ -2147,7 +2347,6 @@ export class PlatformAdminService {
       },
     });
 
-    // No phone SIDs in the client payload.
     return {
       total: results.length,
       ok: results.filter((item) => item.ok).length,
@@ -2170,12 +2369,43 @@ export class PlatformAdminService {
 
     const phoneNumber = dto.phoneNumber.trim();
     const phoneSid = dto.phoneSid?.trim() || '';
-    const owned = await this.twilioService.listIncomingPhoneNumbers(platform);
-    const match = owned.find(
-      (item) =>
-        item.phoneNumber === phoneNumber ||
-        (phoneSid ? item.sid === phoneSid : false),
-    );
+
+    let match: { sid: string; phoneNumber: string } | null = null;
+    if (phoneSid) {
+      const cachedBySid = await this.platformTwilioPhoneNumberRepository.findOne(
+        {
+          where: { phoneSid },
+        },
+      );
+      if (cachedBySid) {
+        match = {
+          sid: cachedBySid.phoneSid,
+          phoneNumber: cachedBySid.phoneNumber,
+        };
+      }
+    }
+    if (!match) {
+      const cachedByNumber =
+        await this.platformTwilioPhoneNumberRepository.findOne({
+          where: { phoneNumber },
+        });
+      if (cachedByNumber) {
+        match = {
+          sid: cachedByNumber.phoneSid,
+          phoneNumber: cachedByNumber.phoneNumber,
+        };
+      }
+    }
+    if (!match) {
+      const remote = await this.twilioService.findIncomingPhoneNumberByPhone({
+        accountSid: platform.accountSid,
+        authToken: platform.authToken,
+        phoneNumber,
+      });
+      if (remote) {
+        match = { sid: remote.sid, phoneNumber: remote.phoneNumber };
+      }
+    }
     if (!match) {
       throw new BadRequestException(
         'That phone number is not on the Dealioo Twilio account.',
@@ -2201,11 +2431,20 @@ export class PlatformAdminService {
     integration.twilioConnectedAt = connectedAt;
     await this.businessTwilioIntegrationRepository.save(integration);
 
-    await this.twilioService.syncInboundWebhookForNumber({
+    const webhook = await this.twilioService.syncInboundWebhookForNumber({
       accountSid: platform.accountSid,
       authToken: platform.authToken,
       phoneSid: match.sid,
       phoneNumber: match.phoneNumber,
+    });
+
+    await this.upsertPlatformTwilioNumber({
+      phoneSid: match.sid,
+      phoneNumber: match.phoneNumber,
+      webhookUrl: webhook.smsUrl,
+      webhookConfigured: Boolean(webhook.smsUrl),
+      businessId: business.id,
+      connectedAt,
     });
 
     await this.writeAudit({
@@ -2218,7 +2457,6 @@ export class PlatformAdminService {
       },
     });
 
-    // Safe client payload — no phone SID.
     return {
       businessId: business.id,
       businessName: business.name,

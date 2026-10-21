@@ -7,11 +7,13 @@ import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-int
 import { CustomerOnboarding } from '../../db/entities/customer-onboarding.entity';
 import { MeetingRequest } from '../../db/entities/meeting-request.entity';
 import { PlatformAdminAuditLog } from '../../db/entities/platform-admin-audit-log.entity';
+import { PlatformTwilioPhoneNumber } from '../../db/entities/platform-twilio-phone-number.entity';
 import { Role } from '../../db/entities/role.entity';
 import { SubscriptionPlan } from '../../db/entities/subscription-plan.entity';
 import { User } from '../../db/entities/user.entity';
 import { UserSubscription } from '../../db/entities/user-subscription.entity';
 import { AuthModule } from '../auth/auth.module';
+import { SmsModule } from '../sms/sms.module';
 import { StripeModule } from '../stripe/stripe.module';
 import { PlatformAdminController } from './platform-admin.controller';
 import { PlatformAdminService } from './platform-admin.service';
@@ -21,12 +23,14 @@ import { SuperAdminGuard } from './super-admin.guard';
   imports: [
     AuthModule,
     StripeModule,
+    SmsModule,
     TypeOrmModule.forFeature([
       User,
       Role,
       Business,
       BusinessMember,
       BusinessTwilioIntegration,
+      PlatformTwilioPhoneNumber,
       UserSubscription,
       AdminNotification,
       MeetingRequest,

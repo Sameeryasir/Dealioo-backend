@@ -120,8 +120,18 @@ export class PlatformAdminController {
   }
 
   @Get('twilio/dashboard')
-  getTwilioDashboard(@Req() req: { user: User }) {
-    return this.platformAdminService.getTwilioDashboard(req.user);
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  getTwilioDashboard(
+    @Req() req: { user: User },
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('sync') sync?: string,
+  ) {
+    return this.platformAdminService.getTwilioDashboard(req.user, {
+      page,
+      limit,
+      sync: sync === '1' || sync === 'true',
+    });
   }
 
   @Get('twilio/available-numbers')

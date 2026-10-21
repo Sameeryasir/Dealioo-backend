@@ -114,7 +114,9 @@ export class TwilioService implements OnModuleInit {
 
     try {
       const client = Twilio(accountSid, authToken);
-      const numbers = await client.incomingPhoneNumbers.list({ limit: 100 });
+      const numbers = await client.incomingPhoneNumbers.list({
+        pageSize: 100,
+      });
       return numbers
         .map((n) => ({
           sid: n.sid,
@@ -129,6 +131,185 @@ export class TwilioService implements OnModuleInit {
       throw new BadRequestException(
         `Could not load Twilio phone numbers: ${detail}`,
       );
+    }
+  }
+
+  async findIncomingPhoneNumberByPhone(params: {
+    accountSid: string;
+    authToken: string;
+    phoneNumber: string;
+  }): Promise<{
+    sid: string;
+    phoneNumber: string;
+    friendlyName: string | null;
+  } | null> {
+    const phoneNumber = params.phoneNumber.trim();
+    if (!phoneNumber) return null;
+
+    try {
+      const client = Twilio(params.accountSid.trim(), params.authToken.trim());
+      const numbers = await client.incomingPhoneNumbers.list({
+        phoneNumber,
+        limit: 1,
+      });
+      const match = numbers[0];
+      if (!match?.sid || !match.phoneNumber) return null;
+      return {
+        sid: match.sid,
+        phoneNumber: match.phoneNumber,
+        friendlyName: match.friendlyName?.trim() || null,
+      };
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(
+        `Twilio find phone number failed → ${phoneNumber}: ${detail}`,
+      );
+      throw new BadRequestException(
+        `Could not look up that Twilio phone number: ${detail}`,
+      );
+    }
+  }
+
+  async listAllIncomingPhoneNumbersDetailed(credentials?: {
+    accountSid?: string | null;
+    authToken?: string | null;
+  }): Promise<
+    Array<{
+      sid: string;
+      phoneNumber: string;
+      friendlyName: string | null;
+      status: string | null;
+      addressRequirement: string | null;
+      dateCreated: string | null;
+      webhookUrl: string | null;
+      webhookConfigured: boolean;
+      capabilities: {
+        sms: boolean;
+        mms: boolean;
+        voice: boolean;
+        fax: boolean;
+      };
+    }>
+  > {
+    const accountSid =
+      credentials?.accountSid?.trim() || resolveAccountSid() || null;
+    const authToken =
+      credentials?.authToken?.trim() || envTrim('TWILIO_AUTH_TOKEN') || null;
+
+    if (!accountSid || !authToken) {
+      throw new ServiceUnavailableException(
+        'Twilio is not configured on the server.',
+      );
+    }
+
+    try {
+      const client = Twilio(accountSid, authToken);
+      const numbers = await client.incomingPhoneNumbers.list({
+        pageSize: 100,
+      });
+      return numbers
+        .map((n) => {
+          const caps = n.capabilities as
+            | {
+                sms?: boolean;
+                mms?: boolean;
+                voice?: boolean;
+                fax?: boolean;
+              }
+            | undefined;
+          const statusRaw = (n as { status?: string | null }).status;
+          const webhookUrl = n.smsUrl?.trim() || null;
+          return {
+            sid: n.sid,
+            phoneNumber: n.phoneNumber,
+            friendlyName: n.friendlyName?.trim() || null,
+            status: statusRaw?.trim() || null,
+            addressRequirement: n.addressRequirements?.trim() || null,
+            dateCreated: n.dateCreated
+              ? new Date(n.dateCreated).toISOString()
+              : null,
+            webhookUrl,
+            webhookConfigured: Boolean(webhookUrl),
+            capabilities: {
+              sms: Boolean(caps?.sms),
+              mms: Boolean(caps?.mms),
+              voice: Boolean(caps?.voice),
+              fax: Boolean(caps?.fax),
+            },
+          };
+        })
+        .filter((n) => Boolean(n.sid && n.phoneNumber));
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(`Twilio list detailed phone numbers failed → ${detail}`);
+      throw new BadRequestException(
+        `Could not sync Twilio phone numbers: ${detail}`,
+      );
+    }
+  }
+
+  async getPlatformAccountSummary(): Promise<{
+    configured: boolean;
+    accountOwnerName: string | null;
+    defaultWebhookUrl: string | null;
+    balance: {
+      amount: number | null;
+      currency: string | null;
+    } | null;
+    error: string | null;
+  }> {
+    const accountSid = resolveAccountSid() || null;
+    const authToken = envTrim('TWILIO_AUTH_TOKEN') || null;
+    const configured = Boolean(accountSid && authToken);
+    const defaultWebhookUrl = envTrim('TWILIO_WEBHOOK_PUBLIC_URL') || null;
+    const base = {
+      configured,
+      accountOwnerName: null as string | null,
+      defaultWebhookUrl,
+      balance: null as {
+        amount: number | null;
+        currency: string | null;
+      } | null,
+      error: null as string | null,
+    };
+
+    if (!accountSid || !authToken) {
+      base.error = 'Twilio is not connected on this server yet.';
+      return base;
+    }
+
+    try {
+      const client = this.client ?? Twilio(accountSid, authToken);
+      const [account, balance] = await Promise.all([
+        client.api
+          .accounts(accountSid)
+          .fetch()
+          .catch(() => null),
+        client.balance.fetch().catch(() => null),
+      ]);
+
+      base.accountOwnerName =
+        account?.friendlyName?.trim() ||
+        envTrim('TWILIO_SMS_SENDER_NAME') ||
+        null;
+
+      if (balance) {
+        const amount = Number(balance.balance);
+        base.balance = {
+          amount: Number.isFinite(amount) ? amount : null,
+          currency: balance.currency?.trim() || null,
+        };
+      }
+
+      return base;
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Twilio API request failed.';
+      this.logger.warn(`Twilio account summary failed → ${detail}`);
+      base.error = 'Could not load Twilio account overview right now.';
+      return base;
     }
   }
 
