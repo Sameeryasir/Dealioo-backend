@@ -24,6 +24,7 @@ import type { User } from './user.entity';
 @Unique('UQ_business_members_business_user', ['business', 'user'])
 @Index('IDX_business_members_business_status', ['business', 'status'])
 @Index('IDX_business_members_user_status', ['user', 'status'])
+@Index('IDX_business_members_user_status_role', ['user', 'status', 'role'])
 export class BusinessMember {
   @PrimaryGeneratedColumn()
   id!: number;

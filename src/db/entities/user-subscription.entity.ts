@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -17,6 +18,11 @@ export type UserSubscriptionStatus =
   | 'trialing';
 
 @Entity('user_subscriptions')
+@Index('IDX_user_subscriptions_user_status_created', [
+  'user',
+  'status',
+  'createdAt',
+])
 export class UserSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;

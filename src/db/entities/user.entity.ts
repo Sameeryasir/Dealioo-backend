@@ -16,6 +16,8 @@ import type { UserSubscription } from './user-subscription.entity';
 export type AuthProvider = 'LOCAL' | 'GOOGLE';
 
 @Entity('users')
+@Index('IDX_users_is_active_created_at', ['isActive', 'createdAt'])
+@Index('IDX_users_created_at', ['createdAt'])
 export class User {
   @PrimaryGeneratedColumn()
   id: number;

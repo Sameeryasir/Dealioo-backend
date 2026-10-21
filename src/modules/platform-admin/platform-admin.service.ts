@@ -141,30 +141,6 @@ function pctChange(current: number, previous: number): number {
 }
 
 export type PlatformAdminOverview = {
-  kpis: {
-    totalBusinesses: number;
-    activeBusinesses: number;
-    totalUsers: number;
-    newUsersToday: number;
-    ordersToday: number;
-    revenueTodayCents: number;
-    businessesChangePct: number;
-    activeBusinessesChangePct: number;
-    usersChangePct: number;
-    newUsersChangePct: number;
-    ordersChangePct: number;
-    revenueChangePct: number;
-  };
-  charts: {
-    revenueLast30Days: Array<{ date: string; amountCents: number }>;
-    businessesLast30Days: Array<{ date: string; count: number }>;
-    subscriptionBreakdown: Array<{
-      planSlug: string;
-      planName: string;
-      count: number;
-      mrrCents: number;
-    }>;
-  };
   businesses: Array<{
     id: number;
     name: string;
@@ -802,148 +778,6 @@ export class PlatformAdminService {
     };
   }
 
-  async getTrends(
-    actor: User,
-    fromRaw?: string,
-    toRaw?: string,
-    timeZoneRaw?: string,
-  ): Promise<{
-    from: string;
-    to: string;
-    totalRevenueCents: number;
-    newBusinesses: number;
-    newUsers: number;
-    newSubscriptions: number;
-    points: Array<{
-      bucket: string;
-      revenueCents: number;
-      businesses: number;
-      users: number;
-      subscriptions: number;
-    }>;
-  }> {
-    this.assertSuperAdmin(actor);
-
-    const from = new Date(fromRaw ?? '');
-    const to = new Date(toRaw ?? '');
-    if (
-      Number.isNaN(from.getTime()) ||
-      Number.isNaN(to.getTime()) ||
-      from.getTime() > to.getTime()
-    ) {
-      throw new BadRequestException('Choose a valid day or month.');
-    }
-
-    if (to.getTime() - from.getTime() > 62 * 24 * 60 * 60 * 1000) {
-      throw new BadRequestException('That date range is too long.');
-    }
-
-    const chartTz = resolveSafeTimeZone(timeZoneRaw);
-    const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
-    const startedAt = 'COALESCE(sub.started_at, sub.created_at)';
-    const subscriptionBucket = overviewRangeBucketSql(
-      startedAt,
-      sameDay,
-      chartTz,
-    );
-    const businessBucket = overviewRangeBucketSql(
-      'b.created_at',
-      sameDay,
-      chartTz,
-    );
-    const userBucket = overviewRangeBucketSql(
-      'u.created_at',
-      sameDay,
-      chartTz,
-    );
-    const subscriptionAmountSql = `
-      CASE
-        WHEN sub.billing_cycle = 'annual'
-          THEN COALESCE(plan."yearlyPrice", 0) * 100
-        ELSE COALESCE(plan."monthlyPrice", 0) * 100
-      END
-    `;
-
-    const [revenueRows, businessRows, userRows] = await Promise.all([
-      this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .innerJoin('sub.plan', 'plan')
-        .select(subscriptionBucket, 'bucket')
-        .addSelect(`COALESCE(SUM(${subscriptionAmountSql}), 0)`, 'total')
-        .addSelect('COUNT(*)', 'count')
-        .where(`${startedAt} >= :from`, { from })
-        .andWhere(`${startedAt} <= :to`, { to })
-        .groupBy(subscriptionBucket)
-        .getRawMany<Record<string, string>>(),
-      this.businessRepository
-        .createQueryBuilder('b')
-        .select(businessBucket, 'bucket')
-        .addSelect('COUNT(*)', 'count')
-        .where('b.created_at >= :from', { from })
-        .andWhere('b.created_at <= :to', { to })
-        .groupBy(businessBucket)
-        .getRawMany<{ bucket: string; count: string }>(),
-      this.userRepository
-        .createQueryBuilder('u')
-        .select(userBucket, 'bucket')
-        .addSelect('COUNT(*)', 'count')
-        .where('u.created_at >= :from', { from })
-        .andWhere('u.created_at <= :to', { to })
-        .groupBy(userBucket)
-        .getRawMany<{ bucket: string; count: string }>(),
-    ]);
-
-    const revenueMap = new Map(
-      revenueRows.map((row) => [
-        String(row.bucket ?? ''),
-        Math.round(Number(row.total) || 0),
-      ]),
-    );
-    const subscriptionMap = new Map(
-      revenueRows.map((row) => [
-        String(row.bucket ?? ''),
-        Number(row.count) || 0,
-      ]),
-    );
-    const businessMap = new Map(
-      businessRows.map((row) => [
-        String(row.bucket ?? ''),
-        Number(row.count) || 0,
-      ]),
-    );
-    const userMap = new Map(
-      userRows.map((row) => [String(row.bucket ?? ''), Number(row.count) || 0]),
-    );
-    const points = keys.map((bucket) => ({
-      bucket,
-      revenueCents: revenueMap.get(bucket) ?? 0,
-      businesses: businessMap.get(bucket) ?? 0,
-      users: userMap.get(bucket) ?? 0,
-      subscriptions: subscriptionMap.get(bucket) ?? 0,
-    }));
-
-    return {
-      from: from.toISOString(),
-      to: to.toISOString(),
-      totalRevenueCents: points.reduce(
-        (sum, point) => sum + point.revenueCents,
-        0,
-      ),
-      newBusinesses: points.reduce((sum, point) => sum + point.businesses, 0),
-      newUsers: points.reduce((sum, point) => sum + point.users, 0),
-      newSubscriptions: points.reduce(
-        (sum, point) => sum + point.subscriptions,
-        0,
-      ),
-      points,
-    };
-  }
-
-  async getKpis(actor: User): Promise<PlatformAdminOverview['kpis']> {
-    this.assertSuperAdmin(actor);
-    return this.computeKpis();
-  }
-
   async getDashboardPanel(
     actor: User,
     periodRaw?: string,
@@ -957,8 +791,15 @@ export class PlatformAdminService {
     const { from, to, label, priorFrom, priorTo, useMonthBuckets } =
       resolveDashboardWindow(period, monthKeyRaw, chartTz);
 
-    const day30Ago = addDays(startOfDay(new Date()), -29);
-    const day60Ago = addDays(startOfDay(new Date()), -59);
+    const todayKey = calendarDateInTimeZone(new Date(), chartTz);
+    const day30Ago = startOfCalendarDayInTimeZone(
+      shiftCalendarDateKey(todayKey, -29),
+      chartTz,
+    );
+    const day60Ago = startOfCalendarDayInTimeZone(
+      shiftCalendarDateKey(todayKey, -59),
+      chartTz,
+    );
 
     const [
       trendCurrent,
@@ -1172,54 +1013,91 @@ export class PlatformAdminService {
     const now = new Date();
     const last30Start = addDays(startOfDay(now), -29);
     const prev30Start = addDays(last30Start, -30);
+    const bmStatus = BUSINESS_MEMBER_STATUS.ACTIVE;
 
-    const base = () =>
+    const [core, roleTabs] = await Promise.all([
       this.userRepository
         .createQueryBuilder('u')
-        .leftJoin('u.role', 'role')
-        .where('u.id != :actorId', { actorId });
-
-    const countWithBusinessRoles = (roles: string[]) =>
-      base()
-        .andWhere(this.usersWithBusinessRolesSql, {
-          bmStatus: BUSINESS_MEMBER_STATUS.ACTIVE,
-          bmRoles: roles,
-        })
-        .getCount();
-
-    const [
-      total,
-      active,
-      inactive,
-      managers,
-      staff,
-      scanners,
-      newUsers,
-      prevNewUsers,
-      totalPrev,
-    ] = await Promise.all([
-      base().getCount(),
-      base().andWhere('u.isActive = true').getCount(),
-      base().andWhere('u.isActive = false').getCount(),
-      countWithBusinessRoles(['Manager']),
-      countWithBusinessRoles(['Staff']),
-      countWithBusinessRoles(['Scanner']),
-      base()
-        .andWhere('u.createdAt >= :from', { from: last30Start })
-        .getCount(),
-      base()
-        .andWhere('u.createdAt >= :from AND u.createdAt < :to', {
-          from: prev30Start,
-          to: last30Start,
-        })
-        .getCount(),
-      base()
-        .andWhere('u.createdAt < :cutoff', { cutoff: last30Start })
-        .getCount(),
+        .select('COUNT(*)', 'total')
+        .addSelect(
+          'SUM(CASE WHEN u.isActive = true THEN 1 ELSE 0 END)',
+          'active',
+        )
+        .addSelect(
+          'SUM(CASE WHEN u.isActive = false THEN 1 ELSE 0 END)',
+          'inactive',
+        )
+        .addSelect(
+          'SUM(CASE WHEN u.createdAt >= :last30Start THEN 1 ELSE 0 END)',
+          'newUsers',
+        )
+        .addSelect(
+          `SUM(CASE WHEN u.createdAt >= :prev30Start AND u.createdAt < :last30Start THEN 1 ELSE 0 END)`,
+          'prevNewUsers',
+        )
+        .addSelect(
+          'SUM(CASE WHEN u.createdAt < :last30Start THEN 1 ELSE 0 END)',
+          'totalPrev',
+        )
+        .where('u.id != :actorId', { actorId })
+        .setParameters({ last30Start, prev30Start })
+        .getRawOne<{
+          total: string;
+          active: string;
+          inactive: string;
+          newUsers: string;
+          prevNewUsers: string;
+          totalPrev: string;
+        }>(),
+      this.userRepository
+        .createQueryBuilder('u')
+        .select(
+          `SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM business_members bm
+            WHERE bm.user_id = u.id
+              AND bm.status = :bmStatus
+              AND bm.role = 'Manager'
+          ) THEN 1 ELSE 0 END)`,
+          'managers',
+        )
+        .addSelect(
+          `SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM business_members bm
+            WHERE bm.user_id = u.id
+              AND bm.status = :bmStatus
+              AND bm.role = 'Staff'
+          ) THEN 1 ELSE 0 END)`,
+          'staff',
+        )
+        .addSelect(
+          `SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM business_members bm
+            WHERE bm.user_id = u.id
+              AND bm.status = :bmStatus
+              AND bm.role = 'Scanner'
+          ) THEN 1 ELSE 0 END)`,
+          'scanners',
+        )
+        .where('u.id != :actorId', { actorId })
+        .setParameters({ bmStatus })
+        .getRawOne<{
+          managers: string;
+          staff: string;
+          scanners: string;
+        }>(),
     ]);
 
-    const totalAtPrevEnd = totalPrev;
-    const totalChangePct = pctChange(total, totalAtPrevEnd);
+    const total = Number(core?.total) || 0;
+    const active = Number(core?.active) || 0;
+    const inactive = Number(core?.inactive) || 0;
+    const newUsers = Number(core?.newUsers) || 0;
+    const prevNewUsers = Number(core?.prevNewUsers) || 0;
+    const totalPrev = Number(core?.totalPrev) || 0;
+    const managers = Number(roleTabs?.managers) || 0;
+    const staff = Number(roleTabs?.staff) || 0;
+    const scanners = Number(roleTabs?.scanners) || 0;
+
+    const totalChangePct = pctChange(total, totalPrev);
     const newUsersChangePct = pctChange(newUsers, prevNewUsers);
     const activeSharePct =
       total > 0 ? Math.round((active / total) * 1000) / 10 : 0;
@@ -1999,161 +1877,6 @@ export class PlatformAdminService {
     };
   }
 
-  private async computeKpis(): Promise<PlatformAdminOverview['kpis']> {
-    const now = new Date();
-    const todayStart = startOfDay(now);
-    const yesterdayStart = addDays(todayStart, -1);
-    const day30Ago = addDays(todayStart, -29);
-    const day60Ago = addDays(todayStart, -59);
-    const payingStatuses = ['active', 'trialing'] as const;
-
-    const [
-      totalUsers,
-      totalBusinesses,
-      activeBusinesses,
-      newUsersToday,
-      newUsersYesterday,
-      activeSubscriptions,
-      newSubscriptionsToday,
-      newSubscriptionsYesterday,
-      businessesLast30,
-      businessesPrev30,
-      usersLast30,
-      usersPrev30,
-      payingSubs,
-    ] = await Promise.all([
-      this.userRepository.count(),
-      this.businessRepository.count(),
-      this.businessRepository.count({ where: { onboardingCompleted: true } }),
-      this.userRepository.count({
-        where: { createdAt: MoreThanOrEqual(todayStart) },
-      }),
-      this.userRepository.count({
-        where: { createdAt: Between(yesterdayStart, todayStart) },
-      }),
-      this.subscriptionRepository.count({
-        where: { status: In([...payingStatuses]) },
-      }),
-      this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .where('COALESCE(sub.started_at, sub.created_at) >= :from', {
-          from: todayStart,
-        })
-        .getCount(),
-      this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .where('COALESCE(sub.started_at, sub.created_at) >= :from', {
-          from: yesterdayStart,
-        })
-        .andWhere('COALESCE(sub.started_at, sub.created_at) < :to', {
-          to: todayStart,
-        })
-        .getCount(),
-      this.businessRepository.count({
-        where: { createdAt: MoreThanOrEqual(day30Ago) },
-      }),
-      this.businessRepository.count({
-        where: { createdAt: Between(day60Ago, day30Ago) },
-      }),
-      this.userRepository.count({
-        where: { createdAt: MoreThanOrEqual(day30Ago) },
-      }),
-      this.userRepository.count({
-        where: { createdAt: Between(day60Ago, day30Ago) },
-      }),
-      this.subscriptionRepository.find({
-        where: { status: In([...payingStatuses]) },
-        relations: ['plan'],
-      }),
-    ]);
-
-    let platformMrrCents = 0;
-    for (const sub of payingSubs) {
-      const monthly = Number(sub.plan?.monthlyPrice ?? 0);
-      const yearly = Number(sub.plan?.yearlyPrice ?? 0);
-      if (sub.billingCycle === 'annual') {
-        platformMrrCents += Math.round((yearly * 100) / 12);
-      } else {
-        platformMrrCents += Math.round(monthly * 100);
-      }
-    }
-
-    return {
-      totalBusinesses,
-      activeBusinesses,
-      totalUsers,
-      newUsersToday,
-      ordersToday: activeSubscriptions,
-      revenueTodayCents: platformMrrCents,
-      businessesChangePct: pctChange(businessesLast30, businessesPrev30),
-      activeBusinessesChangePct: pctChange(
-        activeBusinesses,
-        Math.max(activeBusinesses - businessesLast30, 0),
-      ),
-      usersChangePct: pctChange(usersLast30, usersPrev30),
-      newUsersChangePct: pctChange(newUsersToday, newUsersYesterday),
-      ordersChangePct: pctChange(
-        newSubscriptionsToday,
-        newSubscriptionsYesterday,
-      ),
-      revenueChangePct: 0,
-    };
-  }
-
-  async getOverview(actor: User): Promise<PlatformAdminOverview> {
-    this.assertSuperAdmin(actor);
-
-    const [kpis, breakdownRows] = await Promise.all([
-      this.computeKpis(),
-      this.subscriptionRepository
-        .createQueryBuilder('sub')
-        .innerJoin('sub.plan', 'plan')
-        .select('plan.slug', 'planSlug')
-        .addSelect('plan.name', 'planName')
-        .addSelect('COUNT(*)', 'count')
-        .addSelect(
-          `COALESCE(SUM(
-            CASE
-              WHEN sub.billing_cycle = 'annual'
-                THEN COALESCE(plan."yearlyPrice", 0) * 100 / 12.0
-              ELSE COALESCE(plan."monthlyPrice", 0) * 100
-            END
-          ), 0)`,
-          'mrrCents',
-        )
-        .where('sub.status IN (:...statuses)', {
-          statuses: ['active', 'trialing'],
-        })
-        .groupBy('plan.slug')
-        .addGroupBy('plan.name')
-        .orderBy('"mrrCents"', 'DESC')
-        .getRawMany<{
-          planSlug: string;
-          planName: string;
-          count: string;
-          mrrCents: string;
-        }>(),
-    ]);
-
-    const subscriptionBreakdown = breakdownRows.map((row) => ({
-      planSlug: String(row.planSlug ?? 'unknown'),
-      planName: String(row.planName ?? 'Unknown plan'),
-      count: Number(row.count) || 0,
-      mrrCents: Math.round(Number(row.mrrCents) || 0),
-    }));
-
-    return {
-      kpis,
-      charts: {
-        revenueLast30Days: [],
-        businessesLast30Days: [],
-        subscriptionBreakdown,
-      },
-      businesses: [],
-      users: [],
-    };
-  }
-
   /**
    * Super Admin Twilio overview for the UI.
    * Returns: owner name, credits, numbers (+ webhook URL for editing), business name.
@@ -2846,6 +2569,36 @@ function normalizeDashboardPeriod(raw?: string): PlatformDashboardPeriod {
   return 'month';
 }
 
+function calendarDateInTimeZone(date: Date, timeZone: string): string {
+  const tz = resolveSafeTimeZone(timeZone);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value ?? '1970';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+  return `${year}-${month}-${day}`;
+}
+
+function shiftCalendarDateKey(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+}
+
+function startOfCalendarDayInTimeZone(
+  dateKey: string,
+  timeZone: string,
+): Date {
+  return new Date(
+    zonedDateTime(dateKey, '00:00', resolveSafeTimeZone(timeZone)),
+  );
+}
+
 function resolveDashboardWindow(
   period: PlatformDashboardPeriod,
   monthKeyRaw: string | undefined,
@@ -2862,10 +2615,14 @@ function resolveDashboardWindow(
   const tz = resolveSafeTimeZone(timeZone);
 
   if (period === 'today') {
-    const from = startOfDay(now);
+    const todayKey = calendarDateInTimeZone(now, tz);
+    const from = startOfCalendarDayInTimeZone(todayKey, tz);
     const to = now;
+    const priorFrom = startOfCalendarDayInTimeZone(
+      shiftCalendarDateKey(todayKey, -1),
+      tz,
+    );
     const priorTo = new Date(from.getTime() - 1);
-    const priorFrom = startOfDay(addDays(from, -1));
     return {
       from,
       to,
@@ -2877,10 +2634,13 @@ function resolveDashboardWindow(
   }
 
   if (period === 'week') {
+    const todayKey = calendarDateInTimeZone(now, tz);
+    const fromKey = shiftCalendarDateKey(todayKey, -6);
+    const from = startOfCalendarDayInTimeZone(fromKey, tz);
     const to = now;
-    const from = addDays(startOfDay(now), -6);
+    const priorFromKey = shiftCalendarDateKey(fromKey, -6);
+    const priorFrom = startOfCalendarDayInTimeZone(priorFromKey, tz);
     const priorTo = new Date(from.getTime() - 1);
-    const priorFrom = addDays(startOfDay(priorTo), -6);
     return {
       from,
       to,

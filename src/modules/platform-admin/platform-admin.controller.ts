@@ -35,17 +35,8 @@ import { SuperAdminGuard } from './super-admin.guard';
 export class PlatformAdminController {
   constructor(private readonly platformAdminService: PlatformAdminService) {}
 
-  @Get('overview/trends')
-  getTrends(
-    @Req() req: { user: User },
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('timezone') timeZone?: string,
-  ) {
-    return this.platformAdminService.getTrends(req.user, from, to, timeZone);
-  }
-
   @Get('overview/dashboard')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   getDashboardPanel(
     @Req() req: { user: User },
     @Query('period') period?: string,
@@ -60,17 +51,8 @@ export class PlatformAdminController {
     );
   }
 
-  @Get('overview/kpis')
-  getKpis(@Req() req: { user: User }) {
-    return this.platformAdminService.getKpis(req.user);
-  }
-
-  @Get('overview')
-  getOverview(@Req() req: { user: User }) {
-    return this.platformAdminService.getOverview(req.user);
-  }
-
   @Get('users')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   listUsers(
     @Req() req: { user: User },
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
@@ -96,6 +78,7 @@ export class PlatformAdminController {
   }
 
   @Get('roles')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   listRoles(@Req() req: { user: User }) {
     return this.platformAdminService.listAssignableRoles(req.user);
   }

@@ -224,7 +224,17 @@ export class CustomerOnboardingService {
     }
 
     if (dto.attendance !== undefined) {
-      meeting.attendance = dto.attendance;
+      if (
+        meeting.attendance &&
+        dto.attendance !== meeting.attendance
+      ) {
+        throw new BadRequestException(
+          'Attendance cannot be changed after it was recorded.',
+        );
+      }
+      if (!meeting.attendance) {
+        meeting.attendance = dto.attendance;
+      }
     }
     if (dto.salesOutcome !== undefined) {
       if (
