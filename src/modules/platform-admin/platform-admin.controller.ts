@@ -178,6 +178,22 @@ export class PlatformAdminController {
     return this.platformAdminService.assignTwilioNumber(req.user, body);
   }
 
+  @Get('subscriptions')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  listSubscriptions(
+    @Req() req: { user: User },
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+  ) {
+    return this.platformAdminService.listSubscriptions(
+      req.user,
+      page,
+      limit,
+      search,
+    );
+  }
+
   @Get('subscription-plans')
   listSubscriptionPlans(@Req() req: { user: User }) {
     return this.platformAdminService.listSubscriptionPlans(req.user);

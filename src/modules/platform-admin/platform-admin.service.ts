@@ -2489,6 +2489,75 @@ export class PlatformAdminService {
     };
   }
 
+  async listSubscriptions(
+    actor: User,
+    page?: number,
+    limit?: number,
+    searchRaw?: string,
+  ): Promise<{
+    items: Array<{
+      id: string;
+      status: string;
+      billingCycle: string;
+      cancelAtPeriodEnd: boolean;
+      startedAt: Date | null;
+      cancelledAt: Date | null;
+      cancelsAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+      amount: number | null;
+      currency: string;
+      user: { id: number; name: string; email: string };
+      plan: { id: string; name: string; slug: string };
+    }>;
+    meta: PaginationMeta;
+    counts: {
+      all: number;
+      active: number;
+      trialing: number;
+      pastDue: number;
+      cancelled: number;
+    };
+  }> {
+    this.assertSuperAdmin(actor);
+
+    const pagination = normalizePagination(page, limit);
+    const search = searchRaw?.trim() ?? '';
+
+    const qb = this.subscriptionRepository
+      .createQueryBuilder('sub')
+      .leftJoinAndSelect('sub.user', 'user')
+      .leftJoinAndSelect('sub.plan', 'plan')
+      .orderBy('sub.createdAt', 'DESC');
+
+    if (search) {
+      qb.andWhere(
+        `(
+          user.name ILIKE :q
+          OR user.email ILIKE :q
+          OR plan.name ILIKE :q
+          OR plan.slug ILIKE :q
+          OR CAST(user.id AS text) ILIKE :q
+          OR CAST(sub.id AS text) ILIKE :q
+        )`,
+        { q: `%${search}%` },
+      );
+    }
+
+    qb.skip(pagination.skip).take(pagination.limit);
+
+    const [[rows, total], counts] = await Promise.all([
+      qb.getManyAndCount(),
+      this.buildSubscriptionStatusCounts(),
+    ]);
+
+    return {
+      items: rows.map((sub) => this.toAdminSubscriptionItem(sub)),
+      meta: buildPaginationMeta(total, pagination.page, pagination.limit),
+      counts,
+    };
+  }
+
   async listSubscriptionPlans(actor: User) {
     this.assertSuperAdmin(actor);
     const plans = await this.subscriptionPlanRepository.find({
@@ -2687,6 +2756,70 @@ export class PlatformAdminService {
         plan.stripeYearlyPriceId = null;
       }
     }
+  }
+
+  private toAdminSubscriptionItem(sub: UserSubscription) {
+    const plan = sub.plan;
+    const user = sub.user;
+    const amount =
+      sub.billingCycle === 'annual'
+        ? this.parsePlanDecimal(plan?.yearlyPrice)
+        : this.parsePlanDecimal(plan?.monthlyPrice);
+
+    return {
+      id: sub.id,
+      status: sub.status,
+      billingCycle: sub.billingCycle,
+      cancelAtPeriodEnd: Boolean(sub.cancelAtPeriodEnd),
+      startedAt: sub.startedAt,
+      cancelledAt: sub.cancelledAt,
+      cancelsAt: sub.cancelsAt,
+      createdAt: sub.createdAt,
+      updatedAt: sub.updatedAt,
+      amount,
+      currency: (plan?.currency?.trim() || 'USD').toUpperCase(),
+      user: {
+        id: user?.id ?? 0,
+        name: user?.name?.trim() || '—',
+        email: user?.email?.trim() || '—',
+      },
+      plan: {
+        id: plan?.id ?? '',
+        name: plan?.name?.trim() || '—',
+        slug: plan?.slug?.trim() || 'unknown',
+      },
+    };
+  }
+
+  private async buildSubscriptionStatusCounts(): Promise<{
+    all: number;
+    active: number;
+    trialing: number;
+    pastDue: number;
+    cancelled: number;
+  }> {
+    const rows = await this.subscriptionRepository
+      .createQueryBuilder('sub')
+      .select('sub.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('sub.status')
+      .getRawMany<{ status: string; count: string }>();
+
+    const byStatus = new Map<string, number>();
+    let all = 0;
+    for (const row of rows) {
+      const count = Number(row.count) || 0;
+      all += count;
+      byStatus.set(String(row.status ?? '').toLowerCase(), count);
+    }
+
+    return {
+      all,
+      active: byStatus.get('active') ?? 0,
+      trialing: byStatus.get('trialing') ?? 0,
+      pastDue: byStatus.get('past_due') ?? 0,
+      cancelled: byStatus.get('cancelled') ?? 0,
+    };
   }
 
   private toAdminPlanItem(plan: SubscriptionPlan) {
