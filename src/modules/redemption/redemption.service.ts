@@ -1827,10 +1827,6 @@ export class RedemptionService {
         continue;
       }
 
-      if (coupon.funnelId != null && coupon.funnelId > 0) {
-        occupiedFunnelIds.add(coupon.funnelId);
-      }
-
       const isPrepaid = coupon.paymentStatus === CouponPaymentStatus.PAID;
       const isPostpaidCampaign =
         coupon.campaign.campaignType === CampaignType.POSTPAID;
@@ -1843,6 +1839,8 @@ export class RedemptionService {
           !isPostpaidCampaign &&
           !this.isOpenOnlineCheckoutPayment(coupon.funnelPayment)
         ) {
+          // Orphan ACTIVE pending pass (no open online checkout): do not block
+          // Business deals — staff could not redeem it here either.
           continue;
         }
       }
@@ -1852,6 +1850,8 @@ export class RedemptionService {
         payment: coupon.funnelPayment,
       });
 
+      // Counter-only paid ACTIVE passes are not listed under Redeem; they used to
+      // still occupy the funnel and hide the deal from Business deals forever.
       if (isPrepaid && !isOnlineFunnelPayment(coupon.funnelPayment)) {
         continue;
       }
@@ -1869,6 +1869,13 @@ export class RedemptionService {
           : coupon.campaign?.campaignType === CampaignType.PREPAID
             ? ('prepaid' as const)
             : null;
+
+      // --- Occupy only deals the guest can actually redeem ---
+      // Why: marking occupied before the filters above hid Cold Brew (etc.) from
+      // Business deals after redeem/attach even when no redeemable pass remained.
+      if (coupon.funnelId != null && coupon.funnelId > 0) {
+        occupiedFunnelIds.add(coupon.funnelId);
+      }
 
       results.push({
         couponId: coupon.id,
