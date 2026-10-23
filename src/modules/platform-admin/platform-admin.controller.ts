@@ -196,12 +196,14 @@ export class PlatformAdminController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search?: string,
+    @Query('status') status?: string,
   ) {
     return this.platformAdminService.listSubscriptions(
       req.user,
       page,
       limit,
       search,
+      status,
     );
   }
 

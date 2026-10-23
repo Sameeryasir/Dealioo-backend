@@ -2582,6 +2582,7 @@ export class PlatformAdminService {
     page?: number,
     limit?: number,
     searchRaw?: string,
+    statusRaw?: string,
   ): Promise<{
     items: Array<{
       id: string;
@@ -2611,12 +2612,17 @@ export class PlatformAdminService {
 
     const pagination = normalizePagination(page, limit);
     const search = searchRaw?.trim() ?? '';
+    const statusFilter = this.normalizeSubscriptionStatusFilter(statusRaw);
 
     const qb = this.subscriptionRepository
       .createQueryBuilder('sub')
       .leftJoinAndSelect('sub.user', 'user')
       .leftJoinAndSelect('sub.plan', 'plan')
       .orderBy('sub.createdAt', 'DESC');
+
+    if (statusFilter) {
+      qb.andWhere('sub.status = :status', { status: statusFilter });
+    }
 
     if (search) {
       qb.andWhere(
@@ -2980,6 +2986,21 @@ export class PlatformAdminService {
         slug: plan?.slug?.trim() || 'unknown',
       },
     };
+  }
+
+  private normalizeSubscriptionStatusFilter(
+    statusRaw?: string,
+  ): 'active' | 'trialing' | 'past_due' | 'cancelled' | null {
+    const status = statusRaw?.trim().toLowerCase() ?? '';
+    if (
+      status === 'active' ||
+      status === 'trialing' ||
+      status === 'past_due' ||
+      status === 'cancelled'
+    ) {
+      return status;
+    }
+    return null;
   }
 
   private async buildSubscriptionStatusCounts(): Promise<{
