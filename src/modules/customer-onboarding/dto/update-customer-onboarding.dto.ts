@@ -1,4 +1,10 @@
-import { IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { CUSTOMER_ONBOARDING_STATUS } from '../customer-onboarding.constants';
 
 const STATUS_VALUES = [

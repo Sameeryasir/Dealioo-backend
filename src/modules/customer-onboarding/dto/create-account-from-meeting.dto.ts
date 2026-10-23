@@ -85,8 +85,9 @@ export class CreateAccountFromMeetingDto {
   @IsIn(EXISTING_USER_ACTIONS)
   existingUserAction?: (typeof EXISTING_USER_ACTIONS)[number];
 
-  @ValidateIf((dto: CreateAccountFromMeetingDto) =>
-    dto.existingUserAction === 'link_existing_business',
+  @ValidateIf(
+    (dto: CreateAccountFromMeetingDto) =>
+      dto.existingUserAction === 'link_existing_business',
   )
   @Type(() => Number)
   @IsInt()

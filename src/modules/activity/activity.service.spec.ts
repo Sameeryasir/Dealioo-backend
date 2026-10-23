@@ -28,10 +28,8 @@ describe('ActivityService', () => {
           provide: ActivityStatsQueueService,
           useValue: {
             getOrCompute: async (_p: unknown, fb: () => unknown) => fb(),
-            getCachedOrComputeInline: async (
-              _p: unknown,
-              fb: () => unknown,
-            ) => fb(),
+            getCachedOrComputeInline: async (_p: unknown, fb: () => unknown) =>
+              fb(),
           },
         },
       ],

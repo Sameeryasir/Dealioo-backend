@@ -849,12 +849,7 @@ export class StripeService {
         const sameAmount = existing.unit_amount === unitAmount;
         const sameCurrency = existing.currency === currency;
         const sameInterval = existing.recurring?.interval === opts.interval;
-        if (
-          existing.active &&
-          sameAmount &&
-          sameCurrency &&
-          sameInterval
-        ) {
+        if (existing.active && sameAmount && sameCurrency && sameInterval) {
           return { stripePriceId: existing.id };
         }
       } catch (err) {

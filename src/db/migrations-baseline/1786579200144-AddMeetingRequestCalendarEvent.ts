@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddMeetingRequestCalendarEvent1786579200144
-  implements MigrationInterface
-{
+export class AddMeetingRequestCalendarEvent1786579200144 implements MigrationInterface {
   name = 'AddMeetingRequestCalendarEvent1786579200144';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

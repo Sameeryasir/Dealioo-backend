@@ -228,11 +228,7 @@ export class PlatformAdminController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: UpdateAdminPlanDto,
   ) {
-    return this.platformAdminService.updateSubscriptionPlan(
-      req.user,
-      id,
-      body,
-    );
+    return this.platformAdminService.updateSubscriptionPlan(req.user, id, body);
   }
 
   @Delete('subscription-plans/:id')

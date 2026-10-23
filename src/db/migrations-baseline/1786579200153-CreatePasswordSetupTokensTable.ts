@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreatePasswordSetupTokensTable1786579200153
-  implements MigrationInterface
-{
+export class CreatePasswordSetupTokensTable1786579200153 implements MigrationInterface {
   name = 'CreatePasswordSetupTokensTable1786579200153';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -141,7 +141,8 @@ export class MeetingRequestService {
       currentSituation: dto.currentSituation?.trim() || '',
       startTimeline: dto.startTimeline || '',
       meetingCommitment: dto.meetingCommitment || '',
-      selectedPlanSlug: (dto.selectedPlanSlug ?? '').trim().toLowerCase() || null,
+      selectedPlanSlug:
+        (dto.selectedPlanSlug ?? '').trim().toLowerCase() || null,
       selectedPlanName: (dto.selectedPlanName ?? '').trim() || null,
       selectedBillingCycle:
         dto.selectedBillingCycle === 'monthly' ||

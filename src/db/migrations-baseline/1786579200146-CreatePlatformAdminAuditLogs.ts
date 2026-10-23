@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreatePlatformAdminAuditLogs1786579200146
-  implements MigrationInterface
-{
+export class CreatePlatformAdminAuditLogs1786579200146 implements MigrationInterface {
   name = 'CreatePlatformAdminAuditLogs1786579200146';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

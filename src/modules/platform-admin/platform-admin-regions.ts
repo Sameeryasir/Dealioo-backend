@@ -39,7 +39,7 @@ const REGION_ALIASES: Record<string, string> = {
   thailand: 'Asia',
   vietnam: 'Asia',
   philippines: 'Asia',
-  'uae': 'Asia',
+  uae: 'Asia',
   'united arab emirates': 'Asia',
   'saudi arabia': 'Asia',
   qatar: 'Asia',
@@ -74,7 +74,13 @@ export function countryToRegion(country: string | null | undefined): string {
   if (REGION_ALIASES[key]) return REGION_ALIASES[key];
   if (key === 'us' || key === 'ca' || key === 'mx') return 'North America';
   if (key === 'au' || key === 'nz') return 'Australia';
-  if (key === 'pk' || key === 'in' || key === 'cn' || key === 'jp' || key === 'sg') {
+  if (
+    key === 'pk' ||
+    key === 'in' ||
+    key === 'cn' ||
+    key === 'jp' ||
+    key === 'sg'
+  ) {
     return 'Asia';
   }
   if (
@@ -107,7 +113,9 @@ export function buildRegionBreakdownFromCountryCounts(
   const counts = new Map<string, number>();
   for (const row of rows) {
     const region = countryToRegion(row.country);
-    const n = Number.isFinite(row.count) ? Math.max(0, Math.floor(row.count)) : 0;
+    const n = Number.isFinite(row.count)
+      ? Math.max(0, Math.floor(row.count))
+      : 0;
     if (n <= 0) continue;
     counts.set(region, (counts.get(region) ?? 0) + n);
   }

@@ -109,18 +109,32 @@ export type PlatformDashboardPanel = {
   label: string;
   from: string;
   to: string;
+  /** False when browsing a past month/range — KPIs are activity in that range, not live totals. */
+  isCurrentPeriod: boolean;
   kpis: {
     mrr: PlatformDashboardKpi;
     planEarnings: PlatformDashboardKpi;
     platformUsers: PlatformDashboardKpi;
     payingSubscriptions: PlatformDashboardKpi;
     newPlans: PlatformDashboardKpi;
+    newUsers: PlatformDashboardKpi;
+    activeBusinesses: PlatformDashboardKpi;
+    onboardingCompletedPct: PlatformDashboardKpi;
+    meetingsBooked: PlatformDashboardKpi;
+    meetingsAttended: PlatformDashboardKpi;
+    dealsWon: PlatformDashboardKpi;
+    readyToCreate: PlatformDashboardKpi;
+    conversionRate: PlatformDashboardKpi;
   };
   charts: {
     planEarnings: Array<{ label: string; value: number }>;
     subscriptions: Array<{ label: string; value: number }>;
     users: Array<{ label: string; value: number }>;
     businesses: Array<{ label: string; value: number }>;
+    onboardingCompleted: Array<{ label: string; value: number }>;
+    meetingsBooked: Array<{ label: string; value: number }>;
+    meetingsAttended: Array<{ label: string; value: number }>;
+    dealsWon: Array<{ label: string; value: number }>;
   };
   regions: Array<{ region: string; count: number; sharePct: number }>;
 };
@@ -247,8 +261,7 @@ export class PlatformAdminService {
           actorUserId: input.actorUserId,
           action: input.action,
           targetType: input.targetType,
-          targetId:
-            input.targetId == null ? null : String(input.targetId),
+          targetId: input.targetId == null ? null : String(input.targetId),
           metadata: input.metadata ?? null,
         }),
       );
@@ -282,7 +295,9 @@ export class PlatformAdminService {
 
   private async loadBusinessMapForUserIds(
     userIds: number[],
-  ): Promise<Map<number, PlatformAdminOverview['users'][number]['businesses']>> {
+  ): Promise<
+    Map<number, PlatformAdminOverview['users'][number]['businesses']>
+  > {
     const map = new Map<
       number,
       PlatformAdminOverview['users'][number]['businesses']
@@ -826,6 +841,11 @@ export class PlatformAdminService {
       usersLast30,
       usersPrev30,
       countryCounts,
+      growthStats,
+      salesCurrent,
+      salesPrior,
+      salesTrend,
+      onboardingTrend,
     ] = await Promise.all([
       this.computeTrendWindow(from, to, chartTz, useMonthBuckets),
       this.computeTrendWindow(priorFrom, priorTo, chartTz, useMonthBuckets),
@@ -842,8 +862,40 @@ export class PlatformAdminService {
         .createQueryBuilder('b')
         .select('b.country', 'country')
         .addSelect('COUNT(*)', 'count')
+        .where('b.deleted_at IS NULL')
         .groupBy('b.country')
         .getRawMany<{ country: string | null; count: string }>(),
+      this.computeGrowthSnapshotStats(from, to, priorFrom, priorTo),
+      this.computeSalesPipelineStats(from, to),
+      this.computeSalesPipelineStats(priorFrom, priorTo),
+      this.computeSalesTrendWindow(from, to, chartTz, useMonthBuckets).catch(
+        (error) => {
+          this.logger.warn(
+            `Sales trend window failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return [] as Array<{
+            bucket: string;
+            booked: number;
+            attended: number;
+            dealsWon: number;
+          }>;
+        },
+      ),
+      this.computeOnboardingTrendWindow(
+        from,
+        to,
+        chartTz,
+        useMonthBuckets,
+      ).catch((error) => {
+        this.logger.warn(
+          `Onboarding trend window failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return [] as Array<{ bucket: string; count: number }>;
+      }),
     ]);
 
     const spark = (points: number[]) =>
@@ -856,22 +908,39 @@ export class PlatformAdminService {
       trendCurrent.points.map((point) => point.subscriptions),
     );
     const usersSpark = spark(trendCurrent.points.map((point) => point.users));
+    const businessSpark = spark(
+      trendCurrent.points.map((point) => point.businesses),
+    );
 
     const chartLabel = (bucket: string) =>
       formatDashboardBucketLabel(bucket, useMonthBuckets);
+
+    // Past months must not show today's live MRR / paying totals.
+    const isCurrentPeriod = to.getTime() >= Date.now() - 2 * 60_000;
 
     return {
       period,
       label,
       from: from.toISOString(),
       to: to.toISOString(),
+      isCurrentPeriod,
       kpis: {
-        mrr: {
-          value: mrrNow.mrrCents,
-          changePct: pctChange(mrrNow.mrrCents, mrrAtPeriodStart.mrrCents),
-          sparkline: earningsSpark,
-          hint: 'Monthly earnings from active plans',
-        },
+        mrr: isCurrentPeriod
+          ? {
+              value: mrrNow.mrrCents,
+              changePct: pctChange(mrrNow.mrrCents, mrrAtPeriodStart.mrrCents),
+              sparkline: earningsSpark,
+              hint: 'Current monthly recurring income',
+            }
+          : {
+              value: trendCurrent.totalRevenueCents,
+              changePct: pctChange(
+                trendCurrent.totalRevenueCents,
+                trendPrior.totalRevenueCents,
+              ),
+              sparkline: earningsSpark,
+              hint: `${label} · income from new subscriptions`,
+            },
         planEarnings: {
           value: trendCurrent.totalRevenueCents,
           changePct: pctChange(
@@ -882,20 +951,34 @@ export class PlatformAdminService {
           hint: `${label} · new subscriptions`,
         },
         platformUsers: {
-          value: totalUsers,
-          changePct: pctChange(usersLast30, usersPrev30),
+          value: isCurrentPeriod ? totalUsers : trendCurrent.newUsers,
+          changePct: isCurrentPeriod
+            ? pctChange(usersLast30, usersPrev30)
+            : pctChange(trendCurrent.newUsers, trendPrior.newUsers),
           sparkline: usersSpark,
-          hint: 'vs prior 30 days',
+          hint: isCurrentPeriod
+            ? 'All accounts · vs prior 30 days'
+            : `${label} · accounts created`,
         },
-        payingSubscriptions: {
-          value: mrrNow.payingCount,
-          changePct: pctChange(
-            mrrNow.payingCount,
-            mrrAtPeriodStart.payingCount,
-          ),
-          sparkline: subsSpark,
-          hint: 'Active Dealioo plans · vs start of period',
-        },
+        payingSubscriptions: isCurrentPeriod
+          ? {
+              value: mrrNow.payingCount,
+              changePct: pctChange(
+                mrrNow.payingCount,
+                mrrAtPeriodStart.payingCount,
+              ),
+              sparkline: subsSpark,
+              hint: 'Currently paying plans',
+            }
+          : {
+              value: trendCurrent.newSubscriptions,
+              changePct: pctChange(
+                trendCurrent.newSubscriptions,
+                trendPrior.newSubscriptions,
+              ),
+              sparkline: subsSpark,
+              hint: `${label} · new subscriptions`,
+            },
         newPlans: {
           value: trendCurrent.newSubscriptions,
           changePct: pctChange(
@@ -904,6 +987,73 @@ export class PlatformAdminService {
           ),
           sparkline: subsSpark,
           hint: `${label} · subscriptions started`,
+        },
+        newUsers: {
+          value: trendCurrent.newUsers,
+          changePct: pctChange(trendCurrent.newUsers, trendPrior.newUsers),
+          sparkline: usersSpark,
+          hint: `${label} · accounts created`,
+        },
+        activeBusinesses: {
+          value: isCurrentPeriod
+            ? growthStats.activeBusinesses
+            : trendCurrent.newBusinesses,
+          changePct: pctChange(
+            trendCurrent.newBusinesses,
+            trendPrior.newBusinesses,
+          ),
+          sparkline: businessSpark,
+          hint: isCurrentPeriod
+            ? 'Live tenants now'
+            : `${label} · new businesses`,
+        },
+        onboardingCompletedPct: {
+          value: isCurrentPeriod
+            ? growthStats.onboardingCompletedPct
+            : growthStats.completedThisPeriod,
+          changePct: pctChange(
+            growthStats.completedThisPeriod,
+            growthStats.completedPriorPeriod,
+          ),
+          sparkline: businessSpark,
+          hint: isCurrentPeriod
+            ? 'Share of businesses that finished setup'
+            : `${label} · setup completions`,
+        },
+        meetingsBooked: {
+          value: salesCurrent.booked,
+          changePct: pctChange(salesCurrent.booked, salesPrior.booked),
+          sparkline: [salesPrior.booked, salesCurrent.booked],
+          hint: `${label} · meetings created`,
+        },
+        meetingsAttended: {
+          value: salesCurrent.attended,
+          changePct: pctChange(salesCurrent.attended, salesPrior.attended),
+          sparkline: [salesPrior.attended, salesCurrent.attended],
+          hint: `${label} · marked attended`,
+        },
+        dealsWon: {
+          value: salesCurrent.dealsWon,
+          changePct: pctChange(salesCurrent.dealsWon, salesPrior.dealsWon),
+          sparkline: [salesPrior.dealsWon, salesCurrent.dealsWon],
+          hint: `${label} · closed sales`,
+        },
+        readyToCreate: {
+          value: salesCurrent.readyToCreate,
+          changePct: 0,
+          sparkline: [salesCurrent.readyToCreate],
+          hint: isCurrentPeriod
+            ? 'Won deals waiting for an account'
+            : 'Current backlog (not limited to this month)',
+        },
+        conversionRate: {
+          value: salesCurrent.conversionRate,
+          changePct: pctChange(
+            salesCurrent.conversionRate,
+            salesPrior.conversionRate,
+          ),
+          sparkline: [salesPrior.conversionRate, salesCurrent.conversionRate],
+          hint: `${label} · attended → deal won`,
         },
       },
       charts: {
@@ -923,6 +1073,22 @@ export class PlatformAdminService {
           label: chartLabel(point.bucket),
           value: point.businesses,
         })),
+        onboardingCompleted: onboardingTrend.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.count,
+        })),
+        meetingsBooked: salesTrend.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.booked,
+        })),
+        meetingsAttended: salesTrend.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.attended,
+        })),
+        dealsWon: salesTrend.map((point) => ({
+          label: chartLabel(point.bucket),
+          value: point.dealsWon,
+        })),
       },
       regions: buildRegionBreakdownFromCountryCounts(
         countryCounts.map((row) => ({
@@ -930,6 +1096,249 @@ export class PlatformAdminService {
           count: Number(row.count) || 0,
         })),
       ),
+    };
+  }
+
+  private async computeGrowthSnapshotStats(
+    from: Date,
+    to: Date,
+    priorFrom: Date,
+    priorTo: Date,
+  ): Promise<{
+    activeBusinesses: number;
+    onboardingCompletedPct: number;
+    completedThisPeriod: number;
+    completedPriorPeriod: number;
+  }> {
+    const [
+      activeBusinesses,
+      completedBusinesses,
+      completedThisPeriod,
+      completedPriorPeriod,
+    ] = await Promise.all([
+      this.businessRepository
+        .createQueryBuilder('b')
+        .where('b.deleted_at IS NULL')
+        .getCount(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .where('b.deleted_at IS NULL')
+        .andWhere('b.onboarding_completed = true')
+        .getCount(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .where('b.deleted_at IS NULL')
+        .andWhere('b.onboarding_completed_at >= :from', { from })
+        .andWhere('b.onboarding_completed_at <= :to', { to })
+        .getCount(),
+      this.businessRepository
+        .createQueryBuilder('b')
+        .where('b.deleted_at IS NULL')
+        .andWhere('b.onboarding_completed_at >= :from', { from: priorFrom })
+        .andWhere('b.onboarding_completed_at <= :to', { to: priorTo })
+        .getCount(),
+    ]);
+
+    const onboardingCompletedPct =
+      activeBusinesses > 0
+        ? Math.round((completedBusinesses / activeBusinesses) * 1000) / 10
+        : 0;
+
+    return {
+      activeBusinesses,
+      onboardingCompletedPct,
+      completedThisPeriod,
+      completedPriorPeriod,
+    };
+  }
+
+  private async computeOnboardingTrendWindow(
+    from: Date,
+    to: Date,
+    chartTz: string,
+    useMonthBuckets: boolean,
+  ): Promise<Array<{ bucket: string; count: number }>> {
+    let keys: string[];
+    let bucketExpr: string;
+
+    if (useMonthBuckets) {
+      keys = buildMonthBucketKeys(from, to, chartTz);
+      const tz = chartTz.replace(/'/g, "''");
+      bucketExpr = `TO_CHAR(DATE_TRUNC('month', b.onboarding_completed_at AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+    } else {
+      const built = buildZonedRangeBucketKeys(from, to, chartTz);
+      keys = built.keys;
+      bucketExpr = overviewRangeBucketSql(
+        'b.onboarding_completed_at',
+        built.sameDay,
+        chartTz,
+      );
+    }
+
+    const rows = await this.businessRepository
+      .createQueryBuilder('b')
+      .select(bucketExpr, 'bucket')
+      .addSelect('COUNT(*)', 'count')
+      .where('b.deleted_at IS NULL')
+      .andWhere('b.onboarding_completed_at IS NOT NULL')
+      .andWhere('b.onboarding_completed_at >= :from', { from })
+      .andWhere('b.onboarding_completed_at <= :to', { to })
+      .groupBy(bucketExpr)
+      .getRawMany<{ bucket: string; count: string }>();
+
+    const countMap = new Map(
+      rows.map((row) => [String(row.bucket ?? ''), Number(row.count) || 0]),
+    );
+
+    return keys.map((bucket) => ({
+      bucket,
+      count: countMap.get(bucket) ?? 0,
+    }));
+  }
+
+  private async computeSalesTrendWindow(
+    from: Date,
+    to: Date,
+    chartTz: string,
+    useMonthBuckets: boolean,
+  ): Promise<
+    Array<{
+      bucket: string;
+      booked: number;
+      attended: number;
+      dealsWon: number;
+    }>
+  > {
+    const outcomeAt = 'COALESCE(m.outcome_updated_at, m.created_at)';
+    let keys: string[];
+    let bookedBucket: string;
+    let outcomeBucket: string;
+
+    if (useMonthBuckets) {
+      keys = buildMonthBucketKeys(from, to, chartTz);
+      const tz = chartTz.replace(/'/g, "''");
+      bookedBucket = `TO_CHAR(DATE_TRUNC('month', m.created_at AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+      outcomeBucket = `TO_CHAR(DATE_TRUNC('month', ${outcomeAt} AT TIME ZONE '${tz}'), 'YYYY-MM')`;
+    } else {
+      const built = buildZonedRangeBucketKeys(from, to, chartTz);
+      keys = built.keys;
+      bookedBucket = overviewRangeBucketSql(
+        'm.created_at',
+        built.sameDay,
+        chartTz,
+      );
+      outcomeBucket = overviewRangeBucketSql(outcomeAt, built.sameDay, chartTz);
+    }
+
+    const [bookedRows, attendedRows, wonRows] = await Promise.all([
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .select(bookedBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('m.created_at >= :from', { from })
+        .andWhere('m.created_at <= :to', { to })
+        .groupBy(bookedBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .select(outcomeBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('m.attendance = :attendance', { attendance: 'ATTENDED' })
+        .andWhere(`${outcomeAt} >= :from`, { from })
+        .andWhere(`${outcomeAt} <= :to`, { to })
+        .groupBy(outcomeBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .select(outcomeBucket, 'bucket')
+        .addSelect('COUNT(*)', 'count')
+        .where('m.attendance = :attendance', { attendance: 'ATTENDED' })
+        .andWhere('m.sales_outcome = :outcome', { outcome: 'DEAL_WON' })
+        .andWhere(`${outcomeAt} >= :from`, { from })
+        .andWhere(`${outcomeAt} <= :to`, { to })
+        .groupBy(outcomeBucket)
+        .getRawMany<{ bucket: string; count: string }>(),
+    ]);
+
+    const bookedMap = new Map(
+      bookedRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
+      ]),
+    );
+    const attendedMap = new Map(
+      attendedRows.map((row) => [
+        String(row.bucket ?? ''),
+        Number(row.count) || 0,
+      ]),
+    );
+    const wonMap = new Map(
+      wonRows.map((row) => [String(row.bucket ?? ''), Number(row.count) || 0]),
+    );
+
+    return keys.map((bucket) => ({
+      bucket,
+      booked: bookedMap.get(bucket) ?? 0,
+      attended: attendedMap.get(bucket) ?? 0,
+      dealsWon: wonMap.get(bucket) ?? 0,
+    }));
+  }
+
+  private async computeSalesPipelineStats(
+    from: Date,
+    to: Date,
+  ): Promise<{
+    booked: number;
+    attended: number;
+    dealsWon: number;
+    readyToCreate: number;
+    conversionRate: number;
+  }> {
+    const outcomeAt = 'COALESCE(m.outcome_updated_at, m.created_at)';
+
+    const [booked, attended, dealsWon, readyToCreate] = await Promise.all([
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .where('m.created_at >= :from', { from })
+        .andWhere('m.created_at <= :to', { to })
+        .getCount(),
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .where('m.attendance = :attendance', { attendance: 'ATTENDED' })
+        .andWhere(`${outcomeAt} >= :from`, { from })
+        .andWhere(`${outcomeAt} <= :to`, { to })
+        .getCount(),
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .where('m.attendance = :attendance', { attendance: 'ATTENDED' })
+        .andWhere('m.sales_outcome = :outcome', { outcome: 'DEAL_WON' })
+        .andWhere(`${outcomeAt} >= :from`, { from })
+        .andWhere(`${outcomeAt} <= :to`, { to })
+        .getCount(),
+      this.meetingRequestRepository
+        .createQueryBuilder('m')
+        .where('m.attendance = :attendance', { attendance: 'ATTENDED' })
+        .andWhere('m.sales_outcome = :outcome', { outcome: 'DEAL_WON' })
+        .andWhere(
+          `NOT EXISTS (
+            SELECT 1
+            FROM customer_onboardings o
+            WHERE o.meeting_id = m.id
+              AND o.business_id IS NOT NULL
+          )`,
+        )
+        .getCount(),
+    ]);
+
+    const conversionRate =
+      attended > 0 ? Math.round((dealsWon / attended) * 1000) / 10 : 0;
+
+    return {
+      booked,
+      attended,
+      dealsWon,
+      readyToCreate,
+      conversionRate,
     };
   }
 
@@ -985,11 +1394,7 @@ export class PlatformAdminService {
 
   private parseUsersSort(raw?: string): AdminUsersSort {
     const value = (raw ?? 'newest').trim().toLowerCase();
-    if (
-      value === 'oldest' ||
-      value === 'name_asc' ||
-      value === 'name_desc'
-    ) {
+    if (value === 'oldest' || value === 'name_asc' || value === 'name_desc') {
       return value;
     }
     return 'newest';
@@ -1023,9 +1428,7 @@ export class PlatformAdminService {
     }
   }
 
-  private async buildUsersSummary(
-    actorId: number,
-  ): Promise<AdminUsersSummary> {
+  private async buildUsersSummary(actorId: number): Promise<AdminUsersSummary> {
     const now = new Date();
     const last30Start = addDays(startOfDay(now), -29);
     const prev30Start = addDays(last30Start, -30);
@@ -1243,10 +1646,7 @@ export class PlatformAdminService {
         'That role cannot be assigned from Super Admin.',
       );
     }
-    if (
-      isSuperAdminRole(roleName) &&
-      dto.confirmElevateToSuperAdmin !== true
-    ) {
+    if (isSuperAdminRole(roleName) && dto.confirmElevateToSuperAdmin !== true) {
       throw new BadRequestException(
         'Confirm Super Admin assignment to create another Super Admin.',
       );
@@ -1379,7 +1779,9 @@ export class PlatformAdminService {
 
     if (dto.isActive !== undefined) {
       if (isSelf && dto.isActive === false) {
-        throw new BadRequestException('You cannot deactivate your own account.');
+        throw new BadRequestException(
+          'You cannot deactivate your own account.',
+        );
       }
 
       if (
@@ -1436,15 +1838,17 @@ export class PlatformAdminService {
   } {
     const stripeConnected = Boolean(business.stripeAccountId?.trim());
 
-    const metaStatus = (business.metaConnectionStatus ?? '').trim().toUpperCase();
+    const metaStatus = (business.metaConnectionStatus ?? '')
+      .trim()
+      .toUpperCase();
     const metaReadyStatus =
       metaStatus === 'AD_ACCOUNT_SELECTED' ||
       metaStatus === 'ACTIVE' ||
       metaStatus === 'SYNCING';
     const metaConnected = Boolean(
       business.metaUserId?.trim() &&
-        business.metaAdAccountId?.trim() &&
-        metaReadyStatus,
+      business.metaAdAccountId?.trim() &&
+      metaReadyStatus,
     );
 
     const googleStatus = (business.googleConnectionStatus ?? '')
@@ -1940,9 +2344,7 @@ export class PlatformAdminService {
       row.addressRequirement = input.addressRequirement?.trim() || null;
     }
     if (input.dateCreated !== undefined) {
-      row.dateCreated = input.dateCreated
-        ? new Date(input.dateCreated)
-        : null;
+      row.dateCreated = input.dateCreated ? new Date(input.dateCreated) : null;
     }
     if (input.webhookUrl !== undefined) {
       row.webhookUrl = input.webhookUrl?.trim() || null;
@@ -2037,13 +2439,11 @@ export class PlatformAdminService {
   ) {
     this.assertSuperAdmin(actor);
 
-    const { page, limit } = normalizePagination(
-      options?.page,
-      options?.limit,
-    );
+    const { page, limit } = normalizePagination(options?.page, options?.limit);
     const safeLimit = Math.min(50, limit);
 
-    const existingCount = await this.platformTwilioPhoneNumberRepository.count();
+    const existingCount =
+      await this.platformTwilioPhoneNumberRepository.count();
     const newestInventorySync = await this.platformTwilioPhoneNumberRepository
       .createQueryBuilder('n')
       .select('MAX(n.lastSyncedAt)', 'max')
@@ -2257,14 +2657,13 @@ export class PlatformAdminService {
     const cached = await this.platformTwilioPhoneNumberRepository.findOne({
       where: { phoneNumber },
     });
-    const match =
-      cached?.phoneSid
-        ? { sid: cached.phoneSid, phoneNumber: cached.phoneNumber }
-        : await this.twilioService.findIncomingPhoneNumberByPhone({
-            accountSid: platform.accountSid,
-            authToken: platform.authToken,
-            phoneNumber,
-          });
+    const match = cached?.phoneSid
+      ? { sid: cached.phoneSid, phoneNumber: cached.phoneNumber }
+      : await this.twilioService.findIncomingPhoneNumberByPhone({
+          accountSid: platform.accountSid,
+          authToken: platform.authToken,
+          phoneNumber,
+        });
     if (!match?.sid) {
       throw new NotFoundException(
         'That phone number was not found on the Twilio account.',
@@ -2397,11 +2796,10 @@ export class PlatformAdminService {
 
     let match: { sid: string; phoneNumber: string } | null = null;
     if (phoneSid) {
-      const cachedBySid = await this.platformTwilioPhoneNumberRepository.findOne(
-        {
+      const cachedBySid =
+        await this.platformTwilioPhoneNumberRepository.findOne({
           where: { phoneSid },
-        },
-      );
+        });
       if (cachedBySid) {
         match = {
           sid: cachedBySid.phoneSid,
@@ -2501,7 +2899,7 @@ export class PlatformAdminService {
     const phoneNumber = dto.phoneNumber.trim();
     const phoneSid = dto.phoneSid?.trim() || '';
 
-    let inventory =
+    const inventory =
       (phoneSid
         ? await this.platformTwilioPhoneNumberRepository.findOne({
             where: { phoneSid },
@@ -2920,16 +3318,15 @@ export class PlatformAdminService {
 
     if (opts.syncMonthly) {
       if (monthly != null && monthly > 0) {
-        const created = await this.stripeService.createPlatformPlanRecurringPrice(
-          {
+        const created =
+          await this.stripeService.createPlatformPlanRecurringPrice({
             planSlug: plan.slug,
             planName: plan.name,
             amountDollars: monthly,
             currency,
             interval: 'month',
             existingPriceId: plan.stripeMonthlyPriceId,
-          },
-        );
+          });
         plan.stripeMonthlyPriceId = created.stripePriceId;
       } else {
         plan.stripeMonthlyPriceId = null;
@@ -2938,16 +3335,15 @@ export class PlatformAdminService {
 
     if (opts.syncYearly) {
       if (yearly != null && yearly > 0) {
-        const created = await this.stripeService.createPlatformPlanRecurringPrice(
-          {
+        const created =
+          await this.stripeService.createPlatformPlanRecurringPrice({
             planSlug: plan.slug,
             planName: plan.name,
             amountDollars: yearly,
             currency,
             interval: 'year',
             existingPriceId: plan.stripeYearlyPriceId,
-          },
-        );
+          });
         plan.stripeYearlyPriceId = created.stripePriceId;
       } else {
         plan.stripeYearlyPriceId = null;
@@ -3288,10 +3684,7 @@ function shiftCalendarDateKey(dateKey: string, days: number): string {
   return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
 }
 
-function startOfCalendarDayInTimeZone(
-  dateKey: string,
-  timeZone: string,
-): Date {
+function startOfCalendarDayInTimeZone(dateKey: string, timeZone: string): Date {
   return new Date(
     zonedDateTime(dateKey, '00:00', resolveSafeTimeZone(timeZone)),
   );
@@ -3384,11 +3777,24 @@ function resolveDashboardWindow(
     month = Number(parts.find((part) => part.type === 'month')?.value);
   }
 
-  const from = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
-  const to = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
-  const clampedTo = to.getTime() > now.getTime() ? now : to;
-  const priorFrom = new Date(Date.UTC(year, month - 2, 1, 0, 0, 0));
-  const priorTo = new Date(Date.UTC(year, month - 1, 0, 23, 59, 59, 999));
+  // Use the viewer's timezone month bounds (not raw UTC), so Jan 2026
+  // only includes events that happened in that local calendar month.
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const fromKey = `${year}-${pad(month)}-01`;
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthKey = `${nextYear}-${pad(nextMonth)}-01`;
+  const from = startOfCalendarDayInTimeZone(fromKey, tz);
+  const nextMonthStart = startOfCalendarDayInTimeZone(nextMonthKey, tz);
+  const monthEnd = new Date(nextMonthStart.getTime() - 1);
+  const clampedTo = monthEnd.getTime() > now.getTime() ? now : monthEnd;
+
+  const priorMonth = month === 1 ? 12 : month - 1;
+  const priorYear = month === 1 ? year - 1 : year;
+  const priorFromKey = `${priorYear}-${pad(priorMonth)}-01`;
+  const priorFrom = startOfCalendarDayInTimeZone(priorFromKey, tz);
+  const priorTo = new Date(from.getTime() - 1);
+
   const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(
     'en-US',
     { month: 'long', year: 'numeric', timeZone: 'UTC' },
@@ -3404,7 +3810,11 @@ function resolveDashboardWindow(
   };
 }
 
-function buildMonthBucketKeys(from: Date, to: Date, timeZone: string): string[] {
+function buildMonthBucketKeys(
+  from: Date,
+  to: Date,
+  timeZone: string,
+): string[] {
   const tz = resolveSafeTimeZone(timeZone);
   const startParts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -3419,7 +3829,9 @@ function buildMonthBucketKeys(from: Date, to: Date, timeZone: string): string[] 
   let year = Number(startParts.find((part) => part.type === 'year')?.value);
   let month = Number(startParts.find((part) => part.type === 'month')?.value);
   const endYear = Number(endParts.find((part) => part.type === 'year')?.value);
-  const endMonth = Number(endParts.find((part) => part.type === 'month')?.value);
+  const endMonth = Number(
+    endParts.find((part) => part.type === 'month')?.value,
+  );
   const keys: string[] = [];
   for (let guard = 0; guard < 36; guard += 1) {
     keys.push(`${year}-${String(month).padStart(2, '0')}`);

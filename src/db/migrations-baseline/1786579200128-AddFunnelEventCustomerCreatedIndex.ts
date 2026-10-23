@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddFunnelEventCustomerCreatedIndex1786579200128
-  implements MigrationInterface
-{
+export class AddFunnelEventCustomerCreatedIndex1786579200128 implements MigrationInterface {
   name = 'AddFunnelEventCustomerCreatedIndex1786579200128';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

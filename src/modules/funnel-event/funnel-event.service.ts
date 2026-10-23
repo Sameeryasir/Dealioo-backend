@@ -2288,7 +2288,11 @@ export class FunnelEventService {
   }> {
     const { sameDay, keys } = buildZonedRangeBucketKeys(from, to, chartTz);
     const firstBucket = overviewRangeBucketSql('first_at', sameDay, chartTz);
-    const eventBucket = overviewRangeBucketSql('e.created_at', sameDay, chartTz);
+    const eventBucket = overviewRangeBucketSql(
+      'e.created_at',
+      sameDay,
+      chartTz,
+    );
 
     const [newRows, repeatRows, repeatTotalRow] = await Promise.all([
       this.funnelEventRepository.query(
@@ -2315,7 +2319,7 @@ export class FunnelEventService {
           GROUP BY 1
         `,
         [funnelId, from, to],
-      ) as Promise<Array<{ month: string; newVisitors: number }>>,
+      ),
       this.funnelEventRepository.query(
         `
           SELECT ${eventBucket} AS month,
@@ -2337,7 +2341,7 @@ export class FunnelEventService {
           GROUP BY 1
         `,
         [funnelId, from, to],
-      ) as Promise<Array<{ month: string; repeatVisitors: number }>>,
+      ),
       this.funnelEventRepository.query(
         `
           SELECT COUNT(DISTINCT e.customer_id)::int AS "repeatVisitors"
@@ -2357,7 +2361,7 @@ export class FunnelEventService {
             )
         `,
         [funnelId, from, to],
-      ) as Promise<Array<{ repeatVisitors: number }>>,
+      ),
     ]);
 
     const newByMonth = new Map(
@@ -2962,13 +2966,7 @@ export class FunnelEventService {
         ) AS "earlierPayments"
       FROM paid_signup
       `,
-      [
-        funnelId,
-        from,
-        to,
-        FunnelPaymentStatus.PAID,
-        FunnelEventType.SIGNUP,
-      ],
+      [funnelId, from, to, FunnelPaymentStatus.PAID, FunnelEventType.SIGNUP],
     );
 
     const row = rows[0];
@@ -3839,10 +3837,7 @@ export class FunnelEventService {
           'totalEarningsCents',
         )
         .addSelect('COUNT(*)', 'totalOrderCount')
-        .addSelect(
-          `COUNT(DISTINCT p.customer_id)`,
-          'totalUniqueCustomerCount',
-        )
+        .addSelect(`COUNT(DISTINCT p.customer_id)`, 'totalUniqueCustomerCount')
         .getRawOne<{
           totalEarningsCents: string | number;
           totalOrderCount: string | number;
@@ -4134,11 +4129,7 @@ export class FunnelEventService {
         const campaignId = Number(row.campaignId);
         const customerId = Number(row.customerId);
         const agg = byCampaign.get(campaignId);
-        if (
-          !agg ||
-          !Number.isFinite(customerId) ||
-          customerId <= 0
-        ) {
+        if (!agg || !Number.isFinite(customerId) || customerId <= 0) {
           continue;
         }
         agg.customerIds.add(customerId);

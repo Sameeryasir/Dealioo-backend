@@ -103,7 +103,9 @@ export class CreateMeetingRequestDto {
   marketingActivities?: (typeof MEETING_MARKETING_ACTIVITIES)[number][];
 
   @IsOptional()
-  @ValidateIf((_, value) => typeof value === 'string' && value.trim().length > 0)
+  @ValidateIf(
+    (_, value) => typeof value === 'string' && value.trim().length > 0,
+  )
   @IsString()
   @MinLength(10)
   @MaxLength(5000)

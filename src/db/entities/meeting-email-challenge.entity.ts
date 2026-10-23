@@ -25,7 +25,12 @@ export class MeetingEmailChallenge {
   isUsed: boolean;
 
   @Index({ unique: true })
-  @Column({ name: 'proof_token_hash', type: 'varchar', length: 64, nullable: true })
+  @Column({
+    name: 'proof_token_hash',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
   proofTokenHash: string | null;
 
   @Column({ name: 'proof_expires_at', type: 'timestamptz', nullable: true })

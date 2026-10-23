@@ -77,13 +77,23 @@ export class CustomerOnboarding {
   @Column({ name: 'customer_email', type: 'varchar', length: 255 })
   customerEmail: string;
 
-  @Column({ name: 'customer_phone', type: 'varchar', length: 40, nullable: true })
+  @Column({
+    name: 'customer_phone',
+    type: 'varchar',
+    length: 40,
+    nullable: true,
+  })
   customerPhone: string | null;
 
   @Column({ name: 'business_name', type: 'varchar', length: 512 })
   businessName: string;
 
-  @Column({ name: 'business_category', type: 'varchar', length: 128, nullable: true })
+  @Column({
+    name: 'business_category',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
   businessCategory: string | null;
 
   @Column({ name: 'draft_payload', type: 'jsonb', nullable: true })

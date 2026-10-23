@@ -23,9 +23,13 @@ export enum FunnelEventType {
 export type FunnelEventAdSource = 'meta' | 'google' | 'utm';
 
 @Entity('funnel_event')
-@Index('IDX_funnel_event_funnel_customer_created', ['funnelId', 'customerId', 'createdAt'], {
-  where: '"deleted_at" IS NULL AND "customer_id" IS NOT NULL',
-})
+@Index(
+  'IDX_funnel_event_funnel_customer_created',
+  ['funnelId', 'customerId', 'createdAt'],
+  {
+    where: '"deleted_at" IS NULL AND "customer_id" IS NOT NULL',
+  },
+)
 @Index('IDX_funnel_event_funnel_created', ['funnelId', 'createdAt'])
 @Index('IDX_funnel_event_funnel_type_created', [
   'funnelId',

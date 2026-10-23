@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateGoogleCalendarConnections1786579200143
-  implements MigrationInterface
-{
+export class CreateGoogleCalendarConnections1786579200143 implements MigrationInterface {
   name = 'CreateGoogleCalendarConnections1786579200143';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

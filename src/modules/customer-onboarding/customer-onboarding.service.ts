@@ -111,8 +111,7 @@ export class CustomerOnboardingService {
           actorUserId: input.actorUserId,
           action: input.action,
           targetType: input.targetType,
-          targetId:
-            input.targetId == null ? null : String(input.targetId),
+          targetId: input.targetId == null ? null : String(input.targetId),
           metadata: input.metadata ?? null,
         }),
       );
@@ -226,10 +225,7 @@ export class CustomerOnboardingService {
     }
 
     if (dto.attendance !== undefined) {
-      if (
-        meeting.attendance &&
-        dto.attendance !== meeting.attendance
-      ) {
+      if (meeting.attendance && dto.attendance !== meeting.attendance) {
         throw new BadRequestException(
           'Attendance cannot be changed after it was recorded.',
         );
@@ -379,9 +375,9 @@ export class CustomerOnboardingService {
       `${meeting.firstName} ${meeting.lastName}`.trim() ||
       meeting.email
     ).trim();
-    const email = (
-      dto.customerEmail?.trim() || meeting.email
-    ).trim().toLowerCase();
+    const email = (dto.customerEmail?.trim() || meeting.email)
+      .trim()
+      .toLowerCase();
     const customerPhone = (
       dto.customerPhone?.trim() ||
       meeting.phone?.trim() ||
@@ -1060,15 +1056,12 @@ export class CustomerOnboardingService {
         throw new BadRequestException('Phone number is required.');
       }
       const businessType =
-        dto.businessType?.trim() ||
-        onboarding.businessCategory?.trim() ||
-        '';
+        dto.businessType?.trim() || onboarding.businessCategory?.trim() || '';
       if (!businessType) {
         throw new BadRequestException('Business type is required.');
       }
       const currency = (
-        dto.currency?.trim() ||
-        String(draft.currency ?? 'USD')
+        dto.currency?.trim() || String(draft.currency ?? 'USD')
       ).toUpperCase();
       if (!currency) {
         throw new BadRequestException('Currency is required.');
@@ -1097,9 +1090,7 @@ export class CustomerOnboardingService {
             onboarding.customerEmail,
           phoneNumber,
           city:
-            dto.city?.trim() ||
-            String(draft.cityLocation ?? '').trim() ||
-            null,
+            dto.city?.trim() || String(draft.cityLocation ?? '').trim() || null,
           state: dto.state?.trim() || String(draft.state ?? '').trim() || null,
           country:
             dto.country?.trim() || String(draft.country ?? '').trim() || null,
@@ -1299,8 +1290,8 @@ export class CustomerOnboardingService {
   private toOnboardingDetail(row: CustomerOnboarding) {
     const tasks = [...(row.tasks ?? [])].sort(
       (a, b) =>
-        ONBOARDING_TASK_KEYS.indexOf(a.taskKey as OnboardingTaskKey) -
-        ONBOARDING_TASK_KEYS.indexOf(b.taskKey as OnboardingTaskKey),
+        ONBOARDING_TASK_KEYS.indexOf(a.taskKey) -
+        ONBOARDING_TASK_KEYS.indexOf(b.taskKey),
     );
     const list = this.toListItem({ ...row, tasks });
     return {
@@ -1331,9 +1322,7 @@ export class CustomerOnboardingService {
       tasks: tasks.map((task) => ({
         id: task.id,
         taskKey: task.taskKey,
-        label:
-          ONBOARDING_TASK_LABELS[task.taskKey as OnboardingTaskKey] ??
-          task.taskKey,
+        label: ONBOARDING_TASK_LABELS[task.taskKey] ?? task.taskKey,
         status: task.status,
         notes: task.notes,
         completedAt: task.completedAt,

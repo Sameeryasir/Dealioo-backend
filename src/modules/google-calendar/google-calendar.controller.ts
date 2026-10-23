@@ -28,10 +28,7 @@ export class GoogleCalendarController {
 
   @Get('connect')
   @UseGuards(JwtAuthGuard)
-  connect(
-    @Req() req: { user?: SignedInUser },
-    @Res() res: Response,
-  ): void {
+  connect(@Req() req: { user?: SignedInUser }, @Res() res: Response): void {
     if (!isAdminOrSuperAdmin(req.user ?? null)) {
       throw new ForbiddenException(
         'Only an admin can connect the company Google Calendar.',
@@ -68,7 +65,11 @@ export class GoogleCalendarController {
       res
         .status(400)
         .type('html')
-        .send(page('Google Calendar was not connected. You can close this page and try again.'));
+        .send(
+          page(
+            'Google Calendar was not connected. You can close this page and try again.',
+          ),
+        );
       return;
     }
 

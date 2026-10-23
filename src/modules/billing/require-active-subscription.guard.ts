@@ -39,11 +39,7 @@ export class RequireActiveSubscriptionGuard implements CanActivate {
     if (role === SUPER_ADMIN_ROLE) {
       return true;
     }
-    if (
-      role === MANAGER_ROLE ||
-      role === STAFF_ROLE ||
-      role === MEMBER_ROLE
-    ) {
+    if (role === MANAGER_ROLE || role === STAFF_ROLE || role === MEMBER_ROLE) {
       return true;
     }
     if (role !== ADMIN_ROLE) {

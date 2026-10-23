@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreatePlatformTwilioPhoneNumbers1786579200149
-  implements MigrationInterface
-{
+export class CreatePlatformTwilioPhoneNumbers1786579200149 implements MigrationInterface {
   name = 'CreatePlatformTwilioPhoneNumbers1786579200149';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

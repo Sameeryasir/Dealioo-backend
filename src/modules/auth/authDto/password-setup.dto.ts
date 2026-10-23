@@ -3,9 +3,7 @@ import { IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { IsStrongEnoughPassword } from '../auth-password.util';
 
 export class PasswordSetupTokenDto {
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim() : value,
-  )
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   @IsNotEmpty()
   @MinLength(16)

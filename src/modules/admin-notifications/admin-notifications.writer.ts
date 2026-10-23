@@ -118,9 +118,7 @@ export class AdminNotificationWriter {
       'Someone';
     const businessName = input.businessName.trim();
     const planName =
-      input.selectedPlanName?.trim() ||
-      input.selectedPlanSlug?.trim() ||
-      '';
+      input.selectedPlanName?.trim() || input.selectedPlanSlug?.trim() || '';
     const base = businessName
       ? `${fullName} requested a meeting for ${businessName}`
       : `${fullName} requested a meeting`;

@@ -34,13 +34,15 @@ describe('google calendar oauth', () => {
 
   it('rejects an expired state', () => {
     const state = signCalendarState(secret, 1_000);
-    expect(() => assertCalendarState(state, secret, 1_000 + 11 * 60 * 1000)).toThrow(
-      /expired/i,
-    );
+    expect(() =>
+      assertCalendarState(state, secret, 1_000 + 11 * 60 * 1000),
+    ).toThrow(/expired/i);
   });
 
   it('names the missing calendar settings', () => {
-    expect(() => readCalendarOAuthSettings()).toThrow(ServiceUnavailableException);
+    expect(() => readCalendarOAuthSettings()).toThrow(
+      ServiceUnavailableException,
+    );
     expect(() => readCalendarOAuthSettings()).toThrow(
       'GOOGLE_CALENDAR_CLIENT_ID',
     );
@@ -48,10 +50,7 @@ describe('google calendar oauth', () => {
 
   it('rejects a meeting that ends before it starts', () => {
     expect(() =>
-      assertIsoRange(
-        '2026-10-21T10:00:00-05:00',
-        '2026-10-21T09:00:00-05:00',
-      ),
+      assertIsoRange('2026-10-21T10:00:00-05:00', '2026-10-21T09:00:00-05:00'),
     ).toThrow(/end time/i);
   });
 
@@ -68,7 +67,9 @@ describe('google calendar oauth', () => {
       end: '2026-10-21T10:30:00',
       timeZone: 'America/Chicago',
     };
-    expect(bookingKey(input)).toBe(bookingKey({ ...input, email: 'visitor@example.com' }));
+    expect(bookingKey(input)).toBe(
+      bookingKey({ ...input, email: 'visitor@example.com' }),
+    );
   });
 
   it('hides Google failure details from the visitor', () => {
