@@ -54,6 +54,7 @@ import { AssignAdminTwilioNumberDto } from './dto/assign-admin-twilio-number.dto
 import { PurchaseAdminTwilioNumberDto } from './dto/purchase-admin-twilio-number.dto';
 import { SearchAdminTwilioNumbersDto } from './dto/search-admin-twilio-numbers.dto';
 import { SetAdminTwilioWebhookDto } from './dto/set-admin-twilio-webhook.dto';
+import { UnassignAdminTwilioNumberDto } from './dto/unassign-admin-twilio-number.dto';
 import { UpdateAdminPlanDto } from './dto/update-admin-plan.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 
@@ -2489,6 +2490,93 @@ export class PlatformAdminService {
     };
   }
 
+  /**
+   * What changed: Super admin can unassign a platform Twilio number from a business.
+   * Why: Assigned numbers need a safe way to detach without releasing from Twilio.
+   * Related: assignTwilioNumber, BusinessTwilioIntegration, PlatformTwilioPhoneNumber
+   */
+  async unassignTwilioNumber(actor: User, dto: UnassignAdminTwilioNumberDto) {
+    this.assertSuperAdmin(actor);
+
+    const phoneNumber = dto.phoneNumber.trim();
+    const phoneSid = dto.phoneSid?.trim() || '';
+
+    let inventory =
+      (phoneSid
+        ? await this.platformTwilioPhoneNumberRepository.findOne({
+            where: { phoneSid },
+          })
+        : null) ||
+      (await this.platformTwilioPhoneNumberRepository.findOne({
+        where: { phoneNumber },
+      }));
+
+    if (!inventory) {
+      throw new NotFoundException(
+        'That phone number is not in the Dealioo Twilio inventory.',
+      );
+    }
+
+    const resolvedSid = inventory.phoneSid;
+    const resolvedNumber = inventory.phoneNumber;
+    const previousBusinessId = inventory.businessId;
+
+    const businessesToClear = await this.businessRepository.find({
+      where: [
+        ...(previousBusinessId ? [{ id: previousBusinessId }] : []),
+        { twilioPhoneSid: resolvedSid },
+        { twilioPhoneNumber: resolvedNumber },
+      ],
+    });
+
+    const clearedBusinesses: Array<{ id: number; name: string }> = [];
+    for (const business of businessesToClear) {
+      business.twilioPhoneSid = null;
+      business.twilioPhoneNumber = null;
+      business.twilioConnectedAt = null;
+      await this.businessRepository.save(business);
+
+      const integration =
+        await this.businessTwilioIntegrationRepository.findOne({
+          where: { businessId: business.id },
+        });
+      if (integration) {
+        integration.twilioPhoneSid = null;
+        integration.twilioPhoneNumber = null;
+        integration.twilioConnectedAt = null;
+        await this.businessTwilioIntegrationRepository.save(integration);
+      }
+
+      clearedBusinesses.push({ id: business.id, name: business.name });
+    }
+
+    await this.upsertPlatformTwilioNumber({
+      phoneSid: resolvedSid,
+      phoneNumber: resolvedNumber,
+      businessId: null,
+      connectedAt: null,
+    });
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'twilio_number_unassigned',
+      targetType: 'twilio_phone_number',
+      targetId: inventory.id,
+      metadata: {
+        phoneNumber: resolvedNumber,
+        previousBusinessId,
+        clearedBusinessIds: clearedBusinesses.map((b) => b.id),
+      },
+    });
+
+    return {
+      phoneNumber: resolvedNumber,
+      unassigned: true,
+      previousBusinessId,
+      clearedBusinesses,
+    };
+  }
+
   async listSubscriptions(
     actor: User,
     page?: number,
@@ -2563,8 +2651,13 @@ export class PlatformAdminService {
     const plans = await this.subscriptionPlanRepository.find({
       order: { sortOrder: 'ASC', createdAt: 'ASC' },
     });
+    const subscriberStats = await this.getPlanSubscriberStats(
+      plans.map((plan) => plan.id),
+    );
     return {
-      items: plans.map((plan) => this.toAdminPlanItem(plan)),
+      items: plans.map((plan) =>
+        this.toAdminPlanItem(plan, subscriberStats.get(plan.id)),
+      ),
       counts: {
         all: plans.length,
         active: plans.filter((plan) => plan.isActive).length,
@@ -2593,23 +2686,46 @@ export class PlatformAdminService {
       sortOrder = Number.isFinite(maxValue) ? maxValue + 1 : 0;
     }
 
+    const monthlyPrice = this.normalizePlanPriceInput(dto.monthlyPrice);
+    const yearlyPrice = this.normalizePlanPriceInput(dto.yearlyPrice);
+    const descriptionDto = {
+      ...dto,
+      monthlyPrice,
+      yearlyPrice,
+      monthlyOriginalPrice: this.normalizePlanPriceInput(
+        dto.monthlyOriginalPrice,
+      ),
+      yearlyOriginalPrice: this.normalizePlanPriceInput(
+        dto.yearlyOriginalPrice,
+      ),
+    };
+
     const plan = this.subscriptionPlanRepository.create({
       slug,
       name: dto.name.trim(),
-      monthlyPrice: dto.monthlyPrice === undefined ? null : dto.monthlyPrice,
-      yearlyPrice: dto.yearlyPrice === undefined ? null : dto.yearlyPrice,
+      monthlyPrice,
+      yearlyPrice,
       currency: (dto.currency?.trim() || 'USD').toUpperCase(),
       isActive: dto.isActive ?? true,
       sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
       stripeMonthlyPriceId: null,
       stripeYearlyPriceId: null,
-      description: this.buildPlanDescription(null, dto),
+      description: this.buildPlanDescription(null, descriptionDto),
     });
 
-    await this.syncPlanPricesWithStripe(plan, {
-      syncMonthly: plan.monthlyPrice != null,
-      syncYearly: plan.yearlyPrice != null,
-    });
+    try {
+      await this.syncPlanPricesWithStripe(plan, {
+        syncMonthly: plan.monthlyPrice != null,
+        syncYearly: plan.yearlyPrice != null,
+      });
+      this.assertPlanStripeReady(plan);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error
+          ? `Could not sync plan prices with Stripe: ${error.message}`
+          : 'Could not sync plan prices with Stripe.',
+      );
+    }
 
     const saved = await this.subscriptionPlanRepository.save(plan);
 
@@ -2621,7 +2737,10 @@ export class PlatformAdminService {
       metadata: { slug: saved.slug, name: saved.name },
     });
 
-    return this.toAdminPlanItem(saved);
+    return this.toAdminPlanItem(saved, {
+      activeSubscriberCount: 0,
+      totalSubscriberCount: 0,
+    });
   }
 
   async updateSubscriptionPlan(
@@ -2655,13 +2774,37 @@ export class PlatformAdminService {
     }
 
     if (dto.name != null) plan.name = dto.name.trim();
-    if (dto.monthlyPrice !== undefined) plan.monthlyPrice = dto.monthlyPrice;
-    if (dto.yearlyPrice !== undefined) plan.yearlyPrice = dto.yearlyPrice;
+    if (dto.monthlyPrice !== undefined) {
+      plan.monthlyPrice = this.normalizePlanPriceInput(dto.monthlyPrice);
+    }
+    if (dto.yearlyPrice !== undefined) {
+      plan.yearlyPrice = this.normalizePlanPriceInput(dto.yearlyPrice);
+    }
     if (dto.currency != null) {
       plan.currency = dto.currency.trim().toUpperCase() || plan.currency;
     }
     if (dto.isActive !== undefined) plan.isActive = dto.isActive;
     if (dto.sortOrder !== undefined) plan.sortOrder = dto.sortOrder;
+
+    const descriptionDto = {
+      ...dto,
+      monthlyPrice:
+        dto.monthlyPrice !== undefined
+          ? this.normalizePlanPriceInput(dto.monthlyPrice)
+          : undefined,
+      yearlyPrice:
+        dto.yearlyPrice !== undefined
+          ? this.normalizePlanPriceInput(dto.yearlyPrice)
+          : undefined,
+      monthlyOriginalPrice:
+        dto.monthlyOriginalPrice !== undefined
+          ? this.normalizePlanPriceInput(dto.monthlyOriginalPrice)
+          : undefined,
+      yearlyOriginalPrice:
+        dto.yearlyOriginalPrice !== undefined
+          ? this.normalizePlanPriceInput(dto.yearlyOriginalPrice)
+          : undefined,
+    };
 
     const touchesDescription =
       dto.badge !== undefined ||
@@ -2678,7 +2821,10 @@ export class PlatformAdminService {
       dto.promo !== undefined;
 
     if (touchesDescription) {
-      plan.description = this.buildPlanDescription(plan.description, dto);
+      plan.description = this.buildPlanDescription(
+        plan.description,
+        descriptionDto,
+      );
     }
 
     const nextMonthly = this.parsePlanDecimal(plan.monthlyPrice);
@@ -2686,14 +2832,23 @@ export class PlatformAdminService {
     const nextCurrency = (plan.currency || 'USD').toUpperCase();
     const currencyChanged = nextCurrency !== previousCurrency;
 
-    await this.syncPlanPricesWithStripe(plan, {
-      syncMonthly:
-        currencyChanged ||
-        (dto.monthlyPrice !== undefined && nextMonthly !== previousMonthly),
-      syncYearly:
-        currencyChanged ||
-        (dto.yearlyPrice !== undefined && nextYearly !== previousYearly),
-    });
+    try {
+      await this.syncPlanPricesWithStripe(plan, {
+        syncMonthly:
+          currencyChanged ||
+          (dto.monthlyPrice !== undefined && nextMonthly !== previousMonthly),
+        syncYearly:
+          currencyChanged ||
+          (dto.yearlyPrice !== undefined && nextYearly !== previousYearly),
+      });
+      this.assertPlanStripeReady(plan);
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error
+          ? `Could not sync plan prices with Stripe: ${error.message}`
+          : 'Could not sync plan prices with Stripe.',
+      );
+    }
 
     const saved = await this.subscriptionPlanRepository.save(plan);
 
@@ -2710,7 +2865,43 @@ export class PlatformAdminService {
       },
     });
 
-    return this.toAdminPlanItem(saved);
+    const stats = await this.getPlanSubscriberStats([saved.id]);
+    return this.toAdminPlanItem(saved, stats.get(saved.id));
+  }
+
+  async deleteSubscriptionPlan(actor: User, planId: string) {
+    this.assertSuperAdmin(actor);
+    const plan = await this.subscriptionPlanRepository.findOne({
+      where: { id: planId },
+    });
+    if (!plan) {
+      throw new NotFoundException('Subscription plan not found.');
+    }
+
+    const stats = await this.getPlanSubscriberStats([plan.id]);
+    const planStats = stats.get(plan.id) ?? {
+      activeSubscriberCount: 0,
+      totalSubscriberCount: 0,
+    };
+    if (planStats.totalSubscriberCount > 0) {
+      throw new ConflictException(
+        planStats.activeSubscriberCount > 0
+          ? `Cannot delete "${plan.name}" while ${planStats.activeSubscriberCount} subscriber(s) are still on it. Deactivate the plan instead.`
+          : `Cannot delete "${plan.name}" because subscription history still references it. Deactivate the plan instead.`,
+      );
+    }
+
+    await this.subscriptionPlanRepository.remove(plan);
+
+    await this.writeAudit({
+      actorUserId: actor.id,
+      action: 'subscription_plan_deleted',
+      targetType: 'subscription_plan',
+      targetId: planId,
+      metadata: { slug: plan.slug, name: plan.name },
+    });
+
+    return { deleted: true, id: planId };
   }
 
   private async syncPlanPricesWithStripe(
@@ -2822,19 +3013,101 @@ export class PlatformAdminService {
     };
   }
 
-  private toAdminPlanItem(plan: SubscriptionPlan) {
+  private async getPlanSubscriberStats(
+    planIds: string[],
+  ): Promise<
+    Map<string, { activeSubscriberCount: number; totalSubscriberCount: number }>
+  > {
+    const map = new Map<
+      string,
+      { activeSubscriberCount: number; totalSubscriberCount: number }
+    >();
+    for (const id of planIds) {
+      map.set(id, { activeSubscriberCount: 0, totalSubscriberCount: 0 });
+    }
+    if (planIds.length === 0) return map;
+
+    const rows = await this.subscriptionRepository
+      .createQueryBuilder('sub')
+      .select('sub.planId', 'planId')
+      .addSelect('sub.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('sub.planId IN (:...planIds)', { planIds })
+      .groupBy('sub.planId')
+      .addGroupBy('sub.status')
+      .getRawMany<{ planId: string; status: string; count: string }>();
+
+    for (const row of rows) {
+      const current = map.get(row.planId) ?? {
+        activeSubscriberCount: 0,
+        totalSubscriberCount: 0,
+      };
+      const count = Number(row.count) || 0;
+      current.totalSubscriberCount += count;
+      const status = String(row.status ?? '').toLowerCase();
+      if (
+        status === 'active' ||
+        status === 'trialing' ||
+        status === 'past_due'
+      ) {
+        current.activeSubscriberCount += count;
+      }
+      map.set(row.planId, current);
+    }
+    return map;
+  }
+
+  private assertPlanStripeReady(plan: SubscriptionPlan): void {
+    const monthly = this.parsePlanDecimal(plan.monthlyPrice);
+    const yearly = this.parsePlanDecimal(plan.yearlyPrice);
+    if (monthly != null && monthly > 0 && !plan.stripeMonthlyPriceId?.trim()) {
+      throw new BadRequestException(
+        'Monthly price is set but Stripe monthly price sync did not complete.',
+      );
+    }
+    if (yearly != null && yearly > 0 && !plan.stripeYearlyPriceId?.trim()) {
+      throw new BadRequestException(
+        'Yearly price is set but Stripe yearly price sync did not complete.',
+      );
+    }
+  }
+
+  private toAdminPlanItem(
+    plan: SubscriptionPlan,
+    subscriberStats?: {
+      activeSubscriberCount: number;
+      totalSubscriberCount: number;
+    },
+  ) {
+    const monthlyPrice = this.parsePlanDecimal(plan.monthlyPrice);
+    const yearlyPrice = this.parsePlanDecimal(plan.yearlyPrice);
+    const monthlySynced = Boolean(plan.stripeMonthlyPriceId?.trim());
+    const yearlySynced = Boolean(plan.stripeYearlyPriceId?.trim());
+    const activeSubscriberCount = subscriberStats?.activeSubscriberCount ?? 0;
+    const totalSubscriberCount = subscriberStats?.totalSubscriberCount ?? 0;
+
     return {
       id: plan.id,
       slug: plan.slug,
       name: plan.name,
-      monthlyPrice: this.parsePlanDecimal(plan.monthlyPrice),
-      yearlyPrice: this.parsePlanDecimal(plan.yearlyPrice),
+      monthlyPrice,
+      yearlyPrice,
       currency: plan.currency,
       isActive: plan.isActive,
       sortOrder: plan.sortOrder,
       description: plan.description,
       createdAt: plan.createdAt,
       updatedAt: plan.updatedAt,
+      activeSubscriberCount,
+      totalSubscriberCount,
+      canDelete: totalSubscriberCount === 0,
+      stripe: {
+        monthlySynced,
+        yearlySynced,
+        billingReady:
+          (monthlyPrice == null || monthlySynced) &&
+          (yearlyPrice == null || yearlySynced),
+      },
     };
   }
 
@@ -2842,6 +3115,15 @@ export class PlatformAdminService {
     if (value == null) return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private normalizePlanPriceInput(
+    value: number | null | undefined,
+  ): number | null {
+    if (value == null) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return Math.round(parsed * 100) / 100;
   }
 
   private buildPlanDescription(

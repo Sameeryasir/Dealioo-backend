@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   DefaultValuePipe,
+  Delete,
   Get,
   Header,
   Param,
@@ -25,6 +26,7 @@ import { AssignAdminTwilioNumberDto } from './dto/assign-admin-twilio-number.dto
 import { PurchaseAdminTwilioNumberDto } from './dto/purchase-admin-twilio-number.dto';
 import { SearchAdminTwilioNumbersDto } from './dto/search-admin-twilio-numbers.dto';
 import { SetAdminTwilioWebhookDto } from './dto/set-admin-twilio-webhook.dto';
+import { UnassignAdminTwilioNumberDto } from './dto/unassign-admin-twilio-number.dto';
 import { UpdateAdminPlanDto } from './dto/update-admin-plan.dto';
 import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
 import { PlatformAdminService } from './platform-admin.service';
@@ -178,6 +180,15 @@ export class PlatformAdminController {
     return this.platformAdminService.assignTwilioNumber(req.user, body);
   }
 
+  @Post('twilio/phone-numbers/unassign')
+  @Throttle({ default: { limit: 40, ttl: 60_000 } })
+  unassignTwilioNumber(
+    @Req() req: { user: User },
+    @Body() body: UnassignAdminTwilioNumberDto,
+  ) {
+    return this.platformAdminService.unassignTwilioNumber(req.user, body);
+  }
+
   @Get('subscriptions')
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   listSubscriptions(
@@ -220,6 +231,15 @@ export class PlatformAdminController {
       id,
       body,
     );
+  }
+
+  @Delete('subscription-plans/:id')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  deleteSubscriptionPlan(
+    @Req() req: { user: User },
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.platformAdminService.deleteSubscriptionPlan(req.user, id);
   }
 
   @Get('notifications/unread-count')
