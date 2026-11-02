@@ -862,6 +862,7 @@ export class ActivityService {
   ): Promise<{
     data: ActivityEventListItem[];
     meta: ReturnType<typeof buildPaginationMeta> & { allEventsTotal: number };
+    counts: ActivitySummary;
   }> {
     const pagination = normalizePagination(options.page, options.limit);
     const range = resolveActivityDateRange(options.from, options.to);
@@ -899,14 +900,7 @@ export class ActivityService {
       .leftJoinAndSelect('activity.customer', 'customer');
     applyBaseFilters(rowsQb);
 
-    const allEventsTotal = await this.activityRepository
-      .createQueryBuilder('activity')
-      .where('activity.businessId = :businessId', { businessId })
-      .andWhere('activity.occurredAt >= :from', { from: range.from })
-      .andWhere('activity.occurredAt <= :to', { to: range.to })
-      .getCount();
-
-    const [rows, total] = await Promise.all([
+    const [rows, total, counts] = await Promise.all([
       rowsQb
         .orderBy('activity.occurredAt', 'DESC')
         .addOrderBy('activity.id', 'DESC')
@@ -914,7 +908,12 @@ export class ActivityService {
         .take(pagination.limit)
         .getMany(),
       countQb.getCount(),
+      this.getBusinessSummary(businessId, {
+        from: range.from,
+        to: range.to,
+      }),
     ]);
+    const allEventsTotal = counts.totalEvents;
 
     const prepaidCampaignIds = Array.from(
       new Set(
@@ -977,6 +976,7 @@ export class ActivityService {
         ...buildPaginationMeta(total, pagination.page, pagination.limit),
         allEventsTotal,
       },
+      counts,
     };
   }
 

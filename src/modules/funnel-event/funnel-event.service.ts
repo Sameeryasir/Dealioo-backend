@@ -4453,6 +4453,11 @@ export class FunnelEventService {
       funnelCount: number;
       allEventsTotal: number;
     };
+    counts: {
+      all: number;
+      paid: number;
+      not_paid: number;
+    };
   }> {
     const pagination = normalizePagination(page, limit);
     const statusFilter: BusinessFunnelEventStatusFilter =
@@ -4462,7 +4467,21 @@ export class FunnelEventService {
     const rangeFrom = parseBusinessOrdersRangeEdge(filters.from);
     const rangeTo = parseBusinessOrdersRangeEdge(filters.to);
 
-    const [campaignCount, funnelCount, allEventsTotal] = await Promise.all([
+    const listFilterBase = {
+      businessId,
+      dateFilter,
+      rangeFrom,
+      rangeTo,
+      search,
+    } as const;
+
+    const [
+      campaignCount,
+      funnelCount,
+      allEventsTotal,
+      paidCount,
+      notPaidCount,
+    ] = await Promise.all([
       this.campaignRepository.count({
         where: { businessId },
       }),
@@ -4476,18 +4495,32 @@ export class FunnelEventService {
         .where('ord.business_id = :businessId', { businessId })
         .andWhere('ord.deleted_at IS NULL')
         .getCount(),
+      this.buildBusinessOrdersListQuery({
+        ...listFilterBase,
+        statusFilter: 'paid',
+      }).getCount(),
+      this.buildBusinessOrdersListQuery({
+        ...listFilterBase,
+        statusFilter: 'not_paid',
+      }).getCount(),
     ]);
 
-    const filteredQb = this.buildBusinessOrdersListQuery({
-      businessId,
-      statusFilter,
-      dateFilter,
-      rangeFrom,
-      rangeTo,
-      search,
-    });
+    const counts = {
+      all: paidCount + notPaidCount,
+      paid: paidCount,
+      not_paid: notPaidCount,
+    };
+    const total =
+      statusFilter === 'paid'
+        ? paidCount
+        : statusFilter === 'not_paid'
+          ? notPaidCount
+          : counts.all;
 
-    const total = await filteredQb.clone().getCount();
+    const filteredQb = this.buildBusinessOrdersListQuery({
+      ...listFilterBase,
+      statusFilter,
+    });
 
     const orders = await filteredQb
       .clone()
@@ -4551,6 +4584,7 @@ export class FunnelEventService {
         funnelCount,
         allEventsTotal,
       },
+      counts,
     };
   }
 
