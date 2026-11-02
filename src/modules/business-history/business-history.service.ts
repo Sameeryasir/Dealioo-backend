@@ -204,7 +204,11 @@ export class BusinessHistoryService {
       .getManyAndCount();
 
     const [counts, actors, roleByUserId] = await Promise.all([
-      this.categoryCounts(businessId),
+      this.categoryCounts(businessId, {
+        from: filters.from,
+        to: filters.to,
+        q: filters.q,
+      }),
       this.distinctActors(businessId),
       this.resolveBusinessActorRoles(
         businessId,
@@ -284,12 +288,33 @@ export class BusinessHistoryService {
 
   private async categoryCounts(
     businessId: number,
+    filters: { from?: string; to?: string; q?: string } = {},
   ): Promise<Record<HistoryCategory, number>> {
-    const rows = await this.historyRepository
+    const qb = this.historyRepository
       .createQueryBuilder('history')
       .select('history.eventType', 'eventType')
       .addSelect('COUNT(*)', 'count')
-      .where('history.businessId = :businessId', { businessId })
+      .where('history.businessId = :businessId', { businessId });
+
+    const fromDate = parseDayEdge(filters.from, 'start');
+    const toDate = parseDayEdge(filters.to, 'end');
+    if (fromDate) {
+      qb.andWhere('history.occurredAt >= :fromDate', { fromDate });
+    }
+    if (toDate) {
+      qb.andWhere('history.occurredAt <= :toDate', { toDate });
+    }
+
+    const search = filters.q?.trim();
+    if (search) {
+      qb.leftJoin('history.actorUser', 'actorUser');
+      qb.andWhere(
+        '(history.description ILIKE :search OR history.eventType ILIKE :search OR actorUser.name ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+
+    const rows = await qb
       .groupBy('history.eventType')
       .getRawMany<{ eventType: BusinessHistoryEventType; count: string }>();
 
