@@ -227,6 +227,32 @@ export class BusinessTrackingService {
     };
   }
 
+  async clearMetaTrackingIdsForBusiness(businessId: number): Promise<void> {
+    if (!Number.isFinite(businessId) || businessId < 1) return;
+
+    await this.trackingRepository.update(
+      { businessId },
+      {
+        pixelId: null,
+        accessToken: null,
+      },
+    );
+  }
+
+  async clearGoogleTrackingIdsForBusiness(businessId: number): Promise<void> {
+    if (!Number.isFinite(businessId) || businessId < 1) return;
+
+    await this.trackingRepository.update(
+      { businessId },
+      {
+        googleTagManagerId: null,
+        googleAdsSignupConversionLabel: null,
+        googleAdsPurchaseConversionLabel: null,
+        googleAdsLeadConversionLabel: null,
+      },
+    );
+  }
+
   async upsertForBusiness(
     user: User,
     businessId: number,

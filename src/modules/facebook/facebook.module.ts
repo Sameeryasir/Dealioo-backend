@@ -6,6 +6,7 @@ import { MetaOAuthSession } from '../../db/entities/meta-oauth-session.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 import { BusinessModule } from '../business/business.module';
+import { BusinessTrackingModule } from '../business-tracking/business-tracking.module';
 import { FacebookIntegrationAuditService } from './facebook-integration-audit.service';
 import { FacebookMetaTokenService } from './facebook-meta-token.service';
 import { FacebookWebhookController } from './facebook-webhook.controller';
@@ -21,6 +22,7 @@ import { FacebookService } from './facebook.service';
       MetaAdCampaignStatsSnapshot,
     ]),
     BusinessModule,
+    BusinessTrackingModule,
     AdminNotificationsModule,
   ],
   controllers: [FacebookController, FacebookWebhookController],

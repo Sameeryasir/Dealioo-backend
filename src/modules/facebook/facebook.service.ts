@@ -20,6 +20,7 @@ import {
 } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessTrackingService } from '../business-tracking/business-tracking.service';
 import {
   metaCampaignPermissionKeysFor,
   type MetaCampaignAccessAction,
@@ -202,6 +203,7 @@ export class FacebookService {
     private readonly auditService: FacebookIntegrationAuditService,
     private readonly metaTokenService: FacebookMetaTokenService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessTrackingService: BusinessTrackingService,
     private readonly adminNotificationWriter: AdminNotificationWriter,
   ) {}
 
@@ -1872,6 +1874,10 @@ export class FacebookService {
       metaOauthScopes: null,
       metaRequestedScopes: null,
     });
+
+    await this.businessTrackingService.clearMetaTrackingIdsForBusiness(
+      businessId,
+    );
 
     await this.auditService.log(businessId, 'meta_disconnected', {
       metadata: { connectedAccount: 'Meta Ads was removed' },

@@ -18,6 +18,7 @@ import { encryptSecret } from '../../utils/token-encryption.util';
 import { AdminNotificationWriter } from '../admin-notifications/admin-notifications.writer';
 import { BusinessHistoryService } from '../business-history/business-history.service';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import { BusinessTrackingService } from '../business-tracking/business-tracking.service';
 import { businessAccessWhere } from '../../utils/business-access';
 import { GoogleAdsCampaignStatsDto } from './dto/google-ads-campaign-stats.dto';
 import {
@@ -250,6 +251,7 @@ export class GoogleAdsService {
     private readonly adminNotificationWriter: AdminNotificationWriter,
     private readonly businessHistoryService: BusinessHistoryService,
     private readonly businessAccessService: BusinessAccessService,
+    private readonly businessTrackingService: BusinessTrackingService,
   ) {}
 
   private readonly campaignStatsRefreshInFlight = new Map<
@@ -734,6 +736,10 @@ export class GoogleAdsService {
       googleTokenExpiresAt: null,
       googleOauthScopes: null,
     });
+
+    await this.businessTrackingService.clearGoogleTrackingIdsForBusiness(
+      businessId,
+    );
 
     await this.auditService.log(businessId, 'google_ads_disconnected', {
       metadata: { connectedAccount: 'Google Ads was removed' },
