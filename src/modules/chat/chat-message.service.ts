@@ -75,6 +75,12 @@ export class ChatMessageService {
       }
 
       const sendOptions = await this.resolveTwilioSendOptions(businessId);
+      if (!sendOptions?.fromPhoneNumber) {
+        throw new BadRequestException(
+          'Twilio is not connected for this business. Select a Twilio number in Integrations before sending guest chat messages.',
+        );
+      }
+
       await this.twilioService.sendSms(customer.phone, trimmed, sendOptions);
     }
 
