@@ -401,7 +401,15 @@ export class PlatformAdminService {
 
   async getMeetingRequests(
     actor: User,
-    scope: 'upcoming' | 'past' | 'deal_won' | 'all' = 'all',
+    scope:
+      | 'upcoming'
+      | 'past'
+      | 'deal_won'
+      | 'today'
+      | 'this_week'
+      | 'no_show'
+      | 'cancelled'
+      | 'all' = 'all',
     page?: number,
     limit?: number,
     searchRaw?: string,
@@ -457,6 +465,10 @@ export class PlatformAdminService {
       upcoming: number;
       past: number;
       dealWon: number;
+      today: number;
+      thisWeek: number;
+      noShow: number;
+      cancelled: number;
       all: number;
     };
   }> {
@@ -470,18 +482,36 @@ export class PlatformAdminService {
     });
 
     const now = Date.now();
+    const todayYmd = utcYmd(now);
+    const thisWeekMonday = mondayOfUtcYmd(todayYmd);
     let upcomingCount = 0;
     let pastCount = 0;
     let dealWonCount = 0;
+    let todayCount = 0;
+    let thisWeekCount = 0;
+    let noShowCount = 0;
+    let cancelledCount = 0;
     const scoped = rows.filter((row) => {
       const upcoming = isUpcomingMeeting(row, now);
       const dealWon = row.salesOutcome === 'DEAL_WON';
+      const isToday = isScheduledOnUtcYmd(row, todayYmd);
+      const isThisWeek = isScheduledInUtcWeek(row, thisWeekMonday);
+      const isNoShow = row.attendance === 'NO_SHOW';
+      const isCancelled = row.attendance === 'CANCELLED';
       if (upcoming && !dealWon) upcomingCount += 1;
       else if (!dealWon) pastCount += 1;
       if (dealWon) dealWonCount += 1;
+      if (isToday) todayCount += 1;
+      if (isThisWeek) thisWeekCount += 1;
+      if (isNoShow) noShowCount += 1;
+      if (isCancelled) cancelledCount += 1;
       if (scope === 'upcoming') return upcoming && !dealWon;
       if (scope === 'past') return !upcoming && !dealWon;
       if (scope === 'deal_won') return dealWon;
+      if (scope === 'today') return isToday;
+      if (scope === 'this_week') return isThisWeek;
+      if (scope === 'no_show') return isNoShow;
+      if (scope === 'cancelled') return isCancelled;
       return true;
     });
 
@@ -621,6 +651,10 @@ export class PlatformAdminService {
         upcoming: upcomingCount,
         past: pastCount,
         dealWon: dealWonCount,
+        today: todayCount,
+        thisWeek: thisWeekCount,
+        noShow: noShowCount,
+        cancelled: cancelledCount,
         all: rows.length,
       },
     };
@@ -628,7 +662,15 @@ export class PlatformAdminService {
 
   async exportMeetingRequestsCsv(
     actor: User,
-    scope: 'upcoming' | 'past' | 'deal_won' | 'all' = 'all',
+    scope:
+      | 'upcoming'
+      | 'past'
+      | 'deal_won'
+      | 'today'
+      | 'this_week'
+      | 'no_show'
+      | 'cancelled'
+      | 'all' = 'all',
     search?: string,
   ): Promise<string> {
     const result = await this.getMeetingRequests(
@@ -3897,4 +3939,33 @@ function isUpcomingMeeting(row: MeetingRequest, now = Date.now()): boolean {
     return false;
   }
   return isFutureMeeting(row, now);
+}
+
+function utcYmd(nowMs: number): string {
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+function mondayOfUtcYmd(ymd: string): string {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  const weekday = dt.getUTCDay(); // 0 = Sunday
+  const diff = weekday === 0 ? -6 : 1 - weekday;
+  dt.setUTCDate(dt.getUTCDate() + diff);
+  return dt.toISOString().slice(0, 10);
+}
+
+function isScheduledOnUtcYmd(
+  row: MeetingRequest,
+  ymd: string,
+): boolean {
+  return Boolean(row.scheduledDate && row.scheduledDate === ymd);
+}
+
+function isScheduledInUtcWeek(
+  row: MeetingRequest,
+  weekMondayYmd: string,
+): boolean {
+  if (!row.scheduledDate) return false;
+  const meetingMonday = mondayOfUtcYmd(row.scheduledDate);
+  return meetingMonday === weekMondayYmd;
 }

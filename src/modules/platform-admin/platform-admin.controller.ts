@@ -288,14 +288,7 @@ export class PlatformAdminController {
     @Query('scope') scopeRaw?: string,
     @Query('search') search?: string,
   ) {
-    const normalized = scopeRaw?.trim().toLowerCase();
-    const scope =
-      normalized === 'upcoming' ||
-      normalized === 'past' ||
-      normalized === 'deal_won' ||
-      normalized === 'all'
-        ? normalized
-        : 'all';
+    const scope = this.normalizeMeetingRequestScope(scopeRaw);
     const csv = await this.platformAdminService.exportMeetingRequestsCsv(
       req.user,
       scope,
@@ -317,14 +310,7 @@ export class PlatformAdminController {
     @Query('search') search?: string,
     @Query('sort') sortRaw?: string,
   ) {
-    const normalized = scopeRaw?.trim().toLowerCase();
-    const scope =
-      normalized === 'upcoming' ||
-      normalized === 'past' ||
-      normalized === 'deal_won' ||
-      normalized === 'all'
-        ? normalized
-        : 'all';
+    const scope = this.normalizeMeetingRequestScope(scopeRaw);
     const sort =
       sortRaw === 'meeting_desc' ||
       sortRaw === 'newest' ||
@@ -340,5 +326,32 @@ export class PlatformAdminController {
       search,
       sort,
     );
+  }
+
+  private normalizeMeetingRequestScope(
+    scopeRaw?: string,
+  ):
+    | 'upcoming'
+    | 'past'
+    | 'deal_won'
+    | 'today'
+    | 'this_week'
+    | 'no_show'
+    | 'cancelled'
+    | 'all' {
+    const normalized = scopeRaw?.trim().toLowerCase();
+    if (
+      normalized === 'upcoming' ||
+      normalized === 'past' ||
+      normalized === 'deal_won' ||
+      normalized === 'today' ||
+      normalized === 'this_week' ||
+      normalized === 'no_show' ||
+      normalized === 'cancelled' ||
+      normalized === 'all'
+    ) {
+      return normalized;
+    }
+    return 'all';
   }
 }
