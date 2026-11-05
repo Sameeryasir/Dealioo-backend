@@ -12,6 +12,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { Order } from '../../db/entities/order.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
+import { ScannerRedemptionRequest } from '../../db/entities/scanner-redemption-request.entity';
 import { Business } from '../../db/entities/business.entity';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessHistoryModule } from '../business-history/business-history.module';
@@ -22,6 +23,7 @@ import { CouponService } from './coupon.service';
 import { RedemptionController } from './redemption.controller';
 import { RedemptionValidationService } from './redemption-validation.service';
 import { RedemptionService } from './redemption.service';
+import { ScannerRedemptionIdempotencyService } from './scanner-redemption-idempotency.service';
 import { SIGNUP_QR_EMAIL_QUEUE } from './signup-qr-email.constants';
 import { SignupQrEmailProcessor } from './signup-qr-email.processor';
 import { SignupQrEmailService } from './signup-qr-email.service';
@@ -32,6 +34,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     TypeOrmModule.forFeature([
       Coupon,
       RedemptionLog,
+      ScannerRedemptionRequest,
       CustomerVisit,
       CustomerVisitCampaign,
       VisitAddonItem,
@@ -59,6 +62,7 @@ import { SignupQrEmailService } from './signup-qr-email.service';
     CouponService,
     RedemptionValidationService,
     RedemptionService,
+    ScannerRedemptionIdempotencyService,
     SignupQrEmailService,
     SignupQrEmailProcessor,
   ],

@@ -11,6 +11,7 @@ import { FunnelEvent } from '../../db/entities/funnel-event.entity';
 import { FunnelPayment } from '../../db/entities/funnel-payment.entity';
 import { RedemptionLog } from '../../db/entities/redemption-log.entity';
 import { AutomationModule } from '../automation/automation.module';
+import { CustomerScannerService } from './customer-scanner.service';
 import { CustomerController } from './customer.controller';
 import { CustomerService } from './customer.service';
 
@@ -31,7 +32,7 @@ import { CustomerService } from './customer.service';
     forwardRef(() => AutomationModule),
   ],
   controllers: [CustomerController],
-  providers: [CustomerService],
-  exports: [CustomerService],
+  providers: [CustomerService, CustomerScannerService],
+  exports: [CustomerService, CustomerScannerService],
 })
 export class CustomerModule {}

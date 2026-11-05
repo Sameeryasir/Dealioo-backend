@@ -73,6 +73,7 @@ import {
 import { RedemptionValidationService } from './redemption-validation.service';
 import { sanitizeScanToken } from './sanitize-scan-token';
 import { ScannerErrorCode, ScannerErrorMessage } from './scanner-error-codes';
+import { ScannerRedemptionIdempotencyService } from './scanner-redemption-idempotency.service';
 
 export type ScanAuditContext = {
   scannedBy: number | null;
@@ -244,6 +245,7 @@ export class RedemptionService {
     private readonly customerActivityService: CustomerActivityService,
     private readonly customerJourneyService: CustomerJourneyService,
     private readonly businessHistoryService: BusinessHistoryService,
+    private readonly redemptionIdempotencyService: ScannerRedemptionIdempotencyService,
   ) {}
 
   extractToken(raw: string): string {
@@ -703,9 +705,31 @@ export class RedemptionService {
       };
     }
 
-    if (audit.idempotencyKey?.trim()) {
+    const idempotencyKey = audit.idempotencyKey?.trim() || null;
+    const requestHash = idempotencyKey
+      ? this.redemptionIdempotencyService.buildRequestHash({
+          couponIds: uniqueIds,
+          orderSubtotal,
+          extraItemsAmount,
+          extraItemNames,
+          extraItems,
+          visitSource: audit.visitSource,
+        })
+      : null;
+
+    if (idempotencyKey && requestHash) {
+      const durableCached =
+        await this.redemptionIdempotencyService.findCompleted(
+          businessId,
+          idempotencyKey,
+          requestHash,
+        );
+      if (durableCached) {
+        return durableCached;
+      }
+
       const cached = await this.findIdempotentRedemption(
-        audit.idempotencyKey.trim(),
+        idempotencyKey,
         businessId,
       );
       if (cached) {
@@ -728,6 +752,22 @@ export class RedemptionService {
     } = { value: null };
 
     const result = await this.dataSource.transaction(async (manager) => {
+      if (idempotencyKey && requestHash) {
+        const reserved =
+          await this.redemptionIdempotencyService.reserveInTransaction(
+            manager,
+            {
+              businessId,
+              staffUserId: audit.scannedBy,
+              idempotencyKey,
+              requestHash,
+            },
+          );
+        if (reserved !== 'proceed') {
+          return reserved;
+        }
+      }
+
       const lockedCoupons: Coupon[] = [];
       const business = await manager.findOne(Business, {
         where: { id: businessId },
@@ -1128,6 +1168,17 @@ export class RedemptionService {
       );
 
       if (successResult.success) {
+        if (idempotencyKey) {
+          await this.redemptionIdempotencyService.completeInTransaction(
+            manager,
+            {
+              businessId,
+              idempotencyKey,
+              response: successResult,
+            },
+          );
+        }
+
         const enteredOffer =
           hasUnpaid &&
           orderSubtotal != null &&

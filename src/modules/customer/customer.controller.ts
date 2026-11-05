@@ -13,11 +13,19 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { requireScannerRole } from '../../utils/require-scanner-role';
 import { BusinessAccessService } from '../business-access/business-access.service';
+import {
+  BusinessPermissionGuard,
+  RequireBusinessPermission,
+} from '../business-access';
+import { CustomerScannerService } from './customer-scanner.service';
 import { CustomerService } from './customer.service';
 import { Customer } from '../../db/entities/customer.entity';
 import { RegisterCustomerDto } from './customerDto/register-customer.dto';
+import { ScannerCreateGuestDto } from './customerDto/scanner-create-guest.dto';
 
 type AuthRequest = Request & {
   user: { id: number; email: string; role: { id: number; name: string } };
@@ -27,6 +35,7 @@ type AuthRequest = Request & {
 export class CustomerController {
   constructor(
     private readonly customerService: CustomerService,
+    private readonly customerScannerService: CustomerScannerService,
     private readonly businessAccessService: BusinessAccessService,
   ) {}
 
@@ -35,6 +44,39 @@ export class CustomerController {
     @Body() registerCustomer: RegisterCustomerDto,
   ): Promise<Customer & { isNewCustomer: boolean }> {
     return this.customerService.registerCustomer(registerCustomer);
+  }
+
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('scanning')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('business/:businessId/scanner/guests')
+  async createScannerGuest(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Body() dto: ScannerCreateGuestDto,
+    @Req() req: AuthRequest,
+  ): Promise<Customer & { isNewCustomer: boolean }> {
+    requireScannerRole(req.user);
+    return this.customerScannerService.createGuestForBusiness(businessId, dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'), BusinessPermissionGuard)
+  @RequireBusinessPermission('scanning')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('business/:businessId/scanner/guests/search')
+  async searchScannerGuests(
+    @Param('businessId', ParseIntPipe) businessId: number,
+    @Query('q') query = '',
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Req() req: AuthRequest,
+  ) {
+    requireScannerRole(req.user);
+    return this.customerScannerService.searchGuestsForBusiness(
+      businessId,
+      query,
+      page,
+      limit,
+    );
   }
 
   @UseGuards(AuthGuard('jwt'))

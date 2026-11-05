@@ -21,10 +21,7 @@ import {
 } from '../../db/entities/campaign.entity';
 import { FunnelPageType } from '../../db/entities/funnel-page-type';
 import { CheckoutAccessToken } from '../../db/entities/checkout-access-token.entity';
-import {
-  CustomerVisit,
-  CustomerVisitSource,
-} from '../../db/entities/customer-visit.entity';
+import { CustomerVisit } from '../../db/entities/customer-visit.entity';
 import {
   buildPaginationMeta,
   normalizePagination,
@@ -48,11 +45,11 @@ import {
   visitAddOnAmountDollars,
   type ResolvedCounterExtras,
 } from '../../utils/normalize-extra-items';
+import { resolveVisitStoredExtraItems } from '../../utils/visit-addon-items.util';
 import {
-  replaceVisitAddonItems,
-  resolveVisitStoredExtraItems,
-} from '../../utils/visit-addon-items.util';
-import { VisitAddonItemSource } from '../../db/entities/visit-addon-item.entity';
+  finalizeScannerPurchaseEssentials,
+  type ScannerPurchasedDealResult,
+} from './scanner-purchase-finalize.util';
 import {
   FunnelEvent,
   FunnelEventType,
@@ -85,10 +82,6 @@ import { CustomerJourneyService } from '../customer-journey/customer-journey.ser
 import { CustomerService } from '../customer/customer.service';
 import { PendingFunnelPaymentService } from '../payment/pending-funnel-payment.service';
 import { CouponService } from '../redemption/coupon.service';
-import {
-  CouponPaymentStatus,
-  CouponStatus,
-} from '../../db/entities/coupon.entity';
 import {
   ScannerErrorCode,
   ScannerErrorMessage,
@@ -140,12 +133,7 @@ import { FunnelStatsQueueService } from './funnel-stats-queue.service';
 
 // --- Scanner purchase response ---
 // purchaseMeans echoes what the caller sent (IN_PERSON | REDEEMED | SCANNED).
-type ScannerPurchasedDeal = {
-  funnelId: number;
-  campaignName: string;
-  couponId: number | null;
-  purchaseMeans: ScannerPurchaseMeans;
-};
+type ScannerPurchasedDeal = ScannerPurchasedDealResult;
 
 @Injectable()
 export class FunnelEventService {
@@ -911,6 +899,18 @@ export class FunnelEventService {
           })
         )?.orderId ?? null;
 
+      const purchased = await finalizeScannerPurchaseEssentials(manager, {
+        businessId,
+        customerId,
+        staffUserId,
+        orderId: primaryOrderId,
+        collectedAt,
+        purchaseMeans,
+        deals: created,
+        visitOrderSubtotalDollars,
+        normalizedExtraItems,
+      });
+
       if (idempotencyKey) {
         await manager.save(
           manager.create(ScannerPurchaseRequest, {
@@ -919,7 +919,7 @@ export class FunnelEventService {
             staffUserId,
             idempotencyKey,
             requestHash,
-            responseJson: [],
+            responseJson: purchased,
           }),
         );
       }
@@ -927,6 +927,7 @@ export class FunnelEventService {
       return {
         orderId: primaryOrderId,
         deals: created,
+        purchased,
         orderActivities: [...orderActivityById.values()],
       };
     });
@@ -939,173 +940,78 @@ export class FunnelEventService {
     }
 
     const deals = purchaseBatch?.deals ?? [];
-    const orderId = purchaseBatch?.orderId ?? null;
-    const purchased: ScannerPurchasedDeal[] = [];
-    const visitCampaignIds = [
-      ...new Set(deals.map((deal) => deal.funnel.campaign.id)),
-    ];
+    const purchased = purchaseBatch?.purchased ?? [];
 
     try {
-      for (const deal of deals) {
-        const { funnel, paymentId } = deal;
-        const funnelId = funnel.id;
+      const guestName =
+        customer.name?.trim() || customer.email?.trim() || 'Guest';
+      const dealNames =
+        purchased
+          .map((row) => row.campaignName?.trim())
+          .filter(Boolean)
+          .join(', ') || 'deal';
+      await this.businessHistoryService.logScannerPurchase({
+        businessId,
+        customerName: guestName,
+        dealNames,
+        amountLabel:
+          extraItemsCents > 0
+            ? `$${expectedTotalDollars.toFixed(2)} (+ $${centsToDollars(extraItemsCents).toFixed(2)} extras${
+                normalizedExtraItemNames.length > 0
+                  ? `: ${normalizedExtraItemNames.join(', ')}`
+                  : ''
+              })`
+            : `$${expectedTotalDollars.toFixed(2)}`,
+        couponIds: purchased
+          .map((row) => row.couponId)
+          .filter((id): id is number => id != null && id > 0),
+        actorUserId: staffUserId,
+        idempotencyKey,
+        occurredAt: collectedAt,
+      });
+    } catch (historyError) {
+      this.logger.error(
+        'Failed to write scanner purchase business history',
+        historyError instanceof Error ? historyError.stack : historyError,
+      );
+    }
 
-        const existingPass = await this.couponService.findByCustomerAndFunnel(
+    for (let index = 0; index < deals.length; index += 1) {
+      const deal = deals[index];
+      try {
+        await this.activityService.logPrepaidForOffer({
+          paymentId: deal.paymentId,
           customerId,
-          funnelId,
-        );
-        const hasUnpaidOnlinePass =
-          existingPass != null &&
-          existingPass.status === CouponStatus.ACTIVE &&
-          existingPass.paymentStatus === CouponPaymentStatus.PENDING &&
-          !this.couponService.isExpired(existingPass);
-
-        if (hasUnpaidOnlinePass && existingPass) {
-          const consumed = await this.couponService.consumeUnpaidPassAtCounter({
-            couponId: existingPass.id,
-            funnelPaymentId: paymentId,
-            staffUserId,
-            redeemedAt: collectedAt,
-          });
-
-          purchased.push({
-            funnelId,
-            campaignName: funnel.campaign.campaignName,
-            couponId: consumed?.id ?? existingPass.id,
-            purchaseMeans,
-          });
-          continue;
-        }
-
-        purchased.push({
-          funnelId,
-          campaignName: funnel.campaign.campaignName,
-          couponId: null,
-          purchaseMeans,
-        });
-      }
-
-      if (visitCampaignIds.length > 0) {
-        const primaryCampaignId = visitCampaignIds[0];
-        const savedVisit = await this.customerVisitRepository.save({
-          customerId,
-          campaignId: primaryCampaignId,
-          businessId,
-          couponId: null,
-          orderId,
+          occurredAt: collectedAt,
           staffUserId,
-          visitedAt: collectedAt,
-          source: CustomerVisitSource.STAFF_LOOKUP,
-          orderSubtotal: visitOrderSubtotalDollars,
+          extraItemsCents: index === 0 ? extraItemsCents : 0,
+          extraItemNames:
+            index === 0 && extraItemsCents > 0 ? normalizedExtraItemNames : [],
           extraItems:
-            visitOrderSubtotalDollars != null && visitOrderSubtotalDollars > 0
-              ? normalizedExtraItems
-              : null,
-          visitCampaigns: visitCampaignIds.map((campaignId) => ({
-            campaignId,
-          })),
+            index === 0 && extraItemsCents > 0 ? normalizedExtraItems : [],
         });
-        await replaceVisitAddonItems(this.dataSource.manager, {
-          customerVisitId: savedVisit.id,
-          businessId,
-          customerId,
-          campaignId: primaryCampaignId,
-          orderId,
-          staffUserId,
-          source: VisitAddonItemSource.SCANNER_PURCHASE,
-          items:
-            visitOrderSubtotalDollars != null && visitOrderSubtotalDollars > 0
-              ? normalizedExtraItems
-              : [],
-        });
-      }
-
-      if (idempotencyKey) {
-        await this.scannerPurchaseRequestRepository.update(
-          { businessId, idempotencyKey },
-          { responseJson: purchased },
+      } catch (activityError) {
+        this.logger.warn(
+          `Scanner purchase activity_event log failed payment=${deal.paymentId}: ${
+            activityError instanceof Error
+              ? activityError.message
+              : String(activityError)
+          }`,
         );
       }
 
       try {
-        const guestName =
-          customer.name?.trim() || customer.email?.trim() || 'Guest';
-        const dealNames =
-          purchased
-            .map((row) => row.campaignName?.trim())
-            .filter(Boolean)
-            .join(', ') || 'deal';
-        await this.businessHistoryService.logScannerPurchase({
-          businessId,
-          customerName: guestName,
-          dealNames,
-          amountLabel:
-            extraItemsCents > 0
-              ? `$${expectedTotalDollars.toFixed(2)} (+ $${centsToDollars(extraItemsCents).toFixed(2)} extras${
-                  normalizedExtraItemNames.length > 0
-                    ? `: ${normalizedExtraItemNames.join(', ')}`
-                    : ''
-                })`
-              : `$${expectedTotalDollars.toFixed(2)}`,
-          couponIds: purchased
-            .map((row) => row.couponId)
-            .filter((id): id is number => id != null && id > 0),
-          actorUserId: staffUserId,
-          idempotencyKey,
-          occurredAt: collectedAt,
-        });
-      } catch (historyError) {
-        this.logger.error(
-          'Failed to write scanner purchase business history',
-          historyError instanceof Error ? historyError.stack : historyError,
+        await this.syncPaidFunnelPaymentAutomation(deal.paymentId);
+      } catch (syncError) {
+        this.logger.warn(
+          `Scanner purchase funnel_event payment sync failed payment=${deal.paymentId}: ${
+            syncError instanceof Error ? syncError.message : String(syncError)
+          }`,
         );
       }
-
-      for (let index = 0; index < deals.length; index += 1) {
-        const deal = deals[index];
-        try {
-          await this.activityService.logPrepaidForOffer({
-            paymentId: deal.paymentId,
-            customerId,
-            occurredAt: collectedAt,
-            staffUserId,
-            extraItemsCents: index === 0 ? extraItemsCents : 0,
-            extraItemNames:
-              index === 0 && extraItemsCents > 0
-                ? normalizedExtraItemNames
-                : [],
-            extraItems:
-              index === 0 && extraItemsCents > 0 ? normalizedExtraItems : [],
-          });
-        } catch (activityError) {
-          this.logger.warn(
-            `Scanner purchase activity_event log failed payment=${deal.paymentId}: ${
-              activityError instanceof Error
-                ? activityError.message
-                : String(activityError)
-            }`,
-          );
-        }
-
-        try {
-          await this.syncPaidFunnelPaymentAutomation(deal.paymentId);
-        } catch (syncError) {
-          this.logger.warn(
-            `Scanner purchase funnel_event payment sync failed payment=${deal.paymentId}: ${
-              syncError instanceof Error ? syncError.message : String(syncError)
-            }`,
-          );
-        }
-      }
-
-      return purchased;
-    } catch (err) {
-      this.logger.error(
-        `Scanner purchase side-effects failed after payments committed (business=${businessId} customer=${customerId})`,
-        err instanceof Error ? err.stack : err,
-      );
-      throw err;
     }
+
+    return purchased;
   }
 
   async getStats(funnelId: number): Promise<{

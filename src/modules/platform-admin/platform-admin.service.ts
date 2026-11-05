@@ -3954,10 +3954,7 @@ function mondayOfUtcYmd(ymd: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
-function isScheduledOnUtcYmd(
-  row: MeetingRequest,
-  ymd: string,
-): boolean {
+function isScheduledOnUtcYmd(row: MeetingRequest, ymd: string): boolean {
   return Boolean(row.scheduledDate && row.scheduledDate === ymd);
 }
 
