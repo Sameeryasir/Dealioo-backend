@@ -4,3 +4,9 @@ export const EMPTY_TWIML_RESPONSE =
 export const TWILIO_SIGNATURE_HEADER = 'x-twilio-signature';
 
 export const INBOUND_BODY_LOG_MAX_LENGTH = 80;
+
+export {
+  SMS_OPT_OUT_CONFIRMATION,
+  SMS_OPT_IN_CONFIRMATION,
+  buildSmsOptOutTwiml,
+} from '../utils/sms-opt-out.util';

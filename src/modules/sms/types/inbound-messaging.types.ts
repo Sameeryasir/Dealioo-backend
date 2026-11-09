@@ -13,6 +13,8 @@ export enum InboundMessageSkipReason {
   DATABASE_ERROR = 'database_error',
 }
 
+export type InboundSmsConsentAction = 'opt_out' | 'opt_in';
+
 export type InboundMessageRecordResult = {
   saved: boolean;
   duplicate?: boolean;
@@ -20,6 +22,7 @@ export type InboundMessageRecordResult = {
   customerId?: number;
   businessId?: number;
   skipReason?: InboundMessageSkipReason;
+  consentAction?: InboundSmsConsentAction;
 };
 
 export type MessagingCorrelationContext = {

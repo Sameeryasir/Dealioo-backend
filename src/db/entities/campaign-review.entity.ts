@@ -82,6 +82,9 @@ export class CampaignReview {
   @Column({ type: 'smallint', nullable: true })
   rating!: number | null;
 
+  @Column({ name: 'category_ratings', type: 'jsonb', nullable: true })
+  categoryRatings!: Record<string, number> | null;
+
   @Column({ type: 'text', nullable: true })
   comment!: string | null;
 

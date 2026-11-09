@@ -47,6 +47,15 @@ export class BusinessCustomer {
   @Column({ name: 'joined_at', type: 'timestamptz' })
   joinedAt: Date;
 
+  @Column({ name: 'sms_opted_out', type: 'boolean', default: false })
+  smsOptedOut: boolean;
+
+  @Column({ name: 'sms_opted_out_at', type: 'timestamptz', nullable: true })
+  smsOptedOutAt: Date | null;
+
+  @Column({ name: 'sms_opt_out_source', type: 'varchar', length: 64, nullable: true })
+  smsOptOutSource: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

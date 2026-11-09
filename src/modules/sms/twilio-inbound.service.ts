@@ -3,7 +3,12 @@ import { randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { ConversationMessageChannel } from '../../db/entities/conversation-message.entity';
 import { InboundMessageRecorderService } from '../chat/inbound-message-recorder.service';
-import { EMPTY_TWIML_RESPONSE } from './constants/twilio-inbound.constants';
+import {
+  EMPTY_TWIML_RESPONSE,
+  SMS_OPT_IN_CONFIRMATION,
+  SMS_OPT_OUT_CONFIRMATION,
+  buildSmsOptOutTwiml,
+} from './constants/twilio-inbound.constants';
 import {
   MessagingProvider,
   type MessagingCorrelationContext,
@@ -94,6 +99,7 @@ export class TwilioInboundService {
         messageId: result.messageId ?? null,
         customerId: result.customerId ?? null,
         businessId: result.businessId ?? null,
+        consentAction: result.consentAction ?? null,
       });
     } else {
       this.webhookLogger.warn(logContext, 'webhook.not_stored', {
@@ -101,6 +107,13 @@ export class TwilioInboundService {
         customerId: result.customerId ?? null,
         businessId: result.businessId ?? null,
       });
+    }
+
+    if (result.consentAction === 'opt_out') {
+      return buildSmsOptOutTwiml(SMS_OPT_OUT_CONFIRMATION);
+    }
+    if (result.consentAction === 'opt_in') {
+      return buildSmsOptOutTwiml(SMS_OPT_IN_CONFIRMATION);
     }
 
     return EMPTY_TWIML_RESPONSE;

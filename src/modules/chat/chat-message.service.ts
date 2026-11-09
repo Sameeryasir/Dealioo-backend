@@ -10,6 +10,7 @@ import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Customer } from '../../db/entities/customer.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import {
   ConversationMessage,
@@ -26,6 +27,9 @@ import {
 import { ChatService } from './chat.service';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import { sanitizeChatMessageBody } from '../../utils/strip-email-signoff-for-chat';
+
+const SMS_OPTED_OUT_ERROR =
+  'This guest opted out of SMS. Reply START from their phone to re-subscribe.';
 
 @Injectable()
 export class ChatMessageService {
@@ -44,6 +48,8 @@ export class ChatMessageService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(BusinessTwilioIntegration)
     private readonly businessTwilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
+    @InjectRepository(BusinessCustomer)
+    private readonly businessCustomerRepository: Repository<BusinessCustomer>,
     private readonly chatService: ChatService,
     private readonly chatMessageNotificationService: ChatMessageNotificationService,
     private readonly twilioService: TwilioService,
@@ -72,6 +78,10 @@ export class ChatMessageService {
         throw new BadRequestException(
           'This guest does not have a phone number on file.',
         );
+      }
+
+      if (await this.isSmsOptedOut(businessId, customerId)) {
+        throw new BadRequestException(SMS_OPTED_OUT_ERROR);
       }
 
       const sendOptions = await this.resolveTwilioSendOptions(businessId);
@@ -137,6 +147,10 @@ export class ChatMessageService {
     const phone = params.phone.trim();
     if (!phone) {
       return { sent: false, error: 'Customer phone number is missing.' };
+    }
+
+    if (await this.isSmsOptedOut(params.businessId, params.customerId)) {
+      return { sent: false, error: SMS_OPTED_OUT_ERROR };
     }
 
     const sendOptions = await this.resolveTwilioSendOptions(params.businessId);
@@ -383,6 +397,17 @@ export class ChatMessageService {
     }
 
     return savedMessageId;
+  }
+
+  private async isSmsOptedOut(
+    businessId: number,
+    customerId: number,
+  ): Promise<boolean> {
+    const link = await this.businessCustomerRepository.findOne({
+      where: { businessId, customerId },
+      select: ['id', 'smsOptedOut'],
+    });
+    return Boolean(link?.smsOptedOut);
   }
 
   private async resolveTwilioSendOptions(businessId: number): Promise<

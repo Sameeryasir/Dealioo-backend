@@ -10,12 +10,17 @@ import {
   buildPaginationMeta,
   normalizePagination,
 } from '../../common/pagination';
+import { Business } from '../../db/entities/business.entity';
 import {
   CampaignReview,
   CampaignReviewStatus,
 } from '../../db/entities/campaign-review.entity';
 import { Campaign } from '../../db/entities/campaign.entity';
 import { buildCampaignFeedbackUrl } from '../../utils/campaign-feedback-url';
+import {
+  CAMPAIGN_REVIEW_CATEGORY_KEYS,
+  type CampaignReviewCategoryRatings,
+} from './campaign-review.constants';
 
 const FEEDBACK_TOKEN_TTL_DAYS = 30;
 const MAX_COMMENT_LENGTH = 2000;
@@ -35,6 +40,7 @@ export type CreateCampaignReviewRequestInput = {
 export type CampaignReviewListItem = {
   id: number;
   rating: number;
+  categoryRatings: CampaignReviewCategoryRatings | null;
   comment: string | null;
   guestName: string | null;
   guestEmail: string | null;
@@ -55,6 +61,8 @@ export class CampaignReviewService {
     private readonly reviewRepository: Repository<CampaignReview>,
     @InjectRepository(Campaign)
     private readonly campaignRepository: Repository<Campaign>,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
   ) {}
 
   async hasSubmittedReviewForCampaign(
@@ -153,11 +161,27 @@ export class CampaignReviewService {
     status: CampaignReviewStatus;
     alreadySubmitted: boolean;
     expired: boolean;
+    businessName: string | null;
+    logoUrl: string | null;
+    logoPrimaryColor: string | null;
+    logoSecondaryColor: string | null;
+    logoAccentColor: string | null;
   }> {
     const row = await this.loadByToken(token);
     const campaign = await this.campaignRepository.findOne({
       where: { id: row.campaignId },
       select: ['id', 'campaignName'],
+    });
+    const business = await this.businessRepository.findOne({
+      where: { id: row.businessId },
+      select: [
+        'id',
+        'name',
+        'logoUrl',
+        'logoPrimaryColor',
+        'logoSecondaryColor',
+        'logoAccentColor',
+      ],
     });
 
     const expired =
@@ -174,12 +198,27 @@ export class CampaignReviewService {
       status: expired ? CampaignReviewStatus.EXPIRED : row.status,
       alreadySubmitted,
       expired,
+      businessName: this.sanitizePlainText(business?.name ?? null, 120),
+      logoUrl: this.sanitizeLogoUrl(business?.logoUrl ?? null),
+      logoPrimaryColor: this.sanitizeCssColor(
+        business?.logoPrimaryColor ?? null,
+      ),
+      logoSecondaryColor: this.sanitizeCssColor(
+        business?.logoSecondaryColor ?? null,
+      ),
+      logoAccentColor: this.sanitizeCssColor(
+        business?.logoAccentColor ?? null,
+      ),
     };
   }
 
   async submitPublicFeedback(
     token: string,
-    input: { rating: number; comment?: string },
+    input: {
+      rating: number;
+      comment?: string;
+      categoryRatings?: CampaignReviewCategoryRatings;
+    },
   ): Promise<{ ok: true }> {
     const row = await this.loadByToken(token);
     const now = new Date();
@@ -206,6 +245,9 @@ export class CampaignReviewService {
     }
 
     const comment = this.sanitizePlainText(input.comment, MAX_COMMENT_LENGTH);
+    const categoryRatings = this.sanitizeCategoryRatings(
+      input.categoryRatings,
+    );
 
     const updateResult = await this.reviewRepository
       .createQueryBuilder()
@@ -213,6 +255,7 @@ export class CampaignReviewService {
       .set({
         rating,
         comment,
+        categoryRatings,
         status: CampaignReviewStatus.SUBMITTED,
         submittedAt: now,
       })
@@ -316,6 +359,7 @@ export class CampaignReviewService {
       data: rows.map((row) => ({
         id: row.id,
         rating: row.rating ?? 0,
+        categoryRatings: this.sanitizeCategoryRatings(row.categoryRatings),
         comment: row.comment,
         guestName: row.guestName,
         guestEmail: row.guestEmail,
@@ -441,5 +485,48 @@ export class CampaignReviewService {
       .trim()
       .slice(0, maxLength);
     return cleaned.length > 0 ? cleaned : null;
+  }
+
+  private sanitizePublicHttpsUrl(raw: string | null | undefined): string | null {
+    const value = String(raw ?? '').trim();
+    if (!value || value.length > 2048) return null;
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'https:') return null;
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  private sanitizeLogoUrl(raw: string | null | undefined): string | null {
+    const value = String(raw ?? '').trim();
+    if (!value || value.length > 2048) return null;
+    if (value.startsWith('/uploads/') || value.startsWith('uploads/')) {
+      return value.startsWith('/') ? value : `/${value}`;
+    }
+    return this.sanitizePublicHttpsUrl(value);
+  }
+
+  private sanitizeCssColor(raw: string | null | undefined): string | null {
+    const value = String(raw ?? '').trim();
+    if (!value || value.length > 16) return null;
+    if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value)) return null;
+    return value;
+  }
+
+  private sanitizeCategoryRatings(
+    raw: unknown,
+  ): CampaignReviewCategoryRatings | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const source = raw as Record<string, unknown>;
+    const cleaned: CampaignReviewCategoryRatings = {};
+    for (const key of CAMPAIGN_REVIEW_CATEGORY_KEYS) {
+      const rating = Math.floor(Number(source[key]));
+      if (Number.isFinite(rating) && rating >= 1 && rating <= 5) {
+        cleaned[key] = rating;
+      }
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : null;
   }
 }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { Customer } from '../../db/entities/customer.entity';
 import { Conversation } from '../../db/entities/conversation.entity';
@@ -12,11 +13,13 @@ import {
 } from '../../db/entities/conversation-message.entity';
 import { truncateActivityMessagePreview } from '../../utils/truncate-activity-message';
 import { buildInboundIdempotencyKey } from '../sms/utils/inbound-idempotency.util';
+import { detectSmsOptOutIntent } from '../sms/utils/sms-opt-out.util';
 import { MessagingWebhookLogger } from '../sms/utils/messaging-webhook.logger';
 import {
   InboundMessageSkipReason,
   MessagingProvider,
   type InboundMessageRecordResult,
+  type InboundSmsConsentAction,
   type MessagingCorrelationContext,
 } from '../sms/types/inbound-messaging.types';
 import type { RecordInboundSmsDto } from '../sms/dto/record-inbound-sms.dto';
@@ -44,6 +47,8 @@ export class InboundMessageRecorderService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(BusinessTwilioIntegration)
     private readonly twilioIntegrationRepository: Repository<BusinessTwilioIntegration>,
+    @InjectRepository(BusinessCustomer)
+    private readonly businessCustomerRepository: Repository<BusinessCustomer>,
     private readonly chatMessageNotificationService: ChatMessageNotificationService,
   ) {}
 
@@ -163,11 +168,19 @@ export class InboundMessageRecorderService {
         idempotencyKey,
       });
 
+      const consentAction = await this.applySmsConsentFromInboundBody({
+        businessId: targetBusinessId,
+        customerId: customer.id,
+        body,
+        logContext,
+      });
+
       return {
         saved: true,
         messageId: savedMessageId,
         customerId: customer.id,
         businessId: targetBusinessId,
+        consentAction: consentAction ?? undefined,
       };
     } catch (error) {
       if (this.isIdempotencyConflict(error)) {
@@ -507,6 +520,80 @@ export class InboundMessageRecorderService {
     }
 
     return savedMessageId;
+  }
+
+  private async applySmsConsentFromInboundBody(params: {
+    businessId: number;
+    customerId: number;
+    body: string;
+    logContext: MessagingCorrelationContext;
+  }): Promise<InboundSmsConsentAction | null> {
+    const intent = detectSmsOptOutIntent(params.body);
+    if (!intent) return null;
+
+    let link = await this.businessCustomerRepository.findOne({
+      where: {
+        businessId: params.businessId,
+        customerId: params.customerId,
+      },
+    });
+
+    if (!link) {
+      try {
+        link = await this.businessCustomerRepository.save(
+          this.businessCustomerRepository.create({
+            businessId: params.businessId,
+            customerId: params.customerId,
+            joinedAt: new Date(),
+            smsOptedOut: false,
+            smsOptedOutAt: null,
+            smsOptOutSource: null,
+          }),
+        );
+      } catch {
+        link = await this.businessCustomerRepository.findOne({
+          where: {
+            businessId: params.businessId,
+            customerId: params.customerId,
+          },
+        });
+      }
+    }
+
+    if (!link) {
+      this.webhookLogger.warn(params.logContext, 'inbound.consent_link_missing', {
+        businessId: params.businessId,
+        customerId: params.customerId,
+        intent,
+      });
+      return null;
+    }
+
+    if (intent === 'opt_out') {
+      if (!link.smsOptedOut) {
+        link.smsOptedOut = true;
+        link.smsOptedOutAt = new Date();
+        link.smsOptOutSource = 'inbound_reply';
+        await this.businessCustomerRepository.save(link);
+      }
+      this.webhookLogger.log(params.logContext, 'inbound.sms_opt_out', {
+        businessId: params.businessId,
+        customerId: params.customerId,
+      });
+      return 'opt_out';
+    }
+
+    if (link.smsOptedOut) {
+      link.smsOptedOut = false;
+      link.smsOptedOutAt = null;
+      link.smsOptOutSource = null;
+      await this.businessCustomerRepository.save(link);
+    }
+    this.webhookLogger.log(params.logContext, 'inbound.sms_opt_in', {
+      businessId: params.businessId,
+      customerId: params.customerId,
+    });
+    return 'opt_in';
   }
 
   private isIdempotencyConflict(error: unknown): boolean {

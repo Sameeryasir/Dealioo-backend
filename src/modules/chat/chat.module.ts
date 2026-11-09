@@ -9,6 +9,7 @@ import { Customer } from '../../db/entities/customer.entity';
 import { BusinessUserChatReadState } from '../../db/entities/business-user-chat-read-state.entity';
 import { BusinessUserConversationReadState } from '../../db/entities/business-user-conversation-read-state.entity';
 import { Business } from '../../db/entities/business.entity';
+import { BusinessCustomer } from '../../db/entities/business-customer.entity';
 import { BusinessTwilioIntegration } from '../../db/entities/business-twilio-integration.entity';
 import { AuthModule } from '../auth/auth.module';
 import { RedemptionModule } from '../redemption/redemption.module';
@@ -30,6 +31,7 @@ import { InboundMessageRecorderService } from './inbound-message-recorder.servic
       BusinessUserChatReadState,
       BusinessUserConversationReadState,
       Business,
+      BusinessCustomer,
       BusinessTwilioIntegration,
     ]),
     AuthModule,
